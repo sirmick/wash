@@ -147,6 +147,25 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Test stability  (docs/TEST_FLAKES.md — the 2026-07-03 full-suite audit)
 
+- [ ] **e2e coverage the 2026-08-24 audit found missing.** The suite is
+  otherwise strong (500 passing, both-halves rule broadly observed); these
+  are the holes worth filling, in order:
+  - **idle policy / idle-inhibit has no e2e.** LIFETIME's user-visible
+    promise — a session outlives a closed browser, and an agent holding an
+    inhibit suspends the reaper — is Go-unit-tested only. The reaper lives
+    in `RunUnixListener`, so a spec needs a wash-login-style harness
+    rather than the fixture's `--listen` router; that is why it was not
+    done alongside the attention spec.
+  - **single-file.spec covers 6 of 24 FE bundles** (one of them the test
+    app). The bundle-size / no-chunks / allowed-externals contract is
+    unenforced for the other 18, so a stray dependency ships silently.
+    Derive the list from the Makefile's FE_APPS rather than hand-listing.
+  - **com.wash.audio, com.wash.about and com.wash.fswatch** appear in app
+    lists but nothing asserts their own behaviour. About's registered-apps
+    table is the cheapest one and doubles as a roster tripwire.
+  - **QoS/credit backpressure** (docs/QOS.md §9 has a test plan) has no
+    browser-level spec — only the Go soak test.
+
 - [ ] **Keep `docs/FLAKE_LOG.md` current** — the dated record of flakes actually
   seen, each A/B'd against its pre-change baseline so "my branch broke it" is a
   finding, not a guess. 2026-08-06: the three standing failures (`reconnect` +
@@ -199,18 +218,15 @@ bug list — all fully landed; see `git log` if you need their content.)
   per-connection handler goroutines on shutdown — same hazard class as the
   fixed `runRawListener` (42d6698); latent today, one log line away from the
   t.Logf-panic class.
-- [ ] **Control-socket last-binder-wins collision — pre-0.14 gate.** Every
-  router defaults to `/tmp/wash-<uid>.sock`; `ListenControl` blindly
-  `os.Remove`s on bind (steals a live socket) and on shutdown (unlinks
-  whoever owns it now). Spawned apps dial `WASH_DISPLAY`, so a stolen
-  socket sends them to the *wrong* router, whose registry rejects them
-  ("binary does not match registered app_id") and every launch times out;
-  the loser router is left listening on an orphaned inode. LIFETIME makes
-  concurrent same-uid routers the normal case, so this bites real sessions
-  (observed 2026-08-21 on the live desktop). Fix: per-session socket path
-  (`$XDG_RUNTIME_DIR/wash/ctl-<sessid>.sock`), refuse to steal a socket
-  that answers a probe connect, and unlink on shutdown only if still the
-  owner.
+- [x] **Control-socket last-binder-wins collision** — FIXED 2026-08-24,
+  shipped in 0.14.0. A router now steps aside onto a per-pid path when the
+  configured socket still ANSWERS (a stale file is still reused), resolves
+  that before bring-up so no app is handed a path we are about to abandon,
+  and unlinks on shutdown only when the path still names its own socket.
+  The per-session default path in the original sketch turned out to be
+  unnecessary: not stealing and not orphaning removes the damage, and
+  keeping the well-known name for whoever got there first is what makes a
+  bare `wash launch` keep working.
 
 ## Apps / UX
 
