@@ -13,7 +13,6 @@
 
 import { test, expect } from '../fixtures/login';
 import { readdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 
 type Page = import('@playwright/test').Page;
@@ -147,7 +146,11 @@ test.describe('wash-login picker (M4)', () => {
     await expect(page.locator('.session .name', { hasText: 'home' })).toBeVisible();
   });
 
-  test('cap enforcement disables new-session form', async ({ page, browser, login }) => {
+  // `login` is destructured for its SIDE EFFECT — naming a fixture is what
+  // requests it — and `page` for the same reason: the fixture chain needs a
+  // page even though this test drives `browser` directly.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  test('cap enforcement disables new-session form', async ({ page: _page, browser, login: _login }) => {
     // Need a wash-login configured with a cap. Bring up a second
     // instance via the fixture's startLogin with --max-sessions-per-uid=1.
     const { startLogin, stopLogin } = await import('../fixtures/login');

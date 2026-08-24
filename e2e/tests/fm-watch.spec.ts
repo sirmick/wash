@@ -173,13 +173,22 @@ test.describe('fm fs.watch FE: live tree refresh', () => {
   test('rapid create/delete cycle: tree converges to final state', async ({ page, router }) => {
     await openFm(page, router);
     const target = join(router.fmRoot, 'transient.txt');
+    const row = page.locator('[data-testid="fm-entry-transient.txt"]');
+
+    // Establish the positive FIRST. The assertion this test turns on is an
+    // absence, and an fm that rendered nothing at all — or a watch that
+    // dropped every event — satisfies an absence perfectly. Seeing the row
+    // arrive is what makes its later departure evidence of anything.
+    writeFileSync(target, 'seed\n');
+    await expect(row).toBeVisible({ timeout: 3_000 });
+
     for (let i = 0; i < 5; i++) {
       writeFileSync(target, `${i}\n`);
       unlinkSync(target);
     }
-    // Final state: doesn't exist. The tree must agree.
-    await page.waitForTimeout(500);
-    await expect(page.locator('[data-testid="fm-entry-transient.txt"]')).toHaveCount(0);
+    // Final state: doesn't exist. The tree must agree — polled rather
+    // than slept at, so a slow runner waits and a broken one still fails.
+    await expect(row).toHaveCount(0, { timeout: 3_000 });
     expect(existsSync(target)).toBe(false);
   });
 

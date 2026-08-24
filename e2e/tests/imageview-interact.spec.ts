@@ -4,14 +4,19 @@
 // app auto-scans a folder of several images on launch.
 
 import { test, expect } from '../fixtures/router';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKklEQVR4nGK+Y2NzTm7fPrlzaCSDjc2dOzY2mCQDVlEbmzsDqgMQAAD//+8yV15/i6x3AAAAAElFTkSuQmCC',
   'base64',
 );
-const DIR = '/tmp/wash-iv-interact-e2e';
+// A FRESH directory per run. The assertions below count files
+// ('a.png · 1/3'), so a stray leftover from a crashed run — or a
+// parallel worker sharing one fixed path — turns 1/3 into 1/4 and
+// fails the whole file. mkdtemp is what the other sixteen specs use.
+const DIR = mkdtempSync(join(tmpdir(), 'wash-iv-'));
 
 test.use({ routerOpts: { apps: ['session', 'about', 'imageview'], extraEnv: { WASH_IMAGEVIEW_DIR: DIR } } });
 

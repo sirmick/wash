@@ -11,8 +11,7 @@
 
 import { test, expect } from '../fixtures/router';
 import type { Page } from '@playwright/test';
-import { readdirSync, statSync, existsSync, writeFileSync, mkdtempSync, appendFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 // We need at least one readable file under /var/log for the

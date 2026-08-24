@@ -104,6 +104,11 @@ test.describe('agent awareness + roster survive the reconnect paths', () => {
     // The reporter's "refresh". The FE remounts and re-subscribes; agentd
     // is a separate process that never saw the browser go, so the row it
     // returns is the SAME session, not a new one.
+    //
+    // Cursor BEFORE the reload: the log lines this test cares about all
+    // have identical twins from the initial start, so a match against the
+    // whole log proves nothing about the reload.
+    const cursor = router.logCursor();
     await page.reload();
     await expect(page.locator('wash-app-session')).toBeVisible();
     await expectRailHasAgent(page);
@@ -116,9 +121,13 @@ test.describe('agent awareness + roster survive the reconnect paths', () => {
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 15_000 });
     await expect(win.getByRole('button', { name: 'Start session' })).toHaveCount(0);
 
-    // And the backend really was asked again — the snapshot came from a
-    // fresh subscribe, not from FE state that happened to survive.
-    expect(router.log()).toMatch(/agentd: acp (row|session started)/);
+    // And the backend really was asked again — the transcript came from a
+    // fresh subscribe after the reload, not from FE state that happened
+    // to survive it.
+    await router.waitForLog(/agentd: transcript subscribed instance=.* key=/, 15_000, cursor);
+    // Asked again, not STARTED again: a reload that lost the session and
+    // launched a new one would also re-subscribe.
+    expect(router.log().slice(cursor)).not.toMatch(/acp session started/);
   });
 
   test('a superseding window gets the roster the old one had', async ({ page, router, context }) => {

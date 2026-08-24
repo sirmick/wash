@@ -438,12 +438,35 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   });
 
   // Wait for the "listening on" line, or for the process to die.
-  await Promise.race([
-    waitForRegex(() => logBuf, /listening on /, 5_000),
-    exitPromise.then((r) => {
-      throw new Error(`wash-router exited before listening: code=${r.code} signal=${r.signal}\n${logBuf}`);
-    }),
-  ]);
+  //
+  // Kill the process on ANY failure here, because this function throws
+  // BEFORE the fixture's try/finally exists — `const h = await
+  // startRouter(...)` sits outside it, so a throw means stopRouter never
+  // runs and the router we just spawned is orphaned along with its apps.
+  // Under a full-suite run that is self-amplifying: the leaked routers are
+  // load, the load makes the next bind slower, and a slow bind is exactly
+  // what throws here (the harness leak-on-throw class in
+  // docs/TEST_FLAKES.md).
+  //
+  // The bind window is generous rather than tight for the same reason:
+  // WORKER_CAP workers each spawn a router per test, so the p99 bind under
+  // load is nowhere near the median. A router that is genuinely wedged is
+  // caught by exitPromise or by the test's own timeout; a slow one should
+  // not be turned into a leak.
+  try {
+    await Promise.race([
+      waitForRegex(() => logBuf, /listening on /, 20_000),
+      exitPromise.then((r) => {
+        throw new Error(`wash-router exited before listening: code=${r.code} signal=${r.signal}\n${logBuf}`);
+      }),
+    ]);
+  } catch (err) {
+    try {
+      proc.kill('SIGKILL');
+    } catch { /* already gone */ }
+    killProcsUnder(appsDir);
+    throw err;
+  }
 
   const handle: RouterHandle = {
     url: `http://127.0.0.1:${port}/`,

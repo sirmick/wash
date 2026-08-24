@@ -508,6 +508,14 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 			return nil
 		}
 
+		// Worth a line, unlike the keepalive above: this is a window
+		// actually taking up a session — a first attach, a reload
+		// re-subscribing, or a second window joining. The unsubscribe
+		// side has always logged; this is the other half, and it is what
+		// lets a test tell "the browser came back and asked again" from
+		// "the FE still had the transcript from before".
+		log.Printf("agentd: transcript subscribed instance=%s key=%s replay=%v", from.InstanceID, req.Key, req.Replay)
+
 		// Reply with the history so a reload, or a second window, starts
 		// where the session actually is rather than empty. The history is
 		// unbounded server-side, so replay is chunked into bounded frames.

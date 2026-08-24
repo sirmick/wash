@@ -80,6 +80,12 @@ test.describe('agent roster per-session verbs', () => {
     // row from Detach, and an End that fired on the pick would be a
     // session lost to a slip.
     await menu.locator('[data-testid="agents-menu-end"]').click();
+    // Wait for the confirm row before sampling the log for absence.
+    // Reading it in the same tick as the click proves nothing: an End
+    // that DID fire would not have reached agentd yet either, so the
+    // assertion would pass on a missing gate. The confirm row appearing
+    // is the barrier that makes "and still nothing ended" mean something.
+    await expect(menu.locator('[data-testid="agents-menu-end-confirm"]')).toBeVisible();
     expect(router.log().slice(cursor)).not.toMatch(/acp session ended/);
 
     // Confirming fires: FE → this app's BE → agentd → the adapter. One

@@ -16,8 +16,13 @@ import (
 // them; keeping I/O outside the lock means a slow shell can't stall
 // other mutations.
 type windowSession struct {
-	mu         sync.Mutex
-	windows    map[uint32]*wire.SessionWindow
+	mu      sync.Mutex
+	windows map[uint32]*wire.SessionWindow
+	// attnWanted is who has ASKED for the human, which outlives whether
+	// the ask is currently shown: a window that asks while focused shows
+	// nothing, and must light the moment focus leaves. Cleared by focus
+	// (the human looked) and by the app withdrawing the request.
+	attnWanted map[uint32]bool
 	appState   map[string]json.RawMessage // by instance_id; opaque to router
 	nextZ      uint32
 	nextOffset int32
@@ -139,6 +144,7 @@ func (s *windowSession) destroyWindow(windowID uint32) []wire.SessionPatch {
 		return nil
 	}
 	delete(s.windows, windowID)
+	delete(s.attnWanted, windowID)
 	return []wire.SessionPatch{{Op: wire.SessionPatchWindowDelete, WindowID: windowID}}
 }
 
@@ -156,26 +162,67 @@ func (s *windowSession) setTitle(windowID uint32, title string) []wire.SessionPa
 }
 
 // setAttention flags (or clears) "this window needs the human"
-// (docs/AGENT_UX.md N6). Setting it on the window that already has focus
-// is a no-op: the human is looking at it, so there is nothing to call
-// them back to, and a pill that pulses at the window you are typing in
-// teaches people to ignore the pulse.
+// (docs/AGENT_UX.md N6). Asking for attention on the window that already
+// has focus shows nothing: the human is looking at it, and a pill that
+// pulses at the window you are typing in teaches people to ignore the
+// pulse.
+//
+// But the REQUEST is remembered, which the first cut of this got wrong.
+// An agent that asks a question while you are watching it, and then you
+// switch away, must still mark its pill — the question is unanswered and
+// the pill is the standing version of the interrupt. Dropping the request
+// on the floor because you happened to be looking at the moment it
+// arrived meant the pill never lit in exactly the case it exists for.
+// So: wanted is recorded always, shown only while unfocused, and cleared
+// by focus (see focus()).
 func (s *windowSession) setAttention(windowID uint32, on bool) []wire.SessionPatch {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.applyAttention(windowID, on)
+}
+
+// applyAttention is setAttention's body, for callers already holding mu.
+func (s *windowSession) applyAttention(windowID uint32, on bool) []wire.SessionPatch {
 	w := s.windows[windowID]
 	if w == nil {
 		return nil
 	}
-	if on && w.Focused {
-		on = false
+	if on {
+		// Lazily made, like s.windows and s.appState: winSession is a
+		// zero-value struct field on Router, so writing a nil map here
+		// would panic on the first request.
+		if s.attnWanted == nil {
+			s.attnWanted = map[uint32]bool{}
+		}
+		s.attnWanted[windowID] = true
+	} else {
+		delete(s.attnWanted, windowID)
 	}
-	if w.Attention == on {
+	// Shown only while the window is not the one being looked at.
+	show := on && !w.Focused
+	if w.Attention == show {
 		return nil
 	}
-	w.Attention = on
+	w.Attention = show
 	cp := *w
 	return []wire.SessionPatch{{Op: wire.SessionPatchWindowUpsert, Window: &cp}}
+}
+
+// blurred takes focus away from a window and, if that window had asked
+// for the human while it held focus, makes the ask visible now.
+//
+// Every path that removes focus goes through here — another window taking
+// it, and minimize clearing it — because they are the same event from the
+// window's point of view, and getting only one of them was the bug: a
+// single Agent window that asked a question and was then minimized never
+// lit its pill, since nothing else ever took focus.
+//
+// Caller holds mu and is responsible for emitting the patch.
+func (s *windowSession) blurred(windowID uint32, w *wire.SessionWindow) {
+	w.Focused = false
+	if s.attnWanted[windowID] {
+		w.Attention = true
+	}
 }
 
 // move updates a window's position. State==maximized/minimized
@@ -229,7 +276,7 @@ func (s *windowSession) focus(windowID uint32) []wire.SessionPatch {
 			continue
 		}
 		if w.Focused {
-			w.Focused = false
+			s.blurred(id, w)
 			cp := *w
 			patches = append(patches, wire.SessionPatch{Op: wire.SessionPatchWindowUpsert, Window: &cp})
 		}
@@ -239,11 +286,14 @@ func (s *windowSession) focus(windowID uint32) []wire.SessionPatch {
 		s.nextZ++
 		target.Z = s.nextZ
 	}
-	// Looking at a window settles what it was asking for. Clearing here
-	// rather than in the app keeps "seen it" a fact about the desktop:
-	// however the window came forward — taskbar, toast, alt-tab, an app
-	// raising itself — the pulse stops (docs/AGENT_UX.md N6).
+	// Looking at a window settles what it was asking for — the standing
+	// request too, not just the mark, or the next time you switched away
+	// it would light again for something you have already read. Clearing
+	// here rather than in the app keeps "seen it" a fact about the
+	// desktop: however the window came forward — taskbar, toast, alt-tab,
+	// an app raising itself — the pulse stops (docs/AGENT_UX.md N6).
 	target.Attention = false
+	delete(s.attnWanted, windowID)
 	cp := *target
 	patches = append(patches, wire.SessionPatch{Op: wire.SessionPatchWindowUpsert, Window: &cp})
 	return patches
@@ -280,7 +330,7 @@ func (s *windowSession) setState(windowID uint32, target string) []wire.SessionP
 	w.State = target
 	patches := []wire.SessionPatch{}
 	if target == wire.WindowStateMinimized && w.Focused {
-		w.Focused = false
+		s.blurred(windowID, w)
 	}
 	cp := *w
 	patches = append(patches, wire.SessionPatch{Op: wire.SessionPatchWindowUpsert, Window: &cp})

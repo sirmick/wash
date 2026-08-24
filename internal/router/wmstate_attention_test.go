@@ -90,6 +90,98 @@ func TestFocusClearsAttention(t *testing.T) {
 	}
 }
 
+// The bug the e2e caught: an agent that asks a question while you are
+// WATCHING it, and then you look away, must still mark its pill. The
+// first cut showed nothing (correct) and also forgot the request
+// (wrong), so the pill never lit in exactly the case it exists for.
+func TestAttentionAskedWhileFocusedLightsWhenFocusLeaves(t *testing.T) {
+	s := newTestWindows(t)
+	addWindow(s, 1)
+	addWindow(s, 2)
+	s.focus(1)
+
+	// Asked while focused: nothing to show yet.
+	if got := s.setAttention(1, true); got != nil {
+		t.Fatalf("attention on the focused window rendered something: %+v", got)
+	}
+	if s.windows[1].Attention {
+		t.Fatal("focused window is marked")
+	}
+
+	// Look elsewhere. Now the unanswered question has to say so.
+	patches := s.focus(2)
+	if !s.windows[1].Attention {
+		t.Fatal("the window that asked did not light when focus left it")
+	}
+	var announced bool
+	for _, p := range patches {
+		if p.Window != nil && p.Window.WindowID == 1 && p.Window.Attention {
+			announced = true
+		}
+	}
+	if !announced {
+		t.Fatalf("the shell was never told: %+v", patches)
+	}
+}
+
+// ...but a window you HAVE looked at stays quiet, however many times you
+// switch away afterwards. Focus settles the request, not just the mark.
+func TestFocusForgetsTheRequestNotJustTheMark(t *testing.T) {
+	s := newTestWindows(t)
+	addWindow(s, 1)
+	addWindow(s, 2)
+	s.focus(2)
+	s.setAttention(1, true)
+	if !s.windows[1].Attention {
+		t.Fatal("setup: window 1 should be marked")
+	}
+
+	s.focus(1) // read it
+	s.focus(2) // and go elsewhere again
+	if s.windows[1].Attention {
+		t.Fatal("a window you already read lit up again on the next focus change")
+	}
+}
+
+// An app withdrawing its request must also drop the standing want, or the
+// window would light on the next focus change for a question that has
+// since been answered.
+func TestWithdrawnAttentionDoesNotResurface(t *testing.T) {
+	s := newTestWindows(t)
+	addWindow(s, 1)
+	addWindow(s, 2)
+	s.focus(1)
+	s.setAttention(1, true)  // asked while focused
+	s.setAttention(1, false) // answered before you ever looked away
+
+	s.focus(2)
+	if s.windows[1].Attention {
+		t.Fatal("a withdrawn request still lit the pill")
+	}
+}
+
+// Minimize is the OTHER way focus leaves, and the one that actually bit:
+// a lone Agent window that asked while focused and was then minimized
+// never lit, because nothing else ever took focus. Found by the e2e, not
+// by the unit tests above — which is why this one exists.
+func TestAttentionAskedWhileFocusedLightsOnMinimize(t *testing.T) {
+	s := newTestWindows(t)
+	addWindow(s, 1)
+	s.focus(1)
+	s.setAttention(1, true) // asked while being watched: shows nothing yet
+	if s.windows[1].Attention {
+		t.Fatal("focused window is marked")
+	}
+
+	patches := s.setState(1, wire.WindowStateMinimized)
+	if !s.windows[1].Attention {
+		t.Fatal("minimizing the window that asked did not light it")
+	}
+	if len(patches) == 0 || patches[0].Window == nil || !patches[0].Window.Attention {
+		t.Fatalf("the shell was never told: %+v", patches)
+	}
+}
+
 func TestAttentionSurvivesMinimize(t *testing.T) {
 	// A minimized window that needs you is exactly the case the pill is
 	// for — it has no other way of saying so.

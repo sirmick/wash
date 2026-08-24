@@ -108,9 +108,19 @@ test('a roster verb acts on the row, not on the window it was clicked in', async
 
   const first = await openAgentWindow(page, 0);
   await startSession(first, 'session to be ended');
-  const second = await openAgentWindow(page, 1);
-  await startSession(second, 'the window doing the ending');
+  await openAgentWindow(page, 1);
+  const second = page.locator('wash-app-ai').filter({ hasText: 'the window doing the ending' });
+  await startSession(page.locator('wash-app-ai').nth(1), 'the window doing the ending');
+  await expect(second).toHaveCount(1, { timeout: 20_000 });
 
+  // Bind the acting window by its CONTENT, not by index. Detaching the
+  // other session closes the other window, and `nth(1)` is evaluated
+  // fresh on every use — so the moment that window leaves the DOM, the
+  // survivor becomes nth(0) and every locator derived from nth(1) finds
+  // nothing. That is the whole of this spec's long-running flake: it
+  // failed or passed on whether the close landed before the assertion,
+  // which has nothing to do with what the test is about.
+  //
   // Work from the top window, which shows ITS OWN session. Its roster
   // lists both.
   const pane = second.locator('[data-testid="ai-roster-pane"]');
@@ -137,9 +147,11 @@ test('a roster verb acts on the row, not on the window it was clicked in', async
   // clicking window's session.
   await router.waitForLog(new RegExp(`wash-ai: roster detach key=${otherKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), 10_000, from);
 
-  // And the row says so: detached is "still running, no window on it".
+  // And the row says so. Asserting the row is still VISIBLE would prove
+  // nothing — it was visible before the detach too. What changed is what
+  // the row now claims about itself.
   await expect(pane.locator(`[data-testid="agents-row-${otherKey}"]`))
-    .toBeVisible({ timeout: 10_000 });
+    .toHaveAttribute('title', /Detached/, { timeout: 10_000 });
 
   // The window that issued it is untouched — its own session still shows.
   await expect(second.getByText('the window doing the ending')).toBeVisible();

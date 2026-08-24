@@ -596,9 +596,10 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			session.title = t
 			_ = c.SetTitle(t)
 		}
-		markAttention(c, waitingOn(m["state"], session.key))
+		wants := waitingOn(m["state"], session.key)
+		markAttention(c, wants)
 		if aiDebug {
-			log.Printf("wash-ai: roster push key=%q state=%T", session.key, m["state"])
+			log.Printf("wash-ai: roster push key=%q state=%T waiting=%v", session.key, m["state"], wants)
 		}
 		// The roster push carries adapters (for the launcher), this
 		// session's row (for the status line) and the pending questions.

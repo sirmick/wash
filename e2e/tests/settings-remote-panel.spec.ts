@@ -36,11 +36,16 @@ test.describe('wash-settings — Remote panel (wash-remote supervisor)', () => {
     // defining + mounting the supplied element. On mount it subscribes to the
     // supervisor; with nothing connected the panel shows its empty states.
     await remote.click();
+    // The empty-state TEXT first: toBeAttached is satisfied by an element
+    // that rendered nothing, and the two toHaveCount(0) lines below are
+    // satisfied by that same nothing. Proving the panel actually painted
+    // is what makes the absences below mean "no sessions" rather than "no
+    // panel".
     await expect(app.locator('wash-settings-panel-remote')).toBeAttached({ timeout: 15_000 });
-    await expect(app.locator('[data-testid="remote-sessions"]')).toHaveCount(0);
-    await expect(app.locator('[data-testid="remote-mounts"]')).toHaveCount(0);
     await expect(app).toContainText('No active connections.');
     await expect(app).toContainText('No remote folders mounted.');
+    await expect(app.locator('[data-testid="remote-sessions"]')).toHaveCount(0);
+    await expect(app.locator('[data-testid="remote-mounts"]')).toHaveCount(0);
   });
 
   test('"Open Connect…" launches the com.wash.connect window', async ({ page, router }) => {

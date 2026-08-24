@@ -1089,6 +1089,13 @@ e2e-test: test-app
 	$(MAKE) TEST_APP=1 multicall
 	go test -count=1 -tags=multicall ./cmd/wash/...
 	cd e2e && $(PNPM) install --ignore-workspace --silent
+	# Typecheck BEFORE spending three minutes running the suite. The e2e
+	# tsconfig has always set strict + noUnusedLocals; nothing ran it, so
+	# it had drifted to 62 errors — 35 of them `window.wash` untyped inside
+	# page.evaluate, where a typo compiles clean and fails at runtime deep
+	# inside a test. e2e/types pulls in the shell's own d.ts, so this now
+	# also catches the shell API changing under the suite.
+	cd e2e && $(PNPM) run typecheck
 	cd e2e && $(PNPM) exec playwright install chromium
 	# WASH_E2E_SKIP_VM=1: mirror CI (which has no VM artifacts) — the heavy
 	# KVM-backed net-vm tiers run under `make net-test` / `make e2e-vm`.

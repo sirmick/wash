@@ -11,7 +11,7 @@
 //     event into the wash clipboard.
 
 import { test, expect } from '../fixtures/router';
-import type { Page, Locator } from '@playwright/test';
+import type { Locator } from '@playwright/test';
 
 // Read the full xterm scrollback for the terminal mounted on `host`.
 function termBuffer(host: Locator): Promise<string> {

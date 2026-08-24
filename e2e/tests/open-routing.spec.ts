@@ -58,7 +58,15 @@ test.describe('open routing', () => {
 
     await page.locator('[data-testid="fm-entry-notes.md"]').dblclick();
 
-    await expect(page.locator('wash-app-edit')).toBeVisible({ timeout: 15_000 });
+    // An editor window is not the claim — the claim is that the router
+    // spawned it WITH `--open <path>` and the editor's launch hook opened
+    // that file. A dropped argv still gives you a visible editor, so the
+    // buffer contents are what actually tests the routing.
+    const editor = page.locator('wash-app-edit');
+    await expect(editor).toBeVisible({ timeout: 15_000 });
+    await expect(editor.locator('.cm-content')).toContainText('hello from the editor', {
+      timeout: 15_000,
+    });
   });
 
   test('double-clicking a file with no registered handler falls back to preview', async ({ page, router }) => {

@@ -5,7 +5,7 @@
 // match fm" alignment pass.
 
 import { test, expect } from '../fixtures/router';
-import { existsSync, writeFileSync, mkdirSync, symlinkSync, unlinkSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 function seed(root: string): void {

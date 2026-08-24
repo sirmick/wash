@@ -494,22 +494,27 @@ buffering, and byte-count completion. Product side gained
 **Result:** `-race -count=20` green. B2 is closed rather than logged as a
 recurrence — this one had a mechanism, not a load window.
 
-## 2026-08-21 — `agent-roster-pane` "a roster verb acts on the row": load-only
+## 2026-08-21 — `agent-roster-pane` "a roster verb acts on the row": FIXED
 
-Seen three times during the AGENT_UX phase-Now work (the third on the
-history-search branch), every time only in the FULL `make e2e-test` run
-(6 workers, 500+ tests) and never on its own.
+Four full-suite reds over the AGENT_UX work, never reproducible alone.
+Logged as a load window on the first three sightings; it was not one.
 
-**Isolation:** passes 3/3 alone, 5/5 running its own spec file serially,
-and 5/5 with `--workers=4`. The two full-suite failures straddle unrelated
-changes (before the sessions-pane rework and after the Menu
-pointerdown fix), so nothing in the branch lines up with it.
+**Mechanism (found 2026-08-24 by reading the failure's locator rather
+than its timing):** the acting window was bound as
+`page.locator('wash-app-ai').nth(1)`. The test then detaches the OTHER
+session, which closes the OTHER window — and Playwright locators are
+lazy, so `nth(1)` is re-evaluated on every use. The moment the first
+window leaves the DOM the survivor becomes `nth(0)`, and every locator
+derived from `nth(1)` — including the roster pane the assertions run
+against — resolves to nothing. Whether the run went red came down to
+whether the close landed before the next assertion, which is unrelated to
+anything the test is about. Full-suite runs lost that race more often.
 
-**Not root-caused.** The test drives two Agent windows, a portalled row
-menu and a cross-window verb, so the plausible mechanisms are the usual
-load-window ones — a roster push arriving between the menu opening and the
-click, or the second window's bundle landing late. Logged rather than
-chased: it has cost three full-suite reds and no user-visible symptom, and
-the honest next step is a run with `--repeat-each` under load rather than
-a guess. It is now the only test that reds a full run on this box, so it
-is also the next one worth actually fixing.
+**Fix:** bind the acting window by its content
+(`.filter({ hasText: 'the window doing the ending' })`), which survives
+its sibling's removal. 6/6 green at `--repeat-each=6 --workers=4`.
+
+**Worth generalising:** an index-based locator is only safe while the set
+it indexes is stable. Any spec that closes one of several same-tag
+windows has this bug latent.
+

@@ -419,7 +419,7 @@ test('wash-sudo bare-form auto-promotes a known app binary to spawn mode', async
 // click. The request stays in the queue until the user unlocks it
 // by entering the password.
 test('locked + new request → auto-prompts for password without Approve click', async ({ router }) => {
-  const { privInst, testInst } = await drivePriv(router);
+  const { testInst } = await drivePriv(router);
 
   // No prior unlock. Fire a cross-app spawn from wash-test; wash-priv
   // should auto-fire need_password at enqueue time.

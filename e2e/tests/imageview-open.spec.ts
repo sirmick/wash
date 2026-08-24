@@ -6,8 +6,9 @@
 // typing the seeded path into the picker's path bar.
 
 import { test, expect } from '../fixtures/router';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // A valid 8×8 PNG (decodable by internal/thumbs' stdlib image/png).
 const PNG = Buffer.from(
@@ -93,7 +94,10 @@ test.describe('imageview open dialog', () => {
 // exercised. It defaulted its root to "/", and wfs.New("/") is a degenerate
 // sandbox (Confine tests hasPrefix(path, "//")) that rejects every real path →
 // "No images" for any absolute dir. This guards the unconfined path.
-const UNCONFINED_DIR = '/tmp/wash-iv-unconfined-e2e';
+// Fresh per run, like every other fixture dir: a fixed /tmp path is
+// shared with the previous (possibly crashed) run and with parallel
+// workers, and this spec asserts on exactly what it seeded.
+const UNCONFINED_DIR = mkdtempSync(join(tmpdir(), 'wash-iv-unconfined-'));
 
 test.describe('imageview unconfined (no sandbox root)', () => {
   test.use({ routerOpts: { apps: ['session', 'about', 'imageview'], extraEnv: { WASH_IMAGEVIEW_DIR: UNCONFINED_DIR } } });

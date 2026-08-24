@@ -131,3 +131,48 @@ test.describe('agent focus-or-launch', () => {
     await expect(page.locator('wash-app-ai')).toHaveCount(1);
   });
 });
+
+test('a blocked agent marks its taskbar pill, and looking at it clears the mark', async ({
+  page,
+  router,
+}) => {
+  // docs/AGENT_UX.md N6, end to end: agentd → the Agent window's BE →
+  // EvtWindowAttention → the router → the shell → the pill. The Go tests
+  // cover the router's half (wmstate_attention_test.go); nothing proved a
+  // browser ever renders it, which is the half the user actually sees.
+  //
+  // The clear is the interesting assertion. The app raises the flag but
+  // only the ROUTER lowers it, on focus — so an app cannot leave a pill
+  // pulsing at a window you have already read.
+  test.setTimeout(90_000);
+  const win = await startSession(page, router.url);
+
+  const pill = page.locator('[data-testid="taskbar-pill"]', { hasText: /codex|Agent/ }).first();
+  await expect(pill).toBeVisible({ timeout: 20_000 });
+  // Nothing is waiting yet: the mark must be absent BEFORE it is present,
+  // or its later presence proves nothing.
+  await expect(pill).not.toHaveAttribute('data-attention', 'true');
+
+  const cursor = router.logCursor();
+  const composer = win.locator('textarea');
+  await composer.fill('please ask');
+  await composer.press('Enter');
+  await router.waitForLog(/agentd: ask row=acp:/, 20_000, cursor);
+
+  // Minimize so the window cannot be "focused" — the router clears the
+  // flag on focus, and a focused window is never marked in the first
+  // place. This is the state the pill exists for.
+  await page.getByRole('button', { name: 'Minimize window' }).click();
+  await expect(pill).toHaveAttribute('data-attention', 'true', { timeout: 20_000 });
+  await expect(pill).toHaveAttribute('title', /wants your attention/);
+
+  // Look at it. The router drops the flag as part of the focus it already
+  // performs, so the pill goes quiet without the app being told anything.
+  await pill.click();
+  await expect(page.locator('wash-app-ai').first()).toBeVisible({ timeout: 15_000 });
+  await expect(pill).not.toHaveAttribute('data-attention', 'true', { timeout: 15_000 });
+
+  // And the question is still there — clearing the MARK must not look
+  // like answering the question.
+  await expect(win.getByText(/echo hello/).first()).toBeVisible({ timeout: 15_000 });
+});

@@ -10,8 +10,9 @@
 //      child shell), and the terminal stays interactive afterward.
 
 import { test, expect } from '../fixtures/router';
+import type { Page } from '@playwright/test';
 
-async function openTerminal(page) {
+async function openTerminal(page: Page) {
   await page.locator('button[title="Apps"]').click();
   await page
     .locator('[data-testid="start-menu"]')

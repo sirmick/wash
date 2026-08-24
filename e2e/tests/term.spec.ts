@@ -90,7 +90,7 @@ test.describe('terminal app', () => {
     // Tab 1 should not show tab-two's output. Switch back via its tab
     // button. Tab buttons are data-testid="term-tab-{channelID}";
     // pick the first by index, not id (id is router-allocated).
-    const tabButtons = page.locator('[data-testid^="term-tab-"][data-testid$="-1"]');
+
     // The first tab is the lower-id; the tab bar puts it first.
     const tabs = page.locator('button[data-testid^="term-tab-"]:not([data-testid^="term-tab-close"])');
     await tabs.first().click();

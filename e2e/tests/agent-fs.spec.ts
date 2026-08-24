@@ -60,7 +60,7 @@ async function startAgentIn(page: Page, url: string, dir: string) {
   return win;
 }
 
-async function ask(win: ReturnType<Page['locator']>, page: Page, text: string) {
+async function ask(win: ReturnType<Page['locator']>, _page: Page, text: string) {
   const composer = win.locator('textarea');
   await composer.fill(text);
   await composer.press('Enter');

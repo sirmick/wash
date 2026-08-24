@@ -16,7 +16,7 @@ import { test, expect, displaySkipReason } from '../fixtures/router';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

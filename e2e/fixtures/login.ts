@@ -12,7 +12,7 @@
 
 import { test as base } from '@playwright/test';
 import { spawn, ChildProcess } from 'node:child_process';
-import { mkdtempSync, existsSync, readdirSync, statSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
