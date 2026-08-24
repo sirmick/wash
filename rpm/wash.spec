@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.13.2
+Version:        0.14.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,25 @@ fi
 exit 0
 
 %changelog
+* Mon Aug 24 2026 sirmick <sirmick@gmail.com> - 0.14.0-1
+- agent: every door (sidebar, roster row, notification) goes TO the session
+  that wants you, opening a window only when there is none, instead of a new
+  Agent window per click. A blocked agent toasts its question and the click
+  lands on that session.
+- agent: a waiting question marks its taskbar pill; looking at the window
+  clears it, and the router owns that so no app can leave it blinking.
+- agent: the sessions list is always on screen and resizable (width
+  remembered per window), replacing a toggle with three opening rules.
+- agent: full-text history search — all words required, any order, the
+  matching line shown with terms marked, trigram-indexed so it stays instant.
+- agent: the new-session form opens on the agent and folder you used last.
+- chrome: a menu closes when the window under it moves.
+- router: a router no longer takes a control socket another router is still
+  answering on; the loser's apps used to reach the wrong router and fail to
+  launch.
+- router: a session outlives the browser that opened it and comes back whole.
+- sidebar: the right rail is host-aware — counts, questions and doors span
+  every connected host, with the verbs moved into the apps.
 * Sat Aug 08 2026 sirmick <sirmick@gmail.com> - 0.13.2-1
 - term: a terminal keeps following its own output after a heavy burst. The
   resync reset the xterm out of band, jumping xterm's async parse queue and

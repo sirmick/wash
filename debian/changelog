@@ -1,3 +1,36 @@
+wash (0.14.0-1) unstable; urgency=low
+
+  * agent: the agent feature got a navigation layer. Every door — the
+    sidebar's, a roster row, a notification — now goes TO the session that
+    wants you, opening a window only when there is none, instead of stacking
+    up a fresh Agent window per click. A blocked agent raises a toast naming
+    its question, and clicking it lands on that session rather than on the
+    app in general.
+  * agent: a question waiting on you now marks its window's taskbar pill, and
+    looking at the window clears it — the router owns that, so no app can
+    leave a pill blinking at something you have already read.
+  * agent: the sessions list is always on screen and resizable, in place of a
+    toggle that opened it on three different rules. Its width is remembered
+    per window.
+  * agent: history search is full text. A query is words, all of them
+    required, in any order; a result shows the line that matched with the
+    terms marked; and a trigram index keeps it instant as history grows.
+  * agent: the new-session form opens on the agent and folder you used last.
+  * chrome: a menu closes when the window under it moves. Dragging a titlebar
+    suppresses the mouse event menus were listening for, so they hung in
+    mid-air over whatever was underneath.
+  * router: a router no longer takes a control socket another router is still
+    answering on. With sessions outliving their browsers, several routers at
+    once is normal, and the loser's apps were reaching the wrong router and
+    failing to launch at all.
+  * router: a session outlives the browser that opened it, and comes back
+    whole — with its transcript, its roster and its unanswered questions.
+  * sidebar: the right rail became host-aware. Counts, questions and doors
+    span every connected host, and the verbs moved into the apps, which can
+    act on any host rather than only the local one.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 24 Aug 2026 14:40:15 -0700
+
 wash (0.13.2-1) unstable; urgency=low
 
   * term: a terminal no longer stops following its own output after a heavy
