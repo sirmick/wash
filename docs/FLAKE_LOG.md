@@ -518,3 +518,36 @@ its sibling's removal. 6/6 green at `--repeat-each=6 --workers=4`.
 it indexes is stable. Any spec that closes one of several same-tag
 windows has this bug latent.
 
+
+## 2026-08-25 — `agent-session` "yolo auto-approves": CI-only, once
+
+First red CI run in a while, on the M5 vocabulary push (675598ee). One
+test: the fake agent's `Permission outcome: allow` never appeared inside
+20s. Test 28 of 509, early in a cold run on a 2-core GitHub runner.
+
+**A flake, established rather than assumed.** The same commit passed on
+re-run with no change. Before re-running:
+
+- the local `make push` gate had just passed on that exact commit, e2e
+  500/500;
+- the test passed 3/3 locally at `--workers=1` (CI's worker count);
+- the change under suspicion (M5) cannot reach that path — the yolo
+  branch in `acp.go` reads `h.yolo`, notes the approval and returns an
+  option, touching no session state, and the only consumers of the `done`
+  state anywhere are `statePriority` and its own setters;
+- the earlier assertions in the same test passed, including transcript
+  rendering and the yolo badge, so the `agent-session.tsx` status-line
+  edit was not breaking the render.
+
+**Fixed the diagnosis, not the symptom.** The test asserted only the FE
+half, so a failure could not distinguish "agentd never auto-approved"
+from "the browser never showed it" — which is what made this cost an
+investigation. It now waits for `agentd: acp decide … decision=allow
+reason=yolo` as a barrier first, per the house both-halves rule. That
+also removes the FE assertion from the critical path of a cold-start
+round trip, which is the most likely mechanism.
+
+**Not chased further.** One occurrence, no reproduction in six local
+runs, and a plausible environment cause (a 20s budget for a full agent
+round trip on a 2-core runner, warming up). Logged so a second sighting
+has something to sit next to.

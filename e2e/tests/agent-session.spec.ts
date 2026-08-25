@@ -114,9 +114,19 @@ test.describe('managed agent sessions', () => {
 
     // The same prompt that produced a permission question above now runs
     // without one: no Allow button, and the agent hears the outcome.
+    const cursor = router.logCursor();
     const composer = win.locator('textarea');
     await composer.fill('please ask before running');
     await composer.press('Enter');
+
+    // BE half first, as a barrier. agentd deciding is the hop that makes
+    // the rest of this test meaningful, and asserting it separately is
+    // what tells "agentd never auto-approved" from "the FE never showed
+    // it" — a distinction the FE-only assertion below could not make when
+    // this failed on CI.
+    await router.waitForLog(/agentd: acp decide .*decision=allow reason=yolo/, 20_000, cursor);
+    // ...and the agent really heard the answer, rather than agentd just
+    // logging one.
     await expect(win.getByText('Permission outcome: allow')).toBeVisible({ timeout: 20_000 });
     await expect(win.getByRole('button', { name: /^Allow(\s|$)/ })).toHaveCount(0);
     // Every auto-approval is announced, not silent.
