@@ -3,8 +3,8 @@
 Status: **phase Now shipped** (2026-08-21). Grounded audit of the agent
 feature's navigation layer + a two-phase plan. Phase "Now" (§5) is
 polish-release scope and is **done** — see §5 for what each item became;
-phase "Next" (§6) is a 0.15 design effort that gets its own doc before
-any code, and is untouched.
+phase "Next" (§6) now has that doc — [AGENT_MESSENGER.md](AGENT_MESSENGER.md)
+— and two of its bullets shipped early with 0.14.0; §6 says which.
 
 Related: [SIDEBAR.md](SIDEBAR.md) (the relocation that put the roster in
 `com.wash.ai`), [AGENT_APP.md](AGENT_APP.md) (the app's contract),
@@ -137,25 +137,27 @@ roster, Go tests for the attention state machine and the toast rules, and
 `e2e/tests/agent-focus.spec.ts` for N1+N2 end to end (both halves — FE
 window state and BE router log).
 
-## 6. Phase Next — 0.15, messenger consolidation (design doc first)
+## 6. Phase Next — 0.15, messenger consolidation
 
-Not in this release. A SIDEBAR-grade design doc settles, at minimum:
+**Now has its design doc: [AGENT_MESSENGER.md](AGENT_MESSENGER.md)**
+(2026-08-24). What that doc settles, and how this section's bullets
+turned out:
 
-- Roster becomes the app's permanent, collapsible left pane — the app's
-  spine, not a flap. The "▶ Roster" toggle dissolves into the standard
-  pane chevron.
-- Sessions-not-windows as the noun: default one workspace window per
-  host; explicit "open in new window" pop-out serves UC6. This changes
-  `Instancing` semantics for `com.wash.ai` and must reconcile with
-  window-restore and `launchOn`.
-- Launcher becomes the home surface: agent + folder (defaulted per N5),
-  recent sessions inline, history search as the same list's past — one
-  search box governing live and stored.
-- History panel merges into the conversation list (the "unfinished"
-  distinction survives as a row state).
-- Status vocabulary at every size: waiting = accent + pulse, working =
-  neutral spinner, done = dim check, stale = grey — legible at rail,
-  roster, and taskbar sizes.
+- Roster as the app's permanent pane — **shipped early, in 0.14.0**. It
+  is always on screen with a `<Splitter>` divider, its width persisted
+  per window; the "▶ Roster" toggle and its three auto-open rules are
+  gone. This bullet was overtaken by a direct request during testing.
+- Launcher defaults (agent + folder) — **shipped**, as N5. "Recent
+  sessions inline" did not: it becomes part of the list merge.
+- Sessions-not-windows, history merged into the list, and one status
+  vocabulary — **open**, and the substance of AGENT_MESSENGER.md's M1–M5.
+
+The mechanism finding that shaped that doc, recorded here because it
+contradicts this section's original assumption: `Instancing` is honoured
+on the `shell.launch` path and **ignored** by `EvtSpawnRequest`, which is
+what the start menu and all three of agentd's window-opening paths use.
+"Change `Instancing` for com.wash.ai" would therefore have changed only
+the doors, which already behave.
 
 ## 7. Non-goals
 

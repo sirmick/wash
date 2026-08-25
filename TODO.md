@@ -235,10 +235,15 @@ bug list — all fully landed; see `git log` if you need their content.)
   to their session, hidden-sidebar badge, single-click reattach, launcher
   defaults (last-used, else claude), window attention flag. See §5 for the
   as-built notes, including the two places the plan was wrong.
-- [ ] **Agent UX phase Next (0.15)** — messenger consolidation:
-  docs/AGENT_UX.md §6. Needs a SIDEBAR-grade design doc BEFORE any code;
-  it changes `Instancing` semantics for com.wash.ai and has to reconcile
-  with window-restore and launchOn.
+- [ ] **Agent UX phase Next (0.15)** — messenger consolidation. Design
+  doc landed 2026-08-24: **docs/AGENT_MESSENGER.md**, M1–M5. The list
+  merge (live + stored, one row, one search) is M1 and wants the three
+  time representations reconciled first; one window per host is M2 and
+  needs BOTH spawn paths made instancing-aware, since `EvtSpawnRequest`
+  ignores `Instancing` entirely today. M5's vocabulary pass is worth
+  pulling forward regardless — it fixes three live defects: the rail
+  counts `stale` and `done` rows as "working", a session that failed
+  renders green, and wash-term cannot express `stale` at all.
 - [ ] wash-term does not answer `wash.focus` (the desktop's "the human
   asked for your thing K" verb), so agentd deliberately leaves
   terminal-tier permission toasts unkeyed — clicking one opens the Agent
