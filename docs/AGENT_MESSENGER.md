@@ -24,7 +24,9 @@ Concretely, after phase Now the app still contradicts itself three ways:
    session" opens another; a detached session reattaching opens another;
    a keyed toast may open another. Nothing is wrong with any single one
    of those — but the number of Agent windows you end up with is a
-   function of your click history, not of anything you decided.
+   function of your click history, not of anything you decided. The app
+   still declares `InstancingMulti`, and every one of those paths honours
+   it faithfully.
 
 2. **Two lists that are the same list.** The sessions pane shows what is
    running. The History panel shows what ran. They have different row
@@ -113,45 +115,82 @@ list is strictly better. §5 M4 gives the pill a count so it degrades to
   (AGENT_UX §7). One window per **host**, not one window total.
 - Multi-window stays possible (UC6). It stops being the accident.
 
-## 4. The mechanism problem: who decides a window exists
+## 4. The mechanism: what `Instancing` actually buys, and what it breaks
 
-This is the part that must not be designed by assumption, because the
-router does not behave the way "set `Instancing` and be done" assumes.
+The first draft of this section was wrong, and the correction is worth
+keeping because it changes the plan. I had read `EvtSpawnRequest` as
+bypassing instancing; it does not — `handleSpawnRequest` → `spawnChild` →
+**`launchOrRaise`** (`internal/router/app_session.go:1081`), the same
+helper `shell.launch` uses.
 
-**Instancing is honoured on one of the two spawn paths.**
+**So instancing is honoured on every path that matters:**
 
 | Path | Used by | Honours `Instancing`? |
 |---|---|---|
-| `shell.launch` → `handleLaunch` → `launchOrRaise` | rail doors, wash-connect, `focusOrLaunch` | **yes** |
-| `EvtSpawnRequest` → `handleSpawnRequest` → `spawnChild` | the start menu (via the session BE), **agentd's reattach / resume / focus** | **no** — it spawns unconditionally after a capability check (`internal/router/app_session.go:920-935`) |
+| `shell.launch` → `launchOrRaise` | rail doors, `focusOrLaunch`, `launchOn` (incl. remote hosts) | yes |
+| `EvtSpawnRequest` → `spawnChild` → `launchOrRaise` | start menu (via session BE), agentd's reattach / resume / focus | yes |
+| control socket → `controlLaunch` | `wash launch` | yes |
+| `spawnForOpen` (`--open`), `prepare_spawn` (wash-priv), autoboot | file open-routing, privilege escalation, boot | **no** — these are the escape hatches |
 
-So flipping `com.wash.ai` to `InstancingSingle` would change the doors —
-which already behave — and leave every path that actually multiplies
-windows untouched. The manifest is the wrong lever.
+`launchOrRaise` dedups on `Instancing != multi`, matching **by app id
+only**, and raises the instance's *primary* window. Per-router, so
+"one per host" comes free — B's router scans B's own table, and the
+remote path needs no origin concept at all.
 
-**Decision: the policy lives where the knowledge is.** Two owners, split
-along what each can actually know:
+**Decision: `com.wash.ai` becomes `singleton`, not `single`.** Both make
+`launchOrRaise` raise instead of spawn. Singleton additionally makes
+`{app_id: "com.wash.ai"}` a legal recipient (`resolveRecipient` refuses
+app-id addressing for anything else), and that is worth more than it
+sounds — see below.
 
-- **agentd owns "does this session need a window?"** It is the only party
-  that knows whether a session has one (`transcriptWatchers`), lost one,
-  or never had one — this is the same lesson N1 taught when its keyed
-  half turned out to belong in agentd rather than the shell. Its three
-  `SpawnRequest(aiAppID)` sites (reattach, resume, focus) collapse into
-  one helper that raises an existing window and points it at the session,
-  and spawns only when there is none.
-- **The router owns "is this app single-window?"** for the generic case,
-  by teaching the *launcher* path what the door path already knows: the
-  session BE's `{"action":"launch"}` should raise a running
-  single-instance app rather than spawn a second. That is a small generic
-  fix — every single-window app gets it, not just this one — and it is
-  what makes the start menu stop being a hole in the policy.
+### 4.1 The thing that actually breaks: agentd's positional attach queue
 
-**The pop-out needs an explicit bypass.** Once both paths are
-instancing-aware, *Open in new window* needs a way to say "another one,
-deliberately". A flag on the spawn request (`EvtSpawnRequest.Extra` /
-an explicit `force`) is the honest shape: the caller states intent rather
-than the router guessing from context. This is the one wire addition in
-the plan and it should be scoped as narrowly as that sentence.
+This is the real work, and it is not a launch problem.
+
+agentd opens a window onto a session in two steps: push the session key
+onto a FIFO (`pendingAttach`), then `SpawnRequest(aiAppID)`; when the
+spawn reply arrives, `onSpawnResult` pops the oldest key and sends
+`{kind:"attach", key}` to the returned instance id. It is positional —
+"spawn replies arrive in the order they were requested" — and it has
+three producers (reattach, resume, focus).
+
+Under a raise, `EvtSpawnOk` carries the **existing** instance id. So the
+attach lands on the window you are already looking at and re-points it.
+Note `attach` has no same-key guard, unlike `select`
+(`apps/ai/be/app.go:369`), so it will happily re-subscribe to the session
+it is already showing.
+
+Re-pointing the one window *is* what the messenger model wants. The
+problem is that it would happen by accident, through a queue whose
+correctness argument ("replies arrive in order") stops being true the
+moment a reply can be synchronous.
+
+**So: delete the FIFO.** With `singleton`, agentd addresses the window
+directly — `SendAppMsgTo({app_id: "com.wash.ai"}, {kind:"show", key})` —
+and the router spawns it on first reference if it is not running
+(`resolveRecipient` does exactly that for singletons). One message, no
+queue, no positional matching, and the same code path whether the window
+existed or not. The three producers collapse into one call.
+
+### 4.2 The pop-out needs a bypass, and it must be a second *instance*
+
+Once both launch paths dedup, *Open in new window* needs a way to say
+"another one, deliberately" — a `force` flag on the spawn request. That
+is the one wire addition in this plan.
+
+It must create a second **instance**, not a second window of the same
+instance, because ai's backend is written for exactly one: `session` is a
+package-level struct ("One window, one session — hence a package-level
+value rather than a map", `apps/ai/be/app.go:181`) and closing a window
+calls `os.Exit(0)` (`finishClose`, `app.go:681`). One process serving N
+windows would need a per-window session map and a close path that does
+not kill its siblings — a much larger change, for a feature (side-by-side)
+that a second process serves perfectly well.
+
+The cost of a second instance under `singleton` is that it is a
+*deliberate* violation of the manifest's own claim. That is acceptable
+only if it is rare, explicit and user-initiated — which is exactly what
+*Open in new window* is — and it should be logged when it happens.
 
 ## 5. Milestones
 
@@ -213,20 +252,41 @@ are.
 
 ### M2 — one window per host
 
-The structural change. Both spawn paths become instancing-aware (§4),
-`com.wash.ai` becomes single-instance, and the explicit pop-out lands
-with its bypass flag.
+The structural change. `com.wash.ai` becomes `singleton`, agentd's
+positional attach queue is deleted in favour of app-id addressing, and
+the explicit pop-out lands with its `force` flag (§4).
 
-- agentd's three spawn sites collapse into one raise-or-open helper.
-- The session BE's launch action raises a running single-instance app.
-- *Open in new window* on a row, and only there.
-- **Window restore** must be checked, not assumed: a reload must bring
-  back the one window pointing at the session it was showing (the BE
-  already persists `session_key` and `split_pct`), and must not produce a
-  second window in the process.
+Order within the milestone matters: **delete the FIFO first**, while the
+app is still `multi` and a spawn really is a spawn. `{app_id}` addressing
+of a non-singleton is refused by `resolveRecipient`, so that step has to
+be paired with the manifest flip — but the `show`-verb refactor on both
+sides can land and be tested before it.
 
-*Risk:* this is the milestone that can break "I had two agents side by
-side". The pop-out must land in the same change, not after it.
+Then, in the same change:
+
+- ai's "New session" button stops calling `launchOn` — under a raise it
+  would be a no-op on itself. It becomes M3's in-place compose, so M2 and
+  M3 ship together or M2 ships a dead button.
+- *Open in new window* on a row, and nowhere else.
+- **Window restore checked, not assumed:** a reload must bring back one
+  window on the session it was showing, and must not produce a second.
+  The FE path is a remount, not a re-creation — the router keeps windows
+  and app processes alive across a browser reload — so the risk is in
+  ai's own `restore` handler, which compares the persisted key against
+  its package-level `session.key`.
+
+*What breaks, by name:* `e2e/tests/agent-roster-pane.spec.ts` opens a
+second window via the start menu at lines 67 and 111, and its test *"New
+session opens another window rather than hijacking this one"* (line 187)
+is the written spec of the behaviour being removed. That test should be
+rewritten to assert the opposite — one window, re-pointed — in the same
+commit, not deleted quietly.
+
+*Risk:* this is the milestone that can break "two agents side by side".
+The pop-out must land with it, not after it. And `prepare_spawn` /
+`spawnForOpen` still bypass instancing, so a privileged spawn or an
+`--open` route could still produce a second ai; neither is reachable for
+this app today, but the invariant is asserted, not enforced.
 
 ### M3 — compose in place
 
@@ -346,6 +406,10 @@ filesystem:
 - No cross-host merging inside the app. One window per host; the rail is
   where hosts merge.
 - No fork verb (HISTORY's reasoning is unchanged).
+- No one-process-many-windows. `single` in the wire means "one process
+  serves many windows" and that is explicitly not what this plans for:
+  ai's backend keeps one session per process, and the pop-out is a second
+  process. Revisit only if side-by-side needs shared state.
 - No archive management UI — no bulk delete, no retention settings. The
   store grows unbounded today and that is a separate, honest problem
   (`SessionMeta.Bytes` exists for whoever picks it up).
