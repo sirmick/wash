@@ -1,6 +1,8 @@
 # The agent app as a messenger — one list, one window, one vocabulary
 
-Status: **plan of record** (2026-08-24), 0.15 scope. This is the design
+Status: **plan of record** (2026-08-24), 0.15 scope. **M5 is done**
+(shipped 2026-08-24, ahead of M1 — its three defects were wrong today,
+independent of any merge). This is the design
 doc [AGENT_UX.md](AGENT_UX.md) §6 said phase Next must have before any
 code. It settles the noun, the window count, the two lists, and the words
 for a session's state.
@@ -311,7 +313,17 @@ you". N6's attention flag stays the mechanism; what changes is that
 wash-ai computes the number from the roster rather than from its own
 session, and the pill renders it.
 
-### M5 — one status vocabulary
+### M5 — one status vocabulary — **DONE** 2026-08-24
+
+*As built:* `web/lib/src/agent-status.ts` is the single source; the three
+old switch statements are gone and `stateColor`/`stateLabel` survive as
+thin adapters (public @wash/ui surface). All three defects fixed and
+pinned by tests. One deviation: `awareness.ts` keeps string literals
+rather than importing the predicates — it is dependency-free so it can
+run under plain `node --test`, and @wash/ui's index uses bundler-style
+imports node cannot resolve. `awareness-vocabulary.ctest.ts` imports both
+sides and fails the build if they drift, which is the guarantee the
+import would have given.
 
 One table, every renderer, no disagreements. Worth doing early rather
 than last if M1 slips: two of the defects below are wrong *today*,
