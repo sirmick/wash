@@ -14,6 +14,7 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
+import { agentStateColor, agentStateLabel } from './agent-status';
 import { Markdown } from './markdown';
 import { Terminal } from './terminal';
 import { WASH_SCROLL_CLASS } from './scrollbars';
@@ -53,8 +54,11 @@ export interface AgentStatus {
   dir?: string;
   branch?: string;
   dirty?: boolean;
-  /** running | working | needs-input | done */
+  /** One of AgentState (see agent-status.ts): running | working |
+   *  needs-input | done | failed | stale. */
   state?: string;
+  /** qualifies the state: which input is wanted, or how it ended */
+  reason?: string;
   /** context tokens used / window size, from the agent's usage_update */
   used?: number;
   size?: number;
@@ -128,7 +132,7 @@ function dotColor(status?: string): string {
 }
 
 /** Indeterminate "the agent is thinking" ring. */
-const Spinner: Component<{ size?: number }> = (p) => (
+const Spinner: Component<{ size?: number; color?: string }> = (p) => (
   <span
     data-wash-spin
     aria-label="working"
@@ -140,7 +144,7 @@ const Spinner: Component<{ size?: number }> = (p) => (
       display: 'inline-block',
       'border-radius': '50%',
       border: `2px solid ${tokens.borderMenu}`,
-      'border-top-color': tokens.accentBlue,
+      'border-top-color': p.color ?? tokens.accentBlue,
       animation: tokens.animSpin,
     }}
   />
@@ -639,15 +643,26 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           'font-variant-numeric': 'tabular-nums',
         }}
       >
+        {/* The spinner IS the working state here — motion says "in a
+            turn" better than a colour does at this size — but it now
+            carries the vocabulary's blue rather than being the one
+            surface where working has no colour at all. Every other state
+            is a dot, coloured and named by the shared map
+            (docs/AGENT_MESSENGER.md M5); this status line used to fall
+            everything that was not needs-input or done into one dim grey,
+            so a FAILED session looked identical to an idle one. */}
         <Show
           when={st().state === 'working'}
           fallback={
             <Show when={st().state}>
-              <Dot color={st().state === 'needs-input' ? tokens.accentAmber : st().state === 'done' ? tokens.accentGreen : tokens.fgDim} />
+              <Dot color={agentStateColor(st().state)} />
+              <span style={{ color: agentStateColor(st().state) }}>
+                {agentStateLabel(st().state, st().reason)}
+              </span>
             </Show>
           }
         >
-          <Spinner size={9} />
+          <Spinner size={9} color={tokens.accentBlue} />
         </Show>
         <Show when={st().agent}>
           <span>{st().agent}</span>

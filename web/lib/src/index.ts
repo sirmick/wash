@@ -50,6 +50,18 @@ export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus, AgentConfig 
 // Roster* rather than Agent* because agent-session already owns AgentAsk
 // (a narrower ask) and AgentSession (the component).
 export { AgentAsks, AgentRoster, stateColor, stateLabel, fmtElapsed, fmtAgo } from './agent-roster';
+// The one agent-state vocabulary (docs/AGENT_MESSENGER.md M5): four
+// surfaces render it, so it lives here rather than in any one of them.
+export {
+  AGENT_STATES,
+  agentStateColor,
+  agentStateLabel,
+  detachedLabel,
+  isOver,
+  isWorking,
+  needsHuman,
+  type AgentState,
+} from './agent-status';
 // The bulk queue (docs/SIDEBAR.md M3): com.wash.fm's Jobs strip, and the
 // desktop rail until M3c retires that use.
 export { BulkJobs } from './bulk-jobs';

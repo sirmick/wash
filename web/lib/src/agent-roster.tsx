@@ -19,6 +19,7 @@ import type { Component, JSX } from 'solid-js';
 import { For, Show, createSignal } from 'solid-js';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { tokens } from './tokens';
+import { agentStateColor, agentStateLabel } from './agent-status';
 import type { AgentConfig } from './agent-session';
 
 export interface RosterRow {
@@ -118,25 +119,18 @@ export interface AgentRosterProps {
   onStop?: (row: RosterRow) => void;
 }
 
-// stateColor is the same language as the terminal's own tab dot: blue
-// working, amber needs-input, green done, muted for detected-but-quiet,
-// and a dim grey for a row whose terminal has stopped reporting.
+// stateColor / stateLabel are thin adapters over the shared vocabulary in
+// agent-status.ts (docs/AGENT_MESSENGER.md M5). They used to BE the
+// vocabulary, and three other surfaces kept their own copies that drifted
+// — including one where a failed session rendered green. Kept as named
+// exports because they are part of @wash/ui's public surface; the
+// switch statements are gone.
 export function stateColor(state: string): string {
-  switch (state) {
-    case 'working': return tokens.accentBlue;
-    case 'needs-input': return tokens.accentAmber;
-    case 'done': return tokens.accentGreen;
-    case 'stale': return tokens.fgDim;
-    default: return tokens.fgMuted;
-  }
+  return agentStateColor(state);
 }
 
 export function stateLabel(row: RosterRow): string {
-  switch (row.state) {
-    case 'needs-input': return row.reason ? `needs input · ${row.reason}` : 'needs input';
-    case 'stale': return 'not responding';
-    default: return row.state;
-  }
+  return agentStateLabel(row.state, row.reason);
 }
 
 export function fmtElapsed(ms: number): string {

@@ -451,3 +451,44 @@ func TestYoloAnswersInsteadOfAsking(t *testing.T) {
 		})
 	}
 }
+
+// A turn that dies on an adapter error must not be reported as "done".
+// It was, and every surface paints done GREEN — so a session that failed
+// was indistinguishable from one that succeeded, on every screen wash
+// has (docs/AGENT_MESSENGER.md M5).
+func TestAFailedTurnIsNotReportedAsDone(t *testing.T) {
+	reset()
+	withState(t, 1)
+	h := &hosted{key: "acp:1", agent: "codex"}
+	h.beginTurn()
+	h.endTurn("failed", "error")
+
+	r := rows["acp:1"]
+	if r == nil {
+		t.Fatal("no row published for the session")
+	}
+	if r.State != "failed" {
+		t.Errorf("State = %q, want %q — done renders green", r.State, "failed")
+	}
+	if r.Reason != "error" {
+		t.Errorf("Reason = %q, want %q", r.Reason, "error")
+	}
+}
+
+// A cancelled turn is NOT a failure — the human stopped it on purpose,
+// and colouring that red would cry wolf.
+func TestACancelledTurnIsStillDone(t *testing.T) {
+	reset()
+	withState(t, 1)
+	h := &hosted{key: "acp:2", agent: "codex"}
+	h.beginTurn()
+	h.endTurn("done", "cancelled")
+
+	r := rows["acp:2"]
+	if r == nil {
+		t.Fatal("no row published for the session")
+	}
+	if r.State != "done" {
+		t.Errorf("State = %q, want done", r.State)
+	}
+}

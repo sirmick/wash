@@ -57,6 +57,20 @@ interface NetStateView {
   status?: string;
 }
 
+// The three agent states this module counts.
+//
+// Spelled out here rather than imported from @wash/ui's shared vocabulary
+// (docs/AGENT_MESSENGER.md M5) for one specific reason: this module is
+// dependency-free so it can run under plain `node --test`, and @wash/ui's
+// index uses bundler-style extensionless imports that node cannot
+// resolve. The agreement is pinned by a test instead —
+// awareness-vocabulary.ctest.ts imports BOTH and asserts they match, so
+// the drift this constant could reintroduce fails the build rather than
+// the rail.
+const AGENT_NEEDS_HUMAN = 'needs-input';
+const AGENT_WORKING = 'working';
+const AGENT_FAILED = 'failed';
+
 interface AgentStateView {
   rows?: Array<{ state?: string }>;
   asks?: unknown[];
@@ -152,7 +166,7 @@ export function pendingPrivReqs(state: unknown): number {
  */
 export function waitingAgents(state: unknown): number {
   const s = state as AgentStateView | null;
-  const rows = (s?.rows ?? []).filter((r) => r.state === 'needs-input').length;
+  const rows = (s?.rows ?? []).filter((r) => r.state === AGENT_NEEDS_HUMAN).length;
   return rows + (s?.asks ?? []).length;
 }
 
@@ -236,11 +250,21 @@ export function privSummary(state: unknown): string {
 export function agentSummary(state: unknown): string {
   const s = state as AgentStateView | null;
   const rows = s?.rows ?? [];
-  const waiting = rows.filter((r) => r.state === 'needs-input').length + (s?.asks ?? []).length;
-  const working = rows.filter((r) => r.state !== 'needs-input').length;
+  const waiting = rows.filter((r) => r.state === AGENT_NEEDS_HUMAN).length + (s?.asks ?? []).length;
+  // An ALLOW-list, not "everything that isn't waiting". The old form
+  // counted `stale` and `done` rows as working, so a dead agent and a
+  // finished one both inflated the number — in the one line of the rail
+  // whose whole job is to be trusted at a glance
+  // (docs/AGENT_MESSENGER.md M5).
+  const working = rows.filter((r) => r.state === AGENT_WORKING).length;
+  // A session that ended badly is worth a word: it is not working, it is
+  // not waiting on you, and until now it read as "done" wherever it was
+  // counted at all.
+  const failed = rows.filter((r) => r.state === AGENT_FAILED).length;
   const parts: string[] = [];
   if (waiting > 0) parts.push(`${waiting} waiting on you`);
   if (working > 0) parts.push(`${plural(working, 'agent')} working`);
+  if (failed > 0) parts.push(`${failed} failed`);
   return parts.join(' · ');
 }
 

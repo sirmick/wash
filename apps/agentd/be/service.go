@@ -291,10 +291,14 @@ func statePriority(state string) int {
 		return 1
 	case "running":
 		return 2
-	case "done":
+	case "failed":
+		// Above done: a session that ended badly is the one ended session
+		// worth looking at.
 		return 3
+	case "done":
+		return 4
 	}
-	return 4 // stale, and anything a newer terminal invents
+	return 5 // stale, and anything a newer terminal invents
 }
 
 func rowKey(instance string, channelID uint64) string {

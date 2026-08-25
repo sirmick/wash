@@ -23,6 +23,7 @@ import { Check, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert,
 import {
   Button, ConfirmDialog,
   Menu, MenuItem, MenuSeparator, Terminal,
+  agentStateColor, agentStateLabel,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
   defineWashApp, tokens, WASH_SCROLL_CLASS,
@@ -104,7 +105,12 @@ interface AgentStatus {
   // running: detected in the foreground but not reporting (tier T0, or an
   // agent that has started but isn't in a turn). The other three come
   // from the agent's own hooks.
-  state: 'running' | 'working' | 'needs-input' | 'done';
+  // The shared vocabulary's states (docs/AGENT_MESSENGER.md M5). The
+  // terminal tier only ever PRODUCES the first four — the hook reports
+  // them — but the type no longer makes `stale` and `failed`
+  // inexpressible, which is what stopped this surface from being able to
+  // render a not-responding agent at all.
+  state: 'running' | 'working' | 'needs-input' | 'done' | 'failed' | 'stale';
   // startedAt: local clock anchor for the elapsed counter, derived once
   // from the BE's since_ms so the FE can tick without further messages.
   startedAt: number;
@@ -753,19 +759,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     );
   };
 
-  const agentTitle = (a: AgentStatus): string => {
-    const what = a.state === 'needs-input' && a.reason
-      ? `needs input (${a.reason})`
-      : a.state;
-    return `${a.agent} ${what} · ${elapsed(a.startedAt)}`;
-  };
+  // Both label functions say the state in the shared vocabulary's words
+  // (docs/AGENT_MESSENGER.md M5). They used to phrase it two ways of
+  // their own — "needs input (permission)" in the tooltip, "needs input"
+  // in the status line — while the roster said a third and the rail a
+  // fourth, for one condition.
+  const agentTitle = (a: AgentStatus): string =>
+    `${a.agent} ${agentStateLabel(a.state, a.reason)} · ${elapsed(a.startedAt)}`;
 
   // agentText is the status-line clause appended after the shell sentence:
-  // "bash as mick on ai · claude working 4m".
+  // "bash as mick on ai · claude working 4m". No reason here — the line is
+  // already long, and the tab's tooltip carries the detail.
   const agentText = (a: AgentStatus | undefined): string => {
     if (!a) return '';
-    const what = a.state === 'needs-input' ? 'needs input' : a.state;
-    return `· ${a.agent} ${what} ${elapsed(a.startedAt)}`;
+    return `· ${a.agent} ${agentStateLabel(a.state)} ${elapsed(a.startedAt)}`;
   };
 
   // elapsed renders a duration the way a glanceable status line wants it:
@@ -1802,16 +1809,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
 // ---- helpers / styles ----
 
-// agentColor maps an agent state to its dot hue (docs/AGENT_TERM.md §5):
-// blue working / amber needs-input / green done, with a muted dot for a
-// T0-detected agent that isn't reporting state.
+// agentColor is the shared vocabulary (docs/AGENT_MESSENGER.md M5), not a
+// fourth copy of it. It used to be its own switch, and the copies drifted:
+// this one had no `stale` case, so an agent that had stopped responding
+// was painted the same muted grey as one quietly running.
 function agentColor(state: AgentStatus['state']): string {
-  switch (state) {
-    case 'working': return tokens.accentBlue;
-    case 'needs-input': return tokens.accentAmber;
-    case 'done': return tokens.accentGreen;
-    default: return tokens.fgMuted;
-  }
+  return agentStateColor(state);
 }
 
 function shortShellName(p: string): string {

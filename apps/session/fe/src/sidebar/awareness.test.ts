@@ -226,6 +226,39 @@ test('agent summary separates a claim on your attention from reassurance', () =>
   assert.equal(agentSummary({ rows: [], asks: [] }), '');
 });
 
+// The bug this rail shipped with: `working` was computed as "everything
+// that isn't waiting", so a session that had FINISHED and one that had
+// STOPPED RESPONDING both counted as work in progress — in the one line
+// whose whole job is to be true at a glance (docs/AGENT_MESSENGER.md M5).
+test('a finished or unresponsive agent is not a working one', () => {
+  assert.equal(agentSummary({ rows: [{ state: 'done' }], asks: [] }), '');
+  assert.equal(agentSummary({ rows: [{ state: 'stale' }], asks: [] }), '');
+  assert.equal(agentSummary({ rows: [{ state: 'running' }], asks: [] }), '');
+  const mixed = {
+    rows: [{ state: 'working' }, { state: 'done' }, { state: 'stale' }, { state: 'needs-input' }],
+    asks: [],
+  };
+  assert.equal(agentSummary(mixed), '1 waiting on you · 1 agent working');
+});
+
+// A session that ended on an adapter error used to be indistinguishable
+// from one that finished cleanly — it was `done`, and green, everywhere.
+test('a failed session says so', () => {
+  assert.equal(agentSummary({ rows: [{ state: 'failed' }], asks: [] }), '1 failed');
+  assert.equal(
+    agentSummary({ rows: [{ state: 'working' }, { state: 'failed' }], asks: [] }),
+    '1 agent working · 1 failed',
+  );
+});
+
+// The badge counts only what is blocked on a person — never work in
+// flight, never something that already ended.
+test('the waiting count is exactly the rows blocked on a human', () => {
+  const rows = [{ state: 'needs-input' }, { state: 'working' }, { state: 'failed' }, { state: 'stale' }];
+  assert.equal(waitingAgents({ rows, asks: [] }), 1);
+  assert.equal(waitingAgents({ rows, asks: [{ id: 'q' }, { id: 'r' }] }), 3);
+});
+
 test('net summary speaks up for the states that matter, not the healthy one', () => {
   assert.equal(netSummary({ status: 'await-confirm' }), 'awaiting confirmation');
   assert.equal(netSummary({ status: 'failed' }), 'failed');

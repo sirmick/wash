@@ -41,8 +41,10 @@ test('populated: one row per agent, state on the element for the chrome to read'
   expect(getByTestId('agents-row-a').getAttribute('data-agent-state')).toBe('needs-input');
   expect(getByTestId('agents-row-a').getAttribute('data-agent')).toBe('claude');
   expect(getByTestId('agents-row-b').getAttribute('data-agent')).toBe('codex');
-  // The reason is what makes "needs input" actionable.
-  expect(getByTestId('agents-row-a').textContent).toContain('needs input · permission');
+  // The reason is what makes "needs you" actionable. The words come from
+  // the shared vocabulary now (agent-status.ts) — three surfaces used to
+  // say this three ways.
+  expect(getByTestId('agents-row-a').textContent).toContain('needs you · permission');
 });
 
 test('place line: repo, branch, and a star when the tree is dirty', () => {
@@ -88,8 +90,8 @@ test('state language matches the terminal’s own tab dot', () => {
   // An unknown state still renders (a newer terminal can invent one).
   expect(stateColor('teleporting')).toBeTruthy();
 
-  expect(stateLabel(row({ state: 'needs-input' }))).toBe('needs input');
-  expect(stateLabel(row({ state: 'needs-input', reason: 'idle' }))).toBe('needs input · idle');
+  expect(stateLabel(row({ state: 'needs-input' }))).toBe('needs you');
+  expect(stateLabel(row({ state: 'needs-input', reason: 'idle' }))).toBe('needs you · idle');
   expect(stateLabel(row({ state: 'stale' }))).toBe('not responding');
   expect(stateLabel(row({ state: 'working' }))).toBe('working');
 });

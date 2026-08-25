@@ -268,7 +268,11 @@ func promptHosted(h *hosted, text string) {
 	switch {
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
-		h.endTurn("done", "error")
+		// "failed", not "done": a turn that died on an adapter error is
+		// not a turn that finished, and reporting it as done made every
+		// surface paint it GREEN — indistinguishable from success
+		// (docs/AGENT_MESSENGER.md M5).
+		h.endTurn("failed", "error")
 	case res.StopReason == acp.StopCancelled:
 		h.endTurn("done", "cancelled")
 	default:

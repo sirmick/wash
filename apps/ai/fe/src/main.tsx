@@ -279,6 +279,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       branch: r?.branch,
       dirty: r?.dirty,
       state: r?.state,
+      reason: r?.reason,
       used: r?.used,
       size: r?.size,
       title: r?.title,

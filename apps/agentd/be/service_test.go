@@ -158,7 +158,9 @@ func TestDirLabel(t *testing.T) {
 func TestStatePriorityCoversEveryState(t *testing.T) {
 	// Every state the terminal can report must sort ahead of stale, and
 	// needs-input ahead of all of them.
-	states := []string{"needs-input", "working", "running", "done", "stale"}
+	// failed sits between running and done: a session that ended badly is
+	// the one ended session worth looking at (docs/AGENT_MESSENGER.md M5).
+	states := []string{"needs-input", "working", "running", "failed", "done", "stale"}
 	for i := 1; i < len(states); i++ {
 		if statePriority(states[i-1]) >= statePriority(states[i]) {
 			t.Errorf("%s does not sort ahead of %s", states[i-1], states[i])
