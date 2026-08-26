@@ -227,12 +227,20 @@ The compelling case is the term pane: `terminal/create` can open the agent's
 shell as a **sibling pane in the same window** — transcript left, its shell
 right, one draggable divider. Only possible because split panes landed first.
 
-Two rules that must be designed in, not discovered:
+Three rules that must be designed in, not discovered:
 
 - **Two subscriber counters, not one.** agentd's `SubscriberCount` drives
   defer-on-nobody-home for approvals. A transcript subscription is not a
   roster subscription; sharing the counter would make opening a pane change
   approval behaviour, and closing the last pane defer a live question.
+- **A transcript is bulk traffic.** A streamed reply is one push per chunk,
+  each carrying the message accumulated so far, so one paragraph is hundreds
+  of frames. Both hops — agentd → the app, and the app → its FE — send it on
+  the Bulk class (docs/QOS.md §3), the same class pty output rides, so the
+  scheduler puts a talking agent behind the keystrokes and window moves the
+  human is making while it talks. The cost is that Bulk can be overtaken:
+  session-scoped frames carry the key they belong to, and a window drops the
+  ones addressed to a session it has since switched away from.
 - **N renderers, zero affinity.** With three surfaces plus the sidebar, a
   pending ask is pure state in agentd with no per-view ownership. Answering
   anywhere resolves everywhere. This is what let SIDEBAR.md §3.2(8) keep

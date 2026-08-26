@@ -14,6 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
+import { isStaleTranscript } from './transcript-guard.ts';
 import type { Component } from 'solid-js';
 import { Plus } from 'lucide-solid';
 import {
@@ -124,6 +125,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
   onCleanup(() => { if (historyTimer) clearTimeout(historyTimer); });
 
+  // Why a transcript frame can now be for the wrong session: see
+  // transcript-guard.ts.
+  const staleTranscript = (m: Record<string, unknown>) => isStaleTranscript(m.key, sessionKey());
+
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
       case 'autostart':
@@ -148,6 +153,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setError(String(m.error ?? 'could not start'));
         break;
       case 'snapshot':
+        if (staleTranscript(m)) break;
         if (typeof m.reset === 'boolean') {
           setEvents((prev) => mergeEvents(prev, (m.events as AgentEvent[]) ?? []));
         } else {
@@ -156,7 +162,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
       case 'event': {
         const e = m.event as AgentEvent | undefined;
-        if (!e) break;
+        if (!e || staleTranscript(m)) break;
         // agentd mutates a tool row in place, so an event with a seq we
         // already hold replaces it rather than appending a duplicate.
         setEvents((prev) => mergeEvents(prev, [e]));
@@ -607,9 +613,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       style={{
         // No width here: the grid column owns it, so dragging the
         // splitter is the only thing that decides how wide this is.
+        // No height either, for the same reason — the row is clamped to
+        // the body, and min-height:0 keeps a long list from arguing.
         'min-width': 0,
+        'min-height': 0,
         background: tokens.bgInset,
         overflow: 'auto',
+        // Wheel past the end of the list and the scroll stops here rather
+        // than chaining out to the window frame, which would move this
+        // pane and the transcript together — the two panes are separate
+        // scrollers, so a gesture aimed at one stays in it.
+        'overscroll-behavior': 'contain',
         padding: `${tokens.spaceSm}px`,
       }}
     >
@@ -749,11 +763,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       {menubar}
       <div
         ref={bodyEl!}
+        data-testid="ai-body"
         style={{
           flex: 1,
           'min-height': 0,
           display: 'grid',
           'grid-template-columns': `${splitPct()}% 4px 1fr`,
+          // One row, clamped to the body — the same `grid-template-rows`
+          // + `overflow: hidden` pair wash-edit's and wash-fm's split
+          // bodies use. The row is otherwise implicit and auto-sized, so
+          // its height is a question about content rather than about the
+          // window; minmax(0, 1fr) makes it the body's height flat out,
+          // which is the precondition for each pane scrolling its own
+          // way. Without it, a row that outgrew the window would hand
+          // the scrollbar to the window frame (whose app slot is
+          // `overflow: auto`) — one scrollbar moving both panes.
+          'grid-template-rows': 'minmax(0, 1fr)',
+          overflow: 'hidden',
         }}
       >
         {rosterPane}
@@ -765,7 +791,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onCommit={() => send({ kind: 'set_split', pct: Math.round(splitPct()) })}
           data-testid="ai-splitter"
         />
-        <div style={{ 'min-width': 0, display: 'flex', 'flex-direction': 'column' }}>
+        <div style={{ 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column' }}>
           <Show
             when={sessionKey()}
             fallback={

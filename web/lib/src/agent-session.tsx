@@ -383,11 +383,17 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
 
       <div
         ref={scroller}
+        data-testid="agent-transcript"
         onScroll={() => setPinned(atBottom())}
         style={{
           flex: 1,
           'min-height': 0,
           'overflow-y': 'auto',
+          // The transcript keeps its own scroll: a wheel that reaches the
+          // top or the bottom stops here instead of chaining out to
+          // whatever pane or window is behind it and taking the layout
+          // beside it along for the ride.
+          'overscroll-behavior': 'contain',
           padding: `${tokens.spaceLg}px`,
           display: 'flex',
           'flex-direction': 'column',

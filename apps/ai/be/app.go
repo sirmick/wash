@@ -576,17 +576,28 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			"sessions": m["sessions"],
 		})
 
+	// The transcript hops to the FE on the Bulk class — this is the one
+	// hop that shares the browser's single socket with every other app's
+	// frames, so it is the one where the class decides whether a dragged
+	// window keeps up with the pointer while the agent is talking.
+	//
+	// The key rides along because Bulk can now be overtaken: `started`
+	// (Interactive, sent on select) may jump ahead of transcript frames
+	// already queued for the session we just left, and the FE must be
+	// able to tell that those belong to the old conversation. The check
+	// above is this backend's own view at send time; the one in the FE
+	// is against what it is showing when the frame lands.
 	case "transcript_snapshot":
 		if str(m["key"]) != session.key {
 			return
 		}
-		c.SendAppMsg(map[string]any{"kind": "snapshot", "reset": m["reset"], "events": m["events"]})
+		c.SendAppMsgBulk(map[string]any{"kind": "snapshot", "key": session.key, "reset": m["reset"], "events": m["events"]})
 
 	case "transcript_event":
 		if str(m["key"]) != session.key {
 			return
 		}
-		c.SendAppMsg(map[string]any{"kind": "event", "event": m["event"]})
+		c.SendAppMsgBulk(map[string]any{"kind": "event", "key": session.key, "event": m["event"]})
 
 	case sdk.StateServiceKindState:
 		// The window title follows the agent's own name for the session.

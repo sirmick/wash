@@ -42,6 +42,87 @@ async function startSession(win: ReturnType<Page['locator']>, prompt: string) {
   await composer.press('Enter');
 }
 
+/**
+ * shrinkWin makes an app's window `height` tall.
+ *
+ * Through the shell's own WM API rather than by dragging the resize grip:
+ * the Agent window opens 720 tall on a 720 viewport, so its bottom-right
+ * grip is off the bottom of the screen and there is nothing to grab.
+ */
+async function shrinkWin(page: Page, app: ReturnType<Page['locator']>, height: number) {
+  const id = Number(await app.getAttribute('data-wash-window'));
+  const box = (await app.boundingBox())!;
+  await page.evaluate(
+    (a) => window.wash.resizeWindow(a.id, a.w, a.h),
+    { id, w: Math.round(box.width), h: height },
+  );
+  await expect.poll(async () => (await app.boundingBox())!.height).toBeLessThanOrEqual(height);
+}
+
+test('each pane scrolls its own content rather than growing the window', async ({ page, router }) => {
+  // Two panes, two scrollbars: the sessions list and the transcript each
+  // scroll their own content, and neither the window frame nor the other
+  // pane moves when one of them does. What this guards against is the
+  // layout quietly handing the scroll upwards — a split body whose row
+  // grows with its tallest pane leaves the window frame (whose app slot
+  // is `overflow: auto`) holding the only scrollbar, and one scrollbar
+  // moves both halves.
+  test.setTimeout(60_000);
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+
+  const win = await openAgentWindow(page, 0);
+  await startSession(win, 'a session to look at');
+  const pane = win.locator('[data-testid="ai-roster-pane"]');
+  await expect(pane).toBeVisible();
+
+  // Short enough that the list is taller than the body — the situation
+  // the clamp exists for. Asserted below, so a window that turns out to
+  // be roomy enough fails loudly instead of passing on nothing.
+  await shrinkWin(page, win, 100);
+
+  const m = await pane.evaluate((el) => {
+    const body = el.parentElement!;
+    return { content: el.scrollHeight, pane: el.clientHeight, body: body.clientHeight };
+  });
+  expect(m.content, 'the sessions list must overflow the window for this test to mean anything')
+    .toBeGreaterThan(m.body);
+  // The pane is bounded by the window, not the other way round...
+  expect(m.pane).toBeLessThanOrEqual(m.body + 1);
+  // ...so the overflow is the pane's own to scroll.
+  expect(m.content).toBeGreaterThan(m.pane);
+  const scrolled = await pane.evaluate((el) => {
+    el.scrollTop = 9999;
+    return el.scrollTop;
+  });
+  expect(scrolled, 'the sessions pane scrolls itself').toBeGreaterThan(0);
+
+  // The other half: the transcript is its own scroller too, with its own
+  // viewport inside the window rather than a box as tall as its content.
+  const transcript = win.locator('[data-testid="agent-transcript"]');
+  const t = await transcript.evaluate((el) => ({ view: el.clientHeight, content: el.scrollHeight }));
+  expect(t.view).toBeLessThanOrEqual(m.body);
+  expect(t.content).toBeGreaterThan(t.view);
+
+  // Nothing outside the panes scrolls. The window frame's content slot is
+  // itself `overflow: auto`, so an app that lets its layout outgrow the
+  // window hands the frame the scrollbar — and then one scrollbar moves
+  // both panes at once, which is the coupling this is all about.
+  const slotOverflow = await win.evaluate((el) => {
+    const slot = el.parentElement!;
+    return slot.scrollHeight - slot.clientHeight;
+  });
+  expect(slotOverflow, 'the window frame must not be the scroller for both panes').toBeLessThanOrEqual(1);
+
+  // And a wheel that runs past the end of one pane stays in it: with
+  // overscroll containment the gesture cannot chain outwards and drag the
+  // other pane with it.
+  await pane.hover();
+  const before = await transcript.evaluate((el) => el.scrollTop);
+  await page.mouse.wheel(0, 400);
+  expect(await transcript.evaluate((el) => el.scrollTop)).toBe(before);
+});
+
 test('the roster pane lists agentd\'s sessions and switches the detail pane', async ({ page, router }) => {
   await page.goto(router.url);
   await expect(page.locator('wash-app-session')).toBeVisible();

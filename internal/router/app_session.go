@@ -424,7 +424,7 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 		// From field — relayAppMsgCrossInstance stamps a router-
 		// attested From on the receiver-bound frame.
 		if m.To != nil {
-			return inst.relayAppMsgCrossInstance(m)
+			return inst.relayAppMsgCrossInstance(m, class)
 		}
 		return inst.relayAppMsgToShell(m, class)
 	case wire.TEvtWindowSetTitle:
@@ -590,7 +590,17 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 // The To field on the inbound EvtAppMsg names the recipient; the
 // router writes the relayed frame with From set to the sender's
 // router-attested identity so the receiver knows who messaged it.
-func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsg) error {
+//
+// class is the sender's own word about what this traffic is, and it
+// rides through to the recipient — the same preservation
+// relayAppMsgToShell already does for the BE→FE hop. The recipient's
+// socket has no scheduler in front of it today, so this is not what
+// makes a streaming service (agentd's transcript fan-out) stop
+// fighting the desktop; that is the FE hop. It is what stops
+// SendAppMsgToBulk from being a lie one hop in — the class survives
+// the relay, so the frame the recipient reads says what its sender
+// meant, and a future scheduled hop needs no second source of truth.
+func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsg, class wire.Class) error {
 	if m.To == nil {
 		return nil
 	}
@@ -617,7 +627,7 @@ func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsg) error {
 		inst.router.log("app %s app_msg cross-instance: %v", inst.AppID, err)
 		return nil
 	}
-	return target.WriteEvt(wire.NewEvtAppMsgFrom(target.WindowID, m.Data, from))
+	return target.WriteEvtClass(wire.NewEvtAppMsgFrom(target.WindowID, m.Data, from), class)
 }
 
 // relayAppMsgToShell forwards an APP_MSG from BE to its FE half.
