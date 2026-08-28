@@ -150,3 +150,73 @@ func TestIsRPMArch(t *testing.T) {
 		}
 	}
 }
+
+// canned `dnf search --quiet` output from dnf5 (Fedora 41+), which
+// ships as /usr/bin/dnf and replaced dnf4's " : " separator with a
+// TAB and its "=== ... ===" headers with "Matched fields: ...".
+// Captured verbatim from a fc44 host running dnf5 5.4.3.0.
+const dnf5SearchSample = "Matched fields: name (exact)\n" +
+	" bash.x86_64\tThe GNU Bourne Again shell\n" +
+	"Matched fields: name\n" +
+	" bash-completion.noarch\tProgrammable completion for Bash\n" +
+	" bash.i686\tThe GNU Bourne Again shell\n" +
+	"Matched fields: summary\n" +
+	" cowsay.noarch\tConfigurable talking cow\n"
+
+func TestParseDNFSearch_DNF5Format(t *testing.T) {
+	installed := map[string]string{"bash": "5.3.0-2.fc44"}
+	got := parseDNFSearch([]byte(dnf5SearchSample), installed)
+
+	wantNames := []string{"bash", "bash-completion", "cowsay"}
+	if len(got) != len(wantNames) {
+		t.Fatalf("want %d packages, got %d: %+v", len(wantNames), len(got), got)
+	}
+	for i, want := range wantNames {
+		if got[i].Name != want {
+			t.Errorf("got[%d].Name = %q, want %q", i, got[i].Name, want)
+		}
+	}
+	// Leading space before the name and the TAB separator are both
+	// stripped, so installed-state still keys off the bare name.
+	if !got[0].Installed || got[0].Version != "5.3.0-2.fc44" {
+		t.Errorf("bash installed-state lost: %+v", got[0])
+	}
+	if got[0].Summary != "The GNU Bourne Again shell" {
+		t.Errorf("bash summary = %q", got[0].Summary)
+	}
+	if got[2].Summary != "Configurable talking cow" {
+		t.Errorf("cowsay summary = %q", got[2].Summary)
+	}
+}
+
+func TestParseDNFSearch_DNF5NoMatches(t *testing.T) {
+	// dnf5 exits 0 and prints this on stdout where dnf4 exited 1 with
+	// nothing; it must not parse as a package.
+	if got := parseDNFSearch([]byte("No matches found.\n"), nil); len(got) != 0 {
+		t.Errorf("want no packages, got %+v", got)
+	}
+}
+
+func TestSplitDNFSearchLine(t *testing.T) {
+	cases := []struct {
+		in            string
+		name, summary string
+		ok            bool
+	}{
+		{"bash.x86_64 : The GNU Bourne Again shell", "bash.x86_64", "The GNU Bourne Again shell", true},
+		{"bash.x86_64\tThe GNU Bourne Again shell", "bash.x86_64", "The GNU Bourne Again shell", true},
+		{" bash.x86_64\tThe GNU Bourne Again shell", "bash.x86_64", "The GNU Bourne Again shell", true},
+		// TAB wins: a dnf5 summary may itself contain " : ".
+		{"foo.noarch\tPlugin : legacy shim", "foo.noarch", "Plugin : legacy shim", true},
+		{"Matched fields: name (exact)", "", "", false},
+		{"No matches found.", "", "", false},
+		{"", "", "", false},
+	}
+	for _, c := range cases {
+		name, summary, ok := splitDNFSearchLine(c.in)
+		if ok != c.ok || name != c.name || summary != c.summary {
+			t.Errorf("splitDNFSearchLine(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				c.in, name, summary, ok, c.name, c.summary, c.ok)
+		}
+	}
+}

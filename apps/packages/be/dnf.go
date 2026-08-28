@@ -56,26 +56,33 @@ func (b *dnfBackend) Search(ctx context.Context, query string) ([]Package, error
 	return packages, nil
 }
 
-// parseDNFSearch reads `dnf search --quiet` output. Each match is
-// "<name>.<arch> : <summary>" — `dnf search` groups results under
-// "=== Name Exactly Matched: <query> ===" headers we skip.
+// parseDNFSearch reads `dnf search --quiet` output, in either of the
+// two formats Fedora has shipped:
+//
+//	dnf4:  "=== Name Exactly Matched: htop ==="
+//	       "htop.x86_64 : Interactive process viewer"
+//	dnf5:  "Matched fields: name (exact)"
+//	       " htop.x86_64\tInteractive process viewer"
+//
+// Fedora 41+ ships dnf5 as /usr/bin/dnf, which swapped the " : "
+// separator for a TAB and the "=== … ===" group headers for
+// "Matched fields: …". Both are accepted so one binary works across
+// the whole supported range; splitDNFSearchLine picks per line, not
+// per run, so a mixed-format stream would still parse.
 func parseDNFSearch(b []byte, installed map[string]string) []Package {
 	var packages []Package
 	seen := map[string]bool{}
 	scanner := bufio.NewScanner(bytes.NewReader(b))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "===") {
+		if line == "" || strings.HasPrefix(line, "===") ||
+			strings.HasPrefix(line, "Matched fields:") {
 			continue
 		}
-		// Format: "name.arch : summary". The first " : " separates
-		// the qualified package name from the summary.
-		sep := strings.Index(line, " : ")
-		if sep < 0 {
+		nameArch, summary, ok := splitDNFSearchLine(line)
+		if !ok {
 			continue
 		}
-		nameArch := strings.TrimSpace(line[:sep])
-		summary := strings.TrimSpace(line[sep+3:])
 		// Strip the trailing ".<arch>" (.x86_64, .noarch, …). We want
 		// the bare package name so installed-state lookup works.
 		name := nameArch
@@ -97,6 +104,22 @@ func parseDNFSearch(b []byte, installed map[string]string) []Package {
 		packages = append(packages, p)
 	}
 	return packages
+}
+
+// splitDNFSearchLine separates one result line into its qualified
+// name ("htop.x86_64") and summary. dnf5 uses a TAB, dnf4 uses " : ";
+// TAB is checked first because a dnf5 summary can itself contain
+// " : " (e.g. "foo.noarch\tPlugin : legacy shim") while a dnf4 line
+// never contains a TAB. ok is false for lines with neither separator
+// — headers, notices, blank continuation lines.
+func splitDNFSearchLine(line string) (nameArch, summary string, ok bool) {
+	if i := strings.IndexByte(line, '\t'); i >= 0 {
+		return strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:]), true
+	}
+	if i := strings.Index(line, " : "); i >= 0 {
+		return strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+3:]), true
+	}
+	return "", "", false
 }
 
 // isRPMArch returns true for known RPM arch suffixes. Anything else
