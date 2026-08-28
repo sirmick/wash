@@ -27,6 +27,7 @@ import (
 	"github.com/sirmick/wash/internal/login"
 	"github.com/sirmick/wash/internal/mdns"
 	"github.com/sirmick/wash/internal/tlsutil"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 const (
@@ -127,6 +128,10 @@ func canWriteTo(dir string) bool {
 // name). Returns a process exit code — 0 on normal shutdown,
 // non-zero on setup / runtime failure.
 func Run(args []string) int {
+	// Not an app: decline discovery's probe before flag parsing, which
+	// would otherwise dump this whole usage block into the router's boot
+	// log (pkg/wire.DeclineManifestProbe).
+	wire.DeclineManifestProbe(args)
 	fs := flag.NewFlagSet("wash-login", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 

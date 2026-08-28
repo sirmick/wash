@@ -59,19 +59,17 @@ func main() {
 		// which is pruned from the distro source tarball. It's compiled in only
 		// with -tags=washvmlogin (the VM image build); otherwise vmloginRun is
 		// nil and we fall through to the registry/not-found path.
+		//
+		// The decline has to happen HERE rather than only in vmlogin.Run,
+		// because in the default build that Run is never reached: without
+		// the tag the probe would fall through to "no app registered",
+		// which is a real error message for a genuinely broken symlink but
+		// pure noise for discovery.
+		wire.DeclineManifestProbe(os.Args[1:])
 		if vmloginRun != nil {
 			os.Exit(vmloginRun(os.Args[1:]))
 		}
 	case "wash-fswatchd":
-		// Reject the router's app-probe cleanly (exit 2, matching the
-		// other non-app binaries) instead of starting the daemon, which
-		// would read empty probe stdin and exit 0 with no output — the
-		// router then logged a confusing "probe: no header newline". The
-		// standalone cmd/wash-fswatchd shim guards this too; the multicall
-		// dispatch must match.
-		if len(os.Args) >= 2 && os.Args[1] == "--wash-manifest" {
-			os.Exit(2)
-		}
 		os.Exit(fswatchd.Run(os.Args[1:]))
 	}
 

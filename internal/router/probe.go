@@ -2,10 +2,13 @@ package router
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // probeTimeout is the cap on a --wash-manifest exec (WIRE.md §5).
@@ -25,12 +28,25 @@ const probeStdoutCap = 32 * 1024 * 1024
 // error / disable reason.
 const probeStderrCap = 4 * 1024
 
+// ErrNotAnApp reports that the probed binary explicitly declined the
+// manifest probe: it is a wash- prefixed helper (wash-router,
+// wash-login, wash-sudo, …), not an app. The registry skips these
+// silently rather than listing them disabled — see probeAndRegister.
+var ErrNotAnApp = errors.New("declined the manifest probe (not a wash app)")
+
 // Probe runs `<bin> --wash-manifest` with a stripped environment and
 // returns the captured stdout (WIRE.md §5). Stdout is capped at 64
 // KiB; the process is killed if it exceeds probeTimeout.
 //
-// The function returns the bytes captured even if the process exits
-// with a non-zero status — the registry may want to surface the
+// A binary that exits wire.ExitNotAnApp having printed nothing on
+// either stream gets ErrNotAnApp — that exact combination is the
+// decline signal (WIRE.md §5.3). Both streams must be empty: a helper
+// declines before it can produce output, so anything on stdout or
+// stderr means we are looking at a real failure that wants a visible
+// reason, not a decline.
+//
+// The function otherwise returns the bytes captured even if the process
+// exits with a non-zero status — the registry may want to surface the
 // truncated output in the disable reason. Any stderr the binary emitted
 // is folded into the returned error so an operator can see why a probe
 // produced no usable manifest.
@@ -49,6 +65,11 @@ func Probe(ctx context.Context, binary string) ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return lw.bytes(), fmt.Errorf("probe %s: timed out after %s%s", binary, probeTimeout, stderrSuffix(ew.bytes()))
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == wire.ExitNotAnApp &&
+			len(lw.bytes()) == 0 && len(ew.bytes()) == 0 {
+			return nil, fmt.Errorf("probe %s: %w", binary, ErrNotAnApp)
 		}
 		return lw.bytes(), fmt.Errorf("probe %s: %w%s", binary, err, stderrSuffix(ew.bytes()))
 	}

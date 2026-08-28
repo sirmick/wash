@@ -175,6 +175,10 @@ func (o overlayFS) Open(name string) (http.File, error) {
 // multi-call host's argv[0]-dispatch can drive Run without
 // touching the global flag state.
 func Run(args []string) int {
+	// Not an app: decline discovery's probe before flag parsing, which
+	// would otherwise dump this whole usage block into the router's boot
+	// log (pkg/wire.DeclineManifestProbe).
+	wire.DeclineManifestProbe(args)
 	fs := flag.NewFlagSet("wash-router", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	listen := fs.String("listen", "", "host:port to bind (overrides WASH_LISTEN)")

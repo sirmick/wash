@@ -35,6 +35,10 @@ import (
 
 // Run drives wash-vmlogin with the given argv (excluding the program name).
 func Run(args []string) int {
+	// Not an app: decline discovery's probe before flag parsing, which
+	// would otherwise dump this whole usage block into the router's boot
+	// log (pkg/wire.DeclineManifestProbe).
+	wire.DeclineManifestProbe(args)
 	fs := flag.NewFlagSet("wash-vmlogin", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 

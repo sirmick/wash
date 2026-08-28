@@ -35,6 +35,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/sirmick/wash/internal/version"
+	"github.com/sirmick/wash/pkg/wire"
 	"io"
 	"net"
 	"os"
@@ -43,6 +44,11 @@ import (
 )
 
 func main() {
+	// Not an app: decline discovery's probe before flag parsing, which
+	// would otherwise dump this whole usage block into the router's boot
+	// log (pkg/wire.DeclineManifestProbe).
+	wire.DeclineManifestProbe(os.Args[1:])
+
 	reason := flag.String("reason", "", "freeform note shown in wash-priv's approval row")
 	window := flag.Bool("window", false, "spawn a wash-term window instead of inline streaming")
 	appID := flag.String("app", "", "spawn a registered wash app as root (no command argv)")

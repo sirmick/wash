@@ -28,6 +28,8 @@ import (
 	"net"
 	"os"
 	"time"
+
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // Run drives the wash-launch CLI with the given argv (excluding the
@@ -35,6 +37,10 @@ import (
 // on dial / parse / protocol failure. Callers use os.Exit on the
 // returned value.
 func Run(args []string) int {
+	// Not an app: decline discovery's probe before flag parsing, which
+	// would otherwise dump this whole usage block into the router's boot
+	// log (pkg/wire.DeclineManifestProbe).
+	wire.DeclineManifestProbe(args)
 	fs := flag.NewFlagSet("wash-launch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	showVersion := fs.Bool("version", false, "print version and exit")

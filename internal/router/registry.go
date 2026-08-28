@@ -181,6 +181,16 @@ func (r *Registry) probeAndRegister(ctx context.Context, bin string) {
 	}
 	data, err := Probe(ctx, bin)
 	if err != nil {
+		// The one case that is NOT listed-disabled: the binary declined
+		// the probe outright (wire.ExitNotAnApp, silent). "Never
+		// silently dropped" protects apps that FAILED — an operator
+		// must be able to see why a launcher row is missing. A helper
+		// that says "I am not an app" was never going to have a row, so
+		// listing it disabled reports a non-problem, and there are
+		// seven such binaries beside the router in a default install.
+		if errors.Is(err, ErrNotAnApp) {
+			return
+		}
 		// We still add the entry so it can be surfaced.
 		r.appendEntry(&Entry{Path: bin, Reason: err.Error()})
 		return
@@ -328,6 +338,13 @@ func (r *Registry) Entries() []*Entry {
 // multicall symlinks to a single `wash`), so the prefix is a cheap, safe
 // filter. A future self-describing scheme (ELF note / sidecar manifest)
 // could drop the naming requirement entirely — see docs/MATRIX.md.
+//
+// What the prefix CANNOT do is separate apps from helpers, since
+// wash-router, wash-login, wash-launch and wash-sudo wear it too. Those
+// decline the probe explicitly (wire.DeclineManifestProbe) and are
+// skipped without a log line; see ErrNotAnApp in probe.go. A wash-
+// prefixed binary that neither answers nor declines is still
+// listed-disabled with its stderr as the reason.
 const appBinPrefix = "wash-"
 
 // executablesIn returns the absolute paths of regular +x files in

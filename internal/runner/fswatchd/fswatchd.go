@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/remotewatch"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // stdio adapts the process's stdin/stdout into one io.ReadWriteCloser — the
@@ -23,7 +24,13 @@ func (stdio) Close() error                { return os.Stdin.Close() }
 // Run watches the local filesystem with inotify and streams change events over
 // stdin/stdout. Diagnostics go to stderr so stdout stays a clean event wire.
 // Returns a process exit code.
-func Run(_ []string) int {
+func Run(args []string) int {
+	// Not an app: decline discovery's probe before starting the daemon.
+	// Reading the probe's empty stdin, it used to exit 0 having printed
+	// nothing, and the router logged a confusing "probe: no header
+	// newline" (pkg/wire.DeclineManifestProbe).
+	wire.DeclineManifestProbe(args)
+
 	log.SetFlags(0)
 	log.SetPrefix("wash-fswatchd: ")
 	log.SetOutput(os.Stderr)

@@ -217,6 +217,36 @@ Validation failures (timeout, non-JSON, schema invalid, duplicate id, icon
 oversize, truncated bundle frame) result in a listed-disabled launcher
 entry with the reason. Apps are never silently dropped.
 
+### 5.3 Declining the probe (non-app helpers)
+
+Discovery filters candidates by the `wash-` name prefix, which keeps it
+from exec-probing a crowded `/usr/bin` but cannot tell an app from a
+helper — `wash-router`, `wash-login`, `wash-launch`, `wash-sudo`,
+`wash-fswatchd` and `wash-mount` all wear the prefix too. A non-app
+binary declines by exiting **66** (`wire.ExitNotAnApp`) having written
+**nothing to stdout or stderr**. The router then skips it entirely: no
+registry entry, no boot-log line.
+
+This is the single exception to "never silently dropped" above, and it is
+narrow by construction. That rule exists so an operator can always find
+out why a launcher row is *missing*; a binary that declares itself a
+non-app was never going to have one, so listing it disabled reports a
+non-problem. Both halves of the signal matter:
+
+- **Not exit 2.** Go's `flag` package already exits 2 on an unknown flag,
+  so reserving 2 would mean an app that fails to parse its own arguments
+  disappears from the catalog instead of being listed with a reason.
+- **Silence on both streams.** A helper declines before it can print
+  anything, so output alongside the exit code means a real failure, which
+  stays listed-disabled with its stderr as the reason.
+
+Helpers call `wire.DeclineManifestProbe(args)` as the first statement of
+their entrypoint — ahead of flag parsing, logging setup, and anything
+touching the network or filesystem. A `wash-` prefixed binary that
+neither answers the probe nor declines is still listed-disabled; the
+decline is an optimisation for binaries we ship, not a requirement on
+third parties.
+
 ## 6. App handshake
 
 After the SDK adopts fd 3:

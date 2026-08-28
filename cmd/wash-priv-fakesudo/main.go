@@ -32,6 +32,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // expectedPassword is the secret fakesudo accepts. Overridable via
@@ -57,6 +59,12 @@ type invocation struct {
 }
 
 func main() {
+	// Not an app: this stub lives beside the apps in out/, so the router
+	// probes it like any other wash- binary and it showed up as a
+	// listed-disabled row every boot. Declining costs nothing and keeps
+	// it out of the log (pkg/wire.DeclineManifestProbe).
+	wire.DeclineManifestProbe(os.Args[1:])
+
 	inv := invocation{
 		TS:   time.Now().UTC().Format(time.RFC3339Nano),
 		Args: append([]string(nil), os.Args[1:]...),

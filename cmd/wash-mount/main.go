@@ -30,9 +30,15 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/sirmick/wash/internal/washmount"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 func main() {
+	// Not an app: decline discovery's probe before flag parsing, which
+	// would otherwise dump this whole usage block into the router's boot
+	// log (pkg/wire.DeclineManifestProbe).
+	wire.DeclineManifestProbe(os.Args[1:])
+
 	log.SetFlags(0)
 	log.SetPrefix("wash-mount: ")
 
