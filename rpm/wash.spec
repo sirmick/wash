@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.14.0
+Version:        0.14.1
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,18 @@ fi
 exit 0
 
 %changelog
+* Wed Aug 27 2026 sirmick <sirmick@gmail.com> - 0.14.1-1
+- agent: a failed session renders red instead of green. A turn that died on
+  an adapter error reported as done, and done paints green, so failure was
+  indistinguishable from success on every screen wash has.
+- agent: the rail no longer counts stale and finished sessions as working.
+- agent: the transcript stream rides Bulk, so a talking agent stops competing
+  with window moves and keystrokes for the browser's single socket; the two
+  panes scroll independently instead of sharing one scrollbar.
+- router: helper binaries decline the control-socket probe instead of printing
+  their usage at boot.
+- packages: search works on Fedora 41+. dnf5 replaced the " : " field
+  separator with a TAB and the parser silently dropped every result.
 * Mon Aug 24 2026 sirmick <sirmick@gmail.com> - 0.14.0-1
 - agent: every door (sidebar, roster row, notification) goes TO the session
   that wants you, opening a window only when there is none, instead of a new

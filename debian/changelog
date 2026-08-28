@@ -1,3 +1,27 @@
+wash (0.14.1-1) unstable; urgency=low
+
+  * agent: a failed session renders red instead of green. A turn that died on
+    an adapter error was reported as done, and every surface paints done
+    green — so failure was indistinguishable from success on every screen
+    wash has. It also sorts above done, because a session that ended badly is
+    the one ended session worth looking at.
+  * agent: the rail told the truth about how many agents are working. stale
+    and done rows were both counted as working, in the one line whose whole
+    job is to be true at a glance.
+  * agent: a talking agent no longer makes the desktop stutter. The
+    transcript stream was Interactive — the worst class for it, since one
+    paragraph is hundreds of growing frames — and now rides Bulk, behind the
+    window moves and keystrokes you make while it types.
+  * agent: the two panes of a split Agent window scroll independently instead
+    of sharing the window frame's single scrollbar.
+  * router: helper binaries decline the control-socket probe instead of
+    printing their usage at boot.
+  * packages: search works on Fedora 41+. dnf5 ships as /usr/bin/dnf and
+    replaced the " : " field separator with a TAB, so the parser dropped
+    every result and every query came back empty.
+
+ -- sirmick <sirmick@gmail.com>  Wed, 27 Aug 2026 22:15:00 -0700
+
 wash (0.14.0-1) unstable; urgency=low
 
   * agent: the agent feature got a navigation layer. Every door — the
