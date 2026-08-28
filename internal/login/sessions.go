@@ -48,6 +48,20 @@ type ProcRegistry struct {
 	// RouterArgv0 is the basename to match in argv[0]. Empty means
 	// "wash-router".
 	RouterArgv0 string
+	// SockRoot, when non-empty, restricts List to routers whose ctl
+	// socket lives under it — the run-root that spawned them. Empty
+	// means "every wash-router the uid owns, wherever it listens",
+	// which is what production wash-login wants: it adopts the
+	// session it finds, and there is only ever one run root on a
+	// real host.
+	//
+	// Tests want the opposite. /proc is host-global while a test's
+	// Spawner.RunRoot is a t.TempDir(), so an unscoped registry on a
+	// machine that is *running* wash finds the developer's real
+	// session and attaches to it instead of spawning its own. Set
+	// this to the same value as Spawner.RunRoot to keep a test
+	// looking only at the routers it started.
+	SockRoot string
 }
 
 // NewProcRegistry returns a ProcRegistry rooted at /proc with the
@@ -69,6 +83,17 @@ func (r *ProcRegistry) routerArgv0() string {
 		return r.RouterArgv0
 	}
 	return "wash-router"
+}
+
+// underSockRoot reports whether sock lives under SockRoot. Compares
+// on path boundaries rather than raw prefix so a run root of
+// /run/wash doesn't swallow /run/wash2.
+func (r *ProcRegistry) underSockRoot(sock string) bool {
+	if r.SockRoot == "" {
+		return true
+	}
+	root := strings.TrimRight(r.SockRoot, string(filepath.Separator))
+	return strings.HasPrefix(sock, root+string(filepath.Separator))
 }
 
 // List scans the configured /proc and returns every running
@@ -133,6 +158,9 @@ func (r *ProcRegistry) parseProcEntry(pid int, wantUID uint32) (*Session, error)
 	}
 	sock, name, ok := parseRouterArgv(argv)
 	if !ok {
+		return nil, nil
+	}
+	if !r.underSockRoot(sock) {
 		return nil, nil
 	}
 	exe, _ := os.Readlink(filepath.Join(root, strconv.Itoa(pid), "exe"))

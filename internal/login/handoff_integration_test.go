@@ -88,10 +88,13 @@ func TestHandoffEndToEnd(t *testing.T) {
 	}
 
 	srv, err := NewServer(Config{
-		Auth:     auth,
-		Signer:   signerForTest(t),
-		Logger:   log.New(io.Discard, "", 0),
-		Sessions: NewProcRegistry(),
+		Auth:   auth,
+		Signer: signerForTest(t),
+		Logger: log.New(io.Discard, "", 0),
+		// Scoped to runRoot: /proc is host-global, so an unscoped
+		// registry adopts the developer's real wash session instead
+		// of spawning one here.
+		Sessions: &ProcRegistry{SockRoot: runRoot},
 		Spawner: &Spawner{
 			RouterBinary: routerBin,
 			AllowUID:     uint32(os.Getuid()),
@@ -176,21 +179,16 @@ func TestHandoffEndToEnd(t *testing.T) {
 	}
 
 	// Verify the session actually shows up in /proc.
-	reg := NewProcRegistry()
+	reg := &ProcRegistry{SockRoot: runRoot}
 	sessions, err := reg.List(uint32(os.Getuid()))
 	if err != nil {
 		t.Fatalf("list sessions: %v", err)
 	}
-	found := false
-	for _, s := range sessions {
-		if strings.HasPrefix(s.Sock, runRoot) {
-			found = true
-			t.Logf("found spawned session: pid=%d sessid=%s name=%q sock=%s", s.Pid, s.SessID, s.Name, s.Sock)
-			break
-		}
+	if len(sessions) == 0 {
+		t.Errorf("spawned session not visible in /proc registry (run-root=%s)", runRoot)
 	}
-	if !found {
-		t.Errorf("spawned session not visible in /proc registry (run-root=%s, all sessions=%+v)", runRoot, sessions)
+	for _, s := range sessions {
+		t.Logf("found spawned session: pid=%d sessid=%s name=%q sock=%s", s.Pid, s.SessID, s.Name, s.Sock)
 	}
 }
 
@@ -201,16 +199,13 @@ func TestHandoffEndToEnd(t *testing.T) {
 // (see feedback_e2e_orphan_accumulation).
 func killSpawnedRouters(t *testing.T, runRoot string) {
 	t.Helper()
-	reg := NewProcRegistry()
+	reg := &ProcRegistry{SockRoot: runRoot}
 	sessions, err := reg.List(uint32(os.Getuid()))
 	if err != nil {
 		t.Logf("cleanup list: %v", err)
 		return
 	}
 	for _, s := range sessions {
-		if !strings.HasPrefix(s.Sock, runRoot) {
-			continue
-		}
 		if err := syscall.Kill(s.Pid, syscall.SIGTERM); err != nil {
 			t.Logf("cleanup SIGTERM pid=%d: %v", s.Pid, err)
 			continue

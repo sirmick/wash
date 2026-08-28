@@ -187,3 +187,68 @@ func TestSessIDFromSock(t *testing.T) {
 		}
 	}
 }
+
+// A registry scoped with SockRoot sees only routers whose ctl socket
+// lives under it. This is what keeps the handoff integration tests
+// from adopting the developer's own running wash session: /proc is
+// host-global, but Spawner.RunRoot is a t.TempDir().
+func TestProcRegistrySockRootScoping(t *testing.T) {
+	root := t.TempDir()
+
+	// The developer's real session, under the production run root.
+	fakeProcEntry(t, root, 6852,
+		"Name:\twash-router\nState:\tS (sleeping)\nUid:\t1000\t1000\t1000\t1000\n",
+		[]string{"/usr/local/lib/wash/wash-router", "--listen-unix", "/run/wash/1000/sessions/s-real.sock", "--name", "mick"},
+	)
+	// A test's own spawned session, under its temp run root.
+	fakeProcEntry(t, root, 6853,
+		"Name:\twash-router\nState:\tS (sleeping)\nUid:\t1000\t1000\t1000\t1000\n",
+		[]string{"/tmp/build/wash-router", "--listen-unix", "/tmp/TestHandoff123/001/1000/sessions/s-test.sock", "--name", "alice"},
+	)
+
+	// Unscoped: production behaviour, both are visible.
+	all, err := (&ProcRegistry{Root: root}).List(1000)
+	if err != nil {
+		t.Fatalf("unscoped List: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("unscoped List = %d sessions, want 2: %+v", len(all), all)
+	}
+
+	// Scoped: only the one under the given run root.
+	scoped, err := (&ProcRegistry{Root: root, SockRoot: "/tmp/TestHandoff123/001"}).List(1000)
+	if err != nil {
+		t.Fatalf("scoped List: %v", err)
+	}
+	if len(scoped) != 1 {
+		t.Fatalf("scoped List = %d sessions, want 1: %+v", len(scoped), scoped)
+	}
+	if scoped[0].Pid != 6853 {
+		t.Errorf("scoped List returned pid %d, want 6853 (the test's own)", scoped[0].Pid)
+	}
+	// A trailing separator on SockRoot must not change the answer.
+	trailing, err := (&ProcRegistry{Root: root, SockRoot: "/tmp/TestHandoff123/001/"}).List(1000)
+	if err != nil {
+		t.Fatalf("trailing-slash List: %v", err)
+	}
+	if len(trailing) != 1 {
+		t.Errorf("trailing-slash List = %d sessions, want 1", len(trailing))
+	}
+}
+
+// SockRoot matches on path boundaries, so /run/wash must not swallow
+// a sibling /run/wash2.
+func TestProcRegistrySockRootIsNotARawPrefix(t *testing.T) {
+	root := t.TempDir()
+	fakeProcEntry(t, root, 7001,
+		"Name:\twash-router\nState:\tS (sleeping)\nUid:\t1000\t1000\t1000\t1000\n",
+		[]string{"/usr/bin/wash-router", "--listen-unix", "/run/wash2/1000/sessions/s-other.sock", "--name", "mick"},
+	)
+	got, err := (&ProcRegistry{Root: root, SockRoot: "/run/wash"}).List(1000)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("/run/wash must not match /run/wash2, got %+v", got)
+	}
+}

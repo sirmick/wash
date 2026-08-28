@@ -42,7 +42,7 @@ func TestProxyHandoffOverTLS(t *testing.T) {
 		Auth:     auth,
 		Signer:   signerForTest(t),
 		Logger:   log.New(io.Discard, "", 0),
-		Sessions: NewProcRegistry(),
+		Sessions: &ProcRegistry{SockRoot: runRoot},
 		Spawner: &Spawner{
 			RouterBinary: routerBin,
 			AllowUID:     uint32(os.Getuid()),
