@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { Button, createAppBus, defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
+import { WASH_ROW_CLASS, Button, WASH_BTN_CLASS, createAppBus, defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search, FileText } from 'lucide-solid';
 
 interface LogFile {
@@ -234,8 +234,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const fileRowStyle = (sel: boolean) => ({
     padding: `4px ${tokens.spaceMd}px`,
-    background: sel ? tokens.bgRowSelected : 'transparent',
-    cursor: 'pointer',
+    '--wash-row-bg': sel ? tokens.bgRowSelected : 'transparent',
     'font-size': tokens.fontSizeMd,
     'white-space': 'nowrap' as const,
     'text-overflow': 'ellipsis',
@@ -353,6 +352,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                 <div
                   data-testid="syslogs-file-row"
                   data-file-path={f.path}
+                  class={WASH_ROW_CLASS}
                   style={fileRowStyle(selected() === f.path)}
                   onClick={() => onPickFile(f.path)}
                   title={`${f.path}\nsize ${fmtBytes(f.size)} · modified ${fmtRelTime(f.mtime)} ago`}
@@ -423,13 +423,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <button
               data-testid="syslogs-retry-root"
               onClick={retryAsRoot}
+              class={WASH_BTN_CLASS}
               style={{
-                background: tokens.bgDenied,
-                color: tokens.fg,
-                border: `1px solid ${tokens.borderDenied}`,
-                'border-radius': `${tokens.radiusSm}`,
+                '--wash-btn-bg': tokens.bgDenied,
+                '--wash-btn-border': tokens.borderDenied,
                 padding: '4px 10px',
-                cursor: 'pointer',
                 'font-size': tokens.fontSizeMd,
               }}
             >
@@ -444,13 +442,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             </span>
             <button
               onClick={() => requestStream(selected())}
+              class={WASH_BTN_CLASS}
               style={{
-                background: 'transparent',
-                color: tokens.fg,
-                border: `1px solid ${tokens.borderDanger}`,
-                'border-radius': `${tokens.radiusSm}`,
+                '--wash-btn-bg': 'transparent',
+                '--wash-btn-border': tokens.borderDanger,
                 padding: '3px 10px',
-                cursor: 'pointer',
                 'font-size': tokens.fontSizeMd,
               }}
             >

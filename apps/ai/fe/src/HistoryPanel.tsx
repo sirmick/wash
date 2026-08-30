@@ -20,7 +20,7 @@
 
 import { For, Show, createSignal, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { Button, Input, Overlay, fmtBytes, tokens } from '@wash/ui';
+import { WASH_ROW_CLASS, Button, Input, Overlay, fmtBytes, tokens } from '@wash/ui';
 
 /** One stored session, as agentd's history index describes it. */
 export interface SessionMeta {
@@ -226,6 +226,13 @@ export const HistoryPanel: Component<{
                 data-action={historyAction(s)}
                 onMouseEnter={() => setSelected(i())}
                 onClick={() => { if (historyAction(s) !== 'none') props.onResume(s); }}
+                // onMouseEnter drives the keyboard cursor, so the fill
+                // stays a prop rather than a :hover — the two must not
+                // disagree about which row is current. The class adds the
+                // press state, and aria-disabled suppresses it (and the
+                // hover) on a row with no resumable action.
+                class={WASH_ROW_CLASS}
+                aria-disabled={historyAction(s) === 'none' ? 'true' : undefined}
                 style={{
                   display: 'flex',
                   'flex-direction': 'column',
@@ -234,7 +241,7 @@ export const HistoryPanel: Component<{
                   'border-radius': tokens.radiusSm,
                   cursor: historyAction(s) === 'none' ? 'default' : 'pointer',
                   opacity: historyAction(s) === 'none' ? 0.55 : 1,
-                  background: selected() === i() ? tokens.bgRowSelected : 'transparent',
+                  '--wash-row-bg': selected() === i() ? tokens.bgRowSelected : 'transparent',
                 }}
               >
                 <div style={{ display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceMd}px` }}>

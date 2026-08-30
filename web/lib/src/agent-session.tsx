@@ -14,6 +14,8 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
+import { Button } from './button';
+import { WASH_ROW_CLASS } from './controls';
 import { agentStateColor, agentStateLabel } from './agent-status';
 import { Markdown } from './markdown';
 import { Terminal } from './terminal';
@@ -178,11 +180,16 @@ const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = 
           p.onOpen?.(p.e);
         }
       }}
+      // A tool row is only sometimes a control. It takes the row class
+      // either way and declares itself inert when it isn't, so a
+      // non-clickable row can't advertise a click that goes nowhere.
+      class={WASH_ROW_CLASS}
+      aria-disabled={clickable() ? undefined : 'true'}
       style={{
         display: 'flex',
         'align-items': 'center',
         gap: `${tokens.spaceMd}px`,
-        background: tokens.bgInset,
+        '--wash-row-bg': tokens.bgInset,
         border: `1px solid ${tokens.borderMenu}`,
         'border-radius': tokens.radiusMd,
         padding: `${tokens.spaceXs}px ${tokens.spaceMd}px`,
@@ -260,8 +267,7 @@ const AskRow: Component<{
     <div style={{ flex: '1 1 100%', font: tokens.type.monoMd, color: tokens.fg, 'word-break': 'break-all' }}>
       {p.ask.subject || p.ask.tool}
     </div>
-    <button
-      type="button"
+    <Button
       onClick={() => p.onAnswer?.(p.ask.id, 'allow')}
       style={askBtn(tokens.bgSuccess, tokens.fgSuccess)}
     >
@@ -269,18 +275,16 @@ const AskRow: Component<{
       <Show when={p.keyed}>
         <span style={hintStyle}>{ALLOW_HINT}</span>
       </Show>
-    </button>
+    </Button>
     <Show when={p.ask.suggested_rule}>
-      <button
-        type="button"
+      <Button
         onClick={() => p.onAnswer?.(p.ask.id, 'allow', p.ask.suggested_rule)}
         style={askBtn(tokens.bgInfo, tokens.fgInfo)}
       >
         Always allow <span style={{ font: tokens.type.monoSm }}>{p.ask.suggested_rule}</span>
-      </button>
+      </Button>
     </Show>
-    <button
-      type="button"
+    <Button
       onClick={() => p.onAnswer?.(p.ask.id, 'deny')}
       style={askBtn(tokens.bgDanger, tokens.fgDanger)}
     >
@@ -288,10 +292,15 @@ const AskRow: Component<{
       <Show when={p.keyed}>
         <span style={hintStyle}>{DENY_HINT}</span>
       </Show>
-    </button>
+    </Button>
   </div>
 );
 
+// The permission-prompt buttons. Each carries a status tone (allow =
+// success, deny = danger) as its resting fill; handing that fill to
+// --wash-btn-bg rather than `background` is what lets controls.ts derive
+// a hover and a press for each tone instead of leaving three loud,
+// inert-feeling buttons in front of a decision the user has to make.
 function askBtn(bg: string, fg: string): JSX.CSSProperties {
   return {
     display: 'inline-flex',
@@ -299,11 +308,9 @@ function askBtn(bg: string, fg: string): JSX.CSSProperties {
     gap: `${tokens.spaceXs}px`,
     font: tokens.type.textSm,
     padding: `${tokens.spaceXs}px ${tokens.spaceMd}px`,
-    'border-radius': tokens.radiusSm,
-    border: `1px solid ${bg}`,
-    background: bg,
-    color: fg,
-    cursor: 'pointer',
+    '--wash-btn-bg': bg,
+    '--wash-btn-border': bg,
+    '--wash-btn-fg': fg,
     'white-space': 'nowrap',
   };
 }
@@ -536,14 +543,13 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             <Spinner />
             <span>working…</span>
             <Show when={props.onCancel}>
-              <button
-                type="button"
+              <Button
                 data-testid="agent-stop"
                 onClick={() => props.onCancel?.()}
                 style={askBtn(tokens.bgNeutral, tokens.fgMuted)}
               >
                 Stop
-              </button>
+              </Button>
             </Show>
           </div>
         </Show>
@@ -573,8 +579,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           >
             <For each={slashMatches().slice(0, MAX_SLASH)}>
               {(cmd) => (
-                <button
-                  type="button"
+                <Button
                   title={cmd.description}
                   onClick={() => {
                     setDraft('/' + cmd.name + ' ');
@@ -583,15 +588,12 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                   style={{
                     font: tokens.type.monoSm,
                     padding: `2px ${tokens.spaceSm}px`,
-                    'border-radius': tokens.radiusSm,
-                    border: `1px solid ${tokens.borderMenu}`,
-                    background: tokens.bgInset,
-                    color: tokens.fgMuted,
-                    cursor: 'pointer',
+                    '--wash-btn-bg': tokens.bgInset,
+                    '--wash-btn-fg': tokens.fgMuted,
                   }}
                 >
                   /{cmd.name}
-                </button>
+                </Button>
               )}
             </For>
             <Show when={slashMatches().length > MAX_SLASH}>

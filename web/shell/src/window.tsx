@@ -8,7 +8,7 @@
 // and broadcasts a session.patch back, which lands in the store.
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { accentColor, tokens } from '@wash/ui';
+import { accentColor, tokens, WASH_BTN_CLASS } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId, LOCAL_ORIGIN, type Origin } from './clients';
 import { hostColor } from './host-colors';
@@ -459,6 +459,7 @@ export function FloatingWindow(props: WindowProps) {
           }}
           data-testid="window-minimize"
           aria-label="Minimize window"
+          class={WASH_BTN_CLASS}
           style={titlebarBtnStyle}
         >
           <Minus size={14} />
@@ -475,6 +476,7 @@ export function FloatingWindow(props: WindowProps) {
           }}
           data-testid="window-maximize"
           aria-label={props.win.state === 'maximized' ? 'Restore window' : 'Maximize window'}
+          class={WASH_BTN_CLASS}
           style={titlebarBtnStyle}
         >
           {props.win.state === 'maximized' ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
@@ -488,7 +490,8 @@ export function FloatingWindow(props: WindowProps) {
             props.onClose(props.win);
           }}
           data-testid="window-close"
-          style={titlebarBtnStyle}
+          class={WASH_BTN_CLASS}
+          style={closeBtnStyle}
           aria-label="Close window"
         >
           <X size={14} />
@@ -593,16 +596,17 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           data-testid="window-crashed-copy"
           aria-label="Copy crash log"
           title="Copy log to clipboard"
+          class={WASH_BTN_CLASS}
           style={{
             display: 'flex',
             'align-items': 'center',
             gap: '4px',
-            background: copied() ? tokens.bgSuccess : tokens.bgDanger,
-            color: tokens.fg,
-            border: `1px solid ${tokens.borderDanger}`,
-            'border-radius': tokens.radiusSm,
+            // Set the fill as a custom property, not `background`: the
+            // sheet derives hover/press from it, so the button still
+            // responds after it flips to the copied-green.
+            '--wash-btn-bg': copied() ? tokens.bgSuccess : tokens.bgDanger,
+            '--wash-btn-border': tokens.borderDanger,
             padding: '4px 8px',
-            cursor: 'pointer',
             font: 'inherit',
             'font-size': '12px',
           }}
@@ -636,12 +640,31 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
   );
 }
 
+// Titlebar controls wear WASH_BTN_CLASS for their hover/press/focus
+// states and override only the geometry and the resting palette. The
+// title bar has its own foreground (--wash-titlebar-fg, which a pack
+// sets independently of the window body), so --wash-btn-fg follows it
+// and the derived hover fill is mixed against it rather than the body
+// text color — otherwise a light titlebar on a dark pack would hover
+// the wrong way.
 const titlebarBtnStyle = {
-  background: 'transparent',
-  color: `var(--wash-titlebar-fg, ${tokens.fg})`,
-  border: 'none',
+  '--wash-btn-bg': 'transparent',
+  '--wash-btn-border': 'transparent',
+  '--wash-btn-fg': `var(--wash-titlebar-fg, ${tokens.fg})`,
   'font-size': '12px',
-  cursor: 'pointer',
   padding: '0 8px',
   'line-height': '16px',
+  'border-radius': '0',
+};
+
+// Close is the one titlebar control with a consequence, so it hovers to
+// the danger fill instead of the neutral derived one — the convention
+// every desktop since Windows 95 has taught. Pinning --wash-btn-bg-hover
+// (and -active) overrides the derivation without touching `background`,
+// so the resting state stays transparent.
+const closeBtnStyle = {
+  ...titlebarBtnStyle,
+  '--wash-btn-bg-hover': tokens.bgDanger,
+  '--wash-btn-bg-active': tokens.borderDanger,
+  '--wash-btn-fg-hover': tokens.fg,
 };

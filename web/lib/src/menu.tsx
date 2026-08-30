@@ -2,6 +2,7 @@ import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import type { Component, JSX, ParentComponent } from 'solid-js';
 import { tokens } from './tokens';
+import { WASH_BTN_CLASS } from './controls';
 
 // Menu positions one of two ways:
 //   - cursor-relative (x/y in props): drop-on-target menus,
@@ -145,7 +146,6 @@ export interface MenuItemProps {
 }
 
 export const MenuItem: Component<MenuItemProps> = (props) => {
-  const [hover, setHover] = createSignal(false);
   return (
     <button
       type="button"
@@ -156,26 +156,29 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
       // braces (a click can still be dispatched programmatically).
       disabled={props.disabled}
       aria-disabled={props.disabled ? 'true' : undefined}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       onClick={() => {
         if (!props.disabled) props.onClick();
       }}
+      // Hover used to be a per-item signal and a re-render; it's the
+      // stylesheet's job now (controls.ts), which also brings the press
+      // and keyboard-focus states a menu row never had.
+      class={WASH_BTN_CLASS}
       style={{
         display: 'flex',
         'align-items': 'center',
         gap: props.icon ? '8px' : undefined,
         width: '100%',
         'text-align': 'left',
-        background: !props.disabled && hover() ? tokens.bgRowSelected : 'transparent',
-        color: tokens.fg,
-        border: 'none',
-        'border-radius': `${tokens.radiusSm}`,
+        // A menu row takes the FULL selection fill on hover, not the
+        // subtle derived lift a button gets — that's the convention every
+        // menu in every desktop follows, and the row is large enough to
+        // carry it without shouting.
+        '--wash-btn-bg': 'transparent',
+        '--wash-btn-border': 'transparent',
+        '--wash-btn-bg-hover': tokens.bgRowSelected,
         padding: '4px 10px',
         cursor: props.disabled ? 'not-allowed' : 'pointer',
         opacity: props.disabled ? 0.5 : 1,
-        font: tokens.type.textMd,
-        transition: 'background 0.05s',
       }}
     >
       <Show when={props.icon}>

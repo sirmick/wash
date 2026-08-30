@@ -17,9 +17,10 @@
 // down unchanged rows (see the prevRows comment).
 
 import type { Component, JSX } from 'solid-js';
-import { createMemo, createSignal, createEffect, For, Show } from 'solid-js';
+import { createMemo, createEffect, For, Show } from 'solid-js';
 import { ChevronRight, ChevronDown, ChevronUp } from 'lucide-solid';
 import { tokens } from './tokens';
+import { WASH_BTN_CLASS, WASH_ROW_CLASS } from './controls';
 
 // A single flattened row, matching @wash/fs-client's flattenTree output.
 export interface FileTreeRow<E> {
@@ -210,14 +211,23 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
         data-testid={`${props.testIdPrefix}-header-${key}`}
         disabled={!sortable}
         onClick={() => sortable && h.onSort(key)}
+        class={WASH_BTN_CLASS}
         style={{
-          background: 'transparent',
-          border: 'none',
-          color: tokens.fgMuted,
+          '--wash-btn-bg': 'transparent',
+          '--wash-btn-border': 'transparent',
+          '--wash-btn-fg': tokens.fgMuted,
+          // A sortable header brightens its label rather than filling —
+          // a fill here would read as a selected column, which it isn't.
+          '--wash-btn-fg-hover': tokens.fg,
           font: tokens.type.textSm,
           cursor: sortable ? 'pointer' : 'default',
+          // A non-sortable header is `disabled` so it isn't a tab stop,
+          // but it's a column label, not a dead control — hold it at full
+          // opacity rather than taking the sheet's disabled dimming.
+          opacity: 1,
           padding: '0 8px',
           height: `${HEADER_ROW_H}px`,
+          'border-radius': '0',
           'box-sizing': 'border-box',
           display: 'flex',
           'align-items': 'center',
@@ -267,7 +277,6 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
       {props.prepend}
       <For each={stableRows()}>
         {(row) => {
-          const [hover, setHover] = createSignal(false);
           const entry = () => row.entry;
           const renameState = () => props.renaming?.(row.path) ?? null;
           const dropTarget = () => !!props.isDropTarget?.(row.path);
@@ -284,29 +293,35 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
               onDragEnd={props.onRowDragEnd}
               onDragOver={(ev) => props.onRowDragOver?.(ev, row.path, entry())}
               onDrop={(ev) => props.onRowDrop?.(ev, row.path, entry())}
-              onMouseEnter={() => setHover(true)}
-              onMouseLeave={() => setHover(false)}
               onClick={(ev) => props.onRowClick(row.path, entry(), ev)}
               onDblClick={() => props.onRowDblClick?.(row.path, entry())}
               onContextMenu={(ev) => props.onRowContextMenu?.(ev, entry(), row.path)}
+              // Hover was a signal per row — one createSignal and one
+              // re-render for every entry in the directory. WASH_ROW_CLASS
+              // does it in CSS, and adds the press and keyboard-focus
+              // states rows never had.
+              class={WASH_ROW_CLASS}
               style={{
                 display: 'grid',
                 'grid-template-columns': template(),
                 'align-items': 'center',
                 padding: '3px 8px',
-                background: dropTarget()
+                // Resting fill only. Hover and press derive from it, so a
+                // selected row (or a live drop target) still responds to
+                // the cursor instead of freezing at its highlight.
+                '--wash-row-bg': dropTarget()
                   ? tokens.bgDropTarget
                   : props.isSelected(row.path)
                   ? tokens.bgRowSelected
-                  : (props.hoverHighlight ?? true) && hover()
-                  ? tokens.bgRowHover
                   : 'transparent',
+                // hoverHighlight={false} pins hover to the resting fill
+                // rather than dropping the class, so a picker that doesn't
+                // want row highlighting keeps its focus ring.
+                ...((props.hoverHighlight ?? true) ? {} : { '--wash-row-bg-hover': 'var(--wash-row-bg)' }),
                 color: tokens.fg,
-                cursor: 'pointer',
                 'user-select': 'none',
                 font: tokens.type.textMd,
                 'box-shadow': dropTarget() ? `inset 0 0 0 2px ${tokens.borderDropTarget}` : 'none',
-                outline: 'none',
               }}
             >
               {/* Name cell: chevron + icon + name (+ trailing). The tint colours
@@ -323,6 +338,11 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
               >
                 <span
                   data-testid={`${props.testIdPrefix}-chevron-${entry().name}`}
+                  // Only a control on a directory row — a file's chevron
+                  // slot is a spacer. aria-disabled keeps the hover and
+                  // press off the ones that don't expand anything.
+                  class={WASH_BTN_CLASS}
+                  aria-disabled={isDirLike(entry()) ? undefined : 'true'}
                   style={{
                     width: '12px',
                     display: 'inline-flex',
@@ -330,6 +350,9 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                     'justify-content': 'center',
                     opacity: 0.6,
                     'flex-shrink': 0,
+                    border: 'none',
+                    '--wash-btn-bg': 'transparent',
+                    '--wash-btn-fg-hover': tokens.fg,
                     cursor: isDirLike(entry()) ? 'pointer' : 'default',
                   }}
                   onClick={(ev) => {

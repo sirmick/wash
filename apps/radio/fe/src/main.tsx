@@ -20,6 +20,8 @@ import {
   tokens,
   type AudioSource,
   type WashAppProps,
+  WASH_BTN_CLASS,
+  WASH_ROW_CLASS,
 } from '@wash/ui';
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { ChevronDown, ChevronRight, Info, Plus, Radio, Star } from 'lucide-solid';
@@ -662,17 +664,19 @@ function RadioApp(props: WashAppProps) {
                   aria-expanded={!entry.collapsed}
                   title={`${entry.collapsed ? 'Expand' : 'Collapse'} ${entry.genre}`}
                   onClick={() => toggleGroup(entry.key)}
+                  class={WASH_BTN_CLASS}
                   style={{
                     width: '100%',
                     display: 'flex',
                     'align-items': 'center',
                     gap: '7px',
                     padding: '6px 9px',
-                    background: tokens.bgInset,
-                    color: tokens.fgMuted,
+                    '--wash-btn-bg': tokens.bgInset,
+                    '--wash-btn-fg': tokens.fgMuted,
+                    '--wash-btn-fg-hover': tokens.fg,
                     border: 0,
                     'border-top': `1px solid ${tokens.borderMenu}`,
-                    cursor: 'pointer',
+                    'border-radius': '0',
                     'font-size': tokens.fontSizeSm,
                     'text-align': 'left',
                   }}
@@ -688,17 +692,19 @@ function RadioApp(props: WashAppProps) {
                   aria-expanded={!entry.collapsed}
                   title={`${entry.collapsed ? 'Expand' : 'Collapse'} ${entry.subtype}`}
                   onClick={() => toggleGroup(entry.key)}
+                  class={WASH_BTN_CLASS}
                   style={{
                     width: '100%',
                     display: 'flex',
                     'align-items': 'center',
                     gap: '7px',
                     padding: '5px 9px 5px 22px',
-                    background: tokens.bgNeutral,
-                    color: tokens.fgMuted,
+                    '--wash-btn-bg': tokens.bgNeutral,
+                    '--wash-btn-fg': tokens.fgMuted,
+                    '--wash-btn-fg-hover': tokens.fg,
                     border: 0,
                     'border-top': `1px solid ${tokens.borderMenu}`,
-                    cursor: 'pointer',
+                    'border-radius': '0',
                     'font-size': tokens.fontSizeSm,
                     'text-align': 'left',
                   }}
@@ -720,15 +726,15 @@ function RadioApp(props: WashAppProps) {
                       data-playing={playing() ? 'true' : undefined}
                       onClick={() => setSelectedDisplay(entry.di)}
                       onDblClick={() => tune(r.be)}
+                      class={WASH_ROW_CLASS}
                       style={{
                         display: 'flex',
                         'align-items': 'center',
                         gap: '8px',
                         padding: `4px 10px 4px ${entry.depth > 1 ? 30 : 18}px`,
-                        cursor: 'default',
                         'user-select': 'none',
                         'border-left': `2px solid ${playing() ? tokens.accentGreen : 'transparent'}`,
-                        background: selected() ? tokens.bgRowSelected : 'transparent',
+                        '--wash-row-bg': selected() ? tokens.bgRowSelected : 'transparent',
                         color: playing() ? tokens.accentGreen : tokens.fg,
                         'font-size': tokens.fontSizeBase,
                       }}
@@ -746,12 +752,16 @@ function RadioApp(props: WashAppProps) {
                           e.stopPropagation();
                           toggleFav(r.name);
                         }}
+                        class={WASH_BTN_CLASS}
                         style={{
                           'flex-shrink': 0,
-                          cursor: 'pointer',
+                          border: 'none',
+                          padding: '0 2px',
                           display: 'inline-flex',
                           'align-items': 'center',
-                          color: fav() ? tokens.accentAmber : tokens.fgDim,
+                          '--wash-btn-bg': 'transparent',
+                          '--wash-btn-fg': fav() ? tokens.accentAmber : tokens.fgDim,
+                          '--wash-btn-fg-hover': tokens.accentAmber,
                         }}
                       >
                         <Star size={13} fill={fav() ? 'currentColor' : 'none'} />

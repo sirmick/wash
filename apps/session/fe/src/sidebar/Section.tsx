@@ -9,7 +9,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
-import { tokens, washAssetUrl } from '@wash/ui';
+import { WASH_ROW_CLASS, tokens, washAssetUrl } from '@wash/ui';
 
 export type SectionState = 'collapsed' | 'expanded';
 
@@ -46,8 +46,10 @@ export const Section: Component<SectionProps> = (props) => {
     'align-items': 'center',
     gap: '6px',
     padding: '0 8px',
-    cursor: 'pointer',
-    background: `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
+    // A 4% wash of the foreground, handed to WASH_ROW_CLASS so the header
+    // lifts under the cursor and sinks on click — it's the control that
+    // collapses the section, and read as inert text before.
+    '--wash-row-bg': `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
     'border-bottom': `1px solid ${tokens.borderMenu}`,
     'user-select': 'none',
     color: tokens.fg,
@@ -74,9 +76,22 @@ export const Section: Component<SectionProps> = (props) => {
       style={{ display: 'flex', 'flex-direction': 'column' }}
     >
       <div
+        class={WASH_ROW_CLASS}
         style={headerStyle()}
         onClick={props.onToggle}
         data-testid={`sidebar-section-header-${props.id}`}
+        role="button"
+        tabindex="0"
+        aria-expanded={isOpen()}
+        onKeyDown={(ev) => {
+          // A div with an onClick is invisible to the keyboard. role +
+          // tabindex make it a stop; this makes Enter/Space actually fire
+          // it, which is what a real <button> would have done for free.
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            props.onToggle();
+          }
+        }}
       >
         <span style={chevronStyle()}>▶</span>
         <Show when={props.icon}>

@@ -10,7 +10,7 @@
 // netd validate → apply (commit-confirm) → the box.
 
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show, Switch, Match } from "solid-js";
-import { defineWashApp, tokens, washAssetUrl, washCopyText, type WashAppProps } from "@wash/ui";
+import { defineWashApp, tokens, activeFill, washAssetUrl, washCopyText, type WashAppProps } from "@wash/ui";
 import { x25519 } from "@noble/curves/ed25519.js";
 
 import { ApplyTerminal, type ApplyEvent } from "./ApplyTerminal.tsx";
@@ -1844,6 +1844,39 @@ const STYLE = `
 .wash-net-countdown { flex:1; position:relative; height:22px; border-radius:4px; overflow:hidden; background:${tokens.bgInset}; border:1px solid color-mix(in srgb, ${tokens.accentAmber} 45%, transparent); display:flex; align-items:center; }
 .wash-net-countbar { position:absolute; inset:0 auto 0 0; background:color-mix(in srgb, ${tokens.accentAmber} 18%, transparent); transition:width .25s linear; }
 .wash-net-counttext { position:relative; padding:0 8px; font-size:11px; color:${tokens.fgWarning}; }
+
+/* --- Press + keyboard focus ---------------------------------------------
+ * This app draws its own controls (matrix cells, role chips, the AP list)
+ * rather than using <Button>, so it also owns their states. Hover is
+ * declared per-class above, where each control's highlight is part of its
+ * own colour-coding; press and focus are uniform and collected here.
+ *
+ * Press fills come from activeFill(), the same mix @wash/ui derives its
+ * button states with, so a net control sinks by exactly as much as a
+ * button anywhere else in the desktop. Each is mixed off that control's
+ * OWN resting background, which is why they can't be one shared rule:
+ * a matrix cell tinted green and a toolbar button tinted grey have to
+ * darken from different starting points. */
+.wash-net-btn:active:not(:disabled) { background:${activeFill(tokens.bgRowHover)}; }
+.wash-net-btn.primary:active:not(:disabled) { background:${activeFill(tokens.accentBlue)}; }
+.wash-net-chip:active:not(:disabled) { background:${activeFill(tokens.bgInset)}; }
+.wash-net-cell:active:not(:disabled) { background:${activeFill(tokens.bgInset)}; }
+.wash-net-ap:active { background:${activeFill(tokens.bgRowHover)}; }
+.wash-net-tab:active { color:${tokens.fg}; }
+
+/* One focus ring for every control in the app. :focus-visible keeps it off
+ * mouse clicks; the offset lifts it clear of the chip/cell borders that
+ * would otherwise swallow a flush outline. */
+.wash-net-btn:focus-visible,
+.wash-net-chip:focus-visible,
+.wash-net-cell:focus-visible,
+.wash-net-ap:focus-visible,
+.wash-net-tab:focus-visible,
+.wash-net-link:focus-visible,
+.wash-net-l2-vmode:focus-visible,
+.wash-net-l2-vdel:focus-visible {
+  outline:2px solid ${tokens.focusRing}; outline-offset:1px;
+}
 `;
 
 defineWashApp("wash-app-net", NetApp, { style: `display:block;height:100%;overflow:hidden;font:${tokens.type.textMd};color:${tokens.fg};` });

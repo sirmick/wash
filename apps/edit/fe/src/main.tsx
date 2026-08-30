@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, WASH_BTN_CLASS, WASH_ROW_CLASS, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { AgentAsk, AgentEvent, AgentStatus, TerminalAPI } from '@wash/ui';
 
 // One roster row as agentd publishes it; only the fields this pane reads.
@@ -2517,6 +2517,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     data-active={isActive() ? 'true' : undefined}
                     data-dirty={isDirty() ? 'true' : undefined}
                     onClick={() => { captureActiveState(); setActiveID(t.id); }}
+                    class={WASH_ROW_CLASS}
                     style={tabStyle(isActive())}
                   >
                     <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
@@ -2525,6 +2526,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     <span
                       data-testid={`edit-tab-close-${t.id}`}
                       onClick={(ev) => { ev.stopPropagation(); closeTab(t.id); }}
+                      // A bare <span onClick> is invisible to the keyboard;
+                      // role + tabindex + the key handler give it the
+                      // behaviour a <button> would have had for free. It
+                      // can't BE a button — it sits inside the tab's own
+                      // click target, and nesting is what we're avoiding.
+                      role="button"
+                      tabindex="0"
+                      onKeyDown={(ev) => {
+                        if (ev.key === 'Enter' || ev.key === ' ') {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                          closeTab(t.id);
+                        }
+                      }}
+                      class={WASH_BTN_CLASS}
                       style={tabCloseStyle}
                       title="Close (Ctrl+W)"
                     >
@@ -2656,6 +2672,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     data-testid={`edit-term-tab-${t.id}`}
                     data-active={isActive() ? 'true' : undefined}
                     onClick={() => setActiveTermID(t.id)}
+                    class={WASH_ROW_CLASS}
                     style={tabStyle(isActive())}
                   >
                     <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
@@ -2664,6 +2681,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     <span
                       data-testid={`edit-term-tab-close-${t.id}`}
                       onClick={(ev) => { ev.stopPropagation(); closeTerm(t.id); }}
+                      // A bare <span onClick> is invisible to the keyboard;
+                      // role + tabindex + the key handler give it the
+                      // behaviour a <button> would have had for free. It
+                      // can't BE a button — it sits inside the tab's own
+                      // click target, and nesting is what we're avoiding.
+                      role="button"
+                      tabindex="0"
+                      onKeyDown={(ev) => {
+                        if (ev.key === 'Enter' || ev.key === ' ') {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                          closeTerm(t.id);
+                        }
+                      }}
+                      class={WASH_BTN_CLASS}
                       style={tabCloseStyle}
                       title="Close terminal"
                     >
@@ -2677,6 +2709,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               type="button"
               data-testid="edit-term-new"
               onClick={openNewTerm}
+              class={WASH_BTN_CLASS}
               style={termNewBtnStyle}
               title="New Terminal (Ctrl+Shift+`)"
             >
@@ -2692,6 +2725,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
                 setAgentMenu({ x: r.left, y: r.bottom });
               }}
+              class={WASH_BTN_CLASS}
               style={termNewBtnStyle}
               title="New agent session in this folder"
             >
@@ -3118,10 +3152,10 @@ const WysFindBar: Component<{
           onKeyDown={onReplKey}
           style={{ padding: '0 6px', height: '22px', width: '160px', 'box-sizing': 'border-box', font: tokens.type.monoMd }}
         />
-        <button type="button" data-testid="edit-wf-replace-one" onMouseDown={(e) => e.preventDefault()} title="Replace current match (Enter)" onClick={() => doReplace(false)} style={findButtonStyle}>
+        <button type="button" data-testid="edit-wf-replace-one" onMouseDown={(e) => e.preventDefault()} title="Replace current match (Enter)" onClick={() => doReplace(false)} class={WASH_BTN_CLASS} style={findButtonStyle}>
           Replace
         </button>
-        <button type="button" data-testid="edit-wf-replace-all" onMouseDown={(e) => e.preventDefault()} title="Replace all matches" onClick={() => doReplace(true)} style={findButtonStyle}>
+        <button type="button" data-testid="edit-wf-replace-all" onMouseDown={(e) => e.preventDefault()} title="Replace all matches" onClick={() => doReplace(true)} class={WASH_BTN_CLASS} style={findButtonStyle}>
           All
         </button>
       </div>
@@ -3225,6 +3259,8 @@ const MenuBarButton: Component<{
       type="button"
       data-testid={`edit-menubar-${props.id}`}
       onClick={(ev) => props.onClick(props.id, ev)}
+      class={WASH_BTN_CLASS}
+      aria-expanded={props.active}
       style={menuBarButtonStyle(props.active)}
     >
       {props.label}
@@ -3256,15 +3292,16 @@ const menuBarStyle: JSX.CSSProperties = {
   'user-select': 'none',
 };
 
+// Matches the menubar titles in @wash/ui and wash-term: the open menu
+// rests at the selection fill, both branches go through --wash-btn-bg so
+// the hover and press derive off whichever is live (controls.ts).
 function menuBarButtonStyle(active: boolean): JSX.CSSProperties {
   return {
-    background: active ? tokens.bgRowSelected : 'transparent',
-    color: tokens.fg,
-    border: 'none',
+    '--wash-btn-bg': active ? tokens.bgRowSelected : 'transparent',
+    '--wash-btn-border': 'transparent',
+    '--wash-btn-bg-hover': tokens.bgRowSelected,
     padding: '2px 10px',
     height: '24px',
-    cursor: 'pointer',
-    font: tokens.type.textMd,
   };
 }
 
@@ -3317,13 +3354,12 @@ const termBodyStyle: JSX.CSSProperties = {
 };
 
 const termNewBtnStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fgMuted,
-  border: 'none',
+  '--wash-btn-bg': 'transparent',
+  '--wash-btn-border': 'transparent',
+  '--wash-btn-fg': tokens.fgMuted,
+  '--wash-btn-fg-hover': tokens.fg,
   padding: '0 10px',
   height: '26px',
-  cursor: 'pointer',
-  font: tokens.type.textMd,
 };
 
 const sidebarStyle: JSX.CSSProperties = {
@@ -3416,18 +3452,12 @@ const findCountStyle: JSX.CSSProperties = {
 };
 
 const findButtonStyle: JSX.CSSProperties = {
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
+  '--wash-btn-bg': 'transparent',
   padding: '0 10px',
   height: '22px',
-  'box-sizing': 'border-box',
   display: 'inline-flex',
   'align-items': 'center',
   'justify-content': 'center',
-  cursor: 'pointer',
-  font: tokens.type.textMd,
   'line-height': 1,
 };
 
@@ -3451,9 +3481,12 @@ function tabStyle(active: boolean): JSX.CSSProperties {
     // Rounded only on top so the tab visually sits on the bar's
     // border-bottom — matches wash-term's tab styling.
     'border-radius': '6px 6px 0 0',
-    background: active ? tokens.bgWindow : 'transparent',
+    // The active tab rests at the window fill and inactive ones at
+    // nothing; both go to --wash-row-bg so WASH_ROW_CLASS derives the
+    // hover and press off whichever is live. An inactive tab now shows
+    // it is a target before you click it.
+    '--wash-row-bg': active ? tokens.bgWindow : 'transparent',
     color: active ? tokens.fg : tokens.fgMuted,
-    cursor: 'pointer',
     font: tokens.type.textMd,
     'user-select': 'none',
     'max-width': '200px',
@@ -3463,15 +3496,23 @@ function tabStyle(active: boolean): JSX.CSSProperties {
   };
 }
 
+// The tab's close box. Sized to its glyph, so it opts out of the button
+// class's border rather than losing 2px of content box to a transparent
+// one; the hover goes red because closing a tab with unsaved work is the
+// one action in the strip you can regret.
 const tabCloseStyle: JSX.CSSProperties = {
   width: '14px',
   height: '14px',
   display: 'inline-flex',
   'align-items': 'center',
   'justify-content': 'center',
+  border: 'none',
   'border-radius': '2px',
   font: tokens.type.monoSm,
-  color: tokens.fgMuted,
+  '--wash-btn-bg': 'transparent',
+  '--wash-btn-fg': tokens.fgMuted,
+  '--wash-btn-bg-hover': tokens.bgDanger,
+  '--wash-btn-fg-hover': tokens.fg,
 };
 
 const placeholderOverlayStyle: JSX.CSSProperties = {

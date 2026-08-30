@@ -21,7 +21,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { createAppBus, defineWashApp, tokens, Terminal, Button, Input, Checkbox } from '@wash/ui';
+import { WASH_BTN_CLASS, createAppBus, defineWashApp, tokens, Terminal, Button, Input, Checkbox } from '@wash/ui';
 
 // ----- wire types -----
 
@@ -955,6 +955,7 @@ const MoreMenu: Component<{
           {(app) => (
             <button
               type="button"
+              class={WASH_BTN_CLASS}
               style={menuItemStyle}
               onClick={() => props.onPick(app.id)}
               data-testid={`connect-launch-${app.id}`}
@@ -1263,17 +1264,16 @@ const menuStyle: JSX.CSSProperties = {
   gap: '1px',
 };
 
+// The launch menu's rows. Same treatment as @wash/ui's <MenuItem>: a
+// full selection fill on hover rather than a button's subtle lift.
 const menuItemStyle: JSX.CSSProperties = {
   display: 'flex',
   'align-items': 'center',
   gap: '8px',
   padding: '6px 8px',
-  background: 'transparent',
-  color: tokens.fg,
-  border: 'none',
-  'border-radius': `${tokens.radiusSm}`,
-  cursor: 'pointer',
-  font: tokens.type.textMd,
+  '--wash-btn-bg': 'transparent',
+  '--wash-btn-border': 'transparent',
+  '--wash-btn-bg-hover': tokens.bgRowSelected,
   'text-align': 'left',
   width: '100%',
 };

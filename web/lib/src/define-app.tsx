@@ -16,6 +16,7 @@
 
 import { render } from 'solid-js/web';
 import { ensureScrollbarStyles } from './scrollbars';
+import { ensureControlStyles } from './controls';
 import type { Component } from 'solid-js';
 
 /** Props every wash app component receives. */
@@ -76,6 +77,10 @@ export function defineWashApp(
   // overlay bars otherwise paint over content — and get painted over by
   // it — most visibly in the terminal.
   ensureScrollbarStyles();
+  // …and the control states (controls.ts): hover, press, focus and
+  // disabled are selectors, so they can't ride along on the inline
+  // styles the rest of the UI is built from.
+  ensureControlStyles();
 
   if (customElements.get(realTag)) return;
 

@@ -13,6 +13,7 @@
 import { For, Show, createSignal } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
+import { WASH_BTN_CLASS } from './controls';
 
 export interface MenuBarMenu {
   /** stable id, also used for the testid */
@@ -70,14 +71,19 @@ export const MenuBar: Component<MenuBarProps> = (props) => {
               type="button"
               data-testid={`${props.testidPrefix ?? 'menubar'}-${m.id}`}
               onClick={(ev) => toggle(m.id, ev)}
+              class={WASH_BTN_CLASS}
+              aria-expanded={open() === m.id}
               style={{
-                background: open() === m.id ? tokens.bgRowSelected : 'transparent',
-                color: tokens.fg,
-                border: 'none',
+                // The open title rests at the selection fill; hover and
+                // press derive off whichever branch is live, so a menu
+                // that's already open doesn't go inert under the cursor.
+                '--wash-btn-bg': open() === m.id ? tokens.bgRowSelected : 'transparent',
+                '--wash-btn-border': 'transparent',
+                // A menubar title highlights fully, like the rows in the
+                // menu it opens — not with a button's subtle lift.
+                '--wash-btn-bg-hover': tokens.bgRowSelected,
                 padding: '2px 10px',
                 height: '24px',
-                cursor: 'pointer',
-                font: tokens.type.textMd,
               }}
             >
               {m.label}

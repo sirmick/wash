@@ -19,6 +19,8 @@ import type { Component, JSX } from 'solid-js';
 import { For, Show, createSignal } from 'solid-js';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { tokens } from './tokens';
+import { Button } from './button';
+import { WASH_BTN_CLASS, WASH_ROW_CLASS } from './controls';
 import { agentStateColor, agentStateLabel } from './agent-status';
 import type { AgentConfig } from './agent-session';
 
@@ -297,18 +299,13 @@ const AskBtn: Component<{
   onClick: () => void;
   children: JSX.Element;
 }> = (props) => (
-  <button
-    type="button"
+  <Button
+    size="sm"
     data-testid={props.testid}
     title={props.title}
     onClick={props.onClick}
     style={{
-      background: tokens.bgMenu,
-      color: tokens.fg,
-      border: `1px solid ${tokens.borderMenu}`,
-      'border-radius': tokens.radiusSm,
       padding: '3px 8px',
-      cursor: 'pointer',
       'font-size': '11px',
       'max-width': '100%',
       overflow: 'hidden',
@@ -317,7 +314,7 @@ const AskBtn: Component<{
     }}
   >
     {props.children}
-  </button>
+  </Button>
 );
 
 const AgentRowView: Component<{
@@ -375,12 +372,11 @@ const AgentRowView: Component<{
     // The row the host is showing reads as selected. Kept subtle: the
     // state colour on the left edge is the row's primary signal and a
     // strong selection fill would out-shout it.
-    background: props.active
+    '--wash-row-bg': props.active
       ? 'rgba(255,255,255,0.09)'
       : props.row.state === 'needs-input' ? 'rgba(224,178,95,0.10)' : 'rgba(255,255,255,0.02)',
     padding: '6px 8px',
     'border-radius': tokens.radiusSm,
-    cursor: 'pointer',
     'font-size': '11px',
     opacity: props.row.state === 'stale' ? 0.55 : 1,
     display: 'flex',
@@ -393,6 +389,7 @@ const AgentRowView: Component<{
       data-agent={props.row.agent}
       data-agent-state={props.row.state}
       data-active={props.active ? 'true' : 'false'}
+      class={WASH_ROW_CLASS}
       style={rowStyle()}
       // One click, every row (docs/AGENT_UX.md N4). Detached rows used to
       // insist on a dblclick, on the theory that the two click events
@@ -468,12 +465,10 @@ const AgentRowView: Component<{
             aria-label="Session actions"
             aria-haspopup="menu"
             onClick={openMenu}
+            class={WASH_BTN_CLASS}
+            data-variant="icon"
             style={{
-              background: 'transparent',
-              color: tokens.fg,
-              border: 'none',
               padding: '0 2px',
-              cursor: 'pointer',
               'font-size': '12px',
               'line-height': 1,
               'flex-shrink': 0,

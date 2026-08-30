@@ -27,6 +27,29 @@ const SIZE_LG = 'var(--wash-text-lg, 15px)';
 const SIZE_TITLE_SM = 'var(--wash-title-sm, 13px)';
 const SIZE_TITLE_LG = 'var(--wash-title-lg, 19px)';
 
+// --- Interaction mix fractions ---
+// How far a hovered / pressed surface travels toward the foreground.
+//
+// Mixing toward the FOREGROUND, rather than to a hand-picked lighter
+// colour, is the whole trick: it is the one formula that is correct in
+// both directions. On a dark pack --wash-fg is near-white, so hovering
+// lightens; on a light pack (Seoul, Copland) it is near-black, so the
+// very same rule darkens. One rule, six packs, no per-pack hover table.
+//
+// Percentages, not opacities: the mix happens in the pack's own colours.
+// Tuned so hover is a clear-but-quiet lift and press is unmistakably
+// deeper — keep the gap between them if you retune.
+const HOVER_MIX = 12;
+const ACTIVE_MIX = 22;
+const BORDER_HOVER_MIX = 35;
+
+// mix returns `base` blended `pct`% toward the foreground. Private; the
+// exported hoverFill()/activeFill() below are how call sites reach it, so
+// every interactive surface in the desktop moves by the same amount.
+function mix(base: string, pct: number): string {
+  return `color-mix(in srgb, ${base} ${100 - pct}%, var(--wash-fg, #eee) ${pct}%)`;
+}
+
 export const tokens = {
   // Surfaces.
   bgWindow: 'var(--wash-bg-window, #181828)',
@@ -55,6 +78,13 @@ export const tokens = {
   borderWindow: 'var(--wash-border-window, #2a2a3a)',
   borderFocus: 'var(--wash-border-focus, #3a3a6a)',
   borderDropTarget: 'var(--wash-border-drop-target, #6090e0)', // == accentBlue; the drop-zone ring
+
+  // Keyboard focus ring. Deliberately NOT borderFocus — that token is a
+  // dim inset border for "this field is focused" chrome, far too low
+  // contrast to serve as the ring a keyboard user navigates by. Defaults
+  // to the accent blue (which every pack redefines), and a pack can pin
+  // --wash-focus-ring outright if its accent reads badly as an outline.
+  focusRing: 'var(--wash-focus-ring, var(--wash-accent-blue, #6090e0))',
 
   // Foreground.
   fg: 'var(--wash-fg, #eee)',
@@ -210,6 +240,32 @@ export const tokens = {
 } as const;
 
 export type Tokens = typeof tokens;
+
+/**
+ * hoverFill / activeFill derive a surface's hover and pressed states.
+ *
+ * These are functions rather than a `bgMenuHover`-style token table on
+ * purpose. A fixed token can only describe one resting colour, but the
+ * controls stylesheet derives each state from whatever fill a control
+ * actually ended up with (--wash-btn-bg / --wash-row-bg, which callers
+ * override) — a token would go stale the moment a variant or a caller
+ * changed the base. Reach for these when styling a surface the sheet
+ * doesn't cover: a per-app accent, a status chip, an app-local control.
+ *
+ * `base` may be any CSS color, including a var() chain or `transparent`
+ * (mixing from transparent yields the foreground at the mix alpha, which
+ * is what ghost chrome wants).
+ */
+export function hoverFill(base: string): string {
+  return mix(base, HOVER_MIX);
+}
+export function activeFill(base: string): string {
+  return mix(base, ACTIVE_MIX);
+}
+/** borderHoverFill is the same idea for an outline rather than a fill. */
+export function borderHoverFill(base: string): string {
+  return mix(base, BORDER_HOVER_MIX);
+}
 
 // ---- accent resolution ----
 // Icon colors (launcher rows, titlebar/taskbar) map onto the six themeable

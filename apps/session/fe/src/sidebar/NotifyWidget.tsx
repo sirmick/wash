@@ -9,7 +9,7 @@
 
 import type { Component, JSX } from 'solid-js';
 import { For, Show } from 'solid-js';
-import { tokens } from '@wash/ui';
+import { WASH_BTN_CLASS, WASH_ROW_CLASS, tokens } from '@wash/ui';
 
 export interface NotifyEntry {
   id: string;
@@ -60,13 +60,12 @@ export const NotifyWidget: Component<NotifyWidgetProps> = (props) => {
           type="button"
           data-testid="notify-clear-all"
           onClick={props.onClearAll}
+          class={WASH_BTN_CLASS}
+          data-variant="ghost"
           style={{
-            background: 'transparent',
-            color: tokens.fgMuted,
-            border: `1px solid ${tokens.borderMenu}`,
-            'border-radius': tokens.radiusSm,
+            '--wash-btn-fg': tokens.fgMuted,
+            '--wash-btn-fg-hover': tokens.fg,
             padding: '4px 8px',
-            cursor: 'pointer',
             font: tokens.type.textSm,
             'align-self': 'flex-end',
             'margin-top': '4px',
@@ -94,12 +93,10 @@ const NotifyRow: Component<{ entry: NotifyEntry; onMarkRead: () => void }> = (pr
   };
   const rowStyle = (): JSX.CSSProperties => ({
     'border-left': `3px solid ${stripeColor()}`,
-    background: props.entry.read ? 'rgba(255,255,255,0.02)' : 'rgba(80,90,180,0.08)',
+    '--wash-row-bg': props.entry.read ? 'rgba(255,255,255,0.02)' : 'rgba(80,90,180,0.08)',
     padding: '6px 8px',
     'border-radius': tokens.radiusSm,
-    cursor: 'pointer',
     'font-size': '11px',
-    transition: 'background 0.12s',
     opacity: props.entry.read ? 0.65 : 1,
   });
   return (
@@ -107,6 +104,7 @@ const NotifyRow: Component<{ entry: NotifyEntry; onMarkRead: () => void }> = (pr
       data-testid={`notify-row-${props.entry.id}`}
       data-level={props.entry.level}
       data-read={props.entry.read ? 'true' : 'false'}
+      class={WASH_ROW_CLASS}
       style={rowStyle()}
       onClick={props.onMarkRead}
       title={`From ${props.entry.source_app} — click to mark read`}

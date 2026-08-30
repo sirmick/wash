@@ -29,7 +29,7 @@ import {
 import { ModalLayer, registerModal, summonModal, hasModal, forgetModalsFor } from './modal';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import { RelayChannelSocket } from './relay-socket';
-import { tokens } from '@wash/ui';
+import { tokens, ensureControlStyles, WASH_BTN_CLASS } from '@wash/ui';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
@@ -1599,14 +1599,16 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
           <button
             data-testid="wash-connection-retry"
             onClick={() => conn.reconnectNow()}
+            class={WASH_BTN_CLASS}
             style={{
               font: tokens.type.textSm,
-              color: tokens.fg,
-              background: 'rgba(255,255,255,0.12)',
-              border: `1px solid ${tokens.borderDanger}`,
+              // The banner sits on its own tinted strip, so this button's
+              // fill is a wash of white over it rather than a token
+              // surface; hover/press derive off it as usual.
+              '--wash-btn-bg': 'rgba(255,255,255,0.12)',
+              '--wash-btn-border': tokens.borderDanger,
               'border-radius': '4px',
               padding: '2px 8px',
-              cursor: 'pointer',
             }}
           >
             Reconnect now
@@ -1616,14 +1618,16 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
           <button
             data-testid="wash-connection-use-here"
             onClick={() => location.reload()}
+            class={WASH_BTN_CLASS}
             style={{
               font: tokens.type.textSm,
-              color: tokens.fg,
-              background: 'rgba(255,255,255,0.12)',
-              border: `1px solid ${tokens.borderDenied}`,
+              // The banner sits on its own tinted strip, so this button's
+              // fill is a wash of white over it rather than a token
+              // surface; hover/press derive off it as usual.
+              '--wash-btn-bg': 'rgba(255,255,255,0.12)',
+              '--wash-btn-border': tokens.borderDenied,
               'border-radius': '4px',
               padding: '2px 8px',
-              cursor: 'pointer',
             }}
           >
             Use here
@@ -1635,6 +1639,10 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
 };
 
 void conn.ready();
+// Shell chrome — taskbar, window frames, start menu — is not a wash app,
+// so it doesn't pass through defineWashApp's style injection. Inject the
+// control states here instead, before first paint.
+ensureControlStyles();
 render(App, document.getElementById('root')!);
 
 // Provide a tiny FE-side API for apps that want to send app_msg back

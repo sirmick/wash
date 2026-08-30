@@ -15,7 +15,7 @@
 import { For, Index, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { Button, ConfirmDialog, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
+import { WASH_ROW_CLASS, Button, ConfirmDialog, WASH_BTN_CLASS, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
 import { filterSortProcs, type SortKey } from './procsort.ts';
 import {
   ChevronDown,
@@ -479,6 +479,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <div
             ref={cpuTriggerEl}
             data-testid="top-cpu-meter"
+            class={WASH_ROW_CLASS}
             onClick={() => setCpuPopover(!cpuPopover())}
             title="Click for per-core breakdown"
             style={meterTriggerStyle}
@@ -496,6 +497,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <div
             ref={netTriggerEl}
             data-testid="top-net-meter"
+            class={WASH_ROW_CLASS}
             onClick={() => setNetPopover(!netPopover())}
             title="Click for per-interface breakdown"
             style={meterTriggerStyle}
@@ -505,6 +507,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <div
             ref={diskTriggerEl}
             data-testid="top-disk-meter"
+            class={WASH_ROW_CLASS}
             onClick={() => setDiskPopover(!diskPopover())}
             title="Click for per-disk breakdown"
             style={meterTriggerStyle}
@@ -1016,11 +1019,14 @@ const ProcHeader: Component<{
       data-testid={`top-sort-${p.k}`}
       data-active={props.sortKey === p.k}
       title={`Sort by ${p.label}`}
+      class={WASH_BTN_CLASS}
       style={{
         ...headerCellStyle,
         'text-align': p.align ?? 'left',
         width: p.width,
-        background: props.sortKey === p.k ? tokens.bgRowSelected : 'transparent',
+        // The sorted column rests filled; both branches feed
+        // --wash-btn-bg so hover and press derive off the live one.
+        '--wash-btn-bg': props.sortKey === p.k ? tokens.bgRowSelected : 'transparent',
       }}
     >
       {p.label}{props.sortKey === p.k ? (props.sortDesc ? ' ↓' : ' ↑') : ''}
@@ -1052,6 +1058,7 @@ const ProcRow: Component<{
   const indent = () => props.depth * 12;
   return (
     <div
+      class={WASH_ROW_CLASS}
       style={rowStyle(false, props.selected)}
       data-pid={props.proc.PID}
       data-testid={`top-row-${props.proc.PID}`}
@@ -1072,6 +1079,7 @@ const ProcRow: Component<{
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); props.onToggle?.(); }}
+              class={WASH_BTN_CLASS}
               style={chevronStyle}
               data-testid={`top-tree-toggle-${props.proc.PID}`}
               title={props.collapsed ? 'Expand children' : 'Collapse children'}
@@ -1215,10 +1223,13 @@ const meterCellStyle: JSX.CSSProperties = {
   'border-right': `1px solid ${tokens.borderMenu}`,
 };
 
+// The three header meters that open a per-core / per-interface / per-disk
+// popover. They looked exactly like the (inert) memory meter beside them,
+// so nothing said they were clickable until you happened to click one.
 const meterTriggerStyle: JSX.CSSProperties = {
   ...meterCellStyle,
-  cursor: 'pointer',
   'user-select': 'none',
+  'border-radius': tokens.radiusSm,
 };
 
 // rateMeterShellStyle is the inner grid used by NetMeter / DiskMeter
@@ -1317,8 +1328,12 @@ function rowStyle(header: boolean, selected: boolean): JSX.CSSProperties {
     gap: '6px',
     padding: '2px 8px',
     'border-bottom': header ? `1px solid ${tokens.borderMenu}` : 'none',
-    background: header ? tokens.bgMenu : selected ? tokens.bgRowSelected : 'transparent',
-    cursor: header ? 'default' : 'pointer',
+    // The header carries a real background; data rows hand theirs to
+    // --wash-row-bg so WASH_ROW_CLASS can derive hover and press from
+    // whichever branch is live (selected rows included).
+    ...(header
+      ? { background: tokens.bgMenu, cursor: 'default' }
+      : { '--wash-row-bg': selected ? tokens.bgRowSelected : 'transparent' }),
     // Data rows stay selectable so process names/PIDs can be copied
     // (Ctrl+C rides the shell's copy mirror); only the header — all
     // sort buttons — opts out.
@@ -1331,11 +1346,10 @@ function rowStyle(header: boolean, selected: boolean): JSX.CSSProperties {
 
 const headerCellStyle: JSX.CSSProperties = {
   display: 'inline-block',
-  border: 'none',
-  background: 'transparent',
-  color: tokens.fgMuted,
+  '--wash-btn-border': 'transparent',
+  '--wash-btn-fg': tokens.fgMuted,
+  '--wash-btn-fg-hover': tokens.fg,
   font: tokens.type.textSm,
-  cursor: 'pointer',
   padding: '0 2px',
 };
 
@@ -1399,15 +1413,17 @@ const IconBtn: Component<{
   </Button>
 );
 
+// The tree-expand chevron is sized to its 12px glyph exactly, so it opts
+// out of the class's border rather than losing 2px of content box to a
+// transparent one. Hover recolours the glyph instead of the outline.
 const chevronStyle: JSX.CSSProperties = {
+  '--wash-btn-bg': 'transparent',
+  '--wash-btn-fg-hover': tokens.accentBlue,
   border: 'none',
-  background: 'transparent',
-  color: tokens.fg,
   padding: 0,
   'line-height': 0,
   width: '12px',
   height: '12px',
-  cursor: 'pointer',
 };
 
 const statusBarStyle: JSX.CSSProperties = {

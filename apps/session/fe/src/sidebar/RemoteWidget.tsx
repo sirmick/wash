@@ -13,7 +13,7 @@
 
 import type { Component } from 'solid-js';
 import { For, Show, createSignal } from 'solid-js';
-import { tokens } from '@wash/ui';
+import { WASH_BTN_CLASS, tokens } from '@wash/ui';
 import { hostHue } from './host-hue';
 
 export interface RemoteHost {
@@ -91,14 +91,14 @@ const HostEntry: Component<{
         data-status={props.host.status}
         onClick={onClick}
         title={props.host.error ? `${props.host.host} — ${props.host.error}` : props.host.host}
+        class={WASH_BTN_CLASS}
         style={{
           display: 'flex',
           'align-items': 'center',
           gap: '6px',
           width: '100%',
-          background: 'transparent',
-          border: 'none',
-          cursor: 'pointer',
+          '--wash-btn-bg': 'transparent',
+          '--wash-btn-border': 'transparent',
           padding: '2px 0',
           'text-align': 'left',
           opacity: props.host.status === 'down' ? 0.55 : 1,
@@ -132,6 +132,7 @@ const HostEntry: Component<{
               {(app) => (
                 <button
                   type="button"
+                  class={WASH_BTN_CLASS}
                   style={menuItemStyle}
                   data-testid={`remote-launch-${props.host.origin}-${app.id}`}
                   role="menuitem"
@@ -180,13 +181,10 @@ export const RemoteWidget: Component<RemoteWidgetProps> = (props) => (
       type="button"
       data-testid="remote-manage"
       onClick={() => props.onManage()}
+      class={WASH_BTN_CLASS}
+      data-variant="ghost"
       style={{
-        background: 'transparent',
-        color: tokens.fg,
-        border: `1px solid ${tokens.borderMenu}`,
-        'border-radius': tokens.radiusSm,
         padding: '3px 8px',
-        cursor: 'pointer',
         font: tokens.type.textSm,
         'align-self': 'flex-start',
       }}

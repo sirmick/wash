@@ -20,7 +20,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { WASH_ROW_CLASS, WASH_BTN_CLASS, BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { BulkConflict, BulkJob } from '@wash/ui';
 import type { FileClient, FileTreeColumn } from '@wash/ui';
 import {
@@ -2831,6 +2831,8 @@ const InfoSection: Component<{
       <button
         type="button"
         data-testid="fm-info-toggle"
+        class={WASH_BTN_CLASS}
+        aria-expanded={props.open}
         style={{ ...infoToggleStyle, display: 'flex', 'align-items': 'center', gap: '6px' }}
         onClick={props.onToggle}
       >
@@ -2931,9 +2933,11 @@ const EditableRow: Component<{
           <span
             data-testid={`${props.testid}-value`}
             onClick={props.onStart}
+            // The dashed underline says "editable"; the hover fill
+            // confirms it before you commit to a click.
+            class={WASH_ROW_CLASS}
             style={{
               flex: 1,
-              cursor: 'pointer',
               overflow: 'hidden',
               'text-overflow': 'ellipsis',
               'white-space': 'nowrap',
@@ -3313,13 +3317,13 @@ const infoToggleStyle: JSX.CSSProperties = {
   display: 'block',
   width: '100%',
   height: `${HEADER_ROW_H}px`,
-  'box-sizing': 'border-box',
   'text-align': 'left',
-  background: 'transparent',
-  color: tokens.fgMuted,
-  border: 'none',
+  '--wash-btn-bg': 'transparent',
+  '--wash-btn-border': 'transparent',
+  '--wash-btn-fg': tokens.fgMuted,
+  '--wash-btn-fg-hover': tokens.fg,
+  'border-radius': '0',
   padding: '0 8px',
-  cursor: 'pointer',
   font: tokens.type.textSm,
 };
 
@@ -3588,7 +3592,6 @@ const FolderTile: Component<{
 }> = (props) => {
   const [thumb, setThumb] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal(false);
-  const [hover, setHover] = createSignal(false);
   let el: HTMLDivElement | undefined;
   onMount(() => {
     if (!isThumbable(props.entry) || !el) return;
@@ -3615,20 +3618,20 @@ const FolderTile: Component<{
       data-selected={props.selected ? 'true' : undefined}
       data-drop-target={props.isDropTarget ? 'true' : undefined}
       draggable="true"
+      // Hover was a signal per tile — one createSignal and one re-render
+      // for every icon in the folder. WASH_ROW_CLASS does it in CSS and
+      // brings the press state with it.
+      class={WASH_ROW_CLASS}
       style={{
         ...tileStyle,
-        background: props.isDropTarget
+        '--wash-row-bg': props.isDropTarget
           ? tokens.bgDropTarget
           : props.selected
           ? tokens.bgRowSelected
-          : hover()
-          ? tokens.bgRowHover
           : 'transparent',
         'box-shadow': props.isDropTarget ? `inset 0 0 0 2px ${tokens.borderDropTarget}` : 'none',
       }}
       title={props.entry.name}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       onClick={(ev) => props.onClick(props.path, props.entry, ev)}
       onDblClick={() => props.onActivate(props.path, props.entry)}
       onContextMenu={(ev) => props.onContextMenu(ev, props.entry, props.path)}

@@ -7,17 +7,17 @@ import type { Component, JSX } from 'solid-js';
 import { For, Show } from 'solid-js';
 import { Pause, Play, SkipBack, SkipForward, Volume2 } from 'lucide-solid';
 import { tokens } from './tokens';
+import { Button } from './button';
+import { WASH_ROW_CLASS } from './controls';
 
+// Footprint override on top of <Button variant="ghost">, which supplies
+// the transparent chrome, borderMenu outline, radius and — since the
+// controls sweep — the hover / press / focus states.
 const transportBtn: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   'justify-content': 'center',
-  background: 'transparent',
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusSm}`,
   padding: '4px 10px',
-  cursor: 'pointer',
 };
 
 export interface TransportControlsProps {
@@ -38,52 +38,52 @@ export const TransportControls: Component<TransportControlsProps> = (props) => {
   const sz = () => props.size ?? 14;
   return (
     <div style={{ display: 'flex', gap: '6px', 'justify-content': 'center' }}>
-      <button
-        type="button"
+      <Button
         data-testid="audio-prev"
+        variant="ghost"
         style={transportBtn}
         onClick={() => props.onPrev()}
         title="Previous"
         aria-label="Previous"
       >
         <SkipBack size={sz()} />
-      </button>
+      </Button>
       <Show
         when={props.status === 'playing'}
         fallback={
-          <button
-            type="button"
+          <Button
             data-testid="audio-play"
+            variant="ghost"
             style={transportBtn}
             onClick={() => props.onPlay()}
             title="Play"
             aria-label="Play"
           >
             <Play size={sz()} />
-          </button>
+          </Button>
         }
       >
-        <button
-          type="button"
+        <Button
           data-testid="audio-pause"
+          variant="ghost"
           style={transportBtn}
           onClick={() => props.onPause()}
           title="Pause"
           aria-label="Pause"
         >
           <Pause size={sz()} />
-        </button>
+        </Button>
       </Show>
-      <button
-        type="button"
+      <Button
         data-testid="audio-next"
+        variant="ghost"
         style={transportBtn}
         onClick={() => props.onNext()}
         title="Next"
         aria-label="Next"
       >
         <SkipForward size={sz()} />
-      </button>
+      </Button>
     </div>
   );
 };
@@ -270,15 +270,15 @@ export function MediaList<T>(props: MediaListProps<T>): JSX.Element {
                 data-playing={isPlaying() ? 'true' : undefined}
                 onClick={() => props.onSelect(i())}
                 onDblClick={() => props.onActivate(i())}
+                class={WASH_ROW_CLASS}
                 style={{
                   display: 'flex',
                   'align-items': 'center',
                   gap: '8px',
                   padding: '4px 10px',
-                  cursor: 'default',
                   'user-select': 'none',
                   'border-left': `2px solid ${isPlaying() ? tokens.accentGreen : 'transparent'}`,
-                  background: sel() ? tokens.bgRowSelected : 'transparent',
+                  '--wash-row-bg': sel() ? tokens.bgRowSelected : 'transparent',
                   color: isPlaying() ? tokens.accentGreen : tokens.fg,
                   'font-size': tokens.fontSizeBase,
                 }}

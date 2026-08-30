@@ -20,6 +20,8 @@ import {
   getPack,
   tokens,
   washAssetUrl,
+  WASH_BTN_CLASS,
+  WASH_ROW_CLASS,
 } from '@wash/ui';
 import { PrivWidget, PrivUnlockOverlay } from '@wash/ui';
 import type { Pack, PrivReq, PrivUnlockState, RosterAsk, RosterRow } from '@wash/ui';
@@ -1933,10 +1935,11 @@ const PagerCell: Component<{
     top: `${top()}px`,
     width: `${props.cellW}px`,
     height: `${props.cellH}px`,
-    background: props.active ? `color-mix(in srgb, ${tokens.accentBlue} 28%, transparent)` : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
+    '--wash-row-bg': props.active
+      ? `color-mix(in srgb, ${tokens.accentBlue} 28%, transparent)`
+      : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
     border: props.active ? `1.5px solid ${tokens.accentBlue}` : `1px solid ${tokens.borderMenu}`,
     'border-radius': tokens.radiusSm,
-    cursor: 'pointer',
     overflow: 'hidden',
     'box-sizing': 'border-box',
   });
@@ -1951,6 +1954,7 @@ const PagerCell: Component<{
     <div
       data-testid={`pager-cell-${props.cell.vx}-${props.cell.vy}`}
       data-active={props.active ? 'true' : 'false'}
+      class={WASH_ROW_CLASS}
       style={cellStyle()}
       onClick={onCellClick}
     >
@@ -1993,11 +1997,12 @@ const PagerWindow: Component<{
       top: `${r.top}px`,
       width: `${r.width}px`,
       height: `${r.height}px`,
-      background: props.win.focused ? `color-mix(in srgb, ${tokens.accentBlue} 60%, transparent)` : `color-mix(in srgb, ${tokens.fgMuted} 28%, transparent)`,
+      '--wash-row-bg': props.win.focused
+        ? `color-mix(in srgb, ${tokens.accentBlue} 60%, transparent)`
+        : `color-mix(in srgb, ${tokens.fgMuted} 28%, transparent)`,
       border: `1px solid ${props.win.focused ? tokens.accentBlue : tokens.borderFocus}`,
       'border-radius': tokens.radiusSm,
       'box-sizing': 'border-box',
-      cursor: 'pointer',
     };
   };
   const onClick = (ev: MouseEvent) => {
@@ -2009,6 +2014,7 @@ const PagerWindow: Component<{
   return (
     <div
       data-testid={`pager-window-${props.win.windowID}-${props.cell.vx}-${props.cell.vy}`}
+      class={WASH_ROW_CLASS}
       style={style()}
       onClick={onClick}
       title={props.win.title}
@@ -2023,24 +2029,22 @@ const IconButton: Component<{
   onClick: (ev: MouseEvent) => void;
   children: JSX.Element;
 }> = (props) => {
-  const [hover, setHover] = createSignal(false);
   return (
     <button
       type="button"
       title={props.title}
       data-testid={props.testid}
       ref={props.ref}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       onClick={props.onClick}
+      // Hover was a per-button signal and a re-render; the stylesheet
+      // does it now, and brings the press and focus states with it.
+      class={WASH_BTN_CLASS}
       style={{
-        background: hover() ? `color-mix(in srgb, ${tokens.fg} 8%, transparent)` : 'transparent',
-        color: tokens.fg,
-        border: '1px solid transparent',
+        '--wash-btn-bg': 'transparent',
+        '--wash-btn-border': 'transparent',
         width: '32px',
         height: '32px',
         'border-radius': tokens.radiusMd,
-        cursor: 'pointer',
         display: 'flex',
         'align-items': 'center',
         'justify-content': 'center',
@@ -2085,14 +2089,19 @@ const WindowPill: Component<{
         ev.preventDefault();
         window.wash.closeWindow(props.win.windowID, props.win.origin);
       }}
+      class={WASH_BTN_CLASS}
       style={{
-        background: props.win.focused ? tokens.bgRowSelected : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
-        color: tokens.fg,
-        border: `1px solid ${props.win.focused ? tokens.borderFocus : 'transparent'}`,
+        // The focused window's pill rests at the selection fill and the
+        // rest at a 4% wash of the foreground; both go through
+        // --wash-btn-bg so each hovers and presses from its own resting
+        // colour rather than one of them going inert.
+        '--wash-btn-bg': props.win.focused
+          ? tokens.bgRowSelected
+          : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
+        '--wash-btn-border': props.win.focused ? tokens.borderFocus : 'transparent',
         padding: '0 12px',
         height: '28px',
         'border-radius': tokens.radiusMd,
-        cursor: 'pointer',
         'max-width': '220px',
         // Window name on the start bar uses the title type (matches the
         // window's own titlebar — Chicago in Copland, etc.).
@@ -2372,19 +2381,22 @@ const PaletteRow: Component<{
       type="button"
       data-testid={`palette-item-${props.app.id}`}
       ref={el!}
+      // onMouseEnter moves the palette's keyboard cursor, so the
+      // selected fill stays a prop rather than a :hover — the two must
+      // not disagree about which row is current.
       onMouseEnter={props.onHover}
       onClick={props.onPick}
+      class={WASH_BTN_CLASS}
       style={{
         display: 'flex',
         'align-items': 'center',
         gap: '10px',
         width: '100%',
         padding: '8px 16px',
-        background: props.selected ? tokens.bgRowSelected : 'transparent',
-        color: tokens.fg,
-        border: 'none',
+        '--wash-btn-bg': props.selected ? tokens.bgRowSelected : 'transparent',
+        '--wash-btn-border': 'transparent',
+        'border-radius': '0',
         'text-align': 'left',
-        cursor: 'pointer',
         font: tokens.type.textLg,
       }}
     >

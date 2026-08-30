@@ -1,5 +1,6 @@
 import type { Component, JSX, ParentComponent } from 'solid-js';
 import { tokens } from './tokens';
+import { WASH_BTN_CLASS } from './controls';
 
 // Overlay is the centered-modal scaffold: animated full-bleed
 // backdrop + animated centered box. Clicking the backdrop calls
@@ -95,6 +96,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
           type="button"
           data-testid={props.cancelTestid}
           onClick={props.onCancel}
+          class={WASH_BTN_CLASS}
           style={confirmBtnStyle(false)}
         >
           {props.cancelLabel ?? 'Cancel'}
@@ -103,6 +105,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
           type="button"
           data-testid={props.confirmTestid}
           onClick={props.onConfirm}
+          class={WASH_BTN_CLASS}
           style={confirmBtnStyle(props.danger ?? false)}
         >
           {props.confirmLabel}
@@ -116,14 +119,14 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 // inline because the dialog uses 5px / 12px padding for the
 // extra visual weight modal actions deserve. Could fold into
 // Button as a size="lg" later if it shows up elsewhere.
+//
+// The palette and every interaction state come from WASH_BTN_CLASS; what
+// stays here is the padding and the danger fill, set as a custom
+// property so hover and press derive off it (controls.ts).
 function confirmBtnStyle(danger: boolean): JSX.CSSProperties {
   return {
-    background: danger ? tokens.bgDanger : 'transparent',
-    color: tokens.fg,
-    border: `1px solid ${danger ? tokens.borderDanger : tokens.borderMenu}`,
-    'border-radius': `${tokens.radiusSm}`,
+    '--wash-btn-bg': danger ? tokens.bgDanger : 'transparent',
+    '--wash-btn-border': danger ? tokens.borderDanger : tokens.borderMenu,
     padding: '5px 12px',
-    cursor: 'pointer',
-    font: tokens.type.textMd,
   };
 }

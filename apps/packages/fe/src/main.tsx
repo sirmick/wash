@@ -12,7 +12,7 @@
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { CheckCircle2, Download, RefreshCw, Search, Trash2, X, XCircle } from 'lucide-solid';
-import { Button, ConfirmDialog, Menu, MenuItem, MenuSeparator, StatusBar, Terminal, createAppBus, defineWashApp, tokens } from '@wash/ui';
+import { WASH_BTN_CLASS, Button, ConfirmDialog, Menu, MenuItem, MenuSeparator, StatusBar, Terminal, createAppBus, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 
 interface Package {
@@ -291,6 +291,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           type="button"
           data-testid="pkg-actions-button"
           disabled={!canRunActions() || menuActions().length === 0}
+          class={WASH_BTN_CLASS}
+          aria-expanded={!!actionsMenu()}
           style={menubarBtnStyle(!!actionsMenu())}
           onClick={(e) => {
             if (actionsMenu()) {
@@ -554,12 +556,10 @@ const menubarStyle: JSX.CSSProperties = {
 
 function menubarBtnStyle(open: boolean): JSX.CSSProperties {
   return {
-    background: open ? tokens.bgRowHover : 'transparent',
-    color: tokens.fg,
-    border: 'none',
+    '--wash-btn-bg': open ? tokens.bgRowHover : 'transparent',
+    '--wash-btn-border': 'transparent',
+    '--wash-btn-bg-hover': tokens.bgRowHover,
     padding: '4px 10px',
-    cursor: 'pointer',
-    font: tokens.type.textMd,
   };
 }
 

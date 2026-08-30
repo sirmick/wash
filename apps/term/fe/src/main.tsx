@@ -26,7 +26,7 @@ import {
   agentStateColor, agentStateLabel,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
-  defineWashApp, tokens, WASH_SCROLL_CLASS,
+  defineWashApp, tokens, WASH_SCROLL_CLASS, WASH_BTN_CLASS,
 } from '@wash/ui';
 import type { PasteAnalysis, TermModes, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
@@ -1131,9 +1131,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           type="button"
           draggable={true}
           data-testid={`term-tab-${channelID}`}
+          class={WASH_BTN_CLASS}
           style={{
-            background: isActive() ? tokens.bgRowSelected : 'transparent',
-            color: tokens.fg,
+            // Inactive tabs lift toward the active fill on hover, so the
+            // strip reads as a row of targets rather than flat text.
+            '--wash-btn-bg': isActive() ? tokens.bgRowSelected : 'transparent',
+            // The tab draws its own top rule in the session's tag colour,
+            // so it opts out of the class's border entirely rather than
+            // stacking a transparent one under it.
             border: 'none',
             'border-top': isActive()
               ? `2px solid ${tagHex() ?? tokens.accentBlue}`
@@ -1208,12 +1213,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           >
             {tabLabel(tab()!)}
           </span>
+          {/* A <span>, not a <button>: it sits inside the tab's own
+              <button>, and nesting one button in another is invalid — the
+              inner one is simply unreachable by keyboard. It therefore
+              gets the button class for its hover and press states but no
+              tabindex; closing a tab stays available from Ctrl+W and the
+              tab context menu. Making this a real control means splitting
+              the tab into a button + sibling close button, which the drag
+              handlers on the tab make a larger change than this sweep. */}
           <span
             data-testid={`term-tab-close-${channelID}`}
+            class={WASH_BTN_CLASS}
             style={{
               opacity: 0.6,
-              cursor: 'pointer',
               padding: '0 2px',
+              border: 'none',
+              'border-radius': tokens.radiusSm,
+              '--wash-btn-bg': 'transparent',
+              '--wash-btn-bg-hover': tokens.bgDanger,
               display: 'inline-flex',
               'align-items': 'center',
             }}
@@ -1289,6 +1306,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <button
           type="button"
           data-testid="term-menu-edit-btn"
+          class={WASH_BTN_CLASS}
+          aria-expanded={openMenu() === 'edit'}
           style={menuBarBtnStyle(openMenu() === 'edit')}
           onClick={(ev) => openMenuFor('edit', ev)}
         >
@@ -1297,6 +1316,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <button
           type="button"
           data-testid="term-menu-tab-btn"
+          class={WASH_BTN_CLASS}
+          aria-expanded={openMenu() === 'tab'}
           style={menuBarBtnStyle(openMenu() === 'tab')}
           onClick={(ev) => openMenuFor('tab', ev)}
         >
@@ -1305,6 +1326,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <button
           type="button"
           data-testid="term-menu-split-btn"
+          class={WASH_BTN_CLASS}
+          aria-expanded={openMenu() === 'split'}
           style={menuBarBtnStyle(openMenu() === 'split')}
           onClick={(ev) => openMenuFor('split', ev)}
         >
@@ -1313,6 +1336,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <button
           type="button"
           data-testid="term-menu-theme-btn"
+          class={WASH_BTN_CLASS}
+          aria-expanded={openMenu() === 'theme'}
           style={menuBarBtnStyle(openMenu() === 'theme')}
           onClick={(ev) => openMenuFor('theme', ev)}
         >
@@ -1321,6 +1346,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <button
           type="button"
           data-testid="term-menu-paste-btn"
+          class={WASH_BTN_CLASS}
+          aria-expanded={openMenu() === 'paste'}
           style={menuBarBtnStyle(openMenu() === 'paste')}
           onClick={(ev) => openMenuFor('paste', ev)}
         >
@@ -1329,6 +1356,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <button
           type="button"
           data-testid="term-menu-font-btn"
+          class={WASH_BTN_CLASS}
+          aria-expanded={openMenu() === 'font'}
           style={menuBarBtnStyle(openMenu() === 'font')}
           onClick={(ev) => openMenuFor('font', ev)}
         >
@@ -1845,15 +1874,16 @@ const menuBarStyle: JSX.CSSProperties = {
   'user-select': 'none',
 };
 
+// Matches @wash/ui's <MenuBar> titles: the open one rests at the
+// selection fill, and both branches feed --wash-btn-bg so hover and
+// press derive off whichever is live (controls.ts).
 function menuBarBtnStyle(active: boolean): JSX.CSSProperties {
   return {
-    background: active ? tokens.bgRowSelected : 'transparent',
-    color: tokens.fg,
-    border: 'none',
+    '--wash-btn-bg': active ? tokens.bgRowSelected : 'transparent',
+    '--wash-btn-border': 'transparent',
+    '--wash-btn-bg-hover': tokens.bgRowSelected,
     padding: '2px 10px',
     height: '24px',
-    cursor: 'pointer',
-    font: tokens.type.textMd,
   };
 }
 

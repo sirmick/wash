@@ -9,6 +9,7 @@
 import { For, splitProps } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
+import { WASH_BTN_CLASS } from './controls';
 
 const sectionTitleStyle: JSX.CSSProperties = {
   font: tokens.type.titleSm,
@@ -34,17 +35,15 @@ export const Row: Component<{ label: string; children: JSX.Element }> = (props) 
   </div>
 );
 
+// Geometry only — WASH_BTN_CLASS supplies the palette and the
+// hover/press/focus states (controls.ts). The radius override is the one
+// place this differs from a stock button: panes use the medium radius.
 const smallBtnStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '5px',
-  background: tokens.bgMenu,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '4px 10px',
-  font: tokens.type.textMd,
-  cursor: 'pointer',
 };
 
 /** SmallBtn is the compact action button used across panes. */
@@ -53,7 +52,13 @@ export const SmallBtn: Component<{
   'data-testid'?: string;
   children: JSX.Element;
 }> = (props) => (
-  <button type="button" data-testid={props['data-testid']} onClick={props.onClick} style={smallBtnStyle}>
+  <button
+    type="button"
+    data-testid={props['data-testid']}
+    onClick={props.onClick}
+    class={WASH_BTN_CLASS}
+    style={smallBtnStyle}
+  >
     {props.children}
   </button>
 );

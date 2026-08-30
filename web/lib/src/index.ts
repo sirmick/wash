@@ -1,6 +1,6 @@
 /// <reference path="./window-wash.d.ts" />
 
-export { tokens, accentColor } from './tokens';
+export { tokens, accentColor, hoverFill, activeFill, borderHoverFill } from './tokens';
 export type { Tokens } from './tokens';
 export { packs, defaultPackId, getPack, applyScheme, washAppearance, onAppearanceChange } from './packs';
 export type { Pack } from './packs';
@@ -79,6 +79,13 @@ export { b64encode, b64decode, encryptPassword } from './priv-crypto';
 export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';
+export {
+  ensureControlStyles,
+  WASH_BTN_CLASS,
+  WASH_ROW_CLASS,
+  WASH_REVEAL_CLASS,
+  WASH_REVEAL_HOST_CLASS,
+} from './controls';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
 export { defineSettingsPanel, PANEL_PORT_PROP } from './define-settings-panel';
 export type {
