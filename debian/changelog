@@ -1,3 +1,22 @@
+wash (0.14.3-1) unstable; urgency=low
+
+  * agent: a talking agent no longer floods the interactive traffic class.
+    Every chunk an agent narrated — every message fragment, thought, tool call
+    and plan update — republished the WHOLE roster: every row, every pending
+    question, the entire remembered session history and the adapter list, at
+    interactive priority, to every subscriber, and again on the hop to the
+    window. Measured at 200 full-state pushes for 200 chunks, which is enough
+    to fill the interactive queue on its own and stall the keystrokes and
+    window moves that class exists to protect. The roster now goes on the wire
+    when it has something new to say.
+  * about: the Link section splits FE-bound traffic by the app that produced
+    it, per class and busiest first, so "which app is using the link" has an
+    answer on screen. Router lifecycle traffic has no app to bill, so it is
+    shown as a derived remainder rather than invented — the rows always
+    reconcile with the class totals above them.
+
+ -- sirmick <sirmick@gmail.com>  Tue, 08 Sep 2026 12:05:00 -0700
+
 wash (0.14.2-1) unstable; urgency=low
 
   * edit: Ctrl+S no longer throws away the buffer it just saved. Saving re-ran

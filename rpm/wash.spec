@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.14.2
+Version:        0.14.3
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,14 @@ fi
 exit 0
 
 %changelog
+* Mon Sep 08 2026 sirmick <sirmick@gmail.com> - 0.14.3-1
+- agent: a talking agent no longer floods the interactive traffic class. Every
+  chunk an agent narrated republished the whole roster - all rows, all pending
+  questions, the entire session history - to every subscriber, twice over.
+  Measured at 200 pushes for 200 chunks; it now publishes when something
+  actually changed.
+- about: the Link section splits traffic by the app that produced it, per
+  class, so "which app is using the link" has an answer on screen.
 * Mon Sep 07 2026 sirmick <sirmick@gmail.com> - 0.14.2-1
 - edit: Ctrl+S no longer throws away the buffer it just saved. Saving re-ran
   the editor's tab-seeding path, which reset the caret and undo history, and

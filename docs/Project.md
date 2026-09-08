@@ -97,7 +97,7 @@ composition, hand-edit reaching the flag, whitespace-only not counting),
 `e2e/tests/agent-default-prompt.spec.ts` (the agent really receives it, it
 survives a reload, clearing removes the file).
 
-### Per-app traffic counters — DONE, unreleased
+### Per-app traffic counters — DONE, shipped in 0.14.3
 
 The About window's Link section now splits FE-bound traffic by the app
 that produced it, per class, busiest first. Attribution lives at the two
