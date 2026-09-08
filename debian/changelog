@@ -1,3 +1,29 @@
+wash (0.14.2-1) unstable; urgency=low
+
+  * edit: Ctrl+S no longer throws away the buffer it just saved. Saving re-ran
+    the editor's tab-seeding path: with no captured state that reset the caret
+    to the top of the file and emptied the undo history, and on a tab you had
+    switched away from and back it restored the snapshot taken when you left,
+    so text that had just reached the disk vanished from the screen, the tab
+    showed clean, and the next save wrote the stale text back over the good
+    file.
+  * edit: Save As carries the live buffer across the rename instead of the
+    last snapshot, and retires the wysiwyg editor handle the rename orphaned.
+  * agent: a default prompt, stored once and sent ahead of every new session.
+    Set it from the launcher or the File menu; it is plain text in
+    ~/.config/wash/agent-default-prompt.txt, and the launcher re-reads the
+    file rather than remembering the last save, so editing it in an editor
+    agrees with what the UI says.
+  * desktop: a dragged window no longer snaps back for a round trip on a slow
+    link. Strict Control-before-Bulk ordering stopped at the kernel's 4 MB
+    send buffer, where a drag frame queued behind a talking agent's
+    transcript; the transcript now ships deltas rather than the whole
+    conversation each turn.
+  * build: a bare `make` builds the tree instead of printing the binary list
+    and exiting 0, which read as a successful build that had compiled nothing.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 07 Sep 2026 22:10:00 -0700
+
 wash (0.14.1-1) unstable; urgency=low
 
   * agent: a failed session renders red instead of green. A turn that died on

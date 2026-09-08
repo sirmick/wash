@@ -63,7 +63,7 @@ ship together or M2 ships a dead button.
 use. The always-open sessions list has been in daily use since 0.14.0;
 that feedback should land before M2 is written.
 
-### Default prompt — DONE, unreleased
+### Default prompt — DONE, shipped in 0.14.2
 
 Standing instructions sent to every new agent session ahead of what you
 type. Stored as plain text at

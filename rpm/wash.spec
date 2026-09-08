@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.14.1
+Version:        0.14.2
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,21 @@ fi
 exit 0
 
 %changelog
+* Mon Sep 07 2026 sirmick <sirmick@gmail.com> - 0.14.2-1
+- edit: Ctrl+S no longer throws away the buffer it just saved. Saving re-ran
+  the editor's tab-seeding path, which reset the caret and undo history, and
+  on a tab you had switched away from and back it restored a stale snapshot:
+  the text just written to disk vanished from the screen and the next save
+  wrote the old text back over the good file.
+- edit: Save As carries the live buffer and retires the editor handle the
+  rename orphaned.
+- agent: a default prompt, stored once and sent ahead of every new session.
+  Set it from the launcher or File menu; it lives in
+  ~/.config/wash/agent-default-prompt.txt and is re-read from the file, so
+  editing it by hand agrees with what the UI says.
+- desktop: dragging a window over a slow link no longer snaps back for a
+  round trip; QoS now survives the kernel send buffer.
+- build: a bare `make` builds instead of printing the binary list.
 * Wed Aug 27 2026 sirmick <sirmick@gmail.com> - 0.14.1-1
 - agent: a failed session renders red instead of green. A turn that died on
   an adapter error reported as done, and done paints green, so failure was
