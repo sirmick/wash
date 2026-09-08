@@ -14,6 +14,7 @@
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Button, createAppBus, defineWashApp, fmtBytes, fmtUptime, tokens } from '@wash/ui';
+import { trafficRows } from './app-traffic';
 
 // ----- wire types -----
 
@@ -634,6 +635,50 @@ const DisplayStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
   );
 };
 
+// AppTrafficTable answers "who is using the link" — the same FE-bound
+// bytes as the table above, split by the app that produced them. Sorted
+// busiest-first, since that is the question being asked.
+//
+// The last row is the router's own lifecycle traffic, derived from the
+// difference rather than counted: only frames with an app behind them can
+// be attributed, and a table that visibly does not add up to the class
+// totals above it invites the reader to distrust both.
+const AppTrafficTable: Component<{ h: WashLinkHealth }> = (props) => {
+  const rows = () => trafficRows(props.h.session.apps, props.h.session.tx_bytes, props.h.session.tx_frames);
+  return (
+    <Show when={rows().length > 0}>
+      <table style={tableStyle} data-testid="about-app-traffic">
+        <thead>
+          <tr style={tableHeadRowStyle}>
+            <th style={thStyle}>App</th>
+            <For each={LINK_CLASSES}>
+              {(name) => <th style={{ ...thStyle, 'text-align': 'right' }}>{name}</th>}
+            </For>
+            <th style={{ ...thStyle, 'text-align': 'right' }}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={rows()}>
+            {(r) => (
+              <tr style={tdRowStyle} data-testid={`about-app-traffic-row-${r.label}`}>
+                <td style={{ ...tdStyle, color: r.derived ? tokens.fgMuted : tokens.fg }}>{r.label}</td>
+                <For each={LINK_CLASSES}>
+                  {(_, i) => (
+                    <td style={{ ...tdStyle, 'text-align': 'right' }}>
+                      {r.bytes[i()] ? fmtBytes(r.bytes[i()]) : '—'}
+                    </td>
+                  )}
+                </For>
+                <td style={{ ...tdStyle, 'text-align': 'right' }}>{fmtBytes(r.total)}</td>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+    </Show>
+  );
+};
+
 // LinkStatsPanel dumps the whole link-health bag: the session running
 // totals as a per-class table, then the scalar counters + derived rates.
 const LinkStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
@@ -672,6 +717,7 @@ const LinkStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
           </For>
         </tbody>
       </table>
+      <AppTrafficTable h={props.h} />
       <KVList>
         <KVRow k="Session uptime" v={linkUptime(props.h.uptimeMs)} />
         <KVRow k="Connections" v={props.h.connects} />

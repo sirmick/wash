@@ -93,6 +93,20 @@ interface WashLinkSnapshot {
   wire_bytes: number;
   display_tx_bytes: number;
   display_tx_frames: number;
+  /**
+   * FE-bound traffic split by the app that produced it, sorted by app id.
+   * PARTIAL by construction: only frames with an app behind them can be
+   * attributed, so these sum to less than tx_bytes — the difference is
+   * the router's own lifecycle traffic. Absent when nothing has been
+   * attributed yet.
+   */
+  apps?: WashAppClassStats[];
+}
+
+interface WashAppClassStats {
+  app_id: string;
+  tx_bytes: number[];
+  tx_frames: number[];
 }
 
 interface WashLinkHealth {

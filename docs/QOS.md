@@ -308,3 +308,45 @@ edit when conventions change.
 - **Frame fragmentation**: WIRE.md disallows fragmentation in v0.0
   (END=1 always). If we ever allow it, the class bits must be identical
   across fragments — document there, not here.
+
+## 12. Link-health counters, as built
+
+`internal/router/linkstats.go` accumulates one connection's counters —
+per-class tx bytes/frames, queue-full blocks, drops, queue high-water,
+credit stalls, rx totals — with atomics on seams the egress path already
+has. They ride `link.stats` (~1/s) and the About window's **Link** section
+renders them; each finished connection is folded into session-lifetime
+totals so the figures survive a reconnect.
+
+### 12.1 Per-app split
+
+The class table says how the link is being used; `LinkStatsSnapshot.Apps`
+says by whom. Attribution happens where the producing app is known, which
+is two places and only two:
+
+- the drain loop's raw-channel path — pty output, bundles, thumbnails,
+  video — where the channel binding names the app, and where a lookup was
+  already being done for the display counters;
+- the `app_msg` relay, for control-channel envelopes. This is the last
+  point that knows: by the time the frame reaches the wire, a control
+  frame carries no app identity at all.
+
+So the rows are a PARTIAL view of the class totals by construction.
+Router-originated lifecycle traffic — window create, session patches, the
+link push itself — has no app to bill and is deliberately not invented.
+The About panel renders the difference as one derived row (`router
+(lifecycle)`) rather than leaving a table that visibly does not add up.
+
+Two consequences worth knowing:
+
+- The two seams sample at slightly different moments (an app's bytes when
+  the envelope is relayed, the class total when the frame is written), so
+  a frame in flight at snapshot time can briefly make an app's share
+  exceed the total. The renderer clamps the remainder at zero.
+- App bytes are the app's own payload, not the framing around it, so an
+  app author reading the column sees the number they can act on.
+
+This is the panel to reach for when one app is suspected of crowding a
+class — it is how the roster-push flood was confirmed to be agentd's
+state pushes rather than the transcript stream (§10's Bulk suffixes had
+already moved the transcript).

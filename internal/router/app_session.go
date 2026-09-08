@@ -657,6 +657,13 @@ func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) 
 		if err := s.WriteCtrlClass(send, class); err != nil {
 			return err
 		}
+		// Attribute the envelope to the app that sent it. Counted here
+		// rather than in the drain loop because a control-channel frame
+		// carries no app identity by the time it reaches the wire —
+		// this is the last point that knows. The payload length is the
+		// app's own bytes, not the envelope's few framing bytes, which
+		// keeps the number one an app author can reason about.
+		s.statsLink().recordAppTx(inst.AppID, class, len(m.Data))
 	}
 	return nil
 }

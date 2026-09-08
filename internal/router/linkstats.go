@@ -12,6 +12,8 @@
 package router
 
 import (
+	"sort"
+	"sync"
 	"sync/atomic"
 
 	"github.com/sirmick/wash/pkg/wire"
@@ -44,6 +46,21 @@ type LinkStats struct {
 
 	displayTxBytes  atomic.Uint64 // video + video-popup payload bytes
 	displayTxFrames atomic.Uint64
+
+	// appsMu guards apps. A map rather than atomics because the key set
+	// is discovered at runtime; the write is one map lookup on paths
+	// that were already doing one (the drain loop's channel lookup) or
+	// were already encoding JSON (the app_msg relay), so the lock is
+	// not what this costs. Bounded by the installed app roster.
+	appsMu sync.Mutex
+	apps   map[string]*appClassCounters
+}
+
+// appClassCounters is one app's FE-bound traffic by class. Held by
+// pointer so a producer updates in place under appsMu.
+type appClassCounters struct {
+	txBytes  [numClasses]uint64
+	txFrames [numClasses]uint64
 }
 
 // discardLinkStats is a sink for ShellSessions constructed without a
@@ -73,6 +90,49 @@ func (l *LinkStats) recordTx(c wire.Class, n int) {
 	i := classIndex(c)
 	l.txBytes[i].Add(uint64(n))
 	l.txFrames[i].Add(1)
+}
+
+// recordAppTx attributes one FE-bound frame of n payload bytes to the app
+// that produced it. Called at the two seams where the origin is known:
+// the app_msg relay (control-channel envelopes, which is where a talking
+// agent's transcript shows up) and the drain loop's raw-channel path
+// (terminal output, bundles, video), which already looks the binding up.
+//
+// Deliberately NOT called for router-originated control frames — window
+// lifecycle, session patches, the link push itself. Those have no app to
+// blame, and inventing one would make the column lie.
+func (l *LinkStats) recordAppTx(appID string, c wire.Class, n int) {
+	if appID == "" {
+		return
+	}
+	i := classIndex(c)
+	l.appsMu.Lock()
+	defer l.appsMu.Unlock()
+	if l.apps == nil {
+		l.apps = make(map[string]*appClassCounters)
+	}
+	a := l.apps[appID]
+	if a == nil {
+		a = &appClassCounters{}
+		l.apps[appID] = a
+	}
+	a.txBytes[i] += uint64(n)
+	a.txFrames[i]++
+}
+
+// appRows renders the per-app table as sorted wire values.
+func (l *LinkStats) appRows() []wire.AppClassStats {
+	l.appsMu.Lock()
+	defer l.appsMu.Unlock()
+	if len(l.apps) == 0 {
+		return nil
+	}
+	out := make([]wire.AppClassStats, 0, len(l.apps))
+	for id, a := range l.apps {
+		out = append(out, wire.AppClassStats{AppID: id, TxBytes: a.txBytes, TxFrames: a.txFrames})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].AppID < out[j].AppID })
+	return out
 }
 
 // recordQueueFull notes that Submit found class c's queue at capacity and
@@ -150,6 +210,7 @@ func (l *LinkStats) snapshot(depth [numClasses]int) wire.LinkStatsSnapshot {
 	s.WireBytes = l.wireBytes.Load()
 	s.DisplayTxBytes = l.displayTxBytes.Load()
 	s.DisplayTxFrames = l.displayTxFrames.Load()
+	s.Apps = l.appRows()
 	return s
 }
 
@@ -172,6 +233,22 @@ func (l *LinkStats) add(s wire.LinkStatsSnapshot) {
 	l.wireBytes.Add(s.WireBytes)
 	l.displayTxBytes.Add(s.DisplayTxBytes)
 	l.displayTxFrames.Add(s.DisplayTxFrames)
+	l.appsMu.Lock()
+	if l.apps == nil && len(s.Apps) > 0 {
+		l.apps = make(map[string]*appClassCounters, len(s.Apps))
+	}
+	for _, r := range s.Apps {
+		a := l.apps[r.AppID]
+		if a == nil {
+			a = &appClassCounters{}
+			l.apps[r.AppID] = a
+		}
+		for i := 0; i < numClasses; i++ {
+			a.txBytes[i] += r.TxBytes[i]
+			a.txFrames[i] += r.TxFrames[i]
+		}
+	}
+	l.appsMu.Unlock()
 }
 
 func isDisplayChannelKind(kind string) bool {

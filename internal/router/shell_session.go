@@ -1152,8 +1152,16 @@ func (s *ShellSession) drainLoop(ctx context.Context) {
 		// link-health stats (per-class throughput).
 		s.scheduler.Stats.recordTx(f.Class(), len(f.Payload))
 		if s.router != nil && f.Channel != ChannelControl {
-			if b := s.router.lookupChannel(f.Channel); b != nil && isDisplayChannelKind(b.kind) {
-				s.scheduler.Stats.recordDisplayTx(len(f.Payload))
+			if b := s.router.lookupChannel(f.Channel); b != nil {
+				if isDisplayChannelKind(b.kind) {
+					s.scheduler.Stats.recordDisplayTx(len(f.Payload))
+				}
+				// Raw-channel bytes belong to the app on the other end
+				// of the binding: pty output, bundles, thumbnails,
+				// video. One lookup serves both counters.
+				if b.app != nil {
+					s.scheduler.Stats.recordAppTx(b.app.AppID, f.Class(), len(f.Payload))
+				}
 			}
 		}
 	}

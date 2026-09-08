@@ -10,6 +10,8 @@ package wire
 // decodes in JS, so it needs no DecodeCtrl case. Per-class arrays are
 // indexed by Class — Interactive=0, Bulk=1, Background=2, Control=3.
 
+import "sort"
+
 const TShellLinkStats = "link.stats"
 
 type LinkStatsSnapshot struct {
@@ -31,6 +33,25 @@ type LinkStatsSnapshot struct {
 
 	DisplayTxBytes  uint64 `json:"display_tx_bytes"`  // video + video-popup payload bytes
 	DisplayTxFrames uint64 `json:"display_tx_frames"` // video + video-popup frames
+
+	// Apps breaks the same FE-bound traffic down by the app that
+	// produced it, sorted by AppID so the render order is stable.
+	// It is a PARTIAL view of TxBytes on purpose: only frames whose
+	// origin is an app are attributable, so router lifecycle traffic
+	// (window.create, session.patch, the link push itself) is absent
+	// and the rows sum to less than the class totals above. The
+	// difference is the router's own overhead, which is what a reader
+	// wanting "who is using the link" should see it as.
+	Apps []AppClassStats `json:"apps,omitempty"`
+}
+
+// AppClassStats is one app's FE-bound traffic, split by priority class
+// (indexed like every other per-class array here: Interactive=0, Bulk=1,
+// Background=2, Control=3).
+type AppClassStats struct {
+	AppID    string    `json:"app_id"`
+	TxBytes  [4]uint64 `json:"tx_bytes"`
+	TxFrames [4]uint64 `json:"tx_frames"`
 }
 
 // Plus returns the element-wise sum of two snapshots, taking the max for
@@ -56,6 +77,35 @@ func (a LinkStatsSnapshot) Plus(b LinkStatsSnapshot) LinkStatsSnapshot {
 	out.WireBytes += b.WireBytes
 	out.DisplayTxBytes += b.DisplayTxBytes
 	out.DisplayTxFrames += b.DisplayTxFrames
+	out.Apps = mergeAppStats(a.Apps, b.Apps)
+	return out
+}
+
+// mergeAppStats sums two per-app tables by AppID and returns the result
+// sorted by AppID. Neither input is mutated: a snapshot the caller still
+// holds must not change under it, which is the same copy-on-write rule
+// the rest of these counters follow.
+func mergeAppStats(a, b []AppClassStats) []AppClassStats {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	byID := make(map[string]AppClassStats, len(a)+len(b))
+	for _, src := range [][]AppClassStats{a, b} {
+		for _, r := range src {
+			cur := byID[r.AppID]
+			cur.AppID = r.AppID
+			for i := 0; i < 4; i++ {
+				cur.TxBytes[i] += r.TxBytes[i]
+				cur.TxFrames[i] += r.TxFrames[i]
+			}
+			byID[r.AppID] = cur
+		}
+	}
+	out := make([]AppClassStats, 0, len(byID))
+	for _, r := range byID {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].AppID < out[j].AppID })
 	return out
 }
 

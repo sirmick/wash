@@ -97,6 +97,22 @@ composition, hand-edit reaching the flag, whitespace-only not counting),
 `e2e/tests/agent-default-prompt.spec.ts` (the agent really receives it, it
 survives a reload, clearing removes the file).
 
+### Per-app traffic counters — DONE, unreleased
+
+The About window's Link section now splits FE-bound traffic by the app
+that produced it, per class, busiest first. Attribution lives at the two
+seams that know the producer (the raw-channel drain and the app_msg
+relay); everything else is router lifecycle traffic and is shown as a
+derived remainder rather than counted, so the rows always reconcile with
+the class totals above them. docs/QOS.md §12.1 has the shape and the two
+caveats (sampling skew, payload-not-framing).
+
+Tests: `internal/router/linkstats_test.go` (split, fold across
+reconnects, snapshot is a copy), `apps/about/fe/src/app-traffic.test.ts`
+(row order, the derived remainder, reconciliation, clamping),
+`e2e/tests/about-app-traffic.spec.ts` (a terminal's real pty bytes are
+attributed to the terminal, in the Bulk column).
+
 ## Conventions this repo holds to
 
 - **Both halves.** A test that crosses a process boundary asserts the
