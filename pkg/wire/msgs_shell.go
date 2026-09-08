@@ -297,6 +297,14 @@ type SessionWindow struct {
 	MinH uint32 `json:"min_h,omitempty"`
 	MaxW uint32 `json:"max_w,omitempty"`
 	MaxH uint32 `json:"max_h,omitempty"`
+	// GeomTok echoes the Tok of the last shell-originated window.move /
+	// window.resize the router applied (0 when the geometry last changed
+	// for another reason: a state change, the app's own hint). A shell
+	// that has committed a move locally uses it to tell "the router
+	// confirming my move" from "a patch that was already in flight with
+	// my pre-drag position" — on a slow link the latter lands AFTER the
+	// drop and would otherwise snap the window back for a round trip.
+	GeomTok uint32 `json:"geom_tok,omitempty"`
 }
 
 // ShellSessionSnapshot is the router's "here is everything you need
@@ -388,6 +396,9 @@ type ShellWindowMove struct {
 	WindowID uint32 `json:"window_id"`
 	X        int32  `json:"x"`
 	Y        int32  `json:"y"`
+	// Tok is a shell-chosen nonce the router echoes back as the window's
+	// GeomTok on the resulting patch. 0 = untagged (older shells).
+	Tok uint32 `json:"tok,omitempty"`
 }
 
 func NewShellWindowMove(windowID uint32, x, y int32) ShellWindowMove {
@@ -403,6 +414,8 @@ type ShellWindowResize struct {
 	WindowID uint32 `json:"window_id"`
 	W        uint32 `json:"w"`
 	H        uint32 `json:"h"`
+	// Tok: see ShellWindowMove.Tok.
+	Tok uint32 `json:"tok,omitempty"`
 }
 
 func NewShellWindowResize(windowID, w, h uint32) ShellWindowResize {

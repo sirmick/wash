@@ -53,6 +53,8 @@ import {
   windows,
   dropOrigin,
   type Win,
+  nextGeomTok,
+  markGeomPending,
 } from './wm';
 import { Desktop } from './desktop';
 import { FloatingWindow } from './window';
@@ -128,6 +130,8 @@ export interface SessionWindow {
   min_h?: number;
   max_w?: number;
   max_h?: number;
+  /** Echo of the shell's last window.move / window.resize tok (wm.ts). */
+  geom_tok?: number;
   // is_root is router-attested (SO_PEERCRED uid==0, or app_id is in
   // the privilege-chain reserved set). When true the WM paints a red
   // stripe + ROOT label on the titlebar. Never set by the app itself.
@@ -1291,7 +1295,11 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
     (id) => client.waitForBundle(id),
   );
   for (const m of moves) {
-    client.conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y });
+    // Tagged like a user move: a focus patch already queued behind this
+    // one still carries the (40,40) cascade origin in cell (0,0).
+    const tok = nextGeomTok();
+    markGeomPending(client.origin, m.id, tok);
+    client.conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y, tok });
   }
 }
 
@@ -1937,10 +1945,18 @@ window.wash = {
     wmSend(origin ?? originForWindow(id), id, { t: 'window.close_clicked', window_id: id });
   },
   moveWindow(id, x, y, origin) {
-    wmSend(origin ?? originForWindow(id), id, { t: 'window.move', window_id: id, x, y });
+    // Tagged commit: the store holds our geometry against in-flight
+    // patches until the router echoes tok (wm.ts markGeomPending).
+    const o = origin ?? originForWindow(id);
+    const tok = nextGeomTok();
+    markGeomPending(o, id, tok);
+    wmSend(o, id, { t: 'window.move', window_id: id, x, y, tok });
   },
   resizeWindow(id, w, h, origin) {
-    wmSend(origin ?? originForWindow(id), id, { t: 'window.resize', window_id: id, w, h });
+    const o = origin ?? originForWindow(id);
+    const tok = nextGeomTok();
+    markGeomPending(o, id, tok);
+    wmSend(o, id, { t: 'window.resize', window_id: id, w, h, tok });
   },
   minimizeWindow(id, origin) {
     wmSend(origin ?? originForWindow(id), id, { t: 'window.state', window_id: id, state: 'minimized' });

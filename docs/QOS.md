@@ -86,6 +86,26 @@ operator action, not silent starvation).
   app's `Write` on its fd blocks, no protocol involvement.
 - Selection is per-class, not per-app. Per-app fairness within Bulk is a
   Phase 7 concern.
+- **The kernel's send buffer is FIFO and outside the scheduler.** Strict
+  priority only orders frames still in the class queues; a frame handed
+  to the socket waits in the kernel's send buffer behind everything
+  already there, and Linux autotunes that buffer up to `tcp_wmem` max
+  (4 MB). On a link the router can outrun — a VPN, a far host — that is
+  where bytes actually queue, and a control frame submitted after a bulk
+  burst waits seconds behind it while the scheduler, never blocked,
+  thinks priority is being honoured. So the shell socket's send buffer
+  is pinned small (`SO_SNDBUF`, 256 KB by default, `WASH_SHELL_SNDBUF`
+  overrides; `internal/router/shell_sndbuf.go`): the writer blocks early,
+  the drain order applies, and a control frame's worst-case wait is one
+  buffer. The throughput ceiling is buffer/RTT, which is above what such
+  links carry. `drainLoop` logs a control write that blocks >250 ms with
+  the queue depths, so the condition is visible by mechanism.
+- **Bulk frames are kept small at their producers** for the same reason:
+  a control frame waits at least for the frame ahead of it on the wire.
+  Bundles chunk at 32 KB; agentd streams a reply as coalesced deltas
+  (the text added per ~50 ms, `apps/agentd/be/transcript_emit.go`)
+  rather than re-sending the accumulated message on every chunk, which
+  was quadratic bytes per reply.
 
 ## 5. Credit-based FE → router flow control
 

@@ -227,15 +227,28 @@ func (s *windowSession) blurred(windowID uint32, w *wire.SessionWindow) {
 
 // move updates a window's position. State==maximized/minimized
 // windows ignore moves (the FE doesn't let you drag them anyway).
-func (s *windowSession) move(windowID uint32, x, y int32) []wire.SessionPatch {
+//
+// tok is the shell's nonce for this commit (ShellWindowMove.Tok). A tagged
+// move ALWAYS yields a patch, even a no-op or a refused one (window not
+// normal): the shell has already applied the move locally and is holding
+// its own geometry until the router echoes the token, so silence would
+// leave it holding forever. The echo carries the router's truth either way.
+func (s *windowSession) move(windowID uint32, x, y int32, tok uint32) []wire.SessionPatch {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w := s.windows[windowID]
-	if w == nil || w.State != wire.WindowStateNormal {
+	if w == nil {
 		return nil
 	}
-	if w.X == x && w.Y == y {
-		return nil
+	if tok != 0 {
+		w.GeomTok = tok
+	}
+	if w.State != wire.WindowStateNormal || (w.X == x && w.Y == y) {
+		if tok == 0 {
+			return nil
+		}
+		cp := *w
+		return []wire.SessionPatch{{Op: wire.SessionPatchWindowUpsert, Window: &cp}}
 	}
 	w.X = x
 	w.Y = y
@@ -244,15 +257,23 @@ func (s *windowSession) move(windowID uint32, x, y int32) []wire.SessionPatch {
 }
 
 // resize updates a window's size.
-func (s *windowSession) resize(windowID, width, height uint32) []wire.SessionPatch {
+// tok: see move.
+func (s *windowSession) resize(windowID, width, height uint32, tok uint32) []wire.SessionPatch {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w := s.windows[windowID]
-	if w == nil || w.State != wire.WindowStateNormal {
+	if w == nil {
 		return nil
 	}
-	if w.W == width && w.H == height {
-		return nil
+	if tok != 0 {
+		w.GeomTok = tok
+	}
+	if w.State != wire.WindowStateNormal || (w.W == width && w.H == height) {
+		if tok == 0 {
+			return nil
+		}
+		cp := *w
+		return []wire.SessionPatch{{Op: wire.SessionPatchWindowUpsert, Window: &cp}}
 	}
 	w.W = width
 	w.H = height

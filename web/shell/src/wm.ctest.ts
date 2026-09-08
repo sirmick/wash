@@ -5,7 +5,17 @@
 // origin, and focus is tracked per (origin,windowID).
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { applySessionSnapshot, applySessionPatch, raiseLocal, windows, focused } from './wm.ts';
+import {
+  applySessionSnapshot,
+  applySessionPatch,
+  raiseLocal,
+  windows,
+  focused,
+  moveLocal,
+  markGeomPending,
+  pendingGeomTok,
+  nextGeomTok,
+} from './wm.ts';
 import type { SessionWindow, SessionPatch } from './main.ts';
 
 // Elements aren't registered in the test, so mountWhenReady takes the
@@ -191,5 +201,72 @@ describe('wm deferred-mount ghost guard (M5)', () => {
     await flush();
 
     expect(windows.filter((w) => w.origin === 'local' && w.windowID === 8).length).toBe(1);
+  });
+});
+
+describe('wm pending geometry commit (window.move tok)', () => {
+  beforeEach(async () => {
+    applySessionSnapshot('local', [], immediate);
+    await flush();
+  });
+
+  it('a stale upsert keeps the committed geometry until the token echoes', async () => {
+    applySessionSnapshot('local', [sw(1, 'a', { x: 10, y: 10 })], immediate);
+    await flush();
+    // Drop: optimistic store write + tagged commit, as window.tsx does.
+    moveLocal('local', 1, 300, 200);
+    markGeomPending('local', 1, 42);
+    // The focus upsert from pointer-down lands after the drop, carrying
+    // the pre-drag position: geometry stays, focus is taken.
+    applySessionPatch('local', [{ op: 'window.upsert', window: sw(1, 'a', { x: 10, y: 10, focused: true }) }], immediate);
+    await flush();
+    const w = windows.find((x) => x.windowID === 1)!;
+    expect([w.x, w.y]).toEqual([300, 200]);
+    expect(focused()).toEqual({ origin: 'local', windowID: 1 });
+    expect(pendingGeomTok('local', 1)).toBe(42);
+    // The router's echo (its clamp of our move) is accepted and clears.
+    applySessionPatch('local', [{ op: 'window.upsert', window: sw(1, 'a', { x: 290, y: 200, geom_tok: 42 }) }], immediate);
+    await flush();
+    expect([windows[0].x, windows[0].y]).toEqual([290, 200]);
+    expect(pendingGeomTok('local', 1)).toBeUndefined();
+    // Nothing pending: a later router move is taken as before.
+    applySessionPatch('local', [{ op: 'window.upsert', window: sw(1, 'a', { x: 5, y: 5, geom_tok: 42 }) }], immediate);
+    await flush();
+    expect([windows[0].x, windows[0].y]).toEqual([5, 5]);
+  });
+
+  it('a newer commit supersedes the older token; a snapshot clears it', async () => {
+    applySessionSnapshot('local', [sw(1, 'a')], immediate);
+    await flush();
+    markGeomPending('local', 1, 1);
+    markGeomPending('local', 1, 2);
+    moveLocal('local', 1, 50, 50);
+    // Echo of the FIRST commit is itself stale now.
+    applySessionPatch('local', [{ op: 'window.upsert', window: sw(1, 'a', { x: 20, y: 20, geom_tok: 1 }) }], immediate);
+    await flush();
+    expect([windows[0].x, windows[0].y]).toEqual([50, 50]);
+    expect(pendingGeomTok('local', 1)).toBe(2);
+    applySessionSnapshot('local', [sw(1, 'a', { x: 7, y: 7 })], immediate);
+    await flush();
+    expect(pendingGeomTok('local', 1)).toBeUndefined();
+    expect([windows[0].x, windows[0].y]).toEqual([7, 7]);
+  });
+
+  it('a commit whose echo never comes stops holding geometry after the TTL', async () => {
+    applySessionSnapshot('local', [sw(1, 'a')], immediate);
+    await flush();
+    moveLocal('local', 1, 50, 50);
+    markGeomPending('local', 1, 3, Date.now() - 10_000);
+    applySessionPatch('local', [{ op: 'window.upsert', window: sw(1, 'a', { x: 20, y: 20, geom_tok: 99 }) }], immediate);
+    await flush();
+    expect([windows[0].x, windows[0].y]).toEqual([20, 20]);
+    expect(pendingGeomTok('local', 1)).toBeUndefined();
+  });
+
+  it('tokens are non-zero and distinct', () => {
+    const a = nextGeomTok();
+    const b = nextGeomTok();
+    expect(a).not.toBe(0);
+    expect(b).not.toBe(a);
   });
 });

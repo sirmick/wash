@@ -1559,9 +1559,11 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 		r.log("bundle bind %s: %v", inst.InstanceID, err)
 		return
 	}
-	// Chunk the write so very large bundles don't pin a giant
-	// allocation in the WS layer.
-	const chunkSize = 256 * 1024
+	// Chunk the write so very large bundles don't pin a giant allocation
+	// in the WS layer — and, sized well under the shell socket's send
+	// buffer (shell_sndbuf.go), so a control frame queued behind a bundle
+	// waits for one small frame, not a quarter-megabyte one.
+	const chunkSize = 32 * 1024
 	for off := 0; off < len(payload); off += chunkSize {
 		end := off + chunkSize
 		if end > len(payload) {

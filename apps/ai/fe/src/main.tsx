@@ -20,7 +20,7 @@ import { Plus } from 'lucide-solid';
 import {
   AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
   Splitter,
-  createAppBus, defineWashApp, kbdStyle, tokens, washCopyText,
+  applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
   AgentAsk, AgentEvent, AgentStatus, RosterAsk, RosterRow,
@@ -70,15 +70,12 @@ interface PersistedState {
 // narrow enough that the transcript still reads on a small window.
 const defaultSplitPct = 26;
 
-function mergeEvents(prev: AgentEvent[], next: AgentEvent[]): AgentEvent[] {
-  const bySeq = new Map<number, AgentEvent>();
-  for (const e of prev) bySeq.set(e.seq, e);
-  for (const e of next) bySeq.set(e.seq, e);
-  return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
-}
+const mergeEvents = mergeAgentEvents;
 
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   const [events, setEvents] = createSignal<AgentEvent[]>([]);
+  // One replay request in flight at a time; the snapshot clears it.
+  let resyncPending = false;
   const [sessionKey, setSessionKey] = createSignal('');
   const [roster, setRoster] = createSignal<RosterState>({});
   const [error, setError] = createSignal('');
@@ -178,6 +175,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
       case 'snapshot':
         if (staleTranscript(m)) break;
+        resyncPending = false;
         if (typeof m.reset === 'boolean') {
           setEvents((prev) => mergeEvents(prev, (m.events as AgentEvent[]) ?? []));
         } else {
@@ -187,9 +185,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'event': {
         const e = m.event as AgentEvent | undefined;
         if (!e || staleTranscript(m)) break;
-        // agentd mutates a tool row in place, so an event with a seq we
-        // already hold replaces it rather than appending a duplicate.
-        setEvents((prev) => mergeEvents(prev, [e]));
+        // Whole rows replace by seq (agentd mutates a tool row in place);
+        // a streamed reply's later chunks arrive as deltas and append. A
+        // delta we cannot apply means our base is wrong — a reload landed
+        // mid-reply, say — so ask for the snapshot again, once.
+        const r = applyAgentEvent(events(), e);
+        setEvents(r.events);
+        if (r.gap && !resyncPending) {
+          resyncPending = true;
+          send({ kind: 'resync' });
+        }
         break;
       }
       case 'confirm_close':

@@ -45,6 +45,9 @@ type ShellSession struct {
 	// drainerDone is closed by the drainer goroutine on exit so
 	// HandleShell can wait for it during teardown.
 	drainerDone chan struct{}
+	// lastSlowCtrlLog rate-limits the "control write blocked" line in
+	// drainLoop. Touched by the drainer goroutine only.
+	lastSlowCtrlLog time.Time
 
 	// peerChannels tracks this shell's remote-apps relay channels
 	// (docs/REMOTE.md), channel id → binding, so they're torn down (socket
@@ -764,14 +767,14 @@ func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
 }
 
 func (s *ShellSession) handleWindowMove(m wire.ShellWindowMove) error {
-	s.router.broadcastPatches(s.router.winSession.move(m.WindowID, m.X, m.Y))
+	s.router.broadcastPatches(s.router.winSession.move(m.WindowID, m.X, m.Y, m.Tok))
 	// No EvtWindowMove on the app side yet — apps that care about
 	// position would need a new event; nothing requests it today.
 	return nil
 }
 
 func (s *ShellSession) handleWindowResize(m wire.ShellWindowResize) error {
-	s.router.broadcastPatches(s.router.winSession.resize(m.WindowID, m.W, m.H))
+	s.router.broadcastPatches(s.router.winSession.resize(m.WindowID, m.W, m.H, m.Tok))
 	s.router.mu.Lock()
 	inst := s.router.byWin[m.WindowID]
 	s.router.mu.Unlock()
@@ -1106,7 +1109,24 @@ func (s *ShellSession) drainLoop(ctx context.Context) {
 			return
 		}
 		count++
-		if err := s.Transport.WriteFrame(f); err != nil {
+		wstart := time.Now()
+		err = s.Transport.WriteFrame(f)
+		if f.Class() == wire.ClassControl {
+			// A control write that blocks is a control frame queued
+			// behind bulk on the wire — the thing shell_sndbuf.go bounds.
+			// Logged rate-limited so a slow link shows up in the router
+			// log by mechanism, not as "the desktop feels laggy".
+			if d := time.Since(wstart); d > slowCtrlWrite && s.router != nil {
+				if last := s.lastSlowCtrlLog; last.IsZero() || time.Since(last) > slowCtrlLogEvery {
+					s.lastSlowCtrlLog = time.Now()
+					dd := s.scheduler.Depths()
+					s.router.log("shell: control write blocked %s conn=%d bytes=%d queued(ctrl/inter/bulk/bg)=%d/%d/%d/%d",
+						d.Round(time.Millisecond), s.connID, len(f.Payload),
+						dd[wire.ClassControl], dd[wire.ClassInteractive], dd[wire.ClassBulk], dd[wire.ClassBackground])
+				}
+			}
+		}
+		if err != nil {
 			// Transport write failed — FE gone. Close the
 			// scheduler so any blocked producers unblock with
 			// ErrSchedulerClosed and the shell tears down.
