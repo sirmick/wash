@@ -581,3 +581,38 @@ learned this lesson for the same reason. The opt-in flag is gone.
 **Worth remembering:** a whole-suite result that reproduces exactly is
 evidence AGAINST a flake, and host state is the first thing to suspect
 when a spec you didn't touch fails the same way every time.
+
+---
+
+## 2026-09-08 — `term-split` "two strips both ptys resized": CI-only, once
+
+The v0.14.3 tag run failed one test — `colsOf()` polled the pty for
+`SZn=<cols>` and got nothing inside its 10s budget. Test 352 of 517 on a
+2-core runner.
+
+**A flake, established rather than assumed**, and worth the paragraph
+because the cost is high: `release` needs `package` needs the tests, so a
+tag run that fails here publishes NOTHING while the tag sits there
+looking done. That is how v0.13.1 ended up with no release.
+
+Before re-running:
+
+- `make all-test` and the `make push` gate had both passed on that exact
+  commit (508/508 e2e, twice);
+- the spec at `--repeat-each=3` locally: 42 passed;
+- the change under suspicion cannot reach it — the release carried an
+  agentd roster-push dedupe, an About panel and a bundle-cap bump, none
+  of which touch pty sizing or the resize path.
+
+Re-running the failed job on the identical commit went green, and the
+release published.
+
+**Mechanism, most likely**: the helper types a command into a real shell
+and waits 10s for its output to appear in the xterm buffer. That is a
+full FE→BE→pty→FE round trip on a cold, contended runner. The same
+helper already carries a comment about a stale-match failure mode, so it
+is the second time this probe has been the thing that broke.
+
+**Not fixed here**: one occurrence, no local reproduction in six runs.
+Logged so a second sighting has something to sit next to — and if there
+is one, the fix is the probe's budget, not the test's intent.
