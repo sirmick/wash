@@ -690,6 +690,42 @@ func truncate(b []byte, n int) string {
 // the *backend* works — a Codex permission request reaching the sidebar
 // with no frontend change at all.
 func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
+	// agent_preamble: read the stored initial prompt. Answered to the
+	// asker rather than pushed on the roster's state, for the same reason
+	// agent_history is: it is one window's question, and a page of text
+	// on every roster push would reach every subscriber — including the
+	// desktop rail — several times a second during a turn.
+	sdk.HandleFromVoid(bus, "agent_preamble", func(conn *sdk.Conn, _ string, _ struct{}, from wire.Sender) error {
+		if from.InstanceID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+			"kind": "preamble",
+			"text": loadPreamble(),
+		})
+	})
+
+	// agent_set_preamble: store it. Empty removes the file.
+	sdk.HandleFromVoid(bus, "agent_set_preamble", func(conn *sdk.Conn, _ string, req preambleReq, from wire.Sender) error {
+		if err := savePreamble(req.Text); err != nil {
+			log.Printf("agentd: save preamble: %v", err)
+			conn.Fail("Could not save the initial prompt", err)
+			return nil
+		}
+		stored := loadPreamble()
+		log.Printf("agentd: preamble saved bytes=%d", len(stored))
+		// Republish so every window's launcher agrees about whether one
+		// is set — including the window that did not make the change.
+		mutateState(func(s *State) { s.HasPreamble = stored != "" })
+		if from.InstanceID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+			"kind": "preamble",
+			"text": stored,
+		})
+	})
+
 	// agent_start: launch an adapter and open a session.
 	sdk.HandleFromVoid(bus, "agent_start", func(conn *sdk.Conn, _ string, req startReq, from wire.Sender) error {
 		h, err := startHosted(req.Agent, req.Cwd, svcConn)
@@ -704,8 +740,15 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			}
 			return nil
 		}
-		if req.Prompt != "" {
-			go promptHosted(h, req.Prompt)
+		// The stored initial prompt goes first, ahead of whatever the
+		// launcher was given (preamble.go). Applied HERE rather than in
+		// the FE so it holds however a session was started — the
+		// launcher, `wash ai --agent`, or anything else that lands on
+		// agent_start — and so the one place that reads the file is the
+		// one process that owns sessions.
+		first := withPreamble(loadPreamble(), req.Prompt)
+		if first != "" {
+			go promptHosted(h, first)
 		}
 		if from.InstanceID == "" {
 			return nil
@@ -883,6 +926,12 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		}
 		return nil
 	})
+}
+
+// preambleReq carries the initial prompt on its way to disk. Empty text
+// is a deletion, not a validation failure.
+type preambleReq struct {
+	Text string `json:"text"`
 }
 
 type startReq struct {
