@@ -80,9 +80,17 @@ session is the kind of magic that gets blamed on the agent) and from the
 File menu. Only the flag rides the roster push; the text is fetched on
 demand, following `agent_history`'s precedent.
 
+The file is the truth, not the dialog. Plain text invites editing it in an
+editor, so the flag is re-derived from the file on agentd's sweep
+(`refreshDefaultPrompt`) rather than remembered from the last save —
+otherwise a hand-written file and the launcher disagree until agentd
+restarts. Found by hand-writing the file, which is how the repo's own
+working rules were installed.
+
 Tests: `apps/agentd/be/default_prompt_test.go` (store, clear, bounds,
-composition), `e2e/tests/agent-default-prompt.spec.ts` (the agent really
-receives it, it survives a reload, clearing removes the file).
+composition, hand-edit reaching the flag, whitespace-only not counting),
+`e2e/tests/agent-default-prompt.spec.ts` (the agent really receives it, it
+survives a reload, clearing removes the file).
 
 ## Conventions this repo holds to
 

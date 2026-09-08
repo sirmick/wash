@@ -127,3 +127,59 @@ func TestDefaultPromptIsNotAppliedToOrdinaryPrompts(t *testing.T) {
 		t.Errorf("an ordinary prompt was decorated: %q", got)
 	}
 }
+
+// The file is the truth. A prompt written or removed outside the dialog —
+// an editor, a config-management tool, a shell redirect — must reach the
+// launcher's "a default prompt will be sent" line without restarting
+// agentd, which is what refreshDefaultPrompt gives the sweep.
+func TestHandEditedDefaultPromptReachesTheFlag(t *testing.T) {
+	path := withConfigDir(t)
+	var s State
+
+	if refreshDefaultPrompt(&s) {
+		t.Error("no file, but the flag moved")
+	}
+	if s.HasDefaultPrompt {
+		t.Error("no file, but a default prompt is advertised")
+	}
+
+	// Written behind agentd's back, as a person with an editor would.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("Be terse.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !refreshDefaultPrompt(&s) || !s.HasDefaultPrompt {
+		t.Error("a hand-written default prompt never reached the flag")
+	}
+	// Settled: an unchanged file must not republish on every sweep.
+	if refreshDefaultPrompt(&s) {
+		t.Error("an unchanged file keeps reporting a change")
+	}
+
+	// Deleted the same way.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if !refreshDefaultPrompt(&s) || s.HasDefaultPrompt {
+		t.Error("a deleted default prompt is still advertised")
+	}
+}
+
+// A file holding only whitespace is not a default prompt: loadDefaultPrompt
+// trims it to "" and nothing is sent, so the flag must not claim otherwise.
+// This is why the flag re-reads rather than stats for a non-empty file.
+func TestWhitespaceOnlyDefaultPromptIsNotAdvertised(t *testing.T) {
+	path := withConfigDir(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("\n\t \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var s State
+	if refreshDefaultPrompt(&s) || s.HasDefaultPrompt {
+		t.Error("whitespace is advertised as a default prompt")
+	}
+}

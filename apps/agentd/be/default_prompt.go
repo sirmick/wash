@@ -120,6 +120,25 @@ func saveDefaultPrompt(text string) error {
 	return os.Rename(name, path)
 }
 
+// refreshDefaultPrompt re-derives the "a default prompt will be sent" flag
+// from the file and reports whether it moved. Called inside Mutate, on the
+// sweep.
+//
+// The prompt is stored as plain text precisely so a person can edit it in
+// an editor, which makes the file the truth: a flag remembered from the
+// last save through the dialog goes stale the moment anyone writes the
+// file directly, and the launcher then claims a prompt that isn't there
+// (or hides one that is) until agentd restarts. Re-reading a bounded file
+// every sweep is cheaper than that lie.
+func refreshDefaultPrompt(s *State) bool {
+	has := loadDefaultPrompt() != ""
+	if has == s.HasDefaultPrompt {
+		return false
+	}
+	s.HasDefaultPrompt = has
+	return true
+}
+
 // withDefaultPrompt is what a new session's first prompt becomes.
 //
 // The default prompt goes FIRST and is separated by a blank line, so the agent

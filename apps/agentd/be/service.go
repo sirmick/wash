@@ -227,6 +227,9 @@ func sweepLoop(c *sdk.Conn) {
 						changed = true
 					}
 				}
+				if refreshDefaultPrompt(s) {
+					changed = true
+				}
 				// Computed on every tick, not only when a row moved: the
 				// needs-input ceiling expires with the clock, not with a
 				// state change, so a hold has to be able to lapse on its
