@@ -47,7 +47,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-agentd ready instance=%s", instanceID)
 	bus := sdk.NewBus(c)
 	loadHistory()
-	svc = sdk.NewStateService(bus, State{Recent: publishHistory(), Adapters: Probe(), HasPreamble: loadPreamble() != ""})
+	svc = sdk.NewStateService(bus, State{Recent: publishHistory(), Adapters: Probe(), HasDefaultPrompt: loadDefaultPrompt() != ""})
 
 	// agent_status: a terminal states (or re-states) one tab's agent. The
 	// sender is router-attested, so the key can't be forged and a

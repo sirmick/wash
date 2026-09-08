@@ -1,7 +1,7 @@
-// The initial prompt: a block of text sent to every NEW session before
+// The default prompt: a block of text sent to every NEW session before
 // anything you type.
 //
-// It is the answer to retyping the same preamble — "you are working in
+// It is the answer to retyping the same default prompt — "you are working in
 // this repo, read CLAUDE.md, prefer X over Y" — into every fresh agent.
 // Stored once, applied automatically, and visible while it is doing so.
 //
@@ -16,7 +16,7 @@
 //
 //   - **Sent as a prompt, not as protocol.** This version of ACP's
 //     session/new carries only cwd and MCP servers (internal/acp/types.go)
-//     — there is no instructions field to put a preamble in. So it rides
+//     — there is no instructions field to put a default prompt in. So it rides
 //     as the first prompt, which also means it appears in the transcript:
 //     an instruction the agent was given must be one you can read back.
 //
@@ -33,20 +33,20 @@ import (
 	"strings"
 )
 
-// preambleFileName is the file, beside agents.json in the wash config dir.
-const preambleFileName = "agent-preamble.txt"
+// defaultPromptFileName is the file, beside agents.json in the wash config dir.
+const defaultPromptFileName = "agent-default-prompt.txt"
 
-// maxPreambleBytes bounds what the FE can store. Generous — a page of
+// maxDefaultPromptBytes bounds what the FE can store. Generous — a page of
 // instructions is a few KB — but finite, because this text is prepended
 // to a prompt and an unbounded blob is a way to make every session
 // expensive by accident.
-const maxPreambleBytes = 64 << 10
+const maxDefaultPromptBytes = 64 << 10
 
-// preamblePath is $XDG_CONFIG_HOME/wash/agent-preamble.txt, or "" when no
+// defaultPromptPath is $XDG_CONFIG_HOME/wash/agent-default-prompt.txt, or "" when no
 // home is resolvable. Same resolution as agentpolicy.Path, deliberately:
 // two agent settings in two different directories would be a small
 // cruelty to whoever goes looking for them.
-func preamblePath() string {
+func defaultPromptPath() string {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -55,14 +55,14 @@ func preamblePath() string {
 		}
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "wash", preambleFileName)
+	return filepath.Join(dir, "wash", defaultPromptFileName)
 }
 
-// loadPreamble reads the stored initial prompt. Any problem — missing,
-// unreadable — is the empty string, which means "no preamble": a broken
+// loadDefaultPrompt reads the stored default prompt. Any problem — missing,
+// unreadable — is the empty string, which means "no default prompt": a broken
 // or absent file must never stop a session starting.
-func loadPreamble() string {
-	path := preamblePath()
+func loadDefaultPrompt() string {
+	path := defaultPromptPath()
 	if path == "" {
 		return ""
 	}
@@ -70,26 +70,26 @@ func loadPreamble() string {
 	if err != nil {
 		return ""
 	}
-	if len(data) > maxPreambleBytes {
-		data = data[:maxPreambleBytes]
+	if len(data) > maxDefaultPromptBytes {
+		data = data[:maxDefaultPromptBytes]
 	}
 	return strings.TrimSpace(string(data))
 }
 
-// savePreamble writes the initial prompt atomically (temp file in the same
+// saveDefaultPrompt writes the default prompt atomically (temp file in the same
 // directory, then rename), so a session starting mid-save reads either the
 // old text or the new one and never half of either. Saving an empty
-// string removes the file — "no preamble" and "an empty preamble" are the
+// string removes the file — "no default prompt" and "an empty default prompt" are the
 // same thing, and leaving an empty file behind would make the difference
 // look meaningful.
-func savePreamble(text string) error {
-	path := preamblePath()
+func saveDefaultPrompt(text string) error {
+	path := defaultPromptPath()
 	if path == "" {
 		return nil
 	}
 	text = strings.TrimSpace(text)
-	if len(text) > maxPreambleBytes {
-		text = text[:maxPreambleBytes]
+	if len(text) > maxDefaultPromptBytes {
+		text = text[:maxDefaultPromptBytes]
 	}
 	if text == "" {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -101,7 +101,7 @@ func savePreamble(text string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".agent-preamble-*.txt")
+	tmp, err := os.CreateTemp(dir, ".agent-default-prompt-*.txt")
 	if err != nil {
 		return err
 	}
@@ -120,21 +120,21 @@ func savePreamble(text string) error {
 	return os.Rename(name, path)
 }
 
-// withPreamble is what a new session's first prompt becomes.
+// withDefaultPrompt is what a new session's first prompt becomes.
 //
-// The preamble goes FIRST and is separated by a blank line, so the agent
+// The default prompt goes FIRST and is separated by a blank line, so the agent
 // reads standing instructions before the request they apply to. With no
 // prompt of your own it is sent alone — starting a session with only a
-// preamble is a legitimate way to set the scene and then talk.
-func withPreamble(preamble, prompt string) string {
-	preamble = strings.TrimSpace(preamble)
+// default prompt is a legitimate way to set the scene and then talk.
+func withDefaultPrompt(preset, prompt string) string {
+	preset = strings.TrimSpace(preset)
 	prompt = strings.TrimSpace(prompt)
 	switch {
-	case preamble == "":
+	case preset == "":
 		return prompt
 	case prompt == "":
-		return preamble
+		return preset
 	default:
-		return preamble + "\n\n" + prompt
+		return preset + "\n\n" + prompt
 	}
 }

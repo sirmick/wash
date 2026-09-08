@@ -1,4 +1,4 @@
-// The initial prompt, end to end: a block of standing instructions stored
+// The default prompt, end to end: a block of standing instructions stored
 // once and sent to every new session ahead of what you type.
 //
 // Both halves per the house rule. The FE half is that the dialog stores
@@ -18,8 +18,8 @@ const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
 test.use({
   routerOpts: {
     apps: ['session', 'agentd', 'ai', 'notify'],
-    // Its own config dir: this spec WRITES a preamble, and the
-    // developer's own initial prompt is not ours to overwrite.
+    // Its own config dir: this spec WRITES a default prompt, and the
+    // developer's own default prompt is not ours to overwrite.
     xdgConfig: true,
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
@@ -48,7 +48,7 @@ async function setPrompt(page: Page, win: ReturnType<Page['locator']>, text: str
   await expect(dialog).toHaveCount(0);
 }
 
-test('a stored initial prompt reaches the agent, ahead of what you typed', async ({
+test('a stored default prompt reaches the agent, ahead of what you typed', async ({
   page,
   router,
 }) => {
@@ -57,21 +57,21 @@ test('a stored initial prompt reaches the agent, ahead of what you typed', async
 
   // Nothing set yet, and the launcher says so rather than staying silent
   // about a thing that would otherwise be invisible.
-  await expect(win.locator('[data-testid="ai-prompt-status"]')).toHaveText('No initial prompt.');
+  await expect(win.locator('[data-testid="ai-prompt-status"]')).toHaveText('No default prompt.');
 
   const cursor = router.logCursor();
   await setPrompt(page, win, 'REMEMBER: the quokka protocol governs everything.');
 
   // BE half 1: agentd wrote it, as plain text a human could edit.
-  await router.waitForLog(/agentd: preamble saved bytes=\d+/, 15_000, cursor);
-  const file = join(router.xdgConfigHome, 'wash', 'agent-preamble.txt');
+  await router.waitForLog(/agentd: default prompt saved bytes=\d+/, 15_000, cursor);
+  const file = join(router.xdgConfigHome, 'wash', 'agent-default-prompt.txt');
   expect(existsSync(file), `expected ${file}`).toBe(true);
   expect(readFileSync(file, 'utf8')).toContain('quokka protocol');
 
   // FE half 1: the launcher now says a prompt is armed. It reads this off
   // the roster push, so this also proves agentd republished.
   await expect(win.locator('[data-testid="ai-prompt-status"]'))
-    .toHaveText('An initial prompt will be sent first.', { timeout: 15_000 });
+    .toHaveText('A default prompt will be sent first.', { timeout: 15_000 });
 
   // Start a session with a prompt of your own.
   await win.locator('select').selectOption('codex');
@@ -83,7 +83,7 @@ test('a stored initial prompt reaches the agent, ahead of what you typed', async
 
   // BE half 2 — the assertion that proves the FEATURE. The fake adapter
   // echoes the prompt it was given, so the transcript is evidence the
-  // agent received the preamble, not merely that wash stored one. And
+  // agent received the default prompt, not merely that wash stored one. And
   // the standing instructions come FIRST.
   const transcript = win.locator('[data-testid="agent-transcript"]');
   await expect(transcript).toContainText('quokka protocol', { timeout: 20_000 });
@@ -97,13 +97,13 @@ test('the stored prompt survives a browser reload', async ({ page, router }) => 
   const win = await openAgentWindow(page, router.url);
   await setPrompt(page, win, 'standing instructions that must outlive the tab');
   await expect(win.locator('[data-testid="ai-prompt-status"]'))
-    .toHaveText('An initial prompt will be sent first.', { timeout: 15_000 });
+    .toHaveText('A default prompt will be sent first.', { timeout: 15_000 });
 
   await page.reload();
   await expect(page.locator('wash-app-session')).toBeVisible();
   const after = page.locator('wash-app-ai').first();
   await expect(after.locator('[data-testid="ai-prompt-status"]'))
-    .toHaveText('An initial prompt will be sent first.', { timeout: 20_000 });
+    .toHaveText('A default prompt will be sent first.', { timeout: 20_000 });
 
   // And re-opening the editor shows the stored text, fetched fresh from
   // agentd rather than remembered by the page.
@@ -115,16 +115,16 @@ test('the stored prompt survives a browser reload', async ({ page, router }) => 
 test('clearing it removes the file, and sessions go back to plain', async ({ page, router }) => {
   test.setTimeout(90_000);
   const win = await openAgentWindow(page, router.url);
-  await expect(win.locator('[data-testid="ai-prompt-status"]')).toHaveText('No initial prompt.');
+  await expect(win.locator('[data-testid="ai-prompt-status"]')).toHaveText('No default prompt.');
   await setPrompt(page, win, 'temporary instructions');
-  const file = join(router.xdgConfigHome, 'wash', 'agent-preamble.txt');
+  const file = join(router.xdgConfigHome, 'wash', 'agent-default-prompt.txt');
   await expect.poll(() => existsSync(file), { timeout: 15_000 }).toBe(true);
 
   await setPrompt(page, win, '');
 
-  // "No preamble" and "an empty preamble" are the same state, so the file
+  // "No default prompt" and "an empty default prompt" are the same state, so the file
   // goes rather than being left empty to puzzle whoever finds it.
   await expect.poll(() => existsSync(file), { timeout: 15_000 }).toBe(false);
   await expect(win.locator('[data-testid="ai-prompt-status"]'))
-    .toHaveText('No initial prompt.', { timeout: 15_000 });
+    .toHaveText('No default prompt.', { timeout: 15_000 });
 });

@@ -58,12 +58,12 @@ type State struct {
 	// with their reason rather than hiding them, so "why can I not pick
 	// Claude here" has an answer on screen.
 	Adapters []Adapter `json:"adapters,omitempty"`
-	// HasPreamble says whether a stored initial prompt exists, so the
+	// HasDefaultPrompt says whether a stored default prompt exists, so the
 	// launcher can say that a new session will not start empty. Only the
 	// FLAG rides the state push — the text itself is fetched on demand
-	// (agent_preamble), because a page of prose on every roster push
+	// (agent_default prompt), because a page of prose on every roster push
 	// would reach every subscriber several times a second during a turn.
-	HasPreamble bool `json:"has_preamble,omitempty"`
+	HasDefaultPrompt bool `json:"has_default_prompt,omitempty"`
 }
 
 // Row is one agent in one terminal tab.

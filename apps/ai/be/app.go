@@ -449,16 +449,16 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 
 	// history: the panel's query. agentd answers this window directly
 	// (see agent_history), and the reply is forwarded below.
-	// preamble: the stored initial prompt (agentd owns the file). Both
+	// default prompt: the stored default prompt (agentd owns the file). Both
 	// directions are pure passthrough — this window is a host, and a
 	// setting that applies to every new session on this machine is not
 	// its state to keep.
-	case "preamble":
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "agent_preamble"})
+	case "default_prompt":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "agent_default_prompt"})
 
-	case "set_preamble":
+	case "set_default_prompt":
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
-			"kind": "agent_set_preamble",
+			"kind": "agent_set_default_prompt",
 			"text": str(m["text"]),
 		})
 
@@ -589,8 +589,8 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			"sessions": m["sessions"],
 		})
 
-	case "preamble":
-		c.SendAppMsg(map[string]any{"kind": "preamble", "text": m["text"]})
+	case "default_prompt":
+		c.SendAppMsg(map[string]any{"kind": "default_prompt", "text": m["text"]})
 
 	// The transcript hops to the FE on the Bulk class — this is the one
 	// hop that shares the browser's single socket with every other app's

@@ -56,8 +56,8 @@ interface RosterState {
   asks?: RosterAsk[];
   adapters?: Adapter[];
   recent?: RecentSession[];
-  /** a stored initial prompt exists — the TEXT is fetched on demand */
-  has_preamble?: boolean;
+  /** a stored default prompt exists — the TEXT is fetched on demand */
+  has_default_prompt?: boolean;
 }
 
 interface PersistedState {
@@ -102,7 +102,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // — so the user chooses what happens to it.
   const [confirmClose, setConfirmClose] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
-  // The initial prompt (agentd owns the file; this is the editor for it).
+  // The default prompt (agentd owns the file; this is the editor for it).
   // `draft` is the textarea's contents while the dialog is open — a
   // browser reload loses an unsaved edit, which is the same deal every
   // other unsaved form in wash offers, while the SAVED text survives
@@ -204,7 +204,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         }
         break;
 
-      case 'preamble':
+      case 'default_prompt':
         // Only the reply this dialog asked for opens it. A later echo —
         // agentd answers a save with what it stored — arrives with
         // nothing pending and is ignored, rather than re-opening a
@@ -381,7 +381,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const openPrompt = () => {
     setPromptPending(true);
-    send({ kind: 'preamble' });
+    send({ kind: 'default_prompt' });
   };
 
   const start = () => {
@@ -494,18 +494,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         </div>
       </Show>
 
-      {/* Stated on the launcher, not hidden in a menu: a preamble that
+      {/* Stated on the launcher, not hidden in a menu: a default prompt that
           silently prefixes every new session is the kind of magic that
           gets blamed on the agent. One line, and one click to read or
           change it. */}
       <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceSm}px`, font: tokens.type.textSm }}>
         <span data-testid="ai-prompt-status" style={{ color: tokens.fgMuted }}>
-          {roster().has_preamble
-            ? 'An initial prompt will be sent first.'
-            : 'No initial prompt.'}
+          {roster().has_default_prompt
+            ? 'A default prompt will be sent first.'
+            : 'No default prompt.'}
         </span>
         <Button variant="ghost" data-testid="ai-prompt-open" onClick={openPrompt}>
-          {roster().has_preamble ? 'Edit…' : 'Set…'}
+          {roster().has_default_prompt ? 'Edit…' : 'Set…'}
         </Button>
       </div>
 
@@ -532,7 +532,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 disabled={events().length === 0}
                 onClick={() => { close(); setSaving(true); }} data-testid="ai-menu-save" />
               <MenuSeparator />
-              <MenuItem label="Initial prompt…"
+              <MenuItem label="Default prompt…"
                 onClick={() => { close(); openPrompt(); }} data-testid="ai-menu-prompt" />
               <MenuSeparator />
               <MenuItem label="Detach" disabled={!sessionKey()}
@@ -769,12 +769,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // The initial-prompt editor. An Overlay like the close dialog, because
   // it is a decision you finish or abandon rather than a panel you leave
   // open — and because dismissing must mean "leave it as it was", which
-  // is exactly what not sending set_preamble does.
+  // is exactly what not sending set_default prompt does.
   const promptDialog = (
     <Show when={promptOpen()}>
       <Overlay onDismiss={() => setPromptOpen(false)} data-testid="ai-prompt-dialog">
         <div style={{ 'font-weight': 600, 'margin-bottom': `${tokens.spaceSm}px` }}>
-          Initial prompt
+          Default prompt
         </div>
         <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '54ch', 'margin-bottom': `${tokens.spaceMd}px` }}>
           Sent to every new session on this machine, before anything you
@@ -808,7 +808,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             variant="primary"
             data-testid="ai-prompt-save"
             onClick={() => {
-              send({ kind: 'set_preamble', text: promptDraft() });
+              send({ kind: 'set_default_prompt', text: promptDraft() });
               setPromptOpen(false);
             }}
           >
