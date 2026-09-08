@@ -5,7 +5,7 @@ correctness bug is fixed and merged to local `main`, plus the tractable Phase-H
 protocol gaps (H2 primary selection, H3 viewporter, H7 request_minimize) and
 the three wire-additions (F5 head-steal banner, G4 min/max clamp, G2 keymap
 hint). The retired review docs and their resolution tables live in git history
-(deleted 2026-07-03 in the docs consolidation); `TODO.md` §Display tracks what
+(deleted 2026-07-03 in the docs consolidation); `Todo.md` §Display tracks what
 remains — this file is the implementation guide for those items.
 
 **This pass is NET-NEW FEATURES, not bug fixes** — the remaining X11/Wayland
@@ -113,7 +113,7 @@ Low value: wash captures surfaces directly (not the scene — `WLR_SCENE_DISABLE
 VISIBILITY=1`), so real presentation feedback isn't cheaply derivable, and
 Chromium/Firefox already fall back to frame callbacks fine. Half-advertising the
 global risks mpv waiting for feedback that never arrives. Only revisit on a
-concrete A/V-sync complaint. Record in `TODO.md` won't-do unless the user wants
+concrete A/V-sync complaint. Record in `Todo.md` won't-do unless the user wants
 it.
 
 ---
@@ -149,7 +149,7 @@ Automated gates can't cover these — run each once and report:
 - **H7 minimize**: a guest's CSD minimize button hides the wash window.
 - **H1/H5/H7-rest**: the drag/activate/icon/stacking behaviors added here.
 
-When an item merges green, delete its `TODO.md` line (the merge commit is the
+When an item merges green, delete its `Todo.md` line (the merge commit is the
 record; resolved items are not kept as history).
 
 ## Reference: code landmarks (mapped in pass 3 — start here, don't re-discover)

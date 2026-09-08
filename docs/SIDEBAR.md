@@ -703,7 +703,7 @@ needs an audio *stream*, not a widget (REMOTE.md §7).
 - fold A's remaining gateway into `hostgw` so there is one implementation of
   "subscribe to this host's services" rather than two that must agree;
 - rewrite REMOTE.md §6.2 to point here; update §10 if M4 lands;
-- fold the new ctrl verb into the M6 remote hardening pass already in TODO.md
+- fold the new ctrl verb into the M6 remote hardening pass already in Todo.md
   (multi-tenancy, provenance/priv-phishing review).
 
 ---

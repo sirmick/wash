@@ -157,7 +157,7 @@ full `make all-test`. Push only if asked.
 
 Three commits on `sidebar-host`; two-router e2e proving B→A state flow and
 origin isolation; component + unit + race tiers green; full `make all-test`
-run and its result reported honestly; TODO.md's M1 entry ticked; a short note
+run and its result reported honestly; Todo.md's M1 entry ticked; a short note
 appended to SIDEBAR.md M1 recording anything discovered that contradicts the
 pinned mechanics. Then **stop** — M2 starts with the §3.2(7) tripwire
 conversation, not with code.

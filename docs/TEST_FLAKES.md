@@ -264,7 +264,7 @@ the panic and fixed itself with a no-op logger; the fix never propagated.
   `fr.bundleDone = fr.bundleExpect > 0 && int64(len(fr.bundleBytes)) >= fr.bundleExpect`;
   keep the Unbind case as a no-op (or assert bytes are already complete when it arrives).
 - Verify: `(go build -a ./internal/... >/dev/null 2>&1 &); go test -run 'TestSpine$' -count=50 ./internal/loopback` → green under load.
-- Follow-up (note in TODO.md, not this pass): with B1+B2+B3 landed, trial removing `-p 1` from
+- Follow-up (note in Todo.md, not this pass): with B1+B2+B3 landed, trial removing `-p 1` from
   the unit gate for a parallel speedup.
 
 ### B3 [P1] loopback: join router goroutines on ALL paths; race-scale the p99 cap
@@ -468,7 +468,7 @@ Verify: `go test -race -count=1 -run TestNotifyHistoryCap ./apps/notify/be`.
   replace each with bounded in-guest polls on the concrete precondition (the disks_test.go:71
   idiom), e.g. `for i in $(seq 1 60); do ip -4 addr show <nic> | grep -q 10.50.0.1 && break; sleep 0.5; done; /etc/init.d/dnsmasq restart`;
   for :478, fold the probe ping into a poll before the asserted `ping -c3`.
-  (The real applier reload-ordering fix is tracked separately in TODO.md — these polls stay
+  (The real applier reload-ordering fix is tracked separately in Todo.md — these polls stay
   correct either way.)
 - Verify: `stress-ng --cpu $(nproc) -t 600 & go test ./wash-vm/vm -run 'TestRouterServesDHCP|TestRouterVLANs|TestRouterMultiSegment' -count=2 -v` (needs images).
 
@@ -767,10 +767,10 @@ the same group-kill treatment (A4/A11 pattern) in a follow-up; inotify instances
 with them alive. `e2e/test-results/` was empty (no local failure archaeology available).
 
 **Known-issue closure mapping:**
-- TODO.md "8-worker suite timing-race flakes (fm-be / net-vm / music / settings)" → C1 + C2
+- Todo.md "8-worker suite timing-race flakes (fm-be / net-vm / music / settings)" → C1 + C2
   (fm-be), C3/C1 (music), C1/C11 (settings), B30/B31 + A9 (net-vm), plus A6 removing the
   manufactured IO load.
-- TODO.md "Sidebar e2e order: 3 fm specs pass alone but fail in full suite" → the ORIGINAL
+- Todo.md "Sidebar e2e order: 3 fm specs pass alone but fail in full suite" → the ORIGINAL
   trio (clipboard/fm-tree/app-state) was root-caused and fixed 2026-06-01 (fm's `<For>`
   keyed rows by object reference; re-lists tore down every row's DOM — identity-stabilising
   memo fixed it; the TODO line is stale and can be dropped). The REMAINING full-suite-only
@@ -792,7 +792,7 @@ with them alive. `e2e/test-results/` was empty (no local failure archaeology ava
 - Full-gate soak: `for i in 1 2 3; do make e2e-test || break; done`
 
 **Explicitly NOT fixed here (tracked separately):**
-- The UCI-applier reload-ordering product bug (B30 polls around it; TODO.md item stands).
+- The UCI-applier reload-ordering product bug (B30 polls around it; Todo.md item stands).
 - Lifting `-p 1` from the unit gate (re-evaluate after B1-B3).
 - The 12s→5s control-socket restore (measure after A6).
 - `runRawListener`-style connection-handler joins in `ListenControl` (`control.go:88`) — same

@@ -10,7 +10,7 @@ for a session's state.
 Related: [AGENT_UX.md](AGENT_UX.md) (the audit and phase Now, all shipped
 in 0.14.0 — this doc continues it), [AGENT_APP.md](AGENT_APP.md) §9 (the
 three surfaces table this amends), [SIDEBAR.md](SIDEBAR.md) (the
-relocation that made the app the control surface), TODO.md §Apps / UX.
+relocation that made the app the control surface), Todo.md §Apps / UX.
 
 ---
 

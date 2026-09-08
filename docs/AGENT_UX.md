@@ -9,7 +9,7 @@ phase "Next" (§6) now has that doc — [AGENT_MESSENGER.md](AGENT_MESSENGER.md)
 Related: [SIDEBAR.md](SIDEBAR.md) (the relocation that put the roster in
 `com.wash.ai`), [AGENT_APP.md](AGENT_APP.md) (the app's contract),
 [AGENT_TERM.md](AGENT_TERM.md) (term-embedded agents; their toast path is
-the one that already works), TODO.md §Agent UX.
+the one that already works), Todo.md §Agent UX.
 
 ---
 

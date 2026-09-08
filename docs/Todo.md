@@ -1,4 +1,4 @@
-# wash — TODO / backlog
+# wash — backlog
 
 The one backlog file, grouped by theme. Detailed designs and implementation
 prompts live in `docs/` and on the linked GitHub issues; resolved items are
@@ -10,6 +10,16 @@ review docs + fix prompts, MAKE-PLAN, PACKS-PROMPT, NEXT, and the sftp-mount
 bug list — all fully landed; see `git log` if you need their content.)
 
 ---
+
+## Repo conventions (working-rules gaps)
+
+- [ ] Doc filenames are `UPPER_CASE.md` (52 files in `docs/`), referenced
+  from ~311 files including Go and TS comments. Rename to normal case with
+  a link check in the same change — `docs/ARCHITECTURE.md:1` and friends.
+- [ ] `COMMANDS.md:1` sits at the repo root; belongs in `docs/`.
+- [ ] No sweep has run under the working rules — `docs/Sweeps.md` and
+  `docs/Review-findings.md` do not exist yet. First sweep should be
+  **docs** (follow getting-started cold).
 
 ## Security  (docs/CORE_AUDIT.md §1)
 
