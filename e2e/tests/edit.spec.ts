@@ -78,6 +78,113 @@ test.describe('wash-edit', () => {
     expect(updated).toContain('appended');
   });
 
+  // Saving must not disturb the buffer being edited. The active-tab
+  // effect used to re-seed CodeMirror on every tabs() mutation, and a
+  // save mutates tabs(), so Ctrl+S clobbered the live view.
+  test('Ctrl+S leaves the caret and undo history alone', async ({ page, router }) => {
+    const editor = await openEditor(page, router);
+    const tab = editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.txt') + '"]');
+    await editor.locator('[data-testid="edit-entry-hello.txt"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('first line');
+
+    await editor.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('appended');
+    await page.keyboard.press('Control+s');
+    await expect(tab).not.toHaveAttribute('data-dirty', 'true');
+
+    // The caret is still where the typing left it. If the save rebuilt
+    // the editor state, it went back to offset 0 and this lands at the
+    // top of the file instead.
+    //
+    // The pause is load-bearing: CodeMirror groups edits into undo
+    // events by elapsed time (newGroupDelay, 500ms), so typing straight
+    // after the save would join the previous group and make the undo
+    // assertion below depend on how fast the machine ran the save.
+    await page.waitForTimeout(700);
+    await page.keyboard.type('X');
+    await expect(editor.locator('.cm-content')).toContainText('appendedX');
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => readFileSync(join(router.fmRoot, 'hello.txt'), 'utf8')).toContain('appendedX');
+
+    // Undo history survived the save: one undo takes back the X and
+    // stops there. Rebuilding the state on save left an empty history,
+    // where this undo did nothing at all.
+    await page.keyboard.press('Control+z');
+    await expect(editor.locator('.cm-content')).not.toContainText('appendedX');
+    await expect(editor.locator('.cm-content')).toContainText('appended');
+    await expect(editor.locator('.cm-content')).toContainText('first line');
+  });
+
+  // The data-loss half: a tab switched away from and back carries a
+  // captured EditorState, and re-applying it after a save reverted the
+  // document to that snapshot while the disk held the new text — so the
+  // next save wrote the stale text back over it.
+  test('Ctrl+S on a revisited tab keeps the edits on screen', async ({ page, router }) => {
+    const editor = await openEditor(page, router);
+    const helloTab = '[data-testid="edit-tab-' + join(router.fmRoot, 'hello.txt') + '"]';
+
+    await editor.locator('[data-testid="edit-entry-hello.txt"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('first line');
+    // Away to a second tab (which captures hello.txt's state) and back.
+    await editor.locator('[data-testid="edit-entry-config.json"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('"a":1');
+    await editor.locator(helloTab).click();
+    await expect(editor.locator('.cm-content')).toContainText('first line');
+
+    await editor.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('SURVIVES');
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => readFileSync(join(router.fmRoot, 'hello.txt'), 'utf8')).toContain('SURVIVES');
+    await expect(editor.locator(helloTab)).not.toHaveAttribute('data-dirty', 'true');
+
+    // Still on screen, and still on screen a beat later — the revert
+    // arrived one effect flush after the save, so an immediate check
+    // passes even when the buffer is about to be thrown away.
+    await expect(editor.locator('.cm-content')).toContainText('SURVIVES');
+    await page.waitForTimeout(300);
+    await expect(editor.locator('.cm-content')).toContainText('SURVIVES');
+
+    // And the save that follows must not write the stale text back.
+    await page.keyboard.type('!');
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => readFileSync(join(router.fmRoot, 'hello.txt'), 'utf8')).toContain('SURVIVES!');
+  });
+
+  // Save As is the one save that changes a tab's id, so it is the one
+  // that legitimately re-seeds the view. It must seed from the live
+  // buffer, not from the snapshot taken at the last tab switch.
+  test('Save As carries the live buffer to the new file', async ({ page, router }) => {
+    const editor = await openEditor(page, router);
+    await editor.locator('[data-testid="edit-entry-hello.txt"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('first line');
+    // Switch away and back so the tab carries a captured state.
+    await editor.locator('[data-testid="edit-entry-config.json"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('"a":1');
+    await editor.locator('[data-testid="edit-tab-' + join(router.fmRoot, 'hello.txt') + '"]').click();
+    await expect(editor.locator('.cm-content')).toContainText('first line');
+
+    await editor.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('COPIED');
+    await page.keyboard.press('Control+Shift+S');
+
+    const picker = page.locator('[data-testid="edit-picker"]');
+    await expect(picker).toBeVisible();
+    await picker.locator('[data-testid="fp-path"]').fill(router.fmRoot);
+    await picker.locator('[data-testid="fp-path"]').press('Enter');
+    await picker.locator('[data-testid="fp-save-name"]').fill('copy.txt');
+    await picker.locator('[data-testid="fp-confirm"]').click();
+    await expect(picker).not.toBeVisible();
+
+    await expect.poll(() => existsSync(join(router.fmRoot, 'copy.txt'))).toBe(true);
+    expect(readFileSync(join(router.fmRoot, 'copy.txt'), 'utf8')).toContain('COPIED');
+    // The renamed tab shows what was written, not the pre-edit snapshot.
+    await page.waitForTimeout(300);
+    await expect(editor.locator('.cm-content')).toContainText('COPIED');
+  });
+
   test('Ctrl+N opens an Untitled buffer, Ctrl+S pops Save As', async ({ page, router }) => {
     const editor = await openEditor(page, router);
     // Make sure the editor receives the keystroke — focus it.

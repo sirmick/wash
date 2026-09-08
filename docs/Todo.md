@@ -240,6 +240,12 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Apps / UX
 
+- [ ] **edit: Save As over an open file drops that tab silently** —
+  `pickerConfirm` converges on one tab per path by removing the duplicate
+  (apps/edit/fe/src/main.tsx:655). If that tab held unsaved edits they go
+  with it, unannounced. Found while fixing the save-seeding bug
+  (2026-09-07); the markers and wysiwyg handles are cleaned up now, but
+  the discard still wants a confirm, or a reload of the surviving tab.
 - [x] **Agent UX phase Now (N1–N6)** — docs/AGENT_UX.md, shipped
   2026-08-21. Focus-or-launch everywhere, agentd needs-input toasts keyed
   to their session, hidden-sidebar badge, single-click reattach, launcher

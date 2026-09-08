@@ -641,24 +641,62 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const reply = await sendWithReply({ kind: 'write', path: chosen, content });
     if (reply.kind !== 'write_ok') return;
     const newPath = String(reply.path ?? chosen);
+    // Save As is the one save that changes a tab's id, which makes it
+    // the one save that legitimately re-seeds the editor (the
+    // active-tab effect keys on id). So carry the LIVE state across the
+    // rename: the captured t.state is a snapshot from the last tab
+    // switch, and re-seeding from it would drop everything typed since
+    // — the same revert the effect used to cause on every save.
+    const isActive = src.id === activeID();
+    const liveState = isActive && editorView && src.mode !== 'wysiwyg' ? editorView.state : src.state;
     // Update the tab: new id (the path), new display name, fresh
     // baseline. If another tab already pointed at newPath, drop
     // it — converging on a single tab per path matches openInTab.
     const dupeIdx = tabs().findIndex((t) => t.path === newPath && t.id !== src.id);
+    // Captured before the list is rewritten: after setTabs the dropped
+    // tab is gone and its id is unrecoverable.
+    const dropped = dupeIdx >= 0 ? tabs()[dupeIdx].id : undefined;
     const updated = tabs()
       .filter((_, i) => i !== dupeIdx)
       .map((x) => x.id === src.id
-        ? { ...x, id: newPath, path: newPath, displayName: baseName(newPath) || newPath, baseline: content }
+        ? {
+          ...x,
+          id: newPath,
+          path: newPath,
+          displayName: baseName(newPath) || newPath,
+          baseline: content,
+          state: liveState,
+          // The remounted TipTap seeds from wysCache; leaving the
+          // pre-save cache would show older text than we just wrote.
+          wysCache: x.mode === 'wysiwyg' ? content : x.wysCache,
+        }
         : x);
+    // The wysiwyg handle map is keyed by tab id, so the rename orphans
+    // the old entry: its editor would leak and its onChange would keep
+    // writing to a tab id that no longer exists. Retire it and let the
+    // remount build a fresh one from wysCache above.
+    const oldHandle = wysHandles.get(src.id);
+    if (oldHandle && src.id !== newPath) {
+      oldHandle.destroy();
+      wysHandles.delete(src.id);
+    }
     setTabs(updated);
     setActiveID(newPath);
     // Watch the destination dir so the freshly-saved tab tracks
     // external edits just like an opened file.
     fileWatch.watch(parentPath(newPath));
+    // Both ids go: the source tab is now clean under its new id, and a
+    // duplicate that was dropped above must not leave its marker behind
+    // for a tab that no longer exists.
+    if (dropped) {
+      wysHandles.get(dropped)?.destroy();
+      wysHandles.delete(dropped);
+    }
     setDirtyIDs((s) => {
-      if (!s.has(src.id)) return s;
+      if (!s.has(src.id) && !(dropped && s.has(dropped))) return s;
       const out = new Set(s);
       out.delete(src.id);
+      if (dropped) out.delete(dropped);
       return out;
     });
   };
@@ -2248,20 +2286,41 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   //
   // Language override clears on tab switch — it's a "treat THIS
   // tab as X" rather than a permanent setting.
-  let lastTabID = '';
+  //
+  // ONLY a change of active tab may seed the view. The effect also reads
+  // tabs(), so it re-runs on every tab mutation, and seeding on those was
+  // a data-loss bug: saving mutates tabs() (new baseline), so Ctrl+S
+  // re-entered here and overwrote the live buffer. With no captured state
+  // it rebuilt the doc from baseline, discarding the caret, the scroll
+  // position and the whole undo history; with one — any tab you have
+  // switched away from and back — it re-applied that stale snapshot, so
+  // the text you had just saved vanished from the screen while the disk
+  // kept it, and the next save wrote the reverted text back over it.
+  // While the id is unchanged the view owns its content; the paths that
+  // legitimately replace it (applyReload, toggleWysiwyg) drive editorView
+  // directly.
+  //
+  // seededID is whose buffer the view currently holds — null for the
+  // empty view. Keyed on the tab actually seeded rather than on
+  // activeID() alone, so a tab whose object has not arrived in tabs()
+  // yet (session restore sets the id first) still gets seeded when it
+  // does, instead of being latched as already handled.
+  let seededID: string | null = null;
   createEffect(() => {
     const id = activeID();
-    if (!editorView) return;
-    if (id !== lastTabID) {
-      lastTabID = id;
-      setLangOverride(null);
-    }
     const t = tabs().find((x) => x.id === id);
+    if (!editorView) return;
     if (!t) {
+      if (seededID === null) return;
+      seededID = null;
+      setLangOverride(null);
       // No active tab — leave the view empty.
       editorView.setState(EditorState.create({ doc: '', extensions: baseExtensions() }));
       return;
     }
+    if (seededID === id) return;
+    seededID = id;
+    setLangOverride(null);
     if (t.state) {
       editorView.setState(t.state);
     } else {
