@@ -152,7 +152,18 @@ var asks = map[string]*pending{}
 // (which needs a Bus, which needs a Conn).
 var (
 	stateSubscribers = func() int { return svc.SubscriberCount() }
-	mutateState      = func(fn func(*State)) { svc.Mutate(fn) }
+	// mutateStateIf is the ONE state-write seam: fn returns false when
+	// nothing a subscriber can see moved, and no snapshot is sent. See
+	// StateService.MutateIf — a narrating agent hits this several times a
+	// second, and the row it writes is usually the row already there.
+	mutateStateIf = func(fn func(*State) bool) { svc.MutateIf(fn) }
+	// mutateState is the always-publish form, defined in terms of the
+	// seam above rather than beside it: two independent hooks are two
+	// things a test must remember to stub, and the one it forgets fails
+	// as a nil-pointer panic inside the SDK.
+	mutateState = func(fn func(*State)) {
+		mutateStateIf(func(s *State) bool { fn(s); return true })
+	}
 	// policyRuleCount is how many rules the human has taught wash. One
 	// stat per question, the same price the hosted tier already pays to
 	// read the policy fresh (acp.go), and for the same reason: a rule

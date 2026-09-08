@@ -33,16 +33,18 @@ func addAsk(id, rowKey, tool string, asked time.Time) *pending {
 // production never races on. Restores the real hooks on cleanup.
 func withState(t *testing.T, subs int) {
 	t.Helper()
-	oldSubs, oldMutate := stateSubscribers, mutateState
+	oldSubs, oldMutate := stateSubscribers, mutateStateIf
 	var st State
 	var mu sync.Mutex
 	stateSubscribers = func() int { return subs }
-	mutateState = func(fn func(*State)) {
+	// Stubbing the one seam covers mutateState too, which is defined in
+	// terms of it.
+	mutateStateIf = func(fn func(*State) bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		fn(&st)
 	}
-	t.Cleanup(func() { stateSubscribers, mutateState = oldSubs, oldMutate })
+	t.Cleanup(func() { stateSubscribers, mutateStateIf = oldSubs, oldMutate })
 }
 
 // Questions are a queue of things blocking humans, so the one that has
@@ -233,17 +235,17 @@ func TestAnsweredAskStopsItsTimer(t *testing.T) {
 // what stateSubscribers() reports.
 func withVaryingState(t *testing.T, subs int) func(int) {
 	t.Helper()
-	oldSubs, oldMutate := stateSubscribers, mutateState
+	oldSubs, oldMutate := stateSubscribers, mutateStateIf
 	var st State
 	var mu sync.Mutex
 	n := subs
 	stateSubscribers = func() int { mu.Lock(); defer mu.Unlock(); return n }
-	mutateState = func(fn func(*State)) {
+	mutateStateIf = func(fn func(*State) bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		fn(&st)
 	}
-	t.Cleanup(func() { stateSubscribers, mutateState = oldSubs, oldMutate })
+	t.Cleanup(func() { stateSubscribers, mutateStateIf = oldSubs, oldMutate })
 	return func(v int) { mu.Lock(); n = v; mu.Unlock() }
 }
 

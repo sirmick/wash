@@ -302,3 +302,51 @@ func TestStateServiceDoubleSubscribeIsIdempotent(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 }
+
+// MutateIf is the seam a hot-path service uses to keep its own state
+// current without paying for the wire: returning false writes the state
+// and sends nothing. This is what stops a narrating agent from pushing a
+// full roster snapshot to every subscriber several times a second.
+func TestStateServiceMutateIfSkipsUnchanged(t *testing.T) {
+	bus, router, cleanup := busTestConn(t)
+	defer cleanup()
+
+	svc := NewStateService(bus, jobsState{Count: 0})
+	go func() { _ = bus.conn.Run(context.Background()) }()
+
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{InstanceID: "i-sub"}))
+	_ = readStateMsgToInstance(t, router, "i-sub")
+
+	// A reported change still pushes.
+	svc.MutateIf(func(s *jobsState) bool {
+		s.Count = 41
+		return true
+	})
+	if got, _ := readStateMsgToInstance(t, router, "i-sub")["count"].(float64); got != 41 {
+		t.Fatalf("count=%v, want 41", got)
+	}
+
+	// Silence last: the reader below stays parked, so anything asserted
+	// after it would race that goroutine for the next frame.
+	svc.MutateIf(func(s *jobsState) bool {
+		s.Count = 42
+		return false
+	})
+	// The write still lands — this is a dedupe of the PUSH, not of the
+	// state, so the value a later real change builds on is the new one.
+	if got := svc.Snapshot().Count; got != 42 {
+		t.Fatalf("MutateIf did not apply the write: count=%d, want 42", got)
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = router.ReadFrame()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("MutateIf(false) still produced a frame")
+	case <-time.After(150 * time.Millisecond):
+	}
+}

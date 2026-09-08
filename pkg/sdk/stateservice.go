@@ -119,8 +119,32 @@ func (s *StateService[S]) Snapshot() S {
 // Multiple concurrent Mutate calls serialize; subscribers see one
 // state event per Mutate, in the order Mutate returned.
 func (s *StateService[S]) Mutate(fn func(*S)) {
+	s.MutateIf(func(st *S) bool {
+		fn(st)
+		return true
+	})
+}
+
+// MutateIf is Mutate for a service that can tell whether its change is
+// worth the wire. fn returns false when the state it just wrote is not
+// materially different from what subscribers already hold, and the push
+// is skipped; the state itself is kept either way.
+//
+// This exists because "every mutation is an event" is the wrong default
+// for a service whose state is touched on a hot path. agentd moves a
+// roster row on every chunk an agent narrates — the row usually says the
+// same thing it already said — and each of those was a full snapshot of
+// every row, every pending question and the whole session history, at
+// Interactive priority, to every subscriber. A talking agent could fill
+// the Interactive queue on its own and stall the traffic that class is
+// for. The service knows whether anything changed; the wire cannot.
+func (s *StateService[S]) MutateIf(fn func(*S) bool) {
 	s.mu.Lock()
-	fn(&s.state)
+	changed := fn(&s.state)
+	if !changed {
+		s.mu.Unlock()
+		return
+	}
 	snap := s.state
 	subs := make([]string, 0, len(s.subs))
 	for k := range s.subs {

@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -228,12 +229,13 @@ func (h *hosted) setState(state, reason string) {
 	now := time.Now()
 	var wantGit string
 	var changed bool
-	mutateState(func(s *State) {
+	mutateStateIf(func(s *State) bool {
 		r := rows[h.key]
 		if r == nil {
 			r = &row{}
 			rows[h.key] = r
 		}
+		before := r.Row
 		if r.State != state || r.Reason != reason {
 			r.stateSince = now
 			changed = true
@@ -260,11 +262,23 @@ func (h *hosted) setState(state, reason string) {
 		if r.Cwd != "" {
 			wantGit = r.Cwd
 		}
-		if rememberSession(h.agent, h.sessionID, h.cwd, h.title, now) {
+		remembered := rememberSession(h.agent, h.sessionID, h.cwd, h.title, now)
+		if remembered {
 			historyDirty = true
 		}
-		s.Rows = publish(now)
-		s.Recent = publishHistory()
+		// Publish only what moved. Narration re-asserts an unchanged row
+		// several times a second during a turn; rebuilding the roster and
+		// the whole session history for each of those, and then putting
+		// it on the wire, is the Interactive flood this guards.
+		moved := !sameRow(before, r.Row)
+		if moved {
+			s.Rows = publish(now)
+		}
+		if remembered {
+			s.Recent = publishHistory()
+		}
+		changed = moved
+		return moved || remembered
 	})
 	if changed {
 		log.Printf("agentd: acp row key=%s agent=%s state=%s session=%s dir=%s",
@@ -308,21 +322,38 @@ func (h *hosted) applyConfigs(in []acp.ConfigOption) {
 // state — used when only the detached flag moved.
 func (h *hosted) republish() {
 	now := time.Now()
-	mutateState(func(s *State) {
-		if r := rows[h.key]; r != nil {
-			r.Detached = h.detached
-			r.Used, r.Size = h.used, h.size
-			r.Title = h.title
-			r.Mode, r.Modes = h.mode, publicModes(h.modes)
-			r.Yolo = h.yolo
-			r.Configs = publicConfigs(h.configs)
-			r.Commands = publicCommands(h.commands)
-			r.Configs = publicConfigs(h.configs)
-			r.Commands = publicCommands(h.commands)
-			r.lastSeen = now
+	mutateStateIf(func(s *State) bool {
+		r := rows[h.key]
+		if r == nil {
+			return false
+		}
+		before := r.Row
+		r.Detached = h.detached
+		r.Used, r.Size = h.used, h.size
+		r.Title = h.title
+		r.Mode, r.Modes = h.mode, publicModes(h.modes)
+		r.Yolo = h.yolo
+		r.Configs = publicConfigs(h.configs)
+		r.Commands = publicCommands(h.commands)
+		r.lastSeen = now
+		if sameRow(before, r.Row) {
+			return false
 		}
 		s.Rows = publish(now)
+		return true
 	})
+}
+
+// sameRow reports whether two published rows say the same thing.
+//
+// SinceMS is excluded deliberately: it is derived from the clock at
+// publish time, so two otherwise identical rows always differ by a few
+// milliseconds. Comparing it would defeat every dedupe — which is also
+// why the elapsed clock is refreshed by the 10s sweep rather than by
+// whatever happens to touch a row next.
+func sameRow(a, b Row) bool {
+	a.SinceMS, b.SinceMS = 0, 0
+	return reflect.DeepEqual(a, b)
 }
 
 // ---- acp.SessionHandler ----
