@@ -54,7 +54,11 @@ const APPS: AppBundle[] = [
   // process table/registered-apps/browser sections + sortable table.
   // +~0.1 KB from the shared createAppBus saveState()/flushState() persist
   // helper (in every app's @wash/ui). Headroom still brakes further growth.
-  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 32_000 },
+  // +~2.6 KB (32.0k → 34.6k): the per-app traffic table in the Link
+  // section (docs/QOS.md §12.1) — the trafficRows kernel, the derived
+  // router-overhead row and the class-by-app table itself. Bumped to 40k
+  // to restore the headroom the cap is here to defend.
+  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 40_000 },
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
   // term: +~1 KB for the agent status surface (docs/AGENT_TERM.md M1) — the
   // per-tab agent side map, the tab-chip state dot and the status-line clause
