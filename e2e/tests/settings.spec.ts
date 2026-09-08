@@ -10,8 +10,8 @@
 //   3. Singleton: two launches return the same instance_id.
 //   4. Bad domain returns settings.read_err.
 //
-// xdgConfig fixture points XDG_CONFIG_HOME at a per-test tmpdir, so the
-// developer's real desktop.json is never touched.
+// The router fixture always points XDG_CONFIG_HOME at a per-test tmpdir,
+// so the developer's real desktop.json is never touched.
 
 import { test, expect, displaySkipReason } from '../fixtures/router';
 import { readFileSync, existsSync } from 'node:fs';
@@ -36,7 +36,6 @@ function codeServerInstalled(): boolean {
 test.use({
   routerOpts: {
     apps: ['session', 'settings'],
-    xdgConfig: true,
   },
 });
 
@@ -233,7 +232,6 @@ test.describe('wash-settings — Developer panel (wash-vscode service)', () => {
   test.use({
     routerOpts: {
       apps: ['session', 'settings', 'vscode'],
-      xdgConfig: true,
     },
   });
   test.setTimeout(30_000);
@@ -294,7 +292,6 @@ test.describe('wash-settings — Display panel (wash-display compositor)', () =>
   test.use({
     routerOpts: {
       apps: ['session', 'settings', 'display'],
-      xdgConfig: true,
     },
   });
   // Compositor boot (wlroots + Xwayland) is the slow part.
@@ -372,7 +369,6 @@ test.describe('wash-settings — Display panel, compositor absent', () => {
     routerOpts: {
       // No 'display' app registered → no panel descriptor in the catalog.
       apps: ['session', 'settings'],
-      xdgConfig: true,
     },
   });
   test.setTimeout(15_000);
@@ -403,7 +399,6 @@ test.describe('wash-settings — app-supplied panel discovery', () => {
   test.use({
     routerOpts: {
       apps: ['session', 'settings', 'vscode'],
-      xdgConfig: true,
     },
   });
   test.setTimeout(30_000);

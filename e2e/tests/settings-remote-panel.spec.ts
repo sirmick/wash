@@ -14,7 +14,6 @@ import { test, expect } from '../fixtures/router';
 test.use({
   routerOpts: {
     apps: ['session', 'settings', 'connect', 'remote'],
-    xdgConfig: true,
   },
 });
 

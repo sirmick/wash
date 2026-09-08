@@ -20,7 +20,6 @@ test.use({
     apps: ['session', 'agentd', 'ai', 'notify'],
     // Its own config dir: this spec WRITES a default prompt, and the
     // developer's own default prompt is not ours to overwrite.
-    xdgConfig: true,
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });

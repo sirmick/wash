@@ -551,3 +551,33 @@ round trip, which is the most likely mechanism.
 runs, and a plausible environment cause (a 20s budget for a full agent
 round trip on a 2-core runner, warming up). Logged so a second sighting
 has something to sit next to.
+
+---
+
+## 2026-09-07 — three agent specs red locally: not a flake, my own config
+
+`agent-session.spec.ts` (both "streams its reply into the transcript" and
+"yolo auto-approves"), plus `agent-remote-roster.spec.ts`. Reproducible,
+every run, 3 failed / 501 passed. They look like the flake trio above,
+which is exactly why this is logged.
+
+**Not the branch, and not a flake.** The baseline said so twice: the same
+three failed at the pre-change commit, and they failed identically before
+and after the drag-jank merge that had landed mid-session (the tempting
+suspect, since it touched agent transcript deltas).
+
+**Mechanism: host config leaked INTO the tests.** I had just stored a
+default prompt in my own `~/.config/wash/agent-default-prompt.txt` — the
+feature does exactly what it says and prepends it to every new session,
+including the fake adapter's in these specs. Moving the file aside turned
+all 11 green; putting it back turned them red again.
+
+**Fix — the fixture, not the specs.** `XDG_CONFIG_HOME` was opt-in
+(`xdgConfig: true`, five specs), so it only ever protected the
+developer's files from the tests, never the tests from the developer's
+files. It is now unconditional, like `XDG_STATE_HOME`, which had already
+learned this lesson for the same reason. The opt-in flag is gone.
+
+**Worth remembering:** a whole-suite result that reproduces exactly is
+evidence AGAINST a flake, and host state is the first thing to suspect
+when a spec you didn't touch fails the same way every time.

@@ -94,10 +94,10 @@ export interface RouterHandle {
   /** per-test fm sandbox root. Empty when fmRoot wasn't requested. */
   fmRoot: string;
   /** per-test XDG_CONFIG_HOME (wash configs live under <here>/wash/).
-   *  Empty when xdgConfig wasn't requested. */
+   *  ALWAYS set: host config leaking in is as bad as leaking out. */
   xdgConfigHome: string;
   /**
-   * per-test XDG_STATE_HOME. ALWAYS set, unlike xdgConfigHome — agentd
+   * per-test XDG_STATE_HOME. ALWAYS set, like xdgConfigHome — agentd
    * writes agent-sessions.json and a full transcript per session under
    * <here>/wash/, so without this every agent spec would append to the
    * developer's real history. It also made specs contaminate each OTHER:
@@ -179,13 +179,6 @@ export interface RouterOptions {
    * fixture tree your test needs. Implies fmRoot:true.
    */
   fmSeed?: (root: string) => void;
-  /**
-   * If true, point XDG_CONFIG_HOME at a per-test tmpdir so wash-settings
-   * (and the wash-session config watcher) read/write into an isolated
-   * tree. Without this, settings tests would clobber ~/.config/wash on
-   * the test runner.
-   */
-  xdgConfig?: boolean;
   /**
    * Extra env vars merged into the router process's env after the
    * other options have been applied. Useful for tests that need to
@@ -381,14 +374,15 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   if (wanted.includes('netd')) {
     env.WASH_NETD_BACKEND = 'fake';
   }
-  // Isolate the user's real ~/.config/wash. wash-settings.write()
-  // overwrites desktop.json; without this every settings spec would
-  // trash the developer's chrome between runs.
-  let xdgConfigHome = '';
-  if (opts.xdgConfig) {
-    xdgConfigHome = mkdtempSync(join(tmpdir(), 'wash-e2e-xdg-'));
-    env.XDG_CONFIG_HOME = xdgConfigHome;
-  }
+  // Isolate the user's real ~/.config/wash. Unconditional, for the same
+  // reason as the state dir below: config is READ as well as written, so
+  // opting in per spec only protected the developer's files, not the
+  // tests. A default prompt in the developer's own ~/.config/wash is
+  // prepended to every new session, which broke three agent specs that
+  // had nothing to do with the feature and looked exactly like flakes.
+  // wash-settings.write() overwriting desktop.json is the other half.
+  const xdgConfigHome = mkdtempSync(join(tmpdir(), 'wash-e2e-xdg-'));
+  env.XDG_CONFIG_HOME = xdgConfigHome;
   // Isolate the user's real ~/.local/state/wash. Unconditional, because
   // there is no version of "correct" where a test appends to the
   // developer's agent history — and because a shared state dir made the
