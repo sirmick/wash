@@ -110,6 +110,14 @@ TARGETS := $(addprefix $(SC)/,$(SC_BINS)) $(addprefix $(OUT)/,$(filter $(OUT_ONL
 # BINS.) `make gen-pkg-binaries` regenerates the file; `make check-pkg-binaries`
 # fails if it's drifted from BINS (wired into CI so a new app can't silently
 # miss the packages — the drift that left net/media/vscode out of 0.9.0).
+# print-bins happens to be the first target in the file, which used to make
+# it the default goal: a bare `make` printed a list of binary names, built
+# nothing, and exited 0. That reads as a successful build — it is how a
+# stale FE bundle got tested against for a whole session. Name the real
+# default explicitly; `make wash` is the dev layout (multicall + symlinks),
+# which is also what ships.
+.DEFAULT_GOAL := wash
+
 .PHONY: print-bins gen-pkg-binaries check-pkg-binaries
 print-bins:
 	@printf '%s\n' $(BINS)

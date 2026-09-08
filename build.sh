@@ -16,8 +16,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Named target, not a bare `make`: the default goal is set in the Makefile
+# now, but this file is the promise that ./build.sh builds, and it should
+# not be one line of someone else's file away from printing a list instead.
 case "${1:-}" in
-  "")     exec make ;;
+  "")     exec make wash ;;
   test)   exec make unit-test ;;
   e2e)    exec make e2e-test ;;
   *)      exec make "$@" ;;

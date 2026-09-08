@@ -25,9 +25,14 @@ Deeper: [Architecture](ARCHITECTURE.md) (structure),
 
 ## Build and run
 
-- `./build.sh` — everything. `./build.sh test` — unit tier.
-  `./build.sh e2e` — full browser suite. It is a thin wrapper over the
-  Makefile, which is the real build.
+- `./build.sh` — everything (`make wash`: FE bundles, embed, multicall
+  binary + `wash-<app>` symlinks in `out/`). `./build.sh test` — unit
+  tier. `./build.sh e2e` — full browser suite. It is a thin wrapper over
+  the Makefile, which is the real build.
+- Targeted browser runs need `make test-app` first: the specs put
+  `out/e2e` on PATH for the fake agent adapter, and without it a spec
+  silently reaches for the real `codex` on the host. `make e2e-test`
+  builds it; raw `npx playwright test` does not.
 - `./run.sh` — build, then start a dev router on `0.0.0.0:11000`.
 
 Test layers: Go unit (`go test ./...`) → FE pure kernels (`node --test
