@@ -36,6 +36,11 @@ export interface AgentEvent {
   /** set on kind==="terminal": the raw channel its pty writes to */
   channel?: number;
   at_ms: number;
+  /** a wire-only delta: text is what was ADDED to the row with this seq
+   *  since the last event for it (see agent-events.ts) */
+  append?: boolean;
+  /** the row's UTF-8 byte length after this event applies (message/thought) */
+  text_len?: number;
 }
 
 /** A permission question waiting on this session. */

@@ -793,7 +793,7 @@ func (inst *AppInstance) relayWindowGeometry(m wire.EvtWindowGeometry) error {
 	if !inst.ownsWindow(m.Win) {
 		return nil
 	}
-	inst.router.broadcastPatches(inst.router.winSession.resize(m.Win, m.W, m.H))
+	inst.router.broadcastPatches(inst.router.winSession.resize(m.Win, m.W, m.H, 0))
 	return nil
 }
 

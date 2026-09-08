@@ -390,6 +390,18 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"replay": true,
 		})
 
+	case "resync":
+		// The FE holds a transcript it can no longer append deltas to (it
+		// missed a base). Replay the history; deltas resume from it.
+		if session.key == "" {
+			return
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":   "transcript_subscribe",
+			"key":    session.key,
+			"replay": true,
+		})
+
 	case "start":
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":   "agent_start",

@@ -45,6 +45,8 @@ export { Markdown, parseBlocks, parseInline } from './markdown';
 export type { MarkdownProps, Align } from './markdown';
 export { AgentSession } from './agent-session';
 export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus, AgentConfig } from './agent-session';
+export { applyAgentEvent, mergeAgentEvents, utf8Len } from './agent-events';
+export type { ApplyResult } from './agent-events';
 // The roster (docs/SIDEBAR.md M2): com.wash.ai's list pane, and the
 // desktop rail's Agents section until M2c retires that use. Types are
 // Roster* rather than Agent* because agent-session already owns AgentAsk

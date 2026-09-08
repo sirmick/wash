@@ -103,6 +103,15 @@ func (cl *Client) Watch(key string) error {
 	return cl.send(map[string]any{"kind": "transcript_subscribe", "key": key})
 }
 
+// Resync asks for a watched session's history again. The FE uses it when
+// a transcript delta arrives that it has no base for (agent-events.ts).
+func (cl *Client) Resync(key string) error {
+	if key == "" || !cl.Watching(key) {
+		return nil
+	}
+	return cl.send(map[string]any{"kind": "transcript_subscribe", "key": key, "replay": true})
+}
+
 // Forget stops routing a session's events here. The session itself is
 // untouched — agentd outlives its hosts, which is the whole point of Resume.
 func (cl *Client) Forget(key string) {

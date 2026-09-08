@@ -72,6 +72,9 @@ export interface Win {
   // isRoot is router-attested; renders the red ROOT stripe in the
   // titlebar. See SessionWindow.is_root in main.tsx.
   isRoot?: boolean;
+  // Echo of the last shell-originated move/resize token the router
+  // applied (wire SessionWindow.geom_tok). See markGeomPending.
+  geomTok?: number;
   // chromeless drops the wash titlebar + border so the guest surface
   // (e.g. Webamp) fills the frame and draws its own chrome. Mirrors
   // the app manifest's WindowHints.Chromeless.
@@ -272,7 +275,67 @@ function fromSessionWindow(sw: SessionWindow, origin: Origin): Win {
     isRoot: sw.is_root,
     chromeless: sw.chromeless,
     attention: sw.attention,
+    geomTok: sw.geom_tok ?? 0,
   };
+}
+
+// ---- geometry commits ------------------------------------------------
+//
+// A drag is local: the frame follows the pointer and ONE window.move is
+// sent on release, with moveLocal writing the new x/y into the store so
+// nothing snaps while the router's echo is in flight. The hole is every
+// OTHER patch about that window already on the wire — the focus upsert
+// from pointer-down is the usual one — because each carries the router's
+// x/y from BEFORE the move. On a LAN they land mid-drag and lose to the
+// drag override. On a slow or busy link (bulk traffic queued ahead of
+// control frames, a VPN) they land after the drop, overwrite the store
+// with the pre-drag position, and the window jumps back until the move's
+// own echo arrives: the visible round trip.
+//
+// So every move/resize the shell commits carries a token (window.move
+// tok), the router stamps it on the window (geom_tok), and while a
+// commit is pending the store keeps ITS geometry for any upsert that does
+// not echo the pending token. The echo clears it. Everything else in the
+// patch (focus, title, state) is taken as usual.
+const pendingGeom = new Map<string, { tok: number; at: number }>();
+let geomTokCounter = Math.floor(Math.random() * 0x7fffffff) + 1;
+// A commit whose echo never comes — two shells moved the same window
+// inside one round trip and the other's token won — must not hold the
+// store's geometry forever. Past this age the router's next word is taken.
+const pendingGeomTTL = 5000;
+
+function geomKey(origin: Origin, windowID: number): string {
+  return `${origin}\u0000${windowID}`;
+}
+
+/** nextGeomTok returns a fresh non-zero uint32 token for a window.move /
+ * window.resize. Random-seeded so two shells on one router don't collide. */
+export function nextGeomTok(): number {
+  geomTokCounter = geomTokCounter >= 0xffffffff ? 1 : geomTokCounter + 1;
+  return geomTokCounter;
+}
+
+/** markGeomPending records that the shell has committed geometry for a
+ * window and is waiting for the router to echo `tok`. Until then, router
+ * upserts for the window keep the store's x/y/w/h. A newer commit for the
+ * same window supersedes the older one. */
+export function markGeomPending(origin: Origin, windowID: number, tok: number, at = Date.now()): void {
+  pendingGeom.set(geomKey(origin, windowID), { tok, at });
+}
+
+/** pendingGeomTok reports the token a window is waiting on, or undefined. */
+export function pendingGeomTok(origin: Origin, windowID: number): number | undefined {
+  return pendingGeom.get(geomKey(origin, windowID))?.tok;
+}
+
+function clearPendingGeom(origin: Origin, windowID?: number): void {
+  if (windowID != null) {
+    pendingGeom.delete(geomKey(origin, windowID));
+    return;
+  }
+  for (const k of pendingGeom.keys()) {
+    if (k.startsWith(`${origin}\u0000`)) pendingGeom.delete(k);
+  }
 }
 
 // A bundle-backed window's mount is deferred until its bundle arrives (up to
@@ -366,6 +429,9 @@ export function applySessionSnapshot(
   // when it resolves (REVIEW-RECONNECT M5). Windows the snapshot still wants
   // are re-scheduled below under the new epoch.
   snapshotEpoch.set(origin, (snapshotEpoch.get(origin) ?? 0) + 1);
+  // A snapshot is the router's truth; a commit still pending from before
+  // the (re)connect is moot — its echo may never come.
+  clearPendingGeom(origin);
 
   const keep = new Set<number>();
   for (const sw of sessionWins) {
@@ -445,6 +511,7 @@ export function applySessionPatch(
       // the filter below misses it — cancel its pending mount so the late
       // upsert can't resurrect it as a ghost (REVIEW-RECONNECT M5).
       cancelPendingMount(origin, id);
+      clearPendingGeom(origin, id);
       setWindows((prev) => prev.filter((x) => !(x.origin === origin && x.windowID === id)));
       if (isFocused({ origin, windowID: id })) setFocused(null);
     }
@@ -478,6 +545,7 @@ export function dismissCrashed(origin: Origin, windowID: number): void {
 // LOCAL is never dropped (the seat's own desktop).
 export function dropOrigin(origin: Origin): void {
   if (origin === LOCAL_ORIGIN) return;
+  clearPendingGeom(origin);
   setWindows((prev) => prev.filter((w) => w.origin !== origin));
   if (focused()?.origin === origin) setFocused(null);
 }
@@ -491,6 +559,25 @@ function upsertWindow(w: Win): void {
     // Router-driven update (geometry/title/state). Preserve the FE's global
     // stacking value — only an explicit raise (raiseLocal / a focused patch /
     // a snapshot focus claim) changes gz, never a plain geometry patch.
-    setWindows(idx, { ...w, gz: windows[idx].gz });
+    const cur = windows[idx];
+    const next: Win = { ...w, gz: cur.gz };
+    const key = geomKey(w.origin, w.windowID);
+    const pending = pendingGeom.get(key);
+    if (pending != null) {
+      if (w.geomTok === pending.tok || Date.now() - pending.at > pendingGeomTTL) {
+        // The router confirmed our commit (its geometry is ours, or its
+        // clamp of ours) — or the commit is stale enough that waiting
+        // longer would be the bug. Take the router's word.
+        pendingGeom.delete(key);
+      } else {
+        // In flight from before our commit (or another shell's older
+        // one): everything but the geometry is news.
+        next.x = cur.x;
+        next.y = cur.y;
+        next.w = cur.w;
+        next.h = cur.h;
+      }
+    }
+    setWindows(idx, next);
   }
 }

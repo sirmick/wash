@@ -135,6 +135,12 @@ func registerAgentHandlers(b *sdk.Bus) {
 		log.Printf("edit: agent start tab=%s agent=%s cwd=%s req=%s", req.Tab, req.Agent, cwd, reqID)
 		return nil
 	})
+	sdk.HandleVoid(b, "agent.resync", func(_ *sdk.Conn, _ string, req agentKeyReq) error {
+		if cl := agentClient(); cl != nil {
+			return cl.Resync(req.Key)
+		}
+		return nil
+	})
 	sdk.HandleVoid(b, "agent.prompt", func(_ *sdk.Conn, _ string, req agentKeyReq) error {
 		if cl := agentClient(); cl != nil {
 			return cl.Prompt(req.Key, req.Text)

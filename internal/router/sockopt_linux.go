@@ -21,3 +21,21 @@ func setReuseAddr(_, _ string, c syscall.RawConn) error {
 	}
 	return serr
 }
+
+// setSendBuf pins a socket's send buffer (SO_SNDBUF), which also turns off
+// the kernel's autotuning for it — the point (shell_sndbuf.go). Linux
+// doubles the value for bookkeeping; the effective wire-side bound is the
+// value asked for.
+func setSendBuf(c syscall.Conn, bytes int) error {
+	raw, err := c.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var serr error
+	if err := raw.Control(func(fd uintptr) {
+		serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_SNDBUF, bytes)
+	}); err != nil {
+		return err
+	}
+	return serr
+}

@@ -16,6 +16,7 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { AgentAsk, AgentEvent, AgentStatus, TerminalAPI } from '@wash/ui';
+import { applyAgentEvent } from '@wash/ui';
 
 // One roster row as agentd publishes it; only the fields this pane reads.
 interface AgentRow {
@@ -388,6 +389,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // ---- BE I/O ----
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+  // Sessions with a transcript replay in flight (agent.resync); the
+  // snapshot clears it.
+  const agentResyncPending = new Set<string>();
 
   // Request/reply correlation + timeout live in @wash/fs-client's bus.ts
   // (unit-tested). idPrefix 'e' mints e-<n> ids (fm uses 'f'); handleBE
@@ -1134,6 +1138,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     if (m.kind === 'agent.snapshot') {
       const key = String(m.key ?? '');
+      agentResyncPending.delete(key);
       setAgentEvents({ ...agentEvents(), [key]: (m.events ?? []) as AgentEvent[] });
       return;
     }
@@ -1142,10 +1147,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       const ev = m.event as AgentEvent;
       const cur = agentEvents()[key] ?? [];
       // Same seq means the BE updated a row in place (a tool going
-      // pending → completed), not a new line.
-      const at = cur.findIndex((e) => e.seq === ev.seq);
-      const next = at >= 0 ? cur.map((e, i) => (i === at ? ev : e)) : [...cur, ev];
-      setAgentEvents({ ...agentEvents(), [key]: next });
+      // pending → completed), not a new line; a streamed reply's later
+      // chunks are deltas that append. A delta with no base means our
+      // copy is behind — ask for the history again, once.
+      const r = applyAgentEvent(cur, ev);
+      setAgentEvents({ ...agentEvents(), [key]: r.events });
+      if (r.gap && !agentResyncPending.has(key)) {
+        agentResyncPending.add(key);
+        send({ kind: 'agent.resync', key });
+      }
       return;
     }
     if (m.kind === 'agent.state') {

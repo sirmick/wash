@@ -94,6 +94,14 @@ type Event struct {
 	Channel uint32 `json:"channel,omitempty"`
 	// AtMS is wall-clock at first append, for the FE's own clock anchoring.
 	AtMS int64 `json:"at_ms"`
+	// Append marks a wire-only delta: Text is what was ADDED to the event
+	// with this Seq since the last emit, not the whole message. Never set
+	// on a stored or snapshotted event (transcript_emit.go).
+	Append bool `json:"append,omitempty"`
+	// TextLen is the message's byte length after this event applies, on
+	// message/thought events. A consumer applying a delta checks its own
+	// length + the delta against it, and asks for a replay on mismatch.
+	TextLen int `json:"text_len,omitempty"`
 }
 
 type transcript struct {
@@ -369,6 +377,7 @@ func transcriptLen(key string) int {
 func releaseTranscript(key string) {
 	// Let queued writes land before dropping the only other copy.
 	waitForTranscriptWrites()
+	dropEmitter(key)
 	transMu.Lock()
 	delete(trans, key)
 	transMu.Unlock()
@@ -388,15 +397,6 @@ type transcriptSnapshotMsg struct {
 // it must not be scheduled ahead of the frames that make the desktop
 // feel alive. Both halves of the stream ride the same class so the
 // snapshot cannot be overtaken by the events that follow it.
-func sendTranscriptSnapshot(conn *sdk.Conn, instanceID, key string) error {
-	for _, msg := range transcriptSnapshotMsgs(key, snapshot(key)) {
-		if err := conn.SendAppMsgToBulk(wire.Recipient{InstanceID: instanceID}, msg); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func transcriptSnapshotMsgs(key string, events []Event) []transcriptSnapshotMsg {
 	if len(events) == 0 {
 		return []transcriptSnapshotMsg{{Kind: "transcript_snapshot", Key: key, Reset: true}}
@@ -481,34 +481,6 @@ func transcriptSubscriberCount(key string) int {
 	return len(transSubs[key])
 }
 
-// pushEvent fans one event out to the windows watching that session.
-//
-// Liveness is the watcher's job, not this function's: SendAppMsgTo's error
-// path is the local transport, not per-recipient delivery. Router
-// instance.gone and transcriptWatchers expire stale recipients.
-//
-// Bulk class, for the same reason pty output is: a streamed reply is one
-// push per chunk, each carrying the message accumulated so far, so a
-// single paragraph is hundreds of frames and hundreds of kilobytes. At
-// Interactive that flood sat in front of the window moves and keystrokes
-// the human was making WHILE the agent typed. Bulk puts it behind them —
-// losslessly: the scheduler backpressures, it does not drop.
-//
-// The hop that actually shares a pipe with the desktop is wash-ai's
-// relay to its FE, and that one marks itself (apps/ai/be/app.go). This
-// call marks the stream at its source, so the class is the truth about
-// this traffic everywhere it goes rather than a label applied at the end.
-func pushEvent(conn *sdk.Conn, key string, e Event) {
-	for _, inst := range transcriptWatchers(key) {
-		_ = conn.SendAppMsgToBulk(wire.Recipient{InstanceID: inst}, map[string]any{
-			"kind":  "transcript_event",
-			"key":   key,
-			"event": e,
-		})
-	}
-}
-
-// registerTranscriptHandlers installs the per-session subscription verbs.
 func registerTranscriptHandlers(bus *sdk.Bus) {
 	sdk.HandleFromVoid(bus, "transcript_subscribe", func(conn *sdk.Conn, _ string, req transReq, from wire.Sender) error {
 		if from.InstanceID == "" || req.Key == "" {
