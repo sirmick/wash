@@ -1,5 +1,5 @@
 // The interaction layer — hover / press / focus feedback for everything
-// clickable in wash.
+// clickable in wash. Full write-up: docs/INTERACTION.md.
 //
 // WHY A STYLESHEET AND NOT PROPS. wash chrome styles through inline
 // `style={{}}` objects, and inline styles cannot express :hover / :active /

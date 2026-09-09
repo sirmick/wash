@@ -97,6 +97,41 @@ test.describe('interaction layer', () => {
     expect(Number(hot?.opacity)).toBeGreaterThan(0);
   });
 
+  test('hover polarity follows the pack, with no per-pack rule', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    const apps = 'button[title="Apps"]';
+    await page.locator(apps).hover();
+    await page.waitForTimeout(200);
+
+    // The whole claim of the hover treatment is that it derives its
+    // direction from the pack instead of declaring it: the tint is
+    // currentColor, which is near-white on the dark packs and near-black on
+    // the light ones (Seoul, NT). So the SAME rule lightens dark chrome and
+    // darkens light chrome. Drive it by moving --wash-fg the way a pack
+    // does, and check the overlay follows.
+    const read = () => page.evaluate((s) => {
+      const el = document.querySelector(s)!;
+      const cs = getComputedStyle(el, '::after');
+      return { tint: cs.backgroundColor, opacity: cs.opacity };
+    }, apps);
+
+    const onDark = await read();
+    await page.evaluate(() => document.documentElement.style.setProperty('--wash-fg', '#222222'));
+    await page.waitForTimeout(120);
+    const onLight = await read();
+    await page.evaluate(() => document.documentElement.style.removeProperty('--wash-fg'));
+
+    const lum = (c: string) => {
+      const [r, g, b] = c.match(/\d+/g)!.slice(0, 3).map(Number);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    // Same rule, same opacity — only the direction of the wash changes.
+    expect(onLight.opacity).toBe(onDark.opacity);
+    expect(lum(onDark.tint)).toBeGreaterThan(128);  // lightens dark chrome
+    expect(lum(onLight.tint)).toBeLessThan(128);    // darkens light chrome
+  });
+
   test('disabled controls stay inert', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
