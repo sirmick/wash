@@ -1,6 +1,10 @@
 package agentclient
 
-import "testing"
+import (
+	"sync"
+	"testing"
+	"time"
+)
 
 // Handle is the half worth testing without a live conn: it decides what an
 // agentd payload means and, crucially, WHICH session it belongs to. The
@@ -101,5 +105,123 @@ func TestForgetStopsRouting(t *testing.T) {
 	cl.Handle(map[string]any{"kind": "transcript_event", "key": "a"})
 	if n != 1 {
 		t.Errorf("delivered %d events, want 1 (the one before Forget)", n)
+	}
+}
+
+// The keepalive is the client's job, not each host's. agentd expires a
+// transcript watcher it has not heard from within WatcherTTL, so a host
+// that subscribes once and goes quiet stops receiving events after a
+// minute — the transcript freezes while the roster (kept alive by the
+// StateService itself) carries on. wash-edit's tabs never re-affirmed;
+// wash-ai did so only on two of its four attach paths.
+func TestWatchKeepsReaffirmingEveryWatchedKey(t *testing.T) {
+	var mu sync.Mutex
+	var sent []map[string]any
+	cl := New(nil, Handlers{})
+	cl.sendTo = func(m map[string]any) error {
+		mu.Lock()
+		sent = append(sent, m)
+		mu.Unlock()
+		return nil
+	}
+	cl.refresh = 5 * time.Millisecond
+	defer cl.Close()
+
+	// Two tabs, both watched: an editor hosts several at once, and every
+	// one of them must stay subscribed — not just the most recent.
+	if err := cl.Watch("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Watch("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	count := func(key string) (n int) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, m := range sent {
+			if m["kind"] == "transcript_subscribe" && m["key"] == key {
+				// A keepalive must not ask for a replay: agentd answers a
+				// repeat subscribe with nothing, which is the point.
+				if r, _ := m["replay"].(bool); r {
+					t.Errorf("keepalive for %s asked for a replay", key)
+				}
+				n++
+			}
+		}
+		return n
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && (count("a") < 3 || count("b") < 3) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if count("a") < 3 || count("b") < 3 {
+		t.Fatalf("keepalives a=%d b=%d after 2s, want the ticker to re-affirm both (refresh=%s)", count("a"), count("b"), cl.refresh)
+	}
+
+	// A forgotten key stops being re-affirmed: the session is untouched,
+	// but this host no longer claims to be watching it.
+	cl.Forget("b")
+	base := count("b")
+	time.Sleep(40 * time.Millisecond)
+	if got := count("b"); got != base {
+		t.Errorf("forgotten key kept being re-affirmed: %d → %d", base, got)
+	}
+}
+
+// Close ends the ticker. One goroutine per client, stopped once — never
+// one per Watch, which is the leak the old per-attach goroutine had.
+func TestCloseStopsTheKeepalive(t *testing.T) {
+	var mu sync.Mutex
+	n := 0
+	cl := New(nil, Handlers{})
+	cl.sendTo = func(m map[string]any) error {
+		mu.Lock()
+		n++
+		mu.Unlock()
+		return nil
+	}
+	cl.refresh = 2 * time.Millisecond
+	_ = cl.Watch("a")
+	_ = cl.Watch("a") // a second Watch must not start a second ticker
+	time.Sleep(30 * time.Millisecond)
+	cl.Close()
+	cl.Close() // idempotent
+	time.Sleep(10 * time.Millisecond)
+	mu.Lock()
+	after := n
+	mu.Unlock()
+	time.Sleep(30 * time.Millisecond)
+	mu.Lock()
+	later := n
+	mu.Unlock()
+	if later != after {
+		t.Errorf("keepalive kept sending after Close: %d → %d", after, later)
+	}
+	if after < 5 {
+		t.Errorf("only %d sends in 30ms at a 2ms refresh — the ticker never ran", after)
+	}
+}
+
+// The TTL and the refresh come from one place, so agentd and every host
+// read the same clock; the env seam shrinks both together for tests.
+func TestWatcherClockIsOneSeam(t *testing.T) {
+	t.Setenv(watcherTTLEnv, "")
+	if got := WatcherTTL(); got != defaultWatcherTTL {
+		t.Errorf("default TTL = %s, want %s", got, defaultWatcherTTL)
+	}
+	if got := WatcherRefresh(); got != defaultWatcherTTL/4 {
+		t.Errorf("default refresh = %s, want TTL/4", got)
+	}
+	t.Setenv(watcherTTLEnv, "2s")
+	if got := WatcherTTL(); got != 2*time.Second {
+		t.Errorf("TTL under env = %s, want 2s", got)
+	}
+	if got := WatcherRefresh(); got != 500*time.Millisecond {
+		t.Errorf("refresh under env = %s, want 500ms", got)
+	}
+	t.Setenv(watcherTTLEnv, "garbage")
+	if got := WatcherTTL(); got != defaultWatcherTTL {
+		t.Errorf("TTL under a bad env = %s, want the default", got)
 	}
 }

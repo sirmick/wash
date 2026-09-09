@@ -276,6 +276,13 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// Subscribe to the roster so the window can show adapters in the
 	// launcher and its own row's state in the status line.
 	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": sdk.StateServiceKindSubscribe})
+	// ONE transcript keepalive per window, from the start, whatever later
+	// sets the key. It used to be started by agent_started and attach only,
+	// so a window that reached its session through `select` (the roster
+	// row, the way the start menu's fresh window gets anywhere) never
+	// re-affirmed and went quiet after watcherTTL — and each of those two
+	// paths started another goroutine on the same conn.
+	go keepWatching(c)
 	if flagAgent == "" {
 		return
 	}
@@ -554,7 +561,6 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			"kind": "transcript_subscribe",
 			"key":  session.key,
 		})
-		go keepWatching(c)
 
 	case agentd.FocusKind:
 		// The human activated a notification about this session and agentd
@@ -589,7 +595,6 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			"kind": "transcript_subscribe",
 			"key":  session.key,
 		})
-		go keepWatching(c)
 
 	// history: agentd's answer to a panel query, forwarded verbatim. No
 	// session key involved — history is about sessions this window is
@@ -672,7 +677,9 @@ func onCloseRequested(c *sdk.Conn, win uint32) bool {
 //
 // agentd removes watchers on router instance.gone, and also expires one it
 // has not heard from as a backstop. Same TTL+keepalive shape the roster's
-// own rows use.
+// own rows use. Started exactly once, from onReady; it re-affirms whatever
+// key the window holds at each tick, so it does not matter which path
+// (start, attach, select, restore) set it.
 func keepWatching(c *sdk.Conn) {
 	t := time.NewTicker(agentd.WatcherRefresh)
 	defer t.Stop()

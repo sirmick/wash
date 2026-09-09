@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentclient"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -40,9 +41,14 @@ var maxTranscriptSnapshotBytes = wire.MaxPayload / 4
 // and the TTL remains as a backstop for any older or missed lifecycle path.
 // Watchers therefore re-affirm, exactly as the roster's own rows do, and one
 // that goes quiet is dropped.
-const (
-	watcherTTL     = 60 * time.Second
-	WatcherRefresh = 15 * time.Second
+//
+// Both numbers come from internal/agentclient, the host side of this
+// protocol, so the service and every host read one clock — and one env
+// seam (WASH_AGENT_WATCHER_TTL) shrinks it for tests that must prove a
+// watcher outlives its own expiry.
+var (
+	watcherTTL     = agentclient.WatcherTTL()
+	WatcherRefresh = agentclient.WatcherRefresh()
 )
 
 // Event kinds. Deliberately fewer than ACP's update variants: the
@@ -486,13 +492,7 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 		if from.InstanceID == "" || req.Key == "" {
 			return nil
 		}
-		transMu.Lock()
-		if transSubs[req.Key] == nil {
-			transSubs[req.Key] = map[string]time.Time{}
-		}
-		fresh := transSubs[req.Key][from.InstanceID].IsZero()
-		transSubs[req.Key][from.InstanceID] = time.Now()
-		transMu.Unlock()
+		fresh := affirmWatcher(req.Key, from.InstanceID, time.Now())
 		if !fresh && !req.Replay {
 			// A keepalive from a window that already has the history.
 			// Re-sending a whole transcript every 15s would be absurd.
@@ -527,6 +527,23 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 		transMu.Unlock()
 		return nil
 	})
+}
+
+// affirmWatcher records that instance is watching key as of now, and
+// reports whether that is news. A watcher the TTL already dropped counts
+// as fresh again — which is exactly what a keepalive that arrives late
+// must do: the window is still there, so it gets its snapshot back rather
+// than silence.
+func affirmWatcher(key, instance string, now time.Time) (fresh bool) {
+	transMu.Lock()
+	defer transMu.Unlock()
+	if transSubs[key] == nil {
+		transSubs[key] = map[string]time.Time{}
+	}
+	seen := transSubs[key][instance]
+	fresh = seen.IsZero() || now.Sub(seen) > watcherTTL
+	transSubs[key][instance] = now
+	return fresh
 }
 
 // forgetInstanceTranscripts drops every subscription held by a window that

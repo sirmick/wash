@@ -17,8 +17,10 @@ package agentclient
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
@@ -26,6 +28,35 @@ import (
 
 // AppID is agentd's app id — the recipient of everything sent here.
 const AppID = "com.wash.agentd"
+
+// defaultWatcherTTL is how long agentd keeps a transcript watcher it has
+// not heard from. The client re-affirms at a quarter of it, so three
+// keepalives can go missing before a window stops receiving events.
+const defaultWatcherTTL = 60 * time.Second
+
+// watcherTTLEnv shrinks the TTL (and with it the refresh) for tests that
+// must prove a watcher survives its own expiry without waiting a minute.
+// Read by agentd AND by every host, which inherit one router env, so the
+// two sides cannot disagree about the clock.
+const watcherTTLEnv = "WASH_AGENT_WATCHER_TTL"
+
+// WatcherTTL is agentd's expiry for a transcript watcher that has gone
+// quiet. Both ends of the protocol read it from here.
+func WatcherTTL() time.Duration {
+	if v := os.Getenv(watcherTTLEnv); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultWatcherTTL
+}
+
+// WatcherRefresh is how often a host re-affirms its transcript
+// subscriptions: a quarter of the TTL, so one missed keepalive costs
+// nothing.
+func WatcherRefresh() time.Duration {
+	return WatcherTTL() / 4
+}
 
 // Handlers is what a host wants to be told. Every callback is optional; a nil
 // one drops its message rather than panicking, so a host can adopt the parts
@@ -46,22 +77,90 @@ type Handlers struct {
 
 // Client relays to agentd over a host app's conn.
 type Client struct {
-	conn *sdk.Conn
-	h    Handlers
+	// sendTo and done are the conn, narrowed to what the client uses, so a
+	// test can stand in a recorder for the wire.
+	sendTo func(map[string]any) error
+	done   <-chan struct{}
+	h      Handlers
 
 	mu   sync.RWMutex
 	keys map[string]bool // sessions this host is subscribed to
 
 	seq atomic.Uint64
+
+	// keepalive re-affirms every watched key on a ticker. Started by the
+	// first Watch, once per client, and stopped by Close or the conn
+	// ending — never one goroutine per Watch, which is the leak wash-ai
+	// had when each attach started another.
+	keepOnce sync.Once
+	stop     chan struct{}
+	stopOnce sync.Once
+	// refresh is the keepalive period, WatcherRefresh() unless a test
+	// shortens it.
+	refresh time.Duration
 }
 
 // New builds a client. h may be zero — a host that only sends is legal.
 func New(c *sdk.Conn, h Handlers) *Client {
-	return &Client{conn: c, h: h, keys: map[string]bool{}}
+	cl := &Client{h: h, keys: map[string]bool{}, stop: make(chan struct{}), refresh: WatcherRefresh()}
+	if c != nil {
+		cl.sendTo = func(m map[string]any) error { return c.SendAppMsgTo(wire.Recipient{AppID: AppID}, m) }
+		cl.done = c.Done()
+	}
+	return cl
 }
 
 func (cl *Client) send(m map[string]any) error {
-	return cl.conn.SendAppMsgTo(wire.Recipient{AppID: AppID}, m)
+	if cl.sendTo == nil {
+		return nil
+	}
+	return cl.sendTo(m)
+}
+
+// Close stops the keepalive. The subscriptions themselves are agentd's to
+// expire; a host that is going away does not need to unsubscribe first.
+func (cl *Client) Close() {
+	cl.stopOnce.Do(func() { close(cl.stop) })
+}
+
+// keepWatching re-affirms every watched key at the refresh period.
+//
+// agentd drops a transcript watcher it has not heard from within
+// WatcherTTL — the router's instance.gone is the fast path, the TTL the
+// backstop. The subscribe verb IS the keepalive (a repeat from a known
+// instance sends no snapshot), so a host that subscribes once and goes
+// quiet stops receiving events after a minute while its roster
+// subscription, which the StateService keeps alive itself, carries on.
+// That is the "transcript freezes at the first event after 60 s" bug,
+// and it belongs to the client rather than to each host: wash-edit's
+// agent tabs never re-affirmed at all, and wash-ai re-affirmed only on
+// the two paths that happened to start a goroutine.
+func (cl *Client) keepWatching() {
+	t := time.NewTicker(cl.refresh)
+	defer t.Stop()
+	for {
+		select {
+		case <-cl.stop:
+			return
+		case <-cl.done:
+			return
+		case <-t.C:
+			for _, key := range cl.watched() {
+				_ = cl.send(map[string]any{"kind": "transcript_subscribe", "key": key})
+			}
+		}
+	}
+}
+
+// watched is a copy of the keys this host is subscribed to.
+func (cl *Client) watched() []string {
+	cl.mu.RLock()
+	defer cl.mu.RUnlock()
+	out := make([]string, 0, len(cl.keys))
+	for k := range cl.keys {
+		out = append(out, k)
+	}
+	return out
 }
 
 // SubscribeRoster asks agentd for roster pushes (adapters + session rows).
@@ -100,6 +199,7 @@ func (cl *Client) Watch(key string) error {
 	cl.mu.Lock()
 	cl.keys[key] = true
 	cl.mu.Unlock()
+	cl.keepOnce.Do(func() { go cl.keepWatching() })
 	return cl.send(map[string]any{"kind": "transcript_subscribe", "key": key})
 }
 
