@@ -24,7 +24,7 @@ import {
   Button, Checkbox, ConfirmDialog, Input,
   Menu, MenuItem, MenuSeparator, Tab, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
-  TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
+  TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_SCROLLBACK_LINES, TERM_THEMES, themeById,
   defineWashApp, tokens, WASH_SCROLL_CLASS,
 } from '@wash/ui';
 import type { PasteAnalysis, TermCursorStyle, TermModes, TermSearchOptions, TerminalAPI } from '@wash/ui';
@@ -259,6 +259,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // every mounted <Terminal>.
   const [cursorStyle, setCursorStyle] = createSignal<TermCursorStyle>('block');
   const [cursorBlink, setCursorBlink] = createSignal(true);
+  // Scrollback lines, desktop-wide. 0 is never stored — the BE treats it
+  // as "unset" — so the component's own default stands until a preference
+  // is written.
+  const [scrollback, setScrollback] = createSignal(TERM_SCROLLBACK_LINES);
   // ---- bell + activity ----
   //
   // bells: tabs that rang since you last looked at them. activity: tabs
@@ -759,27 +763,96 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (to !== undefined) focusGroup(to);
   };
 
-  // ---- font choice (window-wide, persisted) ----
+  // ---- appearance preferences (DESKTOP-wide, not per window) ----
+  //
+  // These used to live in this window's persisted blob, which made them
+  // per window: set a font, open a second terminal, get the default back.
+  // They now live in the BE's ~/.config/wash/term.json, which is also how
+  // they reach the other windows — wash-term is one process per window, so
+  // the file is the only channel they share (apps/term/be/prefs.go).
+  // Every setter applies LOCALLY at once (so the change is instant) and
+  // sends the patch; the echo back is a no-op, and the other windows'
+  // watches turn it into their own update.
+  const sendPrefs = (patch: Record<string, unknown>) => send({ kind: 'prefs_set', prefs: patch });
+  // prefsSeen: the BE has pushed the file at least once. Until then a
+  // restored window blob may still speak (the migration path).
+  let prefsSeen = false;
 
   const changeFontId = (id: string) => {
     if (fontId() === id) return;
     setFontId(id);
-    persist();
+    sendPrefs({ font_id: id });
   };
   const changeFontSize = (px: number) => {
     if (fontSize() === px) return;
     setFontSize(px);
-    persist();
+    sendPrefs({ font_size: px });
   };
-
-  // ---- theme (window-wide, persisted) ----
 
   // changeTheme pins a named palette by id, or undefined to follow the
   // desktop pack. The live switch reaches the mounted xterm via the
   // Terminal's `theme` prop effect — no remount.
   const changeTheme = (id: string | undefined) => {
     setThemeId(id);
-    persist();
+    // 'auto' is how "no pinned palette" travels: an absent key would mean
+    // "unchanged" to the BE's merge, which is the opposite.
+    sendPrefs({ theme_id: id ?? 'auto' });
+  };
+
+  const changeCursorStyle = (style: TermCursorStyle) => {
+    setCursorStyle(style);
+    sendPrefs({ cursor_style: style });
+  };
+  const changeCursorBlink = (on: boolean) => {
+    setCursorBlink(on);
+    sendPrefs({ cursor_blink: on });
+  };
+  const changeScrollback = (lines: number) => {
+    if (scrollback() === lines) return;
+    setScrollback(lines);
+    sendPrefs({ scrollback: lines });
+  };
+
+  // applyPrefs folds a BE push into the window. An absent key means "no
+  // preference stated", which is the default — never a reset of what this
+  // window already shows, so an older build's file can't blank the rest.
+  const applyPrefs = (p: Record<string, unknown>) => {
+    if (typeof p.font_id === 'string' && p.font_id) setFontId(p.font_id);
+    if (typeof p.font_size === 'number' && p.font_size > 0) setFontSize(p.font_size);
+    // theme_id absent = follow the pack, which IS a value here (the BE
+    // stores 'auto' as absent), so it is applied either way.
+    setThemeId(typeof p.theme_id === 'string' && p.theme_id ? p.theme_id : undefined);
+    if (p.smart_paste === 'ask' || p.smart_paste === 'always' || p.smart_paste === 'off') {
+      setSmartPaste(p.smart_paste);
+    }
+    if (p.cursor_style === 'block' || p.cursor_style === 'underline' || p.cursor_style === 'bar') {
+      setCursorStyle(p.cursor_style);
+    }
+    if (typeof p.cursor_blink === 'boolean') setCursorBlink(p.cursor_blink);
+    if (typeof p.scrollback === 'number' && p.scrollback > 0) setScrollback(p.scrollback);
+  };
+
+  // ---- zoom ----
+  //
+  // Ctrl+= / Ctrl+- / Ctrl+0 and Ctrl+wheel, the browser gesture, applied
+  // to the terminal font rather than to the page (which is the shell's and
+  // would zoom every window). Persisted like any other font change, so it
+  // is the same setting the Font menu shows.
+  const zoomBy = (delta: number) => stepFontSize(delta);
+  const zoomReset = () => changeFontSize(TERM_DEFAULT_FONT_SIZE);
+
+  // Scrollback steps by powers of two between 1k and 200k lines. Lines are
+  // allocated as they arrive, so a high ceiling costs nothing until it is
+  // used; the low end is for a machine where it isn't free.
+  const SCROLLBACK_MIN = 1_000;
+  const SCROLLBACK_MAX = 200_000;
+  const stepScrollback = (delta: number) => {
+    const next = delta > 0 ? scrollback() * 2 : Math.round(scrollback() / 2);
+    changeScrollback(Math.max(SCROLLBACK_MIN, Math.min(SCROLLBACK_MAX, next)));
+  };
+  const scrollbackLabel = (): string => {
+    const n = scrollback();
+    return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
   };
 
   // ---- menubar ----
@@ -847,7 +920,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const changeSmartPaste = (mode: SmartPaste) => {
     if (smartPaste() === mode) return;
     setSmartPaste(mode);
-    persist();
+    sendPrefs({ smart_paste: mode });
   };
 
   // ---- find in scrollback ----
@@ -1069,6 +1142,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (api) api.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
         return;
       }
+      case 'prefs': {
+        prefsSeen = true;
+        applyPrefs((m.prefs ?? {}) as Record<string, unknown>);
+        return;
+      }
       case 'path_probe_ok': {
         const done = pendingProbes.get(String(m.id));
         if (done) { pendingProbes.delete(String(m.id)); done(((m.ok ?? []) as string[]).map(String)); }
@@ -1185,12 +1263,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         color: tagColors().get(t.channelID),
       })),
       layout: toPersisted(tree()),
-      font_id: fontId(),
-      font_size: fontSize(),
-      theme_id: themeId(),
-      smart_paste: smartPaste(),
-      cursor_style: cursorStyle(),
-      cursor_blink: cursorBlink(),
+      // Appearance is NOT here any more — it is desktop-wide, in the BE's
+      // prefs file. The keys are still READ on restore, to migrate a blob
+      // written by an older build (see restoreFrom).
     };
     send({ kind: 'save_state', state });
   };
@@ -1205,19 +1280,35 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const restoreFrom = (s: PersistedState) => {
-    if (s.font_id) setFontId(s.font_id);
-    if (s.font_size) setFontSize(s.font_size);
-    // theme_id is the current field; fall back to the legacy `appearance`
-    // ('dark'/'light' map 1:1 to the same-named theme ids) so windows
-    // saved before named themes keep their palette.
-    if (s.theme_id) setThemeId(s.theme_id);
-    else if (s.appearance) setThemeId(s.appearance);
-    if (s.cursor_style === 'block' || s.cursor_style === 'underline' || s.cursor_style === 'bar') {
-      setCursorStyle(s.cursor_style);
-    }
-    if (typeof s.cursor_blink === 'boolean') setCursorBlink(s.cursor_blink);
-    if (s.smart_paste === 'ask' || s.smart_paste === 'always' || s.smart_paste === 'off') {
-      setSmartPaste(s.smart_paste);
+    // Appearance keys in a window blob are a MIGRATION path only: a window
+    // saved before these went desktop-wide carries them, and the first
+    // restore promotes them into the prefs file (where the BE's merge only
+    // takes keys that are actually present, so nothing else is disturbed).
+    // Once prefsSeen is true the file has spoken and the blob must not
+    // overwrite it — a stale blob would otherwise undo every change made
+    // from another window.
+    if (!prefsSeen) {
+      const migrate: Record<string, unknown> = {};
+      if (s.font_id) { setFontId(s.font_id); migrate.font_id = s.font_id; }
+      if (s.font_size) { setFontSize(s.font_size); migrate.font_size = s.font_size; }
+      // theme_id is the current field; fall back to the legacy `appearance`
+      // ('dark'/'light' map 1:1 to the same-named theme ids) so windows
+      // saved before named themes keep their palette.
+      const theme = s.theme_id ?? s.appearance;
+      if (theme) { setThemeId(theme); migrate.theme_id = theme; }
+      if (s.cursor_style === 'block' || s.cursor_style === 'underline' || s.cursor_style === 'bar') {
+        setCursorStyle(s.cursor_style);
+        migrate.cursor_style = s.cursor_style;
+      }
+      if (typeof s.cursor_blink === 'boolean') {
+        setCursorBlink(s.cursor_blink);
+        migrate.cursor_blink = s.cursor_blink;
+      }
+      if (s.smart_paste === 'ask' || s.smart_paste === 'always' || s.smart_paste === 'off') {
+        setSmartPaste(s.smart_paste);
+        migrate.smart_paste = s.smart_paste;
+      }
+      if (Object.keys(migrate).length) sendPrefs(migrate);
     }
     // The restored list may be stale (ptys that died while the
     // browser was detached); ask the BE for the live set and
@@ -1300,6 +1391,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       };
       const dir = arrows[k];
       if (dir) { ev.preventDefault(); focusDir(dir); return false; }
+    }
+    // Zoom: the browser's own gesture, aimed at the terminal font rather
+    // than at the page (zooming the page would take every other window
+    // with it). Shift is allowed on '+' because that is how '=' is typed
+    // on most layouts; every other modifier combination is left alone.
+    if (ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+      if (ev.key === '=' || ev.key === '+') { ev.preventDefault(); zoomBy(1); return false; }
+      if (ev.key === '-' || ev.key === '_') { ev.preventDefault(); zoomBy(-1); return false; }
+      if (ev.key === '0') { ev.preventDefault(); zoomReset(); return false; }
     }
     if (ev.ctrlKey && ev.key === 'Tab') {
       ev.preventDefault();
@@ -1702,6 +1802,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <Button variant="icon" data-testid="term-menu-size-inc" title="Larger font" style={stepBtnStyle} onClick={() => stepFontSize(1)}>+</Button>
           </div>
           <MenuSeparator />
+          {/* Scrollback: how much output a terminal keeps. Desktop-wide,
+              like the font — a per-window answer to "how much history do I
+              have" is not an answer. Halve / double rather than a free
+              number, because the useful range spans two orders of
+              magnitude and no one wants to type 20000. */}
+          <div style={sizeRowStyle}>
+            <span style={{ flex: 1 }}>Scrollback</span>
+            <Button variant="icon" data-testid="term-menu-scroll-dec" title="Less scrollback" style={stepBtnStyle} onClick={() => stepScrollback(-1)}>−</Button>
+            <span data-testid="term-menu-scroll-val" style={sizeValStyle}>{scrollbackLabel()}</span>
+            <Button variant="icon" data-testid="term-menu-scroll-inc" title="More scrollback" style={stepBtnStyle} onClick={() => stepScrollback(1)}>+</Button>
+          </div>
+          <MenuSeparator />
           <For each={TERM_FONTS}>
             {(f) => (
               <MenuItem
@@ -1722,7 +1834,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 label={c.label}
                 data-testid={`term-menu-cursor-${c.id}`}
                 trailing={cursorStyle() === c.id ? <Check size={12} /> : undefined}
-                onClick={run(() => { setCursorStyle(c.id); persist(); })}
+                onClick={run(() => changeCursorStyle(c.id))}
               />
             )}
           </For>
@@ -1731,7 +1843,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             label="Blink"
             data-testid="term-menu-cursor-blink"
             trailing={cursorBlink() ? <Check size={12} /> : undefined}
-            onClick={run(() => { setCursorBlink(!cursorBlink()); persist(); })}
+            onClick={run(() => changeCursorBlink(!cursorBlink()))}
           />
         </Menu>
       </Show>
@@ -1765,6 +1877,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         data-testid="term-stage"
         ref={(el) => { stageEl = el; }}
         style={{ flex: 1, position: 'relative', 'min-height': 0, overflow: 'hidden' }}
+        onWheel={(ev) => {
+          // Ctrl+wheel zooms the terminal font. Taken here rather than in
+          // <Terminal> because the size is window-wide: one wheel notch
+          // should not resize only the pane the pointer happens to be over.
+          if (!ev.ctrlKey || ev.altKey || ev.metaKey) return;
+          ev.preventDefault();
+          zoomBy(ev.deltaY < 0 ? 1 : -1);
+        }}
       >
         <For each={tabs()}>
           {(tab) => {
@@ -1814,6 +1934,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   beforePaste={beforePaste}
                   cursorStyle={cursorStyle()}
                   cursorBlink={cursorBlink()}
+                  scrollback={scrollback()}
                   onBell={() => onBell(tab.channelID)}
                   onActivity={() => onActivity(tab.channelID)}
                   links={{

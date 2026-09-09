@@ -525,6 +525,10 @@ export interface TerminalProps {
   // live. Defaults: a blinking block, which is what xterm does anyway.
   cursorStyle?: TermCursorStyle;
   cursorBlink?: boolean;
+  // scrollback overrides TERM_SCROLLBACK_LINES — the desktop-wide
+  // preference. Applied live, so raising it keeps what is already there
+  // and lowering it trims from the top.
+  scrollback?: number;
   // onBell fires on BEL (\a) from the program. The component draws
   // nothing itself — what a bell should LOOK like is the consumer's
   // (a pane flash, a tab badge, a window attention flag).
@@ -873,7 +877,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       // away on arrival — ~80 KB at 80 columns — so the retained history
       // is raised to match. Lines are allocated as they arrive, so an
       // idle terminal pays nothing for the higher ceiling.
-      scrollback: TERM_SCROLLBACK_LINES,
+      scrollback: props.scrollback ?? TERM_SCROLLBACK_LINES,
       allowProposedApi: true,
       wordSeparator: TERM_WORD_SEPARATORS,
     });
@@ -986,6 +990,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       if (!term) return;
       term.options.cursorStyle = props.cursorStyle ?? 'block';
       term.options.cursorBlink = props.cursorBlink ?? true;
+      term.options.scrollback = props.scrollback ?? TERM_SCROLLBACK_LINES;
     });
     term.open(hostEl);
     // The left/right inset (so the first and last columns aren't jammed

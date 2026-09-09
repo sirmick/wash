@@ -390,6 +390,10 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	registerHandlers(bus)
 	go openTabExec(c, windowID, 80, 24, nil, "", openDir)
 	go pollTabStatus(c)
+	// Desktop-wide prefs: push what is on disk, then keep pushing when
+	// another terminal window changes it (apps/term/be/prefs.go).
+	pushPrefs(c, true)
+	watchPrefs(c)
 }
 
 // pollTabStatus walks every live PTY's foreground process group once a
@@ -477,6 +481,11 @@ type execTabReq struct {
 	Cwd  string   `json:"cwd,omitempty"`
 }
 
+// prefsSetReq is a partial preferences update from the FE.
+type prefsSetReq struct {
+	Prefs termPrefs `json:"prefs"`
+}
+
 // bellReq is a BEL from one tab's program.
 type bellReq struct {
 	ChannelID uint64 `json:"channel_id"`
@@ -554,6 +563,14 @@ func registerHandlers(b *sdk.Bus) {
 		st.mu.Unlock()
 		// Deduped FE-side (one line per change, not per prompt).
 		log.Printf("wash-term tab cwd ch=%d cwd=%q", req.ChannelID, req.Cwd)
+		return nil
+	})
+	// prefs_set: the FE changed a desktop-wide preference (font, palette,
+	// smart-paste mode, cursor, scrollback). Merged into the file and
+	// pushed back; every OTHER terminal window picks it up through its
+	// watch on the file.
+	sdk.HandleVoid(b, "prefs_set", func(c *sdk.Conn, _ string, req prefsSetReq) error {
+		setPrefs(c, req.Prefs)
 		return nil
 	})
 	// bell: a program in this tab rang BEL. The window asks for the human;
