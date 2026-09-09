@@ -632,3 +632,23 @@ Ctrl+X, Ctrl+V did the same for a user.
 
 **Fixed** in 45a4154c by mirroring the clipboard locally before the
 send (the echo carries the identical state). Full suite after: 524/524.
+
+## 2026-09-09 — `net-vm-gate` "VM-served wash UI round-trips a model edit": load, once
+
+Seen at the tail of `make all-test` for 0.14.4, after the KVM net matrix
+and vm-net-test had run back to back: the proxy page showed "served from
+VM" but `wash-app-session` never mounted inside the 40 s budget — the
+guest shell iframe stayed blank. Every other tier was green (Go unit,
+158 component, 561 e2e, 31 standalone-smoke, net-matrix, vm-net-test).
+
+**A/B**: `make e2e-vm` alone on the identical build → 2 passed in 6.1 s
+(the failing run had taken 43 s just to time out). The change set under
+suspicion (the apps sweep: editor/fm/term/agent) does not touch the VM
+image, the proxy, netd or the net app; the shell change in it (an OS
+file-drop guard) ran 561 times in the ordinary suite.
+
+**Mechanism, most likely**: a cold guest booting the full stack while the
+host is still digesting the previous VM tiers; the 40 s budget is the
+whole shell-over-the-wire boot. Not fixed here — one occurrence, green
+on re-run; if it recurs the fix is the budget or serialising the VM
+tiers, not the test's intent.
