@@ -454,10 +454,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- BE comms ----
 
-  const sendList = (p: string) => {
+  // Listing requests are correlated (bus.request) so a failure can be
+  // attributed to the path that failed — list_err carries no path — and
+  // deduped per path while one is in flight. A request that arrives
+  // while the same path is already being listed is coalesced; if it was
+  // a REFRESH (invalidateAndList) the path is listed once more after the
+  // in-flight reply lands, since that reply may predate the change that
+  // asked for the refresh. Entries older than LIST_INFLIGHT_STALE_MS are
+  // ignored so a lost reply can never wedge a directory.
+  const LIST_INFLIGHT_STALE_MS = 30_000;
+  const listInFlight = new Map<string, { again: boolean; at: number }>();
+  const requestList = (p: string, refresh: boolean) => {
     pendingNav = p;
-    send({ kind: 'list', path: p });
+    const cur = listInFlight.get(p);
+    if (cur && Date.now() - cur.at < LIST_INFLIGHT_STALE_MS) {
+      if (refresh) cur.again = true;
+      return;
+    }
+    listInFlight.set(p, { again: false, at: Date.now() });
+    void sendWithReply({ kind: 'list', path: p }, LIST_INFLIGHT_STALE_MS).then((reply) => {
+      const entry = listInFlight.get(p);
+      listInFlight.delete(p);
+      if (reply.kind === 'list_ok') onListOk(reply);
+      else onListErr(p, reply);
+      if (entry?.again) requestList(p, true);
+    });
   };
+  // sendList fetches a directory we have no listing for; invalidateAndList
+  // re-lists one we do. Both keep whatever listing is cached until the
+  // fresh one arrives (see invalidateAndList).
+  const sendList = (p: string) => requestList(p, false);
   const sendRead = (p: string) => {
     setPreviewContent({ binary: false, size: 0, text: 'loading…', truncated: false });
     send({ kind: 'read', path: p });
@@ -549,45 +575,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setOpenExts(new Set(raw.map((e) => e.replace(/^\./, '').toLowerCase())));
         return;
       }
-      case 'list_ok': {
-        const p = String(m.path);
-        const entries = m.entries as Entry[];
-        setListings(p, entries);
-        expandDir(p);
-        if (!rootInitialized()) {
-          setRootInitialized(true);
-          setHome(p);
-          // Only adopt this path as the current location if the user
-          // hasn't already navigated. Otherwise the late initial
-          // list_ok would stomp a navigation that ran while the
-          // request was in flight. The path-input value is gated
-          // separately on the input being untouched, so a user who
-          // typed but hasn't hit Enter yet doesn't lose their entry.
-          if (!path()) {
-            setPath(p);
-            setNavHistory(initAt(p));
-            if (!pathInputValue()) setPathInputValue(p);
-          }
-          setSelectedEntry(findEntry(path() || p));
-          setSelectedPath(path() || p);
-          expandPath(path() || p);
-        } else if (parentPath(path()) === p) {
-          // Parent listing just arrived — refresh the selection's
-          // entry metadata (info pane, etc.) which was stale while
-          // we were navigating with no parent listing in hand.
-          const fresh = findEntry(path());
-          if (fresh) {
-            setSelectedEntry(fresh);
-            setSelectedPath(path());
-          }
-        }
-        pendingNav = null;
+      case 'list_ok':
+        // Unsolicited (the BE's initial paint / request_initial); the
+        // correlated replies to requestList resolve through the bus and
+        // reach onListOk directly.
+        onListOk(m);
         return;
-      }
       case 'list_err':
-        // outside_root is expected in sandbox mode when expandPath
-        // probes ancestors above WASH_FM_ROOT. Don't pollute the
-        // status bar with that — it's the BE doing its job.
+        // Unsolicited failure with no path to attribute it to.
         if (m.code !== 'outside_root') {
           setStatusOverride(`error: ${String(m.msg)}`);
         }
@@ -688,6 +683,63 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         return;
       }
     }
+  };
+
+  // onListOk swaps in a directory's fresh listing (replacing whatever was
+  // cached — rows whose content is unchanged keep their DOM, see the
+  // <FileTree> identity-stabilising layer).
+  const onListOk = (m: BEMessage) => {
+    const p = String(m.path);
+    const entries = m.entries as Entry[];
+    setListings(p, entries);
+    expandDir(p);
+    if (!rootInitialized()) {
+      setRootInitialized(true);
+      setHome(p);
+      // Only adopt this path as the current location if the user
+      // hasn't already navigated. Otherwise the late initial
+      // list_ok would stomp a navigation that ran while the
+      // request was in flight. The path-input value is gated
+      // separately on the input being untouched, so a user who
+      // typed but hasn't hit Enter yet doesn't lose their entry.
+      if (!path()) {
+        setPath(p);
+        setNavHistory(initAt(p));
+        if (!pathInputValue()) setPathInputValue(p);
+      }
+      setSelectedEntry(findEntry(path() || p));
+      setSelectedPath(path() || p);
+      expandPath(path() || p);
+    } else if (parentPath(path()) === p) {
+      // Parent listing just arrived — refresh the selection's
+      // entry metadata (info pane, etc.) which was stale while
+      // we were navigating with no parent listing in hand.
+      const fresh = findEntry(path());
+      if (fresh) {
+        setSelectedEntry(fresh);
+        setSelectedPath(path());
+      }
+    }
+    pendingNav = null;
+  };
+
+  // onListErr is the one place a cached listing is dropped: the
+  // directory could not be listed (gone, unreadable, outside the
+  // sandbox), so its rows — and any expanded subtree under it — go.
+  const onListErr = (p: string, m: BEMessage) => {
+    // A directory we HAD is gone/unreadable: drop it and everything under
+    // it. One we never had (an ancestor probe above the sandbox root, a
+    // path-bar typo) only loses its expansion flag — its descendants may
+    // well be the live tree (the sandbox root sits under a probed ancestor).
+    if (listings[p]) dropSubtreeState(p);
+    else collapseDir(p);
+    // outside_root is expected in sandbox mode when expandPath
+    // probes ancestors above WASH_FM_ROOT. Don't pollute the
+    // status bar with that — it's the BE doing its job.
+    if (m.code !== 'outside_root') {
+      setStatusOverride(`error: ${String(m.msg)}`);
+    }
+    pendingNav = null;
   };
 
   // ---- navigation ----
@@ -866,10 +918,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (par !== p) navigateTo(par);
   };
 
-  const invalidateAndList = (p: string) => {
-    setListings(produce((s) => { delete s[p]; }));
-    sendList(p);
-  };
+  // invalidateAndList re-lists p. The cached listing is KEPT until the
+  // fresh one lands (swap on list_ok, drop only on list_err). Deleting it
+  // first — the old behaviour — made flattenTree stop at the missing
+  // listing, so every fs.watch tick unmounted the directory's rows and
+  // remounted them as new DOM: flicker, a scroll jump, clicks racing the
+  // rebuild, spurious ghost-selection logs, and a re-rooted tree when `/`
+  // was the one refreshed.
+  const invalidateAndList = (p: string) => requestList(p, true);
 
   // viewDir is the directory the tree is showing — the folder itself
   // when path() is a (listed or known) directory, else the folder that
