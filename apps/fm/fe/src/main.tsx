@@ -43,6 +43,7 @@ import {
   type ClipboardState, parseClipboardState, planPaste, pasteStatus,
 } from './clipboard.ts';
 import { nextSelection, rekeyPath, rekeySelection, successorAfterRemoval } from './selection.ts';
+import { arrowLeft, arrowRight, nextRow, pageSizeFor, type NavRow, type VerticalMove } from './keynav.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -962,6 +963,109 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     selectionAnchor = result.anchor;
     setSelectedEntry(entry);
     setSelectedPath(p);
+  };
+
+  // ---- keyboard row navigation ----
+  //
+  // The cursor row is the selection's focus (selectedPath — the row a
+  // click, or an arrow key, last landed on). The pure next-row / page /
+  // expand decisions live in ./keynav.ts (unit-tested); this layer applies
+  // them with the same side effects a click has, and keeps the cursor row
+  // scrolled into view.
+  const cursorPath = (): string | null => {
+    const p = selectedPath();
+    if (p && flatRows().some((r) => r.path === p)) return p;
+    // A folder the user navigated into is bold but not selected; use it
+    // as the starting point so the first arrow press moves from there.
+    const cur = path();
+    return cur && flatRows().some((r) => r.path === cur) ? cur : null;
+  };
+  const keyRows = (): NavRow[] =>
+    flatRows().map((r) => ({ path: r.path, depth: r.depth, isDir: isDirLike(r.entry), expanded: !!expanded[r.path] }));
+  const listEl = (): HTMLElement | null => props.host.querySelector('[data-testid="fm-list"]');
+  const scrollRowIntoView = (p: string) => {
+    const row = listEl()?.querySelector(`[data-path="${CSS.escape(p)}"]`);
+    (row as HTMLElement | null)?.scrollIntoView({ block: 'nearest' });
+  };
+  const pageSize = (): number => {
+    const el = listEl();
+    const row = el?.querySelector('[data-path]') as HTMLElement | null;
+    return pageSizeFor(el?.clientHeight ?? 0, row?.offsetHeight ?? 0);
+  };
+  // moveCursorTo lands the cursor on row p. `extend` (Shift) grows the
+  // range from the anchor instead of replacing the selection — the
+  // keyboard analogue of a Shift-click.
+  const moveCursorTo = (p: string, extend: boolean) => {
+    const row = flatRows().find((r) => r.path === p);
+    if (!row) return;
+    const entry = row.entry;
+    const result = nextSelection(
+      { selection: selection(), anchor: selectionAnchor },
+      p,
+      flatRows().map((r) => r.path),
+      { shift: extend, ctrlOrMeta: false },
+    );
+    applySelection(result.selection, extend ? 'key-extend' : 'key-move');
+    selectionAnchor = result.anchor;
+    setSelectedEntry(entry);
+    setSelectedPath(p);
+    setGridDir(isDirLike(entry) ? p : '');
+    setStatusOverride(null);
+    if (entry.type === 'file') {
+      setPath(p);
+      setPathInputValue(p);
+      if (!extend) sendRead(p);
+    } else if (isDirLike(entry) && !listings[p]) {
+      sendList(p);
+    }
+    scrollRowIntoView(p);
+  };
+  // toggleCursorRow is Space: flip the cursor row in/out of the selection
+  // without moving it (the keyboard Ctrl-click).
+  const toggleCursorRow = () => {
+    const p = cursorPath();
+    if (!p) return;
+    const result = nextSelection(
+      { selection: selection(), anchor: selectionAnchor },
+      p,
+      flatRows().map((r) => r.path),
+      { shift: false, ctrlOrMeta: true },
+    );
+    applySelection(result.selection, 'key-toggle');
+    selectionAnchor = result.anchor;
+  };
+  const keyVertical = (move: VerticalMove, extend: boolean) => {
+    const next = nextRow(keyRows(), cursorPath(), move, pageSize());
+    if (next) moveCursorTo(next, extend);
+  };
+  const keyHorizontal = (dir: 'left' | 'right') => {
+    const rows = keyRows();
+    const d = dir === 'right' ? arrowRight(rows, cursorPath()) : arrowLeft(rows, cursorPath());
+    switch (d.kind) {
+      case 'expand':
+        expandDir(d.path);
+        if (!listings[d.path]) sendList(d.path);
+        persist();
+        return;
+      case 'collapse':
+        collapseDir(d.path);
+        persist();
+        return;
+      case 'move':
+        moveCursorTo(d.path, false);
+        return;
+    }
+  };
+  // activateCursorRow is Enter: a file opens exactly as a double-click
+  // does (registered app, else the preview); a folder toggles expansion.
+  const activateCursorRow = () => {
+    const p = cursorPath();
+    if (!p) return;
+    const entry = findEntry(p);
+    if (!entry) return;
+    if (entry.type === 'symlink' && !isDirLike(entry)) { followSymlink(entry, p); return; }
+    if (isDirLike(entry)) { toggleExpand(p); return; }
+    openFile(p);
   };
 
   const navigateTo = (p: string) => selectPath(p || '/', true);
@@ -2401,9 +2505,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           goUp();
           return;
         }
-        if (ev.key === 'Enter' && sel.size === 1) {
+        // Row navigation (keynav.ts). Shift extends the range.
+        const vertical: Record<string, VerticalMove> = {
+          ArrowUp: 'up', ArrowDown: 'down', PageUp: 'pageUp', PageDown: 'pageDown', Home: 'home', End: 'end',
+        };
+        if (vertical[ev.key]) {
           ev.preventDefault();
-          selectPath(Array.from(sel)[0], true);
+          keyVertical(vertical[ev.key], ev.shiftKey);
+          return;
+        }
+        if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
+          ev.preventDefault();
+          keyHorizontal(ev.key === 'ArrowRight' ? 'right' : 'left');
+          return;
+        }
+        if (ev.key === ' ' && cursorPath()) {
+          ev.preventDefault();
+          toggleCursorRow();
+          return;
+        }
+        if (ev.key === 'Enter') {
+          // Enter on a FILE opens it (the double-click path); on a folder
+          // it toggles expansion. It used to navigate into the selection,
+          // which for a file only previewed it.
+          ev.preventDefault();
+          activateCursorRow();
           return;
         }
         if (ev.key === 'Escape' && sel.size > 0) {

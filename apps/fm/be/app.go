@@ -357,8 +357,12 @@ func registerHandlers(b *sdk.Bus) {
 	sdk.HandleVoid(b, "open", func(conn *sdk.Conn, _ string, req openReq) error {
 		abs, err := fmFS.Confine(req.Path)
 		if err != nil {
+			log.Printf("fm: open path=%q: %v", req.Path, err)
 			return fsErr(err, req.Path)
 		}
+		// Audit line: the router logs only FAILED opens, so this is the
+		// durable trace that a double-click / Enter reached open routing.
+		log.Printf("fm: open path=%q", abs)
 		return conn.OpenPath(abs)
 	})
 
