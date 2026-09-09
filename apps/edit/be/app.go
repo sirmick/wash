@@ -26,10 +26,12 @@ import (
 	"context"
 	"embed"
 	"github.com/sirmick/wash/internal/version"
+	"io"
 	"io/fs"
 	"log"
 	"os"
 	"sync"
+	"unicode/utf8"
 
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/pty"
@@ -107,6 +109,9 @@ func init() {
 		},
 		Assets:  sub,
 		OnReady: onReady,
+		// The FE owns the dirty state, so the close handshake is answered
+		// there: see onCloseRequested.
+		OnCloseRequested: onCloseRequested,
 		// Installed BEFORE the bus, so NewBus captures it as the chain
 		// target: agentd's replies (transcript_snapshot, transcript_event,
 		// agent_started, state) have no bus handler of their own and fall
@@ -233,12 +238,26 @@ func registerHandlers(b *sdk.Bus) {
 		return doRead(req.Path)
 	})
 
-	sdk.Handle(b, "write", func(_ *sdk.Conn, _ string, req wfs.WriteReq) (wfs.WriteReply, error) {
+	sdk.Handle(b, "write", func(c *sdk.Conn, _ string, req wfs.WriteReq) (wfs.WriteReply, error) {
 		abs, n, err := editFS.Write(req.Path, []byte(req.Content), maxWriteBytes)
 		if err != nil {
+			// A save that fails is the one thing an editor must never be
+			// quiet about: the buffer looks saved and is not. The FE puts
+			// it in the status bar; the toast reaches a user who has
+			// already switched windows.
+			log.Printf("wash-edit: write failed path=%q: %v", req.Path, err)
+			c.Warn("Save failed", err.Error())
 			return wfs.WriteReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 		}
 		return wfs.WriteReply{Path: abs, Bytes: n}, nil
+	})
+
+	// close_window_confirmed: the FE has established that nothing unsaved
+	// remains (or the user chose to discard it). An unsolicited
+	// confirm_close(allow=true) runs the same teardown as a confirmed
+	// titlebar click — the term app's pattern (WIRE.md §10).
+	sdk.HandleVoid(b, "close_window_confirmed", func(c *sdk.Conn, _ string, _ struct{}) error {
+		return c.ConfirmClose(c.WindowID(), true)
 	})
 
 	sdk.Handle(b, "rename", func(_ *sdk.Conn, _ string, req wfs.RenameReq) (wfs.RenameReply, error) {
@@ -369,25 +388,52 @@ func doRead(path string) (wfs.ReadReply, error) {
 		return wfs.ReadReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 	}
 	defer f.Close()
+	// ReadFull rather than one Read: a FUSE or network file may return
+	// short reads, and a short first read used to be mistaken for the
+	// whole file.
 	buf := make([]byte, maxReadBytes)
-	n, err := f.Read(buf)
-	if err != nil && n == 0 && info.Size() != 0 {
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		return wfs.ReadReply{}, sdk.Err{Code: sdk.ErrIO, Msg: err.Error()}
 	}
 	buf = buf[:n]
 	truncated := info.Size() > int64(n)
-	binary := wfs.LooksBinary(buf)
-	content := ""
-	if !binary {
-		content = string(buf)
+	reply := wfs.ReadReply{Path: abs, Size: info.Size(), Truncated: truncated}
+	// Anything the editor cannot faithfully write back is delivered
+	// without content and with the reason, so the FE shows a placeholder
+	// instead of a buffer whose save would destroy the file: a binary
+	// save used to write an empty document, a >cap save used to write
+	// the truncated prefix, and a Latin-1 save used to persist U+FFFD.
+	switch {
+	case wfs.LooksBinary(buf):
+		reply.Binary = true
+		reply.Blocked = wfs.BlockedBinary
+	case truncated:
+		reply.Blocked = wfs.BlockedTooLarge
+	case !utf8.Valid(buf):
+		reply.Blocked = wfs.BlockedEncoding
+	default:
+		reply.Content = string(buf)
 	}
-	return wfs.ReadReply{
-		Path:      abs,
-		Content:   content,
-		Size:      info.Size(),
-		Binary:    binary,
-		Truncated: truncated,
-	}, nil
+	return reply, nil
+}
+
+// onCloseRequested answers the router's close handshake (WIRE.md §10).
+// Only the FE knows whether a tab is dirty, so the answer is always an
+// immediate veto plus a question to the FE, which replies with
+// close_window_confirmed once it has nothing unsaved (straight away when
+// every tab is clean, after the Save / Don't save / Cancel dialog when
+// not). Answering "no" first is what makes a dialog possible at all: the
+// router force-kills an app that leaves the handshake open past its
+// grace period, which is far too short to read a question in.
+func onCloseRequested(c *sdk.Conn, win uint32) bool {
+	if err := c.SendAppMsg(map[string]any{"kind": "close_blocked", "scope": "window"}); err != nil {
+		// No FE to ask means nobody is typing into it either; honour the
+		// click rather than leave a window that refuses to shut.
+		log.Printf("wash-edit close prompt: %v", err)
+		return true
+	}
+	return false
 }
 
 const editIcon = "file-pen"

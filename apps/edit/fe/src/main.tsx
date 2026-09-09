@@ -233,6 +233,15 @@ interface Tab {
   baseline: string;
   state: EditorState | null;
   binary: boolean;
+  // Why the tab is a placeholder rather than a buffer, when it is one.
+  // Such a tab is never written back: a save used to write an empty
+  // document over a binary, the truncated prefix over a large file,
+  // and U+FFFD over Latin-1. Binary stays as the legacy alias.
+  blocked?: Blocked;
+  // On-disk size, for the too-large placeholder.
+  size?: number;
+  // Line endings on disk. The buffer is always LF; see toDisk.
+  eol?: Eol;
   // Last-seen vertical scroll for this tab; captured at tab-switch.
   // Restored on switch back so each tab keeps its scroll position
   // alongside its EditorState (which already holds cursor/undo).
@@ -254,6 +263,46 @@ interface Tab {
   // back to disk.
   wysCache?: string;
 }
+
+type Blocked = 'binary' | 'too_large' | 'encoding';
+
+// blockedOf reads the BE's read-only reason off a read_ok, falling back
+// to the legacy binary flag for replies that predate `blocked`.
+const blockedOf = (r: Record<string, unknown>): Blocked | undefined => {
+  const b = r.blocked;
+  if (b === 'binary' || b === 'too_large' || b === 'encoding') return b;
+  return r.binary ? 'binary' : undefined;
+};
+
+// Line endings. CodeMirror splits on \r\n on load and joins with \n, so
+// the buffer is always LF and a CRLF file used to be rewritten as LF on
+// its first save — and never went clean, since the raw baseline still
+// held the \r bytes. The eol is remembered per tab and re-applied on the
+// way out; baselines are kept in buffer form so the dirty compare and the
+// changed-on-disk compare see the same bytes the editor does.
+type Eol = 'lf' | 'crlf';
+const detectEol = (raw: string): Eol => (raw.includes('\r\n') ? 'crlf' : 'lf');
+const toBuffer = (raw: string): string => raw.replace(/\r\n/g, '\n');
+const toDisk = (text: string, eol: Eol | undefined): string =>
+  (eol === 'crlf' ? text.replace(/\r?\n/g, '\r\n') : text);
+
+// readOnlyText is the status-bar / placeholder wording for a blocked tab.
+const readOnlyText = (t: Tab): string => {
+  switch (t.blocked) {
+    case 'binary': return 'binary file — not editable here';
+    case 'too_large': return `${formatSize(t.size ?? 0)} is over the editor's ${formatSize(MAX_EDIT_BYTES)} cap — not editable here`;
+    case 'encoding': return 'not valid UTF-8 — not editable here (saving would corrupt it)';
+    default: return '';
+  }
+};
+
+// Mirrors the BE's maxReadBytes; only used for wording.
+const MAX_EDIT_BYTES = 4 * 1024 * 1024;
+const formatSize = (n: number): string => {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KiB`;
+  return `${n} B`;
+};
 
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   // ---- reactive state ----
@@ -287,6 +336,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // tab with unsaved edits has had its file modified externally; the
   // user chooses Reload (discard edits, load disk content) or Keep.
   // Clean tabs reload silently and never reach this signal.
+  // statusError is the status bar's one-line error surface: a failed
+  // save, a file that would not open, a read-only tab the user tried to
+  // save. Cleared by the next successful save or a tab switch.
+  const [statusError, setStatusError] = createSignal<string | null>(null);
+  // pendingClose is the Save / Don't save / Cancel prompt for a dirty
+  // tab (Ctrl+W, the ×) or for the whole window (the titlebar close,
+  // relayed by the BE as close_blocked).
+  const [pendingClose, setPendingClose] = createSignal<
+    { scope: 'window' } | { scope: 'tab'; tabID: string } | null
+  >(null);
   const [reloadPrompt, setReloadPrompt] = createSignal<
     | null
     | { tabID: string; displayName: string; diskContent: string }
@@ -427,17 +486,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       return;
     }
     const reply = await sendWithReply({ kind: 'read', path });
-    if (reply.kind !== 'read_ok') return;
-    const binary = !!reply.binary;
-    const content = binary ? '' : String(reply.content ?? '');
+    if (reply.kind !== 'read_ok') {
+      // Permission denied, vanished, a directory: say so where the
+      // user is looking instead of silently doing nothing.
+      setStatusError(`cannot open ${baseName(path) || path}: ${String(reply.msg ?? reply.kind)}`);
+      return;
+    }
+    const blocked = blockedOf(reply);
+    const raw = blocked ? '' : String(reply.content ?? '');
     const tab: Tab = {
       id: path,
       path,
       displayName: baseName(path) || path,
-      baseline: content,
+      baseline: toBuffer(raw),
       state: null,
-      binary,
-      mode: !binary && isMarkdownPath(path) ? 'wysiwyg' : 'source',
+      binary: blocked === 'binary',
+      blocked,
+      size: typeof reply.size === 'number' ? reply.size : undefined,
+      eol: blocked ? undefined : detectEol(raw),
+      mode: !blocked && isMarkdownPath(path) ? 'wysiwyg' : 'source',
     };
     setTabs([...tabs(), tab]);
     setActiveID(tab.id);
@@ -460,8 +527,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // edits show up in the diff. baseline is what's on disk.
     const newContent = editorView.state.doc.toString();
     const reply = await sendWithReply({ kind: 'read', path: otherPath });
-    if (reply.kind !== 'read_ok' || reply.binary) return;
-    const otherContent = String(reply.content ?? '');
+    if (reply.kind !== 'read_ok' || blockedOf(reply)) return;
+    const otherContent = toBuffer(String(reply.content ?? ''));
     captureActiveState();
     const id = `diff-${otherPath}-vs-${cur.path || cur.displayName}`;
     const existing = tabs().find((t) => t.id === id);
@@ -570,27 +637,81 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return t.baseline;
   };
 
-  const saveActive = async () => {
-    const t = activeTab();
-    if (!t) return;
+  // saveTab writes one tab. 'needs_path' means the picker was opened
+  // for an Untitled buffer and the write happens in pickerConfirm;
+  // 'failed' means the status bar already says why. Callers that go on
+  // to close something must stop on anything but 'ok'.
+  const saveTab = async (t: Tab): Promise<'ok' | 'failed' | 'needs_path'> => {
+    if (t.blocked) {
+      setStatusError(`${t.displayName}: ${readOnlyText(t)}`);
+      return 'failed';
+    }
     if (!t.path) {
       setPicker({ mode: 'save', tabID: t.id, suggestedName: t.displayName });
-      return;
+      return 'needs_path';
     }
     const content = tabContent(t);
-    const reply = await sendWithReply({ kind: 'write', path: t.path, content });
-    if (reply.kind === 'write_ok') {
-      // Refresh baseline + clear dirty marker. The tab's path may
-      // have changed if write canonicalized it (filepath.Clean).
-      setTabs(tabs().map((x) => x.id === t.id ? { ...x, baseline: content, path: String(reply.path ?? x.path), wysCache: t.mode === 'wysiwyg' ? content : x.wysCache } : x));
-      setDirtyIDs((s) => {
-        if (!s.has(t.id)) return s;
-        const out = new Set(s);
-        out.delete(t.id);
-        return out;
-      });
-      wysHandles.get(t.id)?.markClean();
+    const reply = await sendWithReply({ kind: 'write', path: t.path, content: toDisk(content, t.eol) });
+    if (reply.kind !== 'write_ok') {
+      // The BE also toasts; this is for the eyes already on the editor.
+      setStatusError(`save failed: ${String(reply.msg ?? reply.kind)}`);
+      return 'failed';
     }
+    // Refresh baseline + clear dirty marker. The tab's path may
+    // have changed if write canonicalized it (filepath.Clean).
+    setTabs(tabs().map((x) => x.id === t.id ? { ...x, baseline: content, path: String(reply.path ?? x.path), wysCache: t.mode === 'wysiwyg' ? content : x.wysCache } : x));
+    setDirtyIDs((s) => {
+      if (!s.has(t.id)) return s;
+      const out = new Set(s);
+      out.delete(t.id);
+      return out;
+    });
+    wysHandles.get(t.id)?.markClean();
+    setStatusError(null);
+    return 'ok';
+  };
+
+  const saveActive = async () => {
+    const t = activeTab();
+    if (t) await saveTab(t);
+  };
+
+  // requestCloseTab is what every close gesture goes through: a clean
+  // tab closes at once, a dirty one asks first.
+  const requestCloseTab = (id: string) => {
+    if (dirtyIDs().has(id)) setPendingClose({ scope: 'tab', tabID: id });
+    else closeTab(id);
+  };
+
+  const dirtyTabs = () => tabs().filter((t) => dirtyIDs().has(t.id));
+
+  // The close prompt's three answers. Window scope ends in
+  // close_window_confirmed, which the BE turns into the router's
+  // confirm_close; tab scope ends in closeTab.
+  const discardAndClose = () => {
+    const p = pendingClose();
+    setPendingClose(null);
+    if (!p) return;
+    if (p.scope === 'window') send({ kind: 'close_window_confirmed' });
+    else closeTab(p.tabID);
+  };
+  const saveAndClose = async () => {
+    const p = pendingClose();
+    setPendingClose(null);
+    if (!p) return;
+    const targets = p.scope === 'window' ? dirtyTabs() : tabs().filter((t) => t.id === p.tabID);
+    for (const t of targets) {
+      const r = await saveTab(t);
+      if (r === 'needs_path') {
+        // The picker is up for this buffer; the close is abandoned
+        // rather than queued behind a dialog that may be cancelled.
+        setStatusError(`${t.displayName} needs a path — save it, then close again`);
+        return;
+      }
+      if (r !== 'ok') return;
+    }
+    if (p.scope === 'window') send({ kind: 'close_window_confirmed' });
+    else closeTab(p.tabID);
   };
 
   // saveAsActive forces the picker open for the active tab, no
@@ -598,6 +719,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const saveAsActive = () => {
     const t = activeTab();
     if (!t) return;
+    if (t.blocked) {
+      setStatusError(`${t.displayName}: ${readOnlyText(t)}`);
+      return;
+    }
     setPicker({
       mode: 'save',
       tabID: t.id,
@@ -638,8 +763,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const src = tabs().find((t) => t.id === cur.tabID);
     if (!src) return;
     const content = tabContent(src);
-    const reply = await sendWithReply({ kind: 'write', path: chosen, content });
-    if (reply.kind !== 'write_ok') return;
+    const reply = await sendWithReply({ kind: 'write', path: chosen, content: toDisk(content, src.eol) });
+    if (reply.kind !== 'write_ok') {
+      setStatusError(`save failed: ${String(reply.msg ?? reply.kind)}`);
+      return;
+    }
+    setStatusError(null);
     const newPath = String(reply.path ?? chosen);
     // Save As is the one save that changes a tab's id, which makes it
     // the one save that legitimately re-seeds the editor (the
@@ -1121,6 +1250,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (m.kind === 'cmd.open_file') {
       const path = String(m.path ?? '');
       if (path) void openInTab(path);
+      return;
+    }
+    // The router asked to close the window and the BE vetoed on our
+    // behalf (WIRE.md §10); answer at once when nothing is unsaved,
+    // otherwise ask.
+    if (m.kind === 'close_blocked') {
+      if (dirtyTabs().length === 0) send({ kind: 'close_window_confirmed' });
+      else setPendingClose({ scope: 'window' });
       return;
     }
     if (m.kind === 'cmd.set_root') {
@@ -1678,18 +1815,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (!path) return;
     const tab = tabs().find((t) => t.path === path);
     // Diff and binary tabs aren't live-editable buffers; leave them.
-    if (!tab || tab.diff || tab.binary) return;
+    if (!tab || tab.diff || tab.blocked) return;
     // Already prompting for this tab — the write+chmod burst that one
     // save fires would otherwise re-read and re-arm repeatedly.
     if (reloadPrompt()?.tabID === tab.id) return;
     const reply = await sendWithReply({ kind: 'read', path });
     // File vanished or went unreadable (deleted, perms, became a dir):
     // keep the buffer so the user can still save it back out.
-    if (reply.kind !== 'read_ok' || reply.binary) return;
-    const disk = String(reply.content ?? '');
+    if (reply.kind !== 'read_ok' || blockedOf(reply)) return;
+    const raw = String(reply.content ?? '');
+    const disk = toBuffer(raw);
     // Re-find: the tab may have closed during the async read.
     const cur = tabs().find((t) => t.id === tab.id);
     if (!cur || cur.path !== path) return;
+    // Track the line endings on disk even when the text did not move:
+    // the next save should match what is there now.
+    const eol = detectEol(raw);
+    if (eol !== cur.eol) setTabs(tabs().map((x) => x.id === cur.id ? { ...x, eol } : x));
     if (disk === cur.baseline) return; // no material change (incl. our own save)
     if (dirtyIDs().has(cur.id)) {
       setReloadPrompt({ tabID: cur.id, displayName: cur.displayName, diskContent: disk });
@@ -2201,7 +2343,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (ev.key === 'w' || ev.key === 'W') {
         ev.preventDefault();
         const id = activeID();
-        if (id) closeTab(id);
+        if (id) requestCloseTab(id);
         return;
       }
       // Ctrl+` (VSCode parity): toggle terminal panel.
@@ -2372,7 +2514,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuItem label="Save" trailing={<kbd style={kbdStyle}>Ctrl+S</kbd>} disabled={!activeTab()} onClick={run(() => void saveActive())} data-testid="edit-menu-save" />
             <MenuItem label="Save As…" trailing={<kbd style={kbdStyle}>Ctrl+Shift+S</kbd>} disabled={!activeTab()} onClick={run(saveAsActive)} data-testid="edit-menu-save-as" />
             <MenuSeparator />
-            <MenuItem label="Close Tab" trailing={<kbd style={kbdStyle}>Ctrl+W</kbd>} disabled={!activeTab()} onClick={run(() => closeTab(activeID()))} data-testid="edit-menu-close-tab" />
+            <MenuItem label="Close Tab" trailing={<kbd style={kbdStyle}>Ctrl+W</kbd>} disabled={!activeTab()} onClick={run(() => requestCloseTab(activeID()))} data-testid="edit-menu-close-tab" />
           </Menu>
         </Show>
         <Show when={openMenu() === 'edit'}>
@@ -2593,7 +2735,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     </span>
                     <span
                       data-testid={`edit-tab-close-${t.id}`}
-                      onClick={(ev) => { ev.stopPropagation(); closeTab(t.id); }}
+                      onClick={(ev) => { ev.stopPropagation(); requestCloseTab(t.id); }}
                       style={tabCloseStyle}
                       title="Close (Ctrl+W)"
                     >
@@ -2631,7 +2773,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               // Cut/Copy/Paste menu (the native menu's Paste can't
               // read the system clipboard on an insecure origin
               // anyway). No menu without a tab to act on.
-              if (!activeTab() || activeTab()?.binary) return;
+              if (!activeTab() || activeTab()?.blocked) return;
               ev.preventDefault();
               setTextCtxMenu({ x: ev.clientX, y: ev.clientY });
             }}
@@ -2666,15 +2808,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onClose={closeWysFind}
               />
             </Show>
-            <Show when={!activeTab() || activeTab()?.binary}>
+            <Show when={!activeTab() || activeTab()?.blocked}>
               <div data-testid="edit-placeholder" style={placeholderOverlayStyle}>
                 <Show when={!activeTab()}>
                   Pick a file from the sidebar, or Ctrl+N for an empty buffer.
                 </Show>
-                <Show when={activeTab()?.binary}>
+                <Show when={activeTab()?.blocked}>
                   <div>{activeTab()?.path}</div>
-                  <div style={{ color: tokens.fgDim, 'margin-top': '6px' }}>
-                    Binary file — not displayed.
+                  <div data-testid="edit-placeholder-reason" style={{ color: tokens.fgDim, 'margin-top': '6px' }}>
+                    {readOnlyText(activeTab()!)}
                   </div>
                 </Show>
               </div>
@@ -2838,9 +2980,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <Show when={dirtyIDs().has(activeTab()!.id)}>
             <span style={{ 'margin-left': '8px', color: tokens.fgDim }}>· modified</span>
           </Show>
-          <Show when={activeTab()!.binary}>
-            <span style={{ 'margin-left': '8px', color: tokens.fgDim }}>· binary</span>
+          <Show when={activeTab()!.eol === 'crlf'}>
+            <span data-testid="edit-status-eol" style={{ 'margin-left': '8px', color: tokens.fgDim }}>· CRLF</span>
           </Show>
+          <Show when={activeTab()!.blocked}>
+            <span data-testid="edit-status-readonly" style={{ 'margin-left': '8px', color: tokens.fgDim }}>· read-only: {readOnlyText(activeTab()!)}</span>
+          </Show>
+        </Show>
+        <Show when={statusError()}>
+          <span data-testid="edit-status-error" style={{ 'margin-left': '8px', color: tokens.fgDanger }}>· {statusError()}</span>
         </Show>
       </StatusBar>
 
@@ -2875,6 +3023,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             changes; keep editing to preserve them.
           </div>
         </ConfirmDialog>
+      </Show>
+
+      {/* Save / Don't save / Cancel — raised for a dirty tab close and for
+          the window close the BE relays as close_blocked. */}
+      <Show when={pendingClose()}>
+        {(p) => (
+          <ConfirmDialog
+            title={p().scope === 'window' ? 'Close the editor?' : 'Close this tab?'}
+            confirmLabel="Save"
+            altLabel="Don't save"
+            altDanger
+            cancelLabel="Cancel"
+            onConfirm={() => void saveAndClose()}
+            onAlt={discardAndClose}
+            onCancel={() => setPendingClose(null)}
+            data-testid="edit-close-dialog"
+            confirmTestid="edit-close-save"
+            altTestid="edit-close-discard"
+            cancelTestid="edit-close-cancel"
+          >
+            <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
+              Unsaved changes in:
+              <ul style={{ margin: '6px 0 0', padding: '0 0 0 18px', color: tokens.fg }}>
+                <For each={p().scope === 'window' ? dirtyTabs() : tabs().filter((t) => t.id === (p() as { tabID: string }).tabID)}>
+                  {(t) => <li data-testid="edit-close-dialog-item">{t.displayName}</li>}
+                </For>
+              </ul>
+            </div>
+          </ConfirmDialog>
+        )}
       </Show>
 
       {/* right-click context menu — fires on row right-click. */}

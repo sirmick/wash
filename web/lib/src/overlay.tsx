@@ -79,6 +79,13 @@ export interface ConfirmDialogProps {
   danger?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  // Optional third action between Cancel and Confirm — the "Don't save"
+  // of a Save / Don't save / Cancel close prompt. Rendered only when
+  // altLabel is set; altDanger styles it like a destructive confirm.
+  altLabel?: string;
+  altDanger?: boolean;
+  onAlt?: () => void;
+  altTestid?: string;
   'data-testid'?: string;
   confirmTestid?: string;
   cancelTestid?: string;
@@ -99,6 +106,16 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
         >
           {props.cancelLabel ?? 'Cancel'}
         </button>
+        {props.altLabel ? (
+          <button
+            type="button"
+            data-testid={props.altTestid}
+            onClick={props.onAlt}
+            style={confirmBtnStyle(props.altDanger ?? false)}
+          >
+            {props.altLabel}
+          </button>
+        ) : null}
         <button
           type="button"
           data-testid={props.confirmTestid}

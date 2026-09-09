@@ -58,7 +58,22 @@ type ReadReply struct {
 	Size      int64  `json:"size"`
 	Binary    bool   `json:"binary"`
 	Truncated bool   `json:"truncated"`
+	// Blocked names why Content must not be edited and written back:
+	// "binary" (NUL bytes), "too_large" (past the caller's read cap, so
+	// Content is only a prefix), "encoding" (not valid UTF-8 — the JSON
+	// wire would replace bytes with U+FFFD and a save would persist the
+	// replacements). Empty means the file is an ordinary editable text
+	// file. Binary stays set alongside Blocked=="binary" for callers that
+	// predate this field.
+	Blocked string `json:"blocked,omitempty"`
 }
+
+// Read-only reasons for ReadReply.Blocked.
+const (
+	BlockedBinary   = "binary"
+	BlockedTooLarge = "too_large"
+	BlockedEncoding = "encoding"
+)
 
 // WriteReply is the BE → FE response payload for a write request.
 type WriteReply struct {
