@@ -1008,8 +1008,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Ctrl+Shift+<letter> has no distinct control code, so none of these are
   // stolen from the shell (or from an agent running in it). Returning false
   // keeps the event out of the pty entirely.
+  //
+  // Ctrl+Shift+T, Ctrl+Shift+W and Ctrl+Tab are ALSO Chromium's own
+  // restore-tab / close-window / next-tab on Linux and Windows, and a page
+  // cannot intercept those in a normal browser tab (they work in e2e only
+  // because CDP-injected keys bypass the reservation). They stay bound —
+  // they do work in a PWA/kiosk window — but every one has an Alt
+  // alternate the browser leaves alone: Alt+T new tab, Alt+W close tab,
+  // Alt+PageUp/PageDown previous/next tab, Alt+1…9 jump to tab N. Matched
+  // on ev.code so a non-QWERTY layout gets the same physical keys, and
+  // preventDefault'd so Firefox's Alt-menubar does not swallow them.
   const onTermKey = (ev: KeyboardEvent): boolean => {
     if (ev.type !== 'keydown') return true;
+    if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) {
+      const code = ev.code;
+      if (code === 'KeyT') { ev.preventDefault(); openNewTab(); return false; }
+      if (code === 'KeyW') { ev.preventDefault(); requestCloseTab(active()); return false; }
+      if (code === 'PageDown') { ev.preventDefault(); cycleTabs(1); return false; }
+      if (code === 'PageUp') { ev.preventDefault(); cycleTabs(-1); return false; }
+      const digit = /^Digit([1-9])$/.exec(code);
+      if (digit) { ev.preventDefault(); jumpToTab(Number(digit[1])); return false; }
+    }
     if (ev.ctrlKey && ev.shiftKey) {
       const k = ev.key.toLowerCase();
       if (k === 't') { openNewTab(); return false; }
@@ -1047,6 +1066,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const i = ids.indexOf(active());
     if (i < 0) return;
     activate(ids[(i + dir + ids.length) % ids.length]);
+  };
+
+  // jumpToTab activates the Nth tab (1-based) of the focused group's
+  // strip; a number past the end does nothing, as in every browser.
+  const jumpToTab = (n: number) => {
+    const ids = focusedGroup()?.group.tabs ?? [];
+    const id = ids[n - 1];
+    if (id !== undefined) activate(id);
   };
 
   // ---- tab button (one per tab, inside its group's strip) ----
@@ -1267,8 +1294,35 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       </Show>
       <Show when={openMenu() === 'tab'}>
         <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-tab" onDismiss={closeMenu}>
-          <MenuItem label="New Tab" data-testid="term-menu-newtab" onClick={run(() => openNewTab())} />
-          <MenuItem label="Close Tab" data-testid="term-menu-closetab" onClick={run(() => requestCloseTab(active()))} />
+          {/* Each item shows both bindings: the Ctrl+Shift one the
+              browser may keep for itself, and the Alt one it never does. */}
+          <MenuItem
+            label="New Tab"
+            data-testid="term-menu-newtab"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+T · Alt+T</span>}
+            onClick={run(() => openNewTab())}
+          />
+          <MenuItem
+            label="Close Tab"
+            data-testid="term-menu-closetab"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+W · Alt+W</span>}
+            onClick={run(() => requestCloseTab(active()))}
+          />
+          <MenuSeparator />
+          <MenuItem
+            label="Next Tab"
+            data-testid="term-menu-next-tab"
+            trailing={<span style={shortcutStyle}>Ctrl+Tab · Alt+PgDn</span>}
+            disabled={(focusedGroup()?.group.tabs.length ?? 0) < 2}
+            onClick={run(() => cycleTabs(1))}
+          />
+          <MenuItem
+            label="Previous Tab"
+            data-testid="term-menu-prev-tab"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+Tab · Alt+PgUp</span>}
+            disabled={(focusedGroup()?.group.tabs.length ?? 0) < 2}
+            onClick={run(() => cycleTabs(-1))}
+          />
           <MenuSeparator />
           <MenuItem
             label="No color"
@@ -1328,10 +1382,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             disabled={paneCount() < 2}
             onClick={run(() => focusDir('right'))}
           />
+          {/* The key closes the TAB; the pane goes with its last tab
+              (docs/TERM_LAYOUT.md §5). The label used to say "Close Pane"
+              beside a shortcut that did not do that. */}
           <MenuItem
-            label="Close Pane"
+            label="Close Tab (pane with its last)"
             data-testid="term-menu-close-pane"
-            trailing={<span style={shortcutStyle}>Ctrl+Shift+W</span>}
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+W · Alt+W</span>}
             disabled={paneCount() < 2}
             onClick={run(() => requestCloseTab(active()))}
           />
@@ -1508,7 +1565,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                           onClick={() => { close(); toggleZoom(path()); }}
                         />
                         <MenuItem
-                          label="Close Pane"
+                          label="Close Tab (pane with its last)"
                           data-testid="term-ctx-close-pane"
                           disabled={paneCount() < 2}
                           onClick={() => { close(); requestCloseTab(tab.channelID); }}
@@ -1567,7 +1624,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   <Button
                     variant="icon"
                     data-testid="term-new-tab"
-                    title="New tab (Ctrl+Shift+T)"
+                    title="New tab (Ctrl+Shift+T · Alt+T)"
                     style={ctlBtnStyle}
                     onClick={() => openNewTabIn(path)}
                   >
