@@ -40,8 +40,11 @@ func init() {
 			Surface:         sdk.SurfaceDesktop,
 			Icon:            washIcon,
 			Instancing:      sdk.InstancingSingle,
-			Capabilities:    []string{sdk.CapSpawn},
-			Window:          &sdk.WindowHints{},
+			// CapOpen: the start menu's Recent rows re-issue an open.request
+			// for the path, so the router picks the handler the same way the
+			// original open did.
+			Capabilities: []string{sdk.CapSpawn, sdk.CapOpen},
+			Window:       &sdk.WindowHints{},
 		},
 		Assets:   sub,
 		OnReady:  onReady,
@@ -72,14 +75,17 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	bus := sdk.NewBus(c)
 	startConfigWatcher(c, sdk.NewWatchClient(c))
 	startHostStats(c)
+	launcher := newLauncherStore(launcherStatePath())
 	sdk.HandleVoid(bus, "desktop.request", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		sendDesktopConfig(conn)
 		// Resend the banner facts too so a late-connecting shell (or
 		// a tab refresh that fires desktop.request on mount) gets a
 		// full state, not just the config.
 		sendSystemInfo(conn)
+		sendLauncherState(conn, launcher)
 		return nil
 	})
+	registerLauncher(bus, launcher)
 	// save_state mirrors the wash-edit / wash-fm pattern: the FE
 	// ships its persistable blob (sidebar mode, per-section state)
 	// and we hand it to the SDK's router-side persistence. On every
@@ -315,7 +321,6 @@ func registerNotifyGateway(bus *sdk.Bus) {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: NotifyAppID}, map[string]any{"kind": "clear_all"})
 	})
 }
-
 
 func registerPrivGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "priv_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
