@@ -86,14 +86,16 @@ func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalReque
 			limit = maxOutputLimit
 		}
 	}
-	// cwd is confined the same way the fs capability confines paths: the
-	// folder the user chose when starting the agent. An agent must not be
-	// able to run a command somewhere it cannot read.
+	// cwd is confined the same way the fs capability confines paths, and
+	// against the SAME set of roots (roots.go): a folder an agent may read
+	// but may not run anything in is a distinction nobody asked for and
+	// one nobody would maintain. An agent must not be able to run a
+	// command somewhere it cannot read.
 	cwd := h.cwd
 	if req.Cwd != "" {
-		abs, err := h.fsFor().Confine(req.Cwd)
+		abs, err := h.confineOrAsk(ctx, "Bash", req.Cwd)
 		if err != nil {
-			log.Printf("agentd: terminal/create REFUSED key=%s cwd=%q root=%q: %v", h.key, req.Cwd, h.cwd, err)
+			log.Printf("agentd: terminal/create REFUSED key=%s cwd=%q roots=%v: %v", h.key, req.Cwd, h.roots(), err)
 			return acp.CreateTerminalResponse{}, err
 		}
 		cwd = abs

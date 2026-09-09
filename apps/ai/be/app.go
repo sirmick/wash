@@ -335,6 +335,19 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 	// Acting on the session this window happens to be showing needs no
 	// special case: agentd tells every transcript watcher when a session
 	// detaches, and onAppMsgFrom already exits on that for our own key.
+	case "row_add_root", "row_remove_root":
+		// Widen (or narrow) which folders a session may reach. Row-
+		// addressed like the verbs below: the row that opened the picker
+		// is not necessarily the session this window is showing.
+		if str(m["key"]) == "" || str(m["path"]) == "" {
+			return
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_" + strings.TrimPrefix(str(m["kind"]), "row_"),
+			"key":  str(m["key"]),
+			"path": str(m["path"]),
+		})
+
 	case "row_detach", "row_cancel", "row_stop", "row_reattach":
 		rowKey := str(m["key"])
 		if rowKey == "" {

@@ -416,3 +416,34 @@ test('verbs: Rename… hands the host the row; a row with no session id cannot b
   openRowMenu(r2.getByTestId);
   expect(screen.getByTestId('agents-menu-rename').hasAttribute('disabled')).toBe(true);
 });
+
+// "Also allow a folder…" (docs/Review-findings.md P2 → agent): the cwd is
+// the default scope, not the limit. The row hands the host the row and the
+// host opens its own picker; the label counts what is already allowed,
+// because the hazard of widening a session is forgetting that you did.
+test('verbs: Also allow a folder… hands the host the row and counts existing roots', () => {
+  const widened: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster
+      rows={() => [row({ key: 'a', state: 'done', cwd: '/w/app', roots: ['/w/lib', '/w/gen'] })]}
+      startedAt={at}
+      now={() => 0}
+      onActivate={noop}
+      onAddRoot={(r) => widened.push(r.key)}
+    />
+  ));
+  openRowMenu(getByTestId);
+  const item = screen.getByTestId('agents-menu-add-root');
+  expect(item.textContent).toContain('(2)');
+  fireEvent.click(item);
+  expect(widened).toEqual(['a']);
+
+  cleanup();
+  // A session still confined to its cwd says so by saying nothing.
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onAddRoot={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-add-root').textContent).not.toContain('(');
+});

@@ -74,6 +74,10 @@ func TestWithEnvLetsTheAgentOverrideButPinsPWD(t *testing.T) {
 }
 
 func TestCreateTerminalRefusesACwdOutsideTheSession(t *testing.T) {
+	// No desktop attached: the cwd outside every root asks, and an ask
+	// nobody can answer defers — still a refusal.
+	withStateDir(t)
+	withState(t, 0)
 	root := t.TempDir()
 	outside := t.TempDir()
 	h := &hosted{key: "acp:1", cwd: root}

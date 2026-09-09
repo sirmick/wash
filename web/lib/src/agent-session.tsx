@@ -112,6 +112,10 @@ export interface AgentStatus {
   configs?: AgentConfig[];
   /** the agent's own slash commands */
   commands?: { name: string; description?: string }[];
+  /** folders allowed beyond `dir` (agentd roots.go). Shown in the status
+   *  bar because the whole hazard of widening a session is forgetting
+   *  that you did. */
+  roots?: string[];
   /** wash is auto-approving this session's permission requests (host-side
    *  yolo). Rendered as a standing badge, never as a quiet flag: an agent
    *  nobody is vetting must not look like one that is being watched. */
@@ -141,6 +145,9 @@ export interface AgentSessionProps {
    *  absolute paths (empty when cancelled). Absent hides the Attach
    *  button — a host with no file client cannot offer it. */
   onPickFiles?: () => Promise<string[]>;
+  /** Take back one of the extra folders the session was allowed. Absent
+   *  leaves the status bar's root chips read-only. */
+  onRemoveRoot?: (path: string) => void;
   /** Answer a pending question. `rule` is set when the user chose "always". */
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
   /** Click on a tool row — the host decides what that opens. */
@@ -1177,6 +1184,52 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           <span style={{ color: tokens.fgDim }}>·</span>
           <span>{st().dir}</span>
         </Show>
+        {/* Folders allowed BEYOND the cwd. Named, not counted: "+2
+            folders" tells you that you widened the session and not what
+            you widened it to, and the second is the part that matters. */}
+        <For each={st().roots ?? []}>
+          {(root) => (
+            <span
+              data-testid="agent-root"
+              data-path={root}
+              title={`Also allowed: ${root}`}
+              style={{
+                display: 'inline-flex',
+                'align-items': 'center',
+                gap: '2px',
+                padding: '0 4px',
+                'border-radius': tokens.radiusSm,
+                border: `1px solid ${tokens.borderMenu}`,
+                color: tokens.accentAmber,
+                'max-width': '14ch',
+                'flex-shrink': 0,
+              }}
+            >
+              <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+                {baseName(root)}
+              </span>
+              <Show when={props.onRemoveRoot}>
+                <button
+                  type="button"
+                  data-wash-hit
+                  data-testid="agent-root-remove"
+                  aria-label={`Stop allowing ${root}`}
+                  onClick={() => props.onRemoveRoot?.(root)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: tokens.fgDim,
+                    font: tokens.type.monoSm,
+                    cursor: 'pointer',
+                    padding: 0,
+                  }}
+                >
+                  ×
+                </button>
+              </Show>
+            </span>
+          )}
+        </For>
         {/* The agent's own settings — model, reasoning effort, plan mode
             — all arrive in one generic shape, so ONE control renders
             them and whatever an adapter adds later. When the agent

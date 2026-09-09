@@ -103,6 +103,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // The composer's Attach button. <AgentSession> asks for paths and waits
   // on a promise; the picker is this window's, because the picker needs a
   // BE with a file client and the shared component has neither.
+  // "Also allow a folder…" from a roster row. The picker is this
+  // window's; the row it widens is whichever row opened it, which is not
+  // necessarily the session in the detail pane.
+  const [rootFor, setRootFor] = createSignal<{ key: string; start: string } | null>(null);
+  const openAddRoot = (key: string, start: string) => setRootFor({ key, start });
+
   const [attaching, setAttaching] = createSignal(false);
   let attachResolve: ((paths: string[]) => void) | null = null;
   const finishAttach = (paths: string[]) => {
@@ -387,6 +393,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       commands: r?.commands,
       yolo: r?.yolo,
       queued: r?.queued,
+      roots: r?.roots,
     };
   });
 
@@ -521,6 +528,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         onCancel={() => setSaving(false)}
         data-testid="ai-save-picker"
       />
+
+      <Show when={rootFor()}>
+        {(r) => (
+          <FilePicker
+            open
+            mode="directory"
+            host={props.host}
+            hostInstanceID={props.instance}
+            start={r().start}
+            onConfirm={(p) => {
+              setRootFor(null);
+              send({ kind: 'row_add_root', key: r().key, path: p });
+            }}
+            onCancel={() => setRootFor(null)}
+            data-testid="ai-root-picker"
+          />
+        )}
+      </Show>
 
       <FilePicker
         open={attaching()}
@@ -808,6 +833,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onCancel={(r) => send({ kind: 'row_cancel', key: r.key })}
           onStop={(r) => send({ kind: 'row_stop', key: r.key })}
           onRename={(r) => openRename({ key: r.key, session_id: r.session_id, title: r.title })}
+          onAddRoot={(r) => openAddRoot(r.key, r.cwd ?? '')}
           onAnswer={(a, decision, remember) => send({
             kind: 'answer',
             id: a.id,
@@ -1078,6 +1104,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               asks={asks}
               status={status}
               onSend={(text, blocks) => send({ kind: 'prompt', text, blocks })}
+              onRemoveRoot={(path) => send({ kind: 'row_remove_root', key: sessionKey(), path })}
               onPickFiles={() =>
                 new Promise<string[]>((resolve) => {
                   // A picker already open would strand the earlier waiter.

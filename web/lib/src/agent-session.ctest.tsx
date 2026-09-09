@@ -390,3 +390,32 @@ test('a plain text paste is left to the browser', async () => {
   expect(ev.defaultPrevented).toBe(false);
   expect(container.querySelector('[data-testid="agent-attachment"]')).toBeNull();
 });
+
+// docs/Review-findings.md P2 → agent: "fs/terminal confined to the session
+// cwd with no override". The extra folders are shown NAMED, because the
+// whole hazard of widening a session is forgetting that you did.
+test('extra roots are named in the status bar and can be taken back', () => {
+  const removed: string[] = [];
+  const { container } = render(() => (
+    <AgentSession
+      events={() => []}
+      status={() => ({ dir: 'app', roots: ['/w/lib', '/w/schema'] })}
+      onSend={() => {}}
+      onRemoveRoot={(p) => removed.push(p)}
+    />
+  ));
+
+  const chips = Array.from(container.querySelectorAll('[data-testid="agent-root"]'));
+  expect(chips.map((c) => c.getAttribute('data-path'))).toEqual(['/w/lib', '/w/schema']);
+  expect(chips[0].textContent).toContain('lib');
+
+  (chips[1].querySelector('[data-testid="agent-root-remove"]') as HTMLButtonElement).click();
+  expect(removed).toEqual(['/w/schema']);
+});
+
+test('a session confined to its cwd shows no root chips', () => {
+  const { container } = render(() => (
+    <AgentSession events={() => []} status={() => ({ dir: 'app' })} onSend={() => {}} />
+  ));
+  expect(container.querySelector('[data-testid="agent-root"]')).toBeNull();
+});

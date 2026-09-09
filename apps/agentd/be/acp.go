@@ -151,6 +151,9 @@ type hosted struct {
 	// without the lock (setState runs UNDER turnMu from begin/endTurn).
 	pending []turn
 	queued  atomic.Int32
+	// extraRoots are folders allowed beyond cwd (roots.go). Guarded by
+	// hostedMu like everything else a roster push reads.
+	extraRoots []string
 	// mcp are the MCP servers this session was opened with (agents.json).
 	// Held so a RESUME offers the same set: session/load takes the list
 	// too, and a resumed session that silently lost its tools is worse
@@ -511,6 +514,11 @@ func (h *hosted) setState(state, reason string) {
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
+		// Copied, not aliased: a snapshot outlives this callback, and a
+		// later append to h.extraRoots would otherwise rewrite a
+		// published row from under its readers (the shallow-snapshot
+		// footgun the race gate caught once already).
+		r.Roots = append([]string(nil), h.extraRoots...)
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
@@ -772,6 +780,29 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		return acp.Cancelled(), nil
 	}
 
+	subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
+	v := h.askHuman(ctx, preq.ToolName, subject)
+	switch v.decision {
+	case DecisionAllow:
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+	case DecisionDeny:
+		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
+	if v.why == ReasonAgentExited {
+		// The adapter is gone; there is nobody left to explain it to.
+		return acp.Cancelled(), nil
+	}
+	h.narrateUnanswered(v.why, preq.ToolName, subject)
+	return acp.Cancelled(), nil
+}
+
+// askHuman puts one question in the desktop queue and waits for it.
+//
+// The shared half of every path that needs a person: the tool-call
+// approval above, and "this path is outside every folder you gave me"
+// (roots.go). Returns the verdict rather than an ACP response, because
+// the two callers answer their agents in different protocols.
+func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
 	h.setState("needs-input", "permission")
 	// Back to working once answered — but through the turn gate, so an
 	// answer that lands after the turn already ended cannot resurrect it.
@@ -780,8 +811,8 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	answer := make(chan verdict, 1)
 	queued := enqueueAsk(askSpec{
 		Agent:          h.agent,
-		Tool:           preq.ToolName,
-		Subject:        agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput),
+		Tool:           tool,
+		Subject:        subject,
 		Cwd:            h.cwd,
 		RowKey:         h.key,
 		SourceApp:      AppID,
@@ -793,7 +824,6 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		}
 		return nil
 	})
-	subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 	if !queued {
 		// enqueueAsk already answered with defer, and the buffered channel
 		// is holding *which* defer. Read it so the refusal can say which
@@ -803,8 +833,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		case v = <-answer:
 		default:
 		}
-		h.narrateUnanswered(v.why, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return v
 	}
 
 	select {
@@ -812,24 +841,47 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		// The adapter went away under the question (ctx is the ACP
 		// conn's, cancelled when its read loop ends). The question must
 		// go with it — nothing else will delete it for up to 30 minutes.
-		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, preq.ToolName, ReasonAgentExited)
+		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, tool, ReasonAgentExited)
 		cancelAsksFor(h.key, ReasonAgentExited)
-		return acp.Cancelled(), nil
+		return verdict{decision: DecisionDefer, why: ReasonAgentExited}
 	case v := <-answer:
-		switch v.decision {
-		case DecisionAllow:
-			return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
-		case DecisionDeny:
-			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
-		}
-		h.narrateUnanswered(v.why, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return v
 	case <-time.After(hostedAskTTL):
 		// Backstop only: the queue owns expiry and should always have
 		// answered by now. Reaching here means the queue lost the ask.
-		h.narrateUnanswered(ReasonTimeout, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return verdict{decision: DecisionDefer, why: ReasonTimeout}
 	}
+}
+
+// askOutside is the question a path outside every root raises. Same
+// queue, same row, same buttons — the person is being asked about a
+// FOLDER rather than a command, and nothing else about it differs.
+//
+// A yes allows that path for that call. It does not widen the session:
+// widening is addRoot, a deliberate act with a visible result, and an
+// approval buried in a stream of tool calls must not perform one.
+func (h *hosted) askOutside(ctx context.Context, tool, path string) bool {
+	pol := hostedPolicy()
+	if pol.Enabled && !pol.AskDesktopOrDefault() {
+		h.narrateUnanswered(reasonAskOff, tool, path)
+		return false
+	}
+	hostedMu.Lock()
+	yolo := h.yolo
+	hostedMu.Unlock()
+	if yolo {
+		h.note("Auto-approved (yolo): " + tool + " outside this session's folders — " + path)
+		return true
+	}
+	v := h.askHuman(ctx, tool, path+" (outside this session's folders)")
+	if v.decision == DecisionAllow {
+		h.note("Allowed once, outside this session's folders: " + path)
+		return true
+	}
+	if v.decision != DecisionDeny && v.why != ReasonAgentExited {
+		h.narrateUnanswered(v.why, tool, path)
+	}
+	return false
 }
 
 // verdict is an answer plus why it is that answer. The `why` is the whole
@@ -1240,6 +1292,35 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		return h.client.Cancel(h.sessionID)
 	})
 
+	// agent_add_root / agent_remove_root: widen or narrow which folders a
+	// session may reach (roots.go). Deliberate and visible — the row
+	// publishes the set, so every surface showing the session can say how
+	// wide it is — rather than something a stream of tool approvals can
+	// quietly accumulate.
+	sdk.HandleFromVoid(bus, "agent_add_root", func(_ *sdk.Conn, _ string, req rootReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil || req.Path == "" {
+			return nil
+		}
+		if h.addRoot(req.Path) {
+			h.note("Also allowed: " + req.Path)
+			h.republish()
+		}
+		return nil
+	})
+
+	sdk.HandleFromVoid(bus, "agent_remove_root", func(_ *sdk.Conn, _ string, req rootReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil || req.Path == "" {
+			return nil
+		}
+		if h.removeRoot(req.Path) {
+			h.note("No longer allowed: " + req.Path)
+			h.republish()
+		}
+		return nil
+	})
+
 	// agent_stop: end a session and its adapter.
 	sdk.HandleFromVoid(bus, "agent_stop", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
 		if h := lookupHosted(req.Key); h != nil {
@@ -1341,6 +1422,12 @@ func publicModes(in []acp.SessionMode) []Mode {
 		out = append(out, Mode{ID: m.ID, Name: m.Name, Description: m.Description})
 	}
 	return out
+}
+
+// rootReq addresses one folder on one session.
+type rootReq struct {
+	Key  string `json:"key"`
+	Path string `json:"path"`
 }
 
 type promptReq struct {
