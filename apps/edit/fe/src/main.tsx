@@ -1606,6 +1606,47 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     send({ kind: 'spawn', app_id: 'com.wash.fm' });
   };
 
+  // ---- drop-to-open on the editor area ----
+  //
+  // A drag from fm (or this sidebar) carries application/x-wash-paths.
+  // Dropped on the tab strip or the editor body it OPENS each path in a
+  // tab. The sidebar tree keeps its move semantics — that is a file
+  // tree — but the editor is not a folder, and before this the drop fell
+  // through to CodeMirror's default handler, which inserted the drag's
+  // text/plain fallback (the path) into the buffer. Both listeners run in
+  // the capture phase on the pane so they win over CM's (and TipTap's)
+  // own drop handling on the content DOM. An OS file drop carries no
+  // path the BE could read, so it is swallowed with a hint rather than
+  // letting CM paste the file's bytes into the open buffer.
+  const isOsFileDrag = (dt: DataTransfer | null): boolean =>
+    !!dt && !hasWashDrag(dt) && Array.from(dt.types).includes('Files');
+  const onPaneDragOver = (ev: DragEvent) => {
+    const dt = ev.dataTransfer;
+    if (!dt) return;
+    if (!hasWashDrag(dt) && !isOsFileDrag(dt)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    // 'copy', never 'move': the source stays where it is.
+    dt.dropEffect = 'copy';
+  };
+  const onPaneDrop = (ev: DragEvent) => {
+    const dt = ev.dataTransfer;
+    if (!dt) return;
+    if (hasWashDrag(dt)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const paths = readDragPaths(dt);
+      // Sequential so each open sees the tabs the previous one added.
+      void (async () => { for (const p of paths) await openInTab(p); })();
+      return;
+    }
+    if (isOsFileDrag(dt)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      setStatusError('drag files from Files (fm) to open them');
+    }
+  };
+
   // ---- tree ops + fs.watch ----
   //
   // The watched-dirs dedup set + the fs_event refresh debounce live in
@@ -1785,6 +1826,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // free-typing but unsaved changes don't go anywhere.
 
   let editorMountEl!: HTMLDivElement;
+  // The tab strip + editor body; drop-to-open listens here (capture).
+  let editPaneEl!: HTMLDivElement;
   let editorView: EditorView | undefined;
   const langCompartment = new Compartment();
   // Holds the active syntax-highlight style; reconfigured live when the
@@ -2379,6 +2422,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     };
     props.host.addEventListener('keydown', onKey);
     if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
+    editPaneEl.addEventListener('dragover', onPaneDragOver, true);
+    editPaneEl.addEventListener('drop', onPaneDrop, true);
 
     // Boot with a list of "/" — the BE's Confine downshifts to
     // the sandbox root automatically when one is configured.
@@ -2387,6 +2432,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       props.host.removeEventListener('keydown', onKey);
+      editPaneEl.removeEventListener('dragover', onPaneDragOver, true);
+      editPaneEl.removeEventListener('drop', onPaneDrop, true);
       // Release every active fs.watch so the BE doesn't strand
       // them after the editor window closes, and clear pending
       // refresh timers. Idempotent BE-side.
@@ -2715,7 +2762,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <Splitter container={bodyEl} onChange={setSplitPct} data-testid="edit-splitter" />
 
         {/* editor area — tab bar above, CodeMirror below */}
-        <div data-testid="edit-pane" style={editorPaneStyle}>
+        <div ref={editPaneEl!} data-testid="edit-pane" style={editorPaneStyle}>
           {/* tab bar */}
           <div data-testid="edit-tabs" style={tabBarStyle}>
             <For each={tabs()}>
