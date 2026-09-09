@@ -489,7 +489,7 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 	st.sessions[sess.ID()] = sess
 	st.mu.Unlock()
 
-	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid)
+	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d cols=%d rows=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid, cols, rows)
 	_ = c.SendAppMsg(map[string]any{
 		"kind":       "tab_opened",
 		"channel_id": uint64(sess.ID()),

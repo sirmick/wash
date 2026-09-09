@@ -450,11 +450,41 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // openNewTab asks the BE for a pty. Every request carries an id the BE
   // echoes on tab_opened / tab_error, so a split's placement is bound to
   // the tab it asked for and a failed spawn cannot leave a stray intent
-  // behind for the next plain New Tab to pick up.
+  // behind for the next plain New Tab to pick up. It also carries the grid
+  // the tab's pane will have, so the pty opens at that size and the first
+  // prompt is drawn at the right width instead of at 80×24 and reflowed a
+  // frame later.
   const openNewTab = (intent?: SplitIntent) => {
     const req = splitIntents.mint();
     if (intent) splitIntents.set(req, intent);
-    send({ kind: 'new_tab', req });
+    const grid = intent ? gridAfterSplit(intent) : gridOfGroup(focusPath());
+    send({ kind: 'new_tab', req, ...(grid ?? {}) });
+  };
+
+  // gridOfGroup is the grid a new tab in an existing group gets: that
+  // group's content box, measured with the cell metrics of the terminal
+  // already mounted there. Undefined while nothing there has mounted yet
+  // (a restore in flight), in which case the BE's default stands.
+  const gridOfGroup = (path: string): { cols: number; rows: number } | undefined => {
+    const g = placedAt(path);
+    if (!g) return undefined;
+    return apis.get(g.group.active)?.proposeGrid(g.content.w, g.content.h) ?? undefined;
+  };
+
+  // gridAfterSplit runs the split through the pure kernel with a
+  // placeholder channel and reads the placeholder's content box back out
+  // of the resulting layout — the exact rect the new pane will be given,
+  // gutters and strips included, before it exists.
+  const PLACEHOLDER = -1;
+  const gridAfterSplit = (intent: SplitIntent): { cols: number; rows: number } | undefined => {
+    const src = placedAt(intent.path);
+    if (!src || !groupAt(tree(), intent.path)) return undefined;
+    const s = stage();
+    const next = splitGroup(tree(), intent.path, intent.dir, PLACEHOLDER);
+    const placed = layoutTree(next, { x: 0, y: 0, w: s.w, h: s.h }, { gutter: GUTTER, strip: STRIP_HEIGHT, status: STATUS_HEIGHT });
+    const target = placed.groups.find((g) => g.group.tabs.includes(PLACEHOLDER));
+    if (!target) return undefined;
+    return apis.get(src.group.active)?.proposeGrid(target.content.w, target.content.h) ?? undefined;
   };
   const requestCloseTab = (channelID: number) => {
     if (channelID) send({ kind: 'close_tab', channel_id: channelID });

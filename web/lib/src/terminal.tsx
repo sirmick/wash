@@ -348,6 +348,13 @@ export interface TerminalAPI {
   selectAll: () => void;
   clearScreen: () => void;
   hasSelection: () => boolean;
+  // proposeGrid answers "what grid would a host of w×h px get" with THIS
+  // terminal's cell metrics — the same arithmetic FitAddon runs on the
+  // live host. A consumer that is about to open a pty for a pane that
+  // does not exist yet (wash-term's split / new tab) uses it to ask for
+  // the right size up front instead of 80×24-then-resize, so the first
+  // prompt is drawn at the width the pane will have. Null before mount.
+  proposeGrid: (w: number, h: number) => { cols: number; rows: number } | null;
 }
 
 export interface TerminalProps {
@@ -478,6 +485,36 @@ export const Terminal: Component<TerminalProps> = (props) => {
   const reportResize = () => {
     if (!term || !props.onResize) return;
     props.onResize(term.cols, term.rows);
+  };
+
+  // proposeGrid mirrors @xterm/addon-fit's proposeDimensions for a host of
+  // the given size: the .xterm element's padding (TERM_INSET_PX) and the
+  // viewport scrollbar come off the width, the padding off the height,
+  // and the rest is floored into cells. Cell metrics come from the render
+  // service, which is where the addon reads them too; before the first
+  // render there are none, and the caller falls back to its default.
+  const proposeGrid = (w: number, h: number): { cols: number; rows: number } | null => {
+    if (!term || !term.element) return null;
+    const core = (term as unknown as {
+      _core?: {
+        _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } };
+        viewport?: { scrollBarWidth?: number };
+      };
+    })._core;
+    const cell = core?._renderService?.dimensions?.css?.cell;
+    if (!cell || !(cell.width > 0) || !(cell.height > 0)) return null;
+    const scrollbar = term.options.scrollback === 0
+      ? 0
+      : (term.options.overviewRuler?.width || core?.viewport?.scrollBarWidth || 0);
+    const cs = window.getComputedStyle(term.element);
+    const padH = (parseInt(cs.paddingLeft) || 0) + (parseInt(cs.paddingRight) || 0);
+    const padV = (parseInt(cs.paddingTop) || 0) + (parseInt(cs.paddingBottom) || 0);
+    const availW = Math.floor(w) - padH - scrollbar;
+    const availH = Math.floor(h) - padV;
+    return {
+      cols: Math.max(2, Math.floor(availW / cell.width)),
+      rows: Math.max(1, Math.floor(availH / cell.height)),
+    };
   };
 
   // holdFits suppresses every fit while a restored session's replay
@@ -862,6 +899,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
           selectAll: () => term?.selectAll(),
           clearScreen: () => term?.clear(),
           hasSelection: () => !!term?.hasSelection(),
+          proposeGrid,
         });
       };
       if (restored && drain.length) {
