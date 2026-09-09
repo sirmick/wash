@@ -45,6 +45,12 @@ const (
 	OpDelete Op = "delete"
 	OpMove   Op = "move"
 	OpCopy   Op = "copy"
+	// OpExtract unpacks Paths[0] into Dest. OpCompress writes Paths
+	// into Dest/Names[0], whose extension picks the container. Both are
+	// long walks that want the queue's progress and cancel — see
+	// archive.go.
+	OpExtract  Op = "extract"
+	OpCompress Op = "compress"
 )
 
 // Status is the lifecycle state of a single job.
@@ -77,6 +83,12 @@ const (
 	ConflictSkip       ConflictAction = "skip"
 	ConflictSkipAll    ConflictAction = "skip_all"
 	ConflictCancel     ConflictAction = "cancel"
+	// KeepBoth writes the source alongside the existing entry under a
+	// free "(copy)" name (names.go) instead of choosing between them.
+	// Applies to files and dirs alike — there is nothing to merge or
+	// replace, so it is the one answer that loses nothing.
+	ConflictKeepBoth    ConflictAction = "keep_both"
+	ConflictKeepBothAll ConflictAction = "keep_both_all"
 )
 
 // ConflictInfo is the bag of context passed to the onConflict
@@ -94,10 +106,16 @@ type ConflictInfo struct {
 // Job is one unit of work in the queue. Fields are mutated by the
 // worker under m.mu; callers should not write to them directly.
 type Job struct {
-	ID     string
-	Op     Op
-	Paths  []string // source(s). For Move/Copy these are moved/copied INTO Dest.
-	Dest   string   // destination dir, for Move/Copy. Empty for Delete.
+	ID    string
+	Op    Op
+	Paths []string // source(s). For Move/Copy these are moved/copied INTO Dest.
+	Dest  string   // destination dir, for Move/Copy. Empty for Delete.
+	// Names, when set, is the destination BASENAME for each entry of
+	// Paths (same length). Empty — the usual case — means "keep the
+	// source's own name". fm's Duplicate is what needs it: copying
+	// into the folder the source already lives in only makes sense
+	// under a different name.
+	Names  []string
 	Status Status
 	Done   int    // items processed so far
 	Total  int    // items the job will process (computed at start)
@@ -115,6 +133,7 @@ func (j *Job) snapshot() Job {
 		ID:     j.ID,
 		Op:     j.Op,
 		Paths:  append([]string(nil), j.Paths...),
+		Names:  append([]string(nil), j.Names...),
 		Dest:   j.Dest,
 		Status: j.Status,
 		Done:   j.Done,
@@ -123,6 +142,15 @@ func (j *Job) snapshot() Job {
 		cancel: j.cancel,
 	}
 	return out
+}
+
+// dstFor is the destination path for Paths[i]: Dest joined with the
+// caller-supplied name when there is one, else the source's own basename.
+func (j *Job) dstFor(i int, src string) string {
+	if i < len(j.Names) && j.Names[i] != "" {
+		return filepath.Join(j.Dest, j.Names[i])
+	}
+	return filepath.Join(j.Dest, filepath.Base(src))
 }
 
 // Cancel marks the job for cancellation. The worker checks the flag
@@ -214,7 +242,14 @@ func (m *Manager) Close() error {
 // (permissions, disappearing sources) still surfaces as the job's
 // Failed status.
 func (m *Manager) Enqueue(op Op, paths []string, dest string) (string, error) {
-	if err := ValidatePaths(op, paths, dest); err != nil {
+	return m.EnqueueAs(op, paths, dest, nil)
+}
+
+// EnqueueAs is Enqueue with an explicit destination basename per source
+// (see Job.Names). names may be nil/empty for the usual same-name case;
+// otherwise it must be the same length as paths.
+func (m *Manager) EnqueueAs(op Op, paths []string, dest string, names []string) (string, error) {
+	if err := ValidateNamedPaths(op, paths, dest, names); err != nil {
 		return "", err
 	}
 	id := "j-" + strconv.FormatUint(m.nextID.Add(1), 10)
@@ -222,6 +257,7 @@ func (m *Manager) Enqueue(op Op, paths []string, dest string) (string, error) {
 		ID:     id,
 		Op:     op,
 		Paths:  append([]string(nil), paths...),
+		Names:  append([]string(nil), names...),
 		Dest:   dest,
 		Status: StatusQueued,
 		cancel: &atomic.Bool{},
@@ -274,8 +310,59 @@ func (m *Manager) Enqueue(op Op, paths []string, dest string) (string, error) {
 // Errors are user-facing: they name the offending path and are shown
 // verbatim in the bulk app's failure toast.
 func ValidatePaths(op Op, paths []string, dest string) error {
+	return ValidateNamedPaths(op, paths, dest, nil)
+}
+
+// ValidateNamedPaths is ValidatePaths for a job that renames as it
+// copies/moves (Job.Names). A source landing in its OWN folder is
+// normally a no-op and rejected; under a different name it is exactly
+// what fm's Duplicate asks for, so that one check is lifted for the
+// entries that carry a name of their own.
+func ValidateNamedPaths(op Op, paths []string, dest string, names []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("nothing to %s", opWord(op))
+	}
+	// Archive ops have their own shape: extract takes one archive and a
+	// destination folder, compress a set of sources and ONE archive name.
+	// Neither is the per-source rename `names` otherwise means, and the
+	// src/dst geometry checks below are about moving a tree into itself.
+	switch op {
+	case OpExtract:
+		if len(paths) != 1 {
+			return fmt.Errorf("extract takes one archive, got %d", len(paths))
+		}
+		if !IsExtractable(paths[0]) {
+			return fmt.Errorf("%w: %s", ErrUnsupportedArchive, filepath.Base(paths[0]))
+		}
+		if dest == "" {
+			return errors.New("extract requires a destination")
+		}
+		return nil
+	case OpCompress:
+		if len(names) != 1 || names[0] == "" {
+			return errors.New("compress needs an archive name")
+		}
+		if names[0] != filepath.Base(names[0]) {
+			return fmt.Errorf("compress: %q is not a valid name", names[0])
+		}
+		if !IsExtractable(names[0]) {
+			return fmt.Errorf("%w: %s", ErrUnsupportedArchive, names[0])
+		}
+		if dest == "" {
+			return errors.New("compress requires a destination")
+		}
+		return nil
+	}
+	if len(names) != 0 && len(names) != len(paths) {
+		return fmt.Errorf("%s: %d names for %d paths", opWord(op), len(names), len(paths))
+	}
+	for _, n := range names {
+		if n == "" {
+			continue
+		}
+		if n != filepath.Base(n) || n == "." || n == ".." {
+			return fmt.Errorf("%s: %q is not a valid name", opWord(op), n)
+		}
 	}
 	if op == OpDelete {
 		return nil
@@ -285,9 +372,10 @@ func ValidatePaths(op Op, paths []string, dest string) error {
 	}
 	destClean := filepath.Clean(dest)
 	destReal, destResolved := resolveDir(destClean)
-	for _, src := range paths {
+	for i, src := range paths {
 		srcClean := filepath.Clean(src)
-		if err := checkPair(op, srcClean, destClean); err != nil {
+		renamed := i < len(names) && names[i] != "" && names[i] != filepath.Base(srcClean)
+		if err := checkPair(op, srcClean, destClean, renamed); err != nil {
 			return err
 		}
 		// Resolved pair. Only worth comparing when at least one side
@@ -300,7 +388,7 @@ func ValidatePaths(op Op, paths []string, dest string) error {
 		if !destResolved && srcReal == srcClean {
 			continue
 		}
-		if err := checkPair(op, srcReal, destReal); err != nil {
+		if err := checkPair(op, srcReal, destReal, renamed); err != nil {
 			return err
 		}
 	}
@@ -310,13 +398,13 @@ func ValidatePaths(op Op, paths []string, dest string) error {
 // checkPair applies the three rejection shapes to one (src, dest)
 // pair. Messages quote the caller's spelling of src, not a resolved
 // path, so the user recognises what they clicked.
-func checkPair(op Op, src, dest string) error {
+func checkPair(op Op, src, dest string, renamed bool) error {
 	switch {
 	case dest == src:
 		return fmt.Errorf("cannot %s %s into itself", opWord(op), src)
 	case isWithin(dest, src):
 		return fmt.Errorf("cannot %s %s into its own subfolder %s", opWord(op), src, dest)
-	case filepath.Dir(src) == dest:
+	case filepath.Dir(src) == dest && !renamed:
 		return fmt.Errorf("%s is already in %s", src, dest)
 	}
 	return nil
@@ -348,7 +436,7 @@ func resolveDir(p string) (string, bool) {
 // "delete"; unknown ops fall back to "process".
 func opWord(op Op) string {
 	switch op {
-	case OpCopy, OpMove, OpDelete:
+	case OpCopy, OpMove, OpDelete, OpExtract, OpCompress:
 		return string(op)
 	}
 	return "process"
@@ -434,6 +522,10 @@ func (m *Manager) runJob(job *Job) {
 		err = m.runMove(job)
 	case OpCopy:
 		err = m.runCopy(job)
+	case OpExtract:
+		err = m.runExtract(job)
+	case OpCompress:
+		err = m.runCompress(job)
 	default:
 		err = fmt.Errorf("unknown op %q", job.Op)
 	}
@@ -622,11 +714,11 @@ func (m *Manager) runMove(job *Job) error {
 	}
 	m.setTotal(job, total)
 	sticky := stickyConflict{}
-	for _, src := range job.Paths {
+	for i, src := range job.Paths {
 		if job.cancel.Load() {
 			return nil
 		}
-		dst := filepath.Join(job.Dest, filepath.Base(src))
+		dst := job.dstFor(i, src)
 		if err := m.moveOne(job, src, dst, &sticky); err != nil {
 			return err
 		}
@@ -650,11 +742,11 @@ func (m *Manager) runCopy(job *Job) error {
 	}
 	m.setTotal(job, total)
 	sticky := stickyConflict{}
-	for _, src := range job.Paths {
+	for i, src := range job.Paths {
 		if job.cancel.Load() {
 			return nil
 		}
-		dst := filepath.Join(job.Dest, filepath.Base(src))
+		dst := job.dstFor(i, src)
 		if err := m.copyOne(job, src, dst, &sticky); err != nil {
 			return err
 		}
@@ -667,9 +759,23 @@ func (m *Manager) runCopy(job *Job) error {
 // "Replace All" for unrelated file conflicts later in the job;
 // "Skip All" skips everything regardless of type.
 type stickyConflict struct {
-	replaceAll bool
-	mergeAll   bool
-	skipAll    bool
+	replaceAll  bool
+	mergeAll    bool
+	skipAll     bool
+	keepBothAll bool
+}
+
+// keepBothPath turns a colliding destination into a free sibling under
+// the "(copy)" rule (names.go). Probing with os.Lstat rather than a
+// readdir keeps it O(collisions) and correct for a directory being
+// written into concurrently.
+func keepBothPath(dst string, isDir bool) string {
+	dir, name := filepath.Split(dst)
+	free := UniqueCopyName(name, isDir, func(candidate string) bool {
+		_, err := os.Lstat(filepath.Join(dir, candidate))
+		return err == nil
+	})
+	return filepath.Join(dir, free)
 }
 
 // copyOne processes a single (src, dst) pair. The caller has
@@ -707,6 +813,8 @@ func (m *Manager) copyOne(job *Job, src, dst string, sticky *stickyConflict) err
 		// recurse into its children with the same sticky state.
 		m.bumpDone(job, 1)
 		return m.mergeCopyChildren(job, src, dst, sticky)
+	case ConflictKeepBoth:
+		return copyTree(src, keepBothPath(dst, srcInfo.IsDir()), func() { m.bumpDone(job, 1) })
 	}
 	return nil
 }
@@ -740,6 +848,8 @@ func (m *Manager) moveOne(job *Job, src, dst string, sticky *stickyConflict) err
 			return err
 		}
 		return m.renameOrFallback(job, src, dst)
+	case ConflictKeepBoth:
+		return m.renameOrFallback(job, src, keepBothPath(dst, srcInfo.IsDir()))
 	case ConflictMerge:
 		// Recurse into source children, then remove the (now-
 		// empty) source dir. We DON'T bump for the source dir
@@ -856,6 +966,11 @@ func decideConflict(m *Manager, job *Job, src string, srcInfo os.FileInfo, dst s
 	if sticky.skipAll {
 		return ConflictSkip
 	}
+	// KeepBoth is type-agnostic (it renames rather than choosing), so
+	// its sticky form applies to dir and file collisions alike.
+	if sticky.keepBothAll {
+		return ConflictKeepBoth
+	}
 	if bothDirs && sticky.mergeAll {
 		return ConflictMerge
 	}
@@ -872,6 +987,9 @@ func decideConflict(m *Manager, job *Job, src string, srcInfo os.FileInfo, dst s
 	case ConflictSkipAll:
 		sticky.skipAll = true
 		return ConflictSkip
+	case ConflictKeepBothAll:
+		sticky.keepBothAll = true
+		return ConflictKeepBoth
 	default:
 		return raw
 	}
@@ -1032,4 +1150,64 @@ func removeAll(path string, onItem func()) error {
 // errors.Is unwraps.
 func isCrossDevice(err error) bool {
 	return errors.Is(err, syscall.EXDEV)
+}
+
+// runExtract unpacks Paths[0] into Dest (archive.go). Total comes from a
+// header pre-pass so the progress bar is honest; the walk polls the
+// job's cancel flag between entries, so a huge tarball stops promptly.
+//
+// A zip-slip refusal does not abort the run — the entries that were safe
+// are already on disk and removing them would be a worse surprise — but
+// it does fail the job, because "it extracted, except for the parts that
+// tried to escape" is something the user has to be told.
+func (m *Manager) runExtract(job *Job) error {
+	src := job.Paths[0]
+	if total, err := CountEntries(src); err == nil {
+		m.setTotal(job, total)
+	}
+	st, err := Extract(src, job.Dest, func() bool { return job.cancel.Load() }, func() { m.bumpDone(job, 1) })
+	log.Printf("bulkops: extract %s → %s files=%d dirs=%d symlinks=%d refused=%d skipped=%d",
+		src, job.Dest, st.Files, st.Dirs, st.Symlinks, st.Refused, st.Skipped)
+	if err != nil {
+		return err
+	}
+	if st.Refused > 0 {
+		return fmt.Errorf("%d archive entries were refused for pointing outside %s", st.Refused, job.Dest)
+	}
+	return nil
+}
+
+// runCompress writes Paths into Dest/Names[0]. The archive is built at a
+// temp name in the same directory and renamed on success, so a cancelled
+// or failed run never leaves a half-written .zip looking finished.
+func (m *Manager) runCompress(job *Job) error {
+	total, err := countItems(job.Paths)
+	if err != nil {
+		return err
+	}
+	m.setTotal(job, total)
+	out := filepath.Join(job.Dest, job.Names[0])
+	tmp, err := os.CreateTemp(job.Dest, ".wash-archive-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		tmp.Close()
+		os.Remove(tmpName) // no-op once the rename below has moved it
+	}()
+	if err := WriteArchive(tmp, job.Names[0], job.Paths, func() { m.bumpDone(job, 1) }); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if job.cancel.Load() {
+		return nil
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	log.Printf("bulkops: compress %d paths → %s", len(job.Paths), out)
+	return os.Rename(tmpName, out)
 }

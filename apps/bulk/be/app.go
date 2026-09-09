@@ -130,6 +130,10 @@ type enqueueReq struct {
 	Op    string   `json:"op"`
 	Paths []string `json:"paths"`
 	Dest  string   `json:"dest"`
+	// Names, when present, is the destination basename for each entry
+	// of Paths (see bulkops.Job.Names) — what fm's Duplicate sends so a
+	// copy can land in the folder its source already lives in.
+	Names []string `json:"names"`
 }
 
 type enqueueResp struct {
@@ -177,7 +181,7 @@ func registerHandlers(b *sdk.Bus) {
 	// silently dropped Ctrl+V. Same title as a job that failed mid-way.
 	sdk.Handle(b, "enqueue", func(_ *sdk.Conn, _ string, req enqueueReq) (enqueueResp, error) {
 		op := bulkops.Op(req.Op)
-		id, err := mgr.Enqueue(op, req.Paths, req.Dest)
+		id, err := mgr.EnqueueAs(op, req.Paths, req.Dest, req.Names)
 		if err != nil {
 			log.Printf("bulk-ops enqueue rejected op=%s dest=%q: %v", op, req.Dest, err)
 			c.Fail(opVerb(op, false), err)

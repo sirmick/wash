@@ -85,8 +85,11 @@ func init() {
 			Icon:            fmIcon,
 			Accent:          "#6090e0",
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{sdk.CapOpen},
-			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
+			// CapOpen: routing double-click/Enter to the registered app.
+			// CapSpawn: the "Open with…" chooser and "Open terminal here"
+			// name the target app themselves (openwith.go).
+			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
+			Window:       &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},
 		Assets:             sub,
 		OnReady:            onReady,
@@ -347,6 +350,22 @@ func registerHandlers(b *sdk.Bus) {
 	// Download egress (confined fs → browser save); see download.go.
 	registerDownloadHandlers(b)
 
+	// Recursive name search under a folder (the filter box's "search
+	// subtree" mode); see search.go.
+	registerSearchHandlers(b)
+
+	// "Open with…" chooser (candidate apps + the explicit spawn); see
+	// openwith.go.
+	registerOpenWithHandlers(b)
+
+	// Archives: "Extract here" / "Compress", both as bulk jobs; see
+	// archive.go.
+	registerArchiveHandlers(b)
+
+	// Duplicate (Ctrl+D) — free "(copy)" names + a named bulk job; see
+	// duplicate.go.
+	registerDuplicateHandlers(b)
+
 	// Image bytes / thumbnails over a raw channel, for the folder-grid
 	// preview. Confined to the same fs root as every other fm operation.
 	thumbs.RegisterServer(b, fmFS.Confine)
@@ -357,8 +376,12 @@ func registerHandlers(b *sdk.Bus) {
 	sdk.HandleVoid(b, "open", func(conn *sdk.Conn, _ string, req openReq) error {
 		abs, err := fmFS.Confine(req.Path)
 		if err != nil {
+			log.Printf("fm: open path=%q: %v", req.Path, err)
 			return fsErr(err, req.Path)
 		}
+		// Audit line: the router logs only FAILED opens, so this is the
+		// durable trace that a double-click / Enter reached open routing.
+		log.Printf("fm: open path=%q", abs)
 		return conn.OpenPath(abs)
 	})
 

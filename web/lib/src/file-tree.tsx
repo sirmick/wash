@@ -85,6 +85,13 @@ export interface FileTreeProps<E extends FileTreeEntry> {
   rowTint?: (entry: E) => string | undefined; // name + icon colour; undefined → default fg
   rowHint?: (entry: E) => string | undefined; // value for the data-hint attribute (e2e + styling)
   rowTrailing?: (entry: E) => JSX.Element | null; // slot after the name (fm's setid badge)
+  // Replaces the plain name text (not the rename input): fm's filter
+  // highlighting and search-result relative paths. Omit → entry.name.
+  renderName?: (entry: E, path: string) => JSX.Element;
+  // Rows to render dimmed: fm's cut-but-not-yet-pasted items. The row
+  // stays fully interactive — dimming says "this is going somewhere",
+  // not "this is disabled". Omit → nothing is dimmed.
+  isDimmed?: (path: string) => boolean;
 
   // ---- columns + header ----
   // Extra columns beyond Name. Omit/[] → name-only (edit). The Name track is
@@ -284,6 +291,7 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
               data-hint={props.rowHint?.(entry())}
               data-selected={props.isSelected(row.path) ? 'true' : undefined}
               data-drop-target={dropTarget() ? 'true' : undefined}
+              data-dimmed={props.isDimmed?.(row.path) ? 'true' : undefined}
               draggable="true"
               onDragStart={(ev) => props.onRowDragStart?.(ev, row.path, entry())}
               onDragEnd={props.onRowDragEnd}
@@ -312,6 +320,7 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                 font: tokens.type.textMd,
                 'box-shadow': dropTarget() ? `inset 0 0 0 2px ${tokens.borderDropTarget}` : 'none',
                 outline: 'none',
+                opacity: props.isDimmed?.(row.path) ? 0.45 : 1,
               }}
             >
               {/* Name cell: chevron + icon + name (+ trailing). The tint colours
@@ -370,7 +379,7 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                     'font-weight': props.isCurrent?.(row.path) ? 'bold' : 'normal',
                   }}
                 >
-                  <Show when={renameState()} fallback={entry().name}>
+                  <Show when={renameState()} fallback={props.renderName ? props.renderName(entry(), row.path) : entry().name}>
                     <input
                       data-testid={`${props.testIdPrefix}-rename-input`}
                       ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}

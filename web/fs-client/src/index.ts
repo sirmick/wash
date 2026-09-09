@@ -40,7 +40,7 @@ export {
 } from './dnd.ts';
 export type { DragData } from './dnd.ts';
 
-export { sortedFiltered } from './sort.ts';
+export { sortedFiltered, extensionOf } from './sort.ts';
 export type { SortKey, SortableEntry, SortOptions } from './sort.ts';
 
 export { withReplacePrompt } from './replace-flow.ts';
