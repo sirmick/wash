@@ -235,15 +235,12 @@ func shQuote(s string) string {
 // with the new instance id (OnSpawnResult), and the terminal accepts an
 // exec'd tab only from this service (see wash-term's exec_tab handler).
 func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
-	var s *Session
-	for i := range history {
-		if history[i].SessionID == sessionID {
-			s = &history[i]
-			break
-		}
-	}
-	if s == nil {
+	s, ok := resolveResumeTarget(sessionID)
+	if !ok {
 		log.Printf("agentd: resume unknown session=%s", sessionID)
+		// Said where the click happened, not only in the log: a row that
+		// does nothing when clicked reads as a dead app.
+		c.Warn("Could not reopen that session", "wash has no record of it — not in its history and no transcript on disk.")
 		return
 	}
 	agent, cwd, sid := s.Agent, s.Cwd, s.SessionID
@@ -271,6 +268,37 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 			restoreDetached(hs.key)
 		}
 	}()
+}
+
+// resolveResumeTarget finds what to reopen for a session id: the
+// in-memory history first, then the transcript store's own header.
+//
+// The History panel lists every transcript on disk, while `history` is
+// capped at historyCap. A session older than the cap was therefore
+// listed, clickable, and inert: resume looked it up in the slice, missed,
+// and logged "resume unknown session". The file's meta line carries
+// exactly what a resume needs (agent, cwd, id), so the store is the
+// fallback — and a failed resume that forgets the slice entry no longer
+// leaves a permanently dead row, because the next click resolves from
+// the file again.
+func resolveResumeTarget(sessionID string) (Session, bool) {
+	for i := range history {
+		if history[i].SessionID == sessionID {
+			return history[i], true
+		}
+	}
+	m, ok := readSessionMeta(transcriptPath(sessionID))
+	if !ok || m.SessionID != sessionID {
+		return Session{}, false
+	}
+	return Session{
+		SessionID: m.SessionID,
+		Agent:     m.Agent,
+		Cwd:       m.Cwd,
+		Dir:       m.Dir,
+		Title:     m.Title,
+		LastSeen:  sessionRecency(m) / 1000,
+	}, true
 }
 
 // aiAppID is the window a reopened session appears in. Resume used to
