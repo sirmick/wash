@@ -358,6 +358,10 @@ func registerHandlers(b *sdk.Bus) {
 	// openwith.go.
 	registerOpenWithHandlers(b)
 
+	// Duplicate (Ctrl+D) — free "(copy)" names + a named bulk job; see
+	// duplicate.go.
+	registerDuplicateHandlers(b)
+
 	// Image bytes / thumbnails over a raw channel, for the folder-grid
 	// preview. Confined to the same fs root as every other fm operation.
 	thumbs.RegisterServer(b, fmFS.Confine)

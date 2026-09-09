@@ -2160,6 +2160,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return sel.size >= 2 && sel.has(p) ? Array.from(sel) : [p];
   };
 
+  // Duplicate (Ctrl+D) — a sibling copy under a free "(copy)" name. The
+  // BE resolves the names (it can read the folder) and hands the copying
+  // to wash-bulk, so duplicating a big folder gets the queue's progress
+  // and cancel like any other copy.
+  const duplicatePaths = (paths: string[]) => {
+    if (paths.length === 0) return;
+    void sendWithReply({ kind: 'duplicate', paths }).then((reply) => {
+      if (reply.kind !== 'duplicate_ok') {
+        setStatusOverride(`duplicate: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+        return;
+      }
+      const names = (reply.names as string[] | undefined) ?? [];
+      setStatusInfo(names.length === 1 ? `duplicating → ${names[0]}` : `duplicating ${names.length} items`);
+    });
+  };
+
   // putFilesOnClipboard tells the BE to set the router clipboard
   // with `op` + `paths`. The BE echoes back a clipboard_files_state
   // event which updates filesClipboard reactively — so the status
@@ -2847,6 +2863,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           pasteFilesClipboard();
           return;
         }
+        if (ev.key === 'd' || ev.key === 'D') {
+          const paths = pickSelectionPaths();
+          if (paths.length === 0) return;
+          ev.preventDefault();
+          duplicatePaths(paths);
+          return;
+        }
       }
     };
     // Click-outside dismissal is owned by the Menu component
@@ -3285,6 +3308,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onOpenWith={() => {
             const m = menu() as { left: number; top: number; path: string };
             void openOpenWithMenu(m.path, m.left, m.top);
+          }}
+          onDuplicate={() => {
+            const m = menu() as { path: string };
+            closeMenu();
+            duplicatePaths(menuActionPaths(m.path));
           }}
           onOpenTerminal={() => {
             const m = menu() as { entry: Entry; path: string };
@@ -3864,6 +3892,7 @@ const ContextMenu: Component<{
   onOpen: () => void;
   onOpenWith: () => void;
   onOpenTerminal: () => void;
+  onDuplicate: () => void;
   // Files-clipboard trio — Cut/Copy mirror the Ctrl+X/C shortcuts on
   // the clicked row (or the whole selection when it contains the row);
   // Paste mirrors Ctrl+V into the row's directory. canPaste greys
@@ -3891,6 +3920,8 @@ const ContextMenu: Component<{
       <MenuItem data-testid="fm-ctx-cut" label="Cut" onClick={props.onCut} />
       <MenuItem data-testid="fm-ctx-copy" label="Copy" onClick={props.onFileCopy} />
       <MenuItem data-testid="fm-ctx-paste" label="Paste" disabled={!props.canPaste} onClick={props.onPaste} />
+      <MenuSeparator />
+      <MenuItem data-testid="fm-ctx-duplicate" label="Duplicate" onClick={props.onDuplicate} />
       <MenuSeparator />
       <MenuItem data-testid="fm-ctx-copy-path" label="Copy path" onClick={props.onCopyPath} />
       <MenuItem data-testid="fm-ctx-download" label={props.downloadLabel} onClick={props.onDownload} />
