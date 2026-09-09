@@ -156,6 +156,25 @@ const ConflictModal: Component<{
               Replace
             </Button>
           </Show>
+          {/* Keep both renames the incoming item — "x (copy).txt" — so
+              neither side is lost. bulkops has carried the action since
+              the Duplicate work; this is the button for it. */}
+          <Button
+            data-testid={`bulk-conflict-keep-both-${c().job_id}`}
+            variant="ghost"
+            size="sm"
+            onClick={onAction('keep_both')}
+          >
+            Keep Both
+          </Button>
+          <Button
+            data-testid={`bulk-conflict-keep-both-all-${c().job_id}`}
+            variant="ghost"
+            size="sm"
+            onClick={onAction('keep_both_all')}
+          >
+            Keep Both All
+          </Button>
           <Button
             data-testid={`bulk-conflict-skip-${c().job_id}`}
             variant="ghost"

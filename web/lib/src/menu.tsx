@@ -90,6 +90,12 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
           'border-radius': `${tokens.radiusMd}`,
           padding: '4px 0',
           'min-width': '160px',
+          // A menu taller than the viewport clamps to the top edge above and
+          // then runs off the bottom, where its last rows render but cannot be
+          // clicked — edit's Syntax menu, whose last row is Word Wrap, on a
+          // short window. Bound it to the viewport and let it scroll.
+          'max-height': 'calc(100vh - 8px)',
+          'overflow-y': 'auto',
           'box-shadow': tokens.shadowMenu,
           'z-index': props.zIndex ?? tokens.zMenu,
           ...positionFor(props),
