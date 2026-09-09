@@ -529,9 +529,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const openDiffTab = async (otherPath: string) => {
     const cur = activeTab();
     if (!cur || !editorView) return;
-    // Use the live editor content for the "new" side so unsaved
-    // edits show up in the diff. baseline is what's on disk.
-    const newContent = editorView.state.doc.toString();
+    // Use the live content for the "new" side so unsaved edits show up
+    // in the diff (tabContent reads the wysiwyg handle for markdown
+    // tabs, where the CM view holds stale text). baseline is what's on
+    // disk.
+    const newContent = tabContent(cur);
     const reply = await sendWithReply({ kind: 'read', path: otherPath });
     if (reply.kind !== 'read_ok' || blockedOf(reply)) return;
     const otherContent = toBuffer(String(reply.content ?? ''));
@@ -2006,6 +2008,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (p) applyReload(p.tabID, p.diskContent);
   };
 
+  // showReloadDiff — user wants to see the external change before
+  // choosing. Keeps the buffer exactly as Keep editing does (disk
+  // adopted as the baseline, so the dirty marker means "differs from
+  // disk" and the same change does not re-prompt), then opens the
+  // diff-tab machinery with the buffer as the new side and the disk
+  // version as the original, where chunks can be taken or rejected one
+  // at a time before the next save.
+  const showReloadDiff = async () => {
+    const p = reloadPrompt();
+    if (!p) return;
+    const t = tabs().find((x) => x.id === p.tabID);
+    dismissReload();
+    if (!t || !t.path) return;
+    await openInTab(t.path);
+    await openDiffTab(t.path);
+  };
+
   // dismissReload — user chose Keep editing: hold their buffer but
   // adopt the disk version as the new baseline so (a) we don't re-prompt
   // for the same change and (b) the "modified" indicator now reflects
@@ -3172,17 +3191,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           title="File changed on disk"
           confirmLabel="Reload"
           cancelLabel="Keep editing"
+          altLabel="Show diff"
           danger
           onConfirm={confirmReload}
           onCancel={dismissReload}
+          onAlt={() => void showReloadDiff()}
           data-testid="edit-reload-dialog"
           confirmTestid="edit-reload-confirm"
           cancelTestid="edit-reload-keep"
+          altTestid="edit-reload-diff"
         >
           <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
             <strong style={{ color: tokens.fg }}>{reloadPrompt()!.displayName}</strong>{' '}
             was modified outside the editor. Reloading discards your unsaved
-            changes; keep editing to preserve them.
+            changes; keep editing to preserve them; Show diff keeps them and
+            opens them side by side with the disk version.
           </div>
         </ConfirmDialog>
       </Show>
