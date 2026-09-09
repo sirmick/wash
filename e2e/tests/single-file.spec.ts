@@ -68,7 +68,7 @@ const APPS: AppBundle[] = [
   // 68k: split panes (docs/TERM_LAYOUT.md) — the layout kernel (~6k
   // minified), a strip and control set per group (M1), then divider drag,
   // zoom and the pane context menu (M2).
-  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 68_000 },
+  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 92_000 },
   // fm grew with the image pipeline: folder-grid preview + VirtualGrid +
   // file-client, the ~360-extension lucide icon map (~20 new glyphs), the
   // uid-aware display-hint colours/badges, and the cross-origin DnD guard.
@@ -95,6 +95,9 @@ const ALLOWED_EXTERNALS = new Set([
   'solid-js/store',
   '@xterm/xterm',
   '@xterm/addon-fit',
+  '@xterm/addon-search',
+  '@xterm/addon-web-links',
+  '@xterm/addon-unicode11',
   '@wash/ui',
 ]);
 

@@ -75,7 +75,9 @@ test.describe('terminal geometry across reload', () => {
     const term = await openTerminal(page, router.url);
 
     // Maximize so the window (and thus the grid) tracks the viewport.
-    const id = await page.evaluate(() => window.wash.windows().find((w) => w.title.includes('Terminal'))!.windowID);
+    // By ELEMENT, not by title: a terminal window is named after its
+    // focused tab now, so "Terminal" is not what it says.
+    const id = await page.evaluate(() => window.wash.windows().find((w) => w.element === 'wash-app-term')!.windowID);
     await page.evaluate((wid) => window.wash.maximizeWindow(wid), id);
     await page.waitForTimeout(300);
 

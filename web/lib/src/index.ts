@@ -38,8 +38,10 @@ export {
   fontById,
   TERM_THEMES,
   themeById,
+  parseOsc7,
+  TERM_SCROLLBACK_LINES,
 } from './terminal';
-export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme } from './terminal';
+export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme, TermSearchOptions, TermCursorStyle, TermLinks } from './terminal';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';

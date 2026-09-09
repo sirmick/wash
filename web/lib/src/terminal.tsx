@@ -7,14 +7,18 @@
 // picker now lives in the consumer's menubar, not this menu), and
 // the OSC window title (surfaced via onTitle).
 //
-// xterm and addon-fit are externalized to the shared vendor bundle
-// (web/shell/build-vendor.mjs); consumers' vite configs already
-// include both names in `rollupOptions.external`.
+// xterm and its addons (fit, search, web-links, unicode11) are externalized to the shared
+// vendor bundle (web/shell/build-vendor.mjs); consumers' vite configs
+// already list every name in `rollupOptions.external`.
 
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import type { ISearchOptions } from '@xterm/addon-search';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { ensureScrollbarStyles } from './scrollbars';
-import type { ITheme } from '@xterm/xterm';
+import type { ILink, ILinkProvider, ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 
@@ -327,6 +331,23 @@ function modesToSeq(m: TermModes): string {
   return s;
 }
 
+// parseOsc7 turns an OSC 7 payload into a path. The payload is a
+// `file://` URL whose host is the machine name (empty or "localhost" in
+// the common case); a non-file scheme yields null. The host is not
+// checked here — a shell reached over ssh reports ITS paths, and the
+// consumer's backend already refuses a directory that does not exist
+// locally, which is the check that matters. Percent-escapes are decoded
+// (a space is `%20` on the wire).
+export function parseOsc7(data: string): string | null {
+  const m = /^file:\/\/[^/]*(\/.*)$/.exec(data.trim());
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
+}
+
 // Bound on distinct tracked mode numbers — a guardrail against a
 // hostile/buggy stream growing the persisted blob without limit.
 const MAX_TRACKED_MODES = 64;
@@ -345,6 +366,11 @@ export interface TerminalAPI {
   // system clipboards and returns whether there was anything to copy.
   copySelection: () => boolean;
   paste: () => void;
+  // pasteText types text into the pty as if it had been pasted (bracketed
+  // paste and all), bypassing the clipboard. For text the CONSUMER
+  // composed — dropped file paths, a snippet — where a smart-paste
+  // dialog about "structure" would be about the consumer's own quoting.
+  pasteText: (text: string) => void;
   selectAll: () => void;
   clearScreen: () => void;
   hasSelection: () => boolean;
@@ -355,7 +381,72 @@ export interface TerminalAPI {
   // the right size up front instead of 80×24-then-resize, so the first
   // prompt is drawn at the width the pane will have. Null before mount.
   proposeGrid: (w: number, h: number) => { cols: number; rows: number } | null;
+  // Find in scrollback (@xterm/addon-search). findNext/findPrevious scroll
+  // the viewport to the match and decorate every hit; they return whether
+  // anything matched. clearSearch drops the decorations (closing the find
+  // bar). onSearchResults reports the live "n of m" whenever it changes;
+  // resultCount is -1 when the addon stopped counting (past its highlight
+  // limit). Returns an unsubscribe.
+  findNext: (query: string, opts?: TermSearchOptions) => boolean;
+  findPrevious: (query: string, opts?: TermSearchOptions) => boolean;
+  clearSearch: () => void;
+  onSearchResults: (cb: (r: { resultIndex: number; resultCount: number }) => void) => () => void;
 }
+
+// TermSearchOptions is the consumer-facing slice of the addon's options:
+// the three toggles a find bar exposes. Decoration colours are the
+// component's (they follow the theme), not the consumer's.
+export interface TermSearchOptions {
+  regex?: boolean;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  // incremental: the query grew by a character, so a match that still
+  // starts at the current selection stays put instead of jumping ahead.
+  incremental?: boolean;
+}
+
+// TermLinks turns terminal output into something clickable. It is a pure
+// seam: this component finds the candidates and draws the underline, the
+// consumer decides what a path IS and what opening one means — a terminal
+// component has no business knowing about wash's open routing, and the
+// same component runs in edit's agent pane where "open" means something
+// else again.
+export interface TermLinks {
+  // openUrl activates @xterm/addon-web-links: http(s) URLs in output get
+  // underlined and clicking one calls this. Omit and no URL handling is
+  // installed at all (the addon is not even loaded).
+  openUrl?: (uri: string) => void;
+  // probePaths is asked, per visible line, which of the path-shaped tokens
+  // on it actually exist. It gets the raw tokens as they appear in the
+  // output (absolute, ./relative, or ~/…) and returns the subset that is
+  // real; the consumer resolves them against whatever it thinks the cwd is
+  // and is expected to cache, because this runs on every render of every
+  // line the pointer crosses. Omit and no path links are offered.
+  probePaths?: (tokens: string[]) => Promise<string[]>;
+  // openPath is the click, with the token exactly as probePaths saw it.
+  openPath?: (token: string) => void;
+}
+
+// PATH_TOKEN matches what could be a path in terminal output: absolute
+// (/etc/hosts), explicitly relative (./x, ../x) or home-relative (~/x).
+// A bare `foo/bar` is deliberately NOT a candidate — in a terminal most
+// such tokens are not paths (git branches, urls' tails, "and/or"), and a
+// wrong underline is worse than a missing one. The trailing character
+// class excludes what usually terminates a path in prose rather than
+// belonging to it; a real file whose name ends in one of those is the
+// price.
+const PATH_TOKEN = /(?:~|\.{1,2})?\/[^\s'"`<>|()[\]{}]*[^\s'"`<>|()[\]{},.;:!?]/g;
+
+// TermCursorStyle is xterm's cursor shapes, named for a preferences UI.
+export type TermCursorStyle = 'block' | 'underline' | 'bar';
+
+// IS_MAC decides macOptionIsMeta. It is a property of the KEYBOARD the
+// browser is attached to, not a user preference: on a Mac, Option+key
+// produces a composed character (Option+B is ∫), so without this every
+// Meta binding in readline, emacs and vim is unreachable from a wash
+// terminal. Everywhere else the same flag would break AltGr.
+const IS_MAC = typeof navigator !== 'undefined'
+  && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
 
 export interface TerminalProps {
   // channelId opts the component into the raw-channel I/O path:
@@ -393,6 +484,12 @@ export interface TerminalProps {
   // whenever the running program sets it — used by the term app to
   // label the tab. Empty string when the program clears the title.
   onTitle?: (title: string) => void;
+  // onCwd fires with the shell's working directory whenever it reports
+  // one through OSC 7 (`ESC ] 7 ; file://host/path BEL` — zsh, fish, and
+  // bash with a PROMPT_COMMAND hook all emit it). A consumer uses it to
+  // start the next tab where this one is. Absent for shells that never
+  // report; the consumer's backend falls back to /proc.
+  onCwd?: (cwd: string) => void;
   // contextMenu enables the right-click Copy/Paste menu (default on).
   contextMenu?: boolean;
   // menuExtras appends host-supplied items to that menu (below a
@@ -429,6 +526,26 @@ export interface TerminalProps {
   // can use this to show a "terminal stalled — recovering…" affordance
   // instead of leaving the user staring at an unexplained black screen.
   onStalled?: () => void;
+  // cursorStyle / cursorBlink are the caller's cursor preference, applied
+  // live. Defaults: a blinking block, which is what xterm does anyway.
+  cursorStyle?: TermCursorStyle;
+  cursorBlink?: boolean;
+  // scrollback overrides TERM_SCROLLBACK_LINES — the desktop-wide
+  // preference. Applied live, so raising it keeps what is already there
+  // and lowering it trims from the top.
+  scrollback?: number;
+  // onBell fires on BEL (\a) from the program. The component draws
+  // nothing itself — what a bell should LOOK like is the consumer's
+  // (a pane flash, a tab badge, a window attention flag).
+  onBell?: () => void;
+  // onActivity fires when output arrives, coalesced to at most one call
+  // per ACTIVITY_MS. A per-byte callback would be a signal write per
+  // frame during a build.
+  onActivity?: () => void;
+  // links makes output clickable — http(s) URLs and existing file paths.
+  // Read once at mount (the callbacks are read live, so a consumer can
+  // close over changing state).
+  links?: TermLinks;
 }
 
 export const Terminal: Component<TerminalProps> = (props) => {
@@ -436,6 +553,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
   let term: XTerm | null = null;
   let fit: FitAddon | null = null;
+  let search: SearchAddon | null = null;
 
   // Right-click menu position (null = closed) + cached selection
   // state captured at open time so Copy can grey out with no
@@ -469,8 +587,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // is the caller's responsibility — they hold the api.write
   // handle and decide when to feed bytes.
   let pending: Uint8Array[] | null = [];
+  // ACTIVITY_MS coalesces onActivity. Long enough that a noisy build is a
+  // handful of calls a second, short enough that a single line of output
+  // in a background tab lights its dot at once.
+  const ACTIVITY_MS = 250;
+  let lastActivityAt = 0;
   const writeOrBuffer = (bytes: Uint8Array) => {
     awaitingOutput = false;
+    if (props.onActivity) {
+      const now = Date.now();
+      if (now - lastActivityAt >= ACTIVITY_MS) {
+        lastActivityAt = now;
+        props.onActivity();
+      }
+    }
     if (pending) pending.push(bytes);
     else term?.write(bytes);
   };
@@ -514,6 +644,85 @@ export const Terminal: Component<TerminalProps> = (props) => {
       rows: Math.max(1, Math.floor(availH / cell.height)),
     };
   };
+
+  // searchOptions merges the consumer's toggles with the decoration set.
+  // Decorations are what make a find bar usable in a terminal: without
+  // them only the active match (the selection) is visible, and the other
+  // hits on screen are invisible. Colours are fixed amber/orange — legible
+  // on every palette in TERM_THEMES, light or dark — with a border so a
+  // match on a same-coloured cell still reads.
+  const searchOptions = (o?: TermSearchOptions): ISearchOptions => ({
+    regex: !!o?.regex,
+    caseSensitive: !!o?.caseSensitive,
+    wholeWord: !!o?.wholeWord,
+    incremental: !!o?.incremental,
+    decorations: {
+      matchBackground: '#7a5c00',
+      matchBorder: '#c49a00',
+      matchOverviewRuler: '#c49a00',
+      activeMatchBackground: '#c46a00',
+      activeMatchBorder: '#ffb84d',
+      activeMatchColorOverviewRuler: '#ffb84d',
+    },
+  });
+
+  // ---- path links ----
+  //
+  // lineCells reads one buffer line as a string PLUS a per-character map
+  // back to its column, walking cells rather than using translateToString
+  // so a CJK or emoji cell earlier on the line doesn't shift every
+  // underline that follows it by a column.
+  const lineCells = (y: number): { text: string; cols: number[] } | null => {
+    const buf = term?.buffer.active;
+    const line = buf?.getLine(y - 1);
+    if (!buf || !line) return null;
+    const cell = buf.getNullCell();
+    let text = '';
+    const cols: number[] = [];
+    for (let x = 0; x < line.length; x++) {
+      line.getCell(x, cell);
+      if (cell.getWidth() === 0) continue; // right half of a wide cell
+      const chars = cell.getChars() || ' ';
+      for (let i = 0; i < chars.length; i++) cols.push(x);
+      text += chars;
+    }
+    return { text, cols };
+  };
+
+  // pathLinkProvider underlines the path-shaped tokens on a line that the
+  // consumer confirms exist. xterm asks per line, lazily, as the pointer
+  // moves — so the probe is only ever run for lines someone is pointing
+  // at, and the consumer caches the answers.
+  const pathLinkProvider = (): ILinkProvider => ({
+    provideLinks(y, callback) {
+      const cells = lineCells(y);
+      if (!cells || !cells.text) { callback(undefined); return; }
+      PATH_TOKEN.lastIndex = 0;
+      const found: { token: string; start: number; end: number }[] = [];
+      for (let m = PATH_TOKEN.exec(cells.text); m; m = PATH_TOKEN.exec(cells.text)) {
+        found.push({ token: m[0], start: m.index, end: m.index + m[0].length - 1 });
+      }
+      if (!found.length) { callback(undefined); return; }
+      const probe = props.links?.probePaths;
+      if (!probe) { callback(undefined); return; }
+      probe(found.map((f) => f.token)).then((real) => {
+        const ok = new Set(real);
+        const links: ILink[] = [];
+        for (const f of found) {
+          if (!ok.has(f.token)) continue;
+          const sx = cells.cols[f.start];
+          const ex = cells.cols[f.end];
+          if (sx === undefined || ex === undefined) continue;
+          links.push({
+            range: { start: { x: sx + 1, y }, end: { x: ex + 1, y } },
+            text: f.token,
+            activate: (ev, text) => { ev.preventDefault(); props.links?.openPath?.(text); },
+          });
+        }
+        callback(links.length ? links : undefined);
+      }).catch(() => callback(undefined));
+    },
+  });
 
   // holdFits suppresses every fit while a restored session's replay
   // is still parsing — xterm.write is async, and a ResizeObserver
@@ -664,14 +873,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
       fontFamily: initialFamily,
       fontSize: effectiveSize(),
       theme: props.theme ?? termThemeFor(props.appearanceOverride ?? washAppearance()),
-      cursorBlink: true,
+      cursorBlink: props.cursorBlink ?? true,
+      cursorStyle: props.cursorStyle ?? 'block',
+      macOptionIsMeta: IS_MAC,
       // The router keeps up to 4 MiB of output for a channel nobody is
       // reading (a closed lid, a refreshed tab), and replays it on
       // reattach. xterm's default of 1000 lines would throw most of that
       // away on arrival — ~80 KB at 80 columns — so the retained history
       // is raised to match. Lines are allocated as they arrive, so an
       // idle terminal pays nothing for the higher ceiling.
-      scrollback: TERM_SCROLLBACK_LINES,
+      scrollback: props.scrollback ?? TERM_SCROLLBACK_LINES,
       allowProposedApi: true,
       wordSeparator: TERM_WORD_SEPARATORS,
     });
@@ -758,6 +969,34 @@ export const Terminal: Component<TerminalProps> = (props) => {
     }
     fit = new FitAddon();
     term.loadAddon(fit);
+    search = new SearchAddon();
+    term.loadAddon(search);
+    // Unicode 11 widths. Without it xterm measures emoji and much of CJK
+    // with Unicode 6 tables, so a starship / powerlevel prompt or any
+    // TUI that draws with them lands its columns one cell out and the
+    // whole line smears. Registering the provider is not enough — the
+    // active version has to be switched to it.
+    if (props.onBell) term.onBell(() => props.onBell?.());
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = '11';
+    // Links. Both halves are opt-in: nothing is registered unless the
+    // consumer supplied the corresponding callback, so a terminal with no
+    // `links` prop behaves exactly as before.
+    if (props.links?.openUrl) {
+      term.loadAddon(new WebLinksAddon((ev, uri) => {
+        ev.preventDefault();
+        props.links?.openUrl?.(uri);
+      }));
+    }
+    if (props.links?.probePaths) term.registerLinkProvider(pathLinkProvider());
+    // Cursor preference, applied live so a menu change does not need a
+    // remount (which would drop the scrollback).
+    createEffect(() => {
+      if (!term) return;
+      term.options.cursorStyle = props.cursorStyle ?? 'block';
+      term.options.cursorBlink = props.cursorBlink ?? true;
+      term.options.scrollback = props.scrollback ?? TERM_SCROLLBACK_LINES;
+    });
     term.open(hostEl);
     // The left/right inset (so the first and last columns aren't jammed
     // against the window edge) goes on the .xterm ELEMENT, not on the host
@@ -794,6 +1033,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // OSC window title (set by the shell's PROMPT_COMMAND, vim, ssh, …)
     // bubbles to the consumer so it can label the tab.
     if (props.onTitle) term.onTitleChange((t) => props.onTitle?.(t));
+    // OSC 7 — the shell's cwd. Observed, never consumed (return false so
+    // xterm's default handling, which is nothing, still runs); wrapped so a
+    // throw can never wedge the parser (see noteDec).
+    if (props.onCwd) {
+      term.parser.registerOscHandler(7, (data) => {
+        try {
+          const cwd = parseOsc7(data);
+          if (cwd !== null) props.onCwd?.(cwd);
+        } catch (e) {
+          window.wash.log('error', 'terminal', `onCwd threw: ${e}`, (e as Error)?.stack);
+        }
+        return false;
+      });
+    }
 
     // PuTTY-style select = copy: xterm keeps its own selection model
     // (not a DOM selection), so on selection-end we push the selected
@@ -894,10 +1147,18 @@ export const Terminal: Component<TerminalProps> = (props) => {
             return true;
           },
           paste: () => pasteWash(),
+          pasteText: (text: string) => { if (text) term?.paste(text); },
           selectAll: () => term?.selectAll(),
           clearScreen: () => term?.clear(),
           hasSelection: () => !!term?.hasSelection(),
           proposeGrid,
+          findNext: (q, o) => (q && search ? search.findNext(q, searchOptions(o)) : false),
+          findPrevious: (q, o) => (q && search ? search.findPrevious(q, searchOptions(o)) : false),
+          clearSearch: () => search?.clearDecorations(),
+          onSearchResults: (cb) => {
+            const d = search?.onDidChangeResults((r) => cb(r));
+            return () => d?.dispose();
+          },
         });
       };
       if (restored && drain.length) {
@@ -925,6 +1186,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       term?.dispose();
       term = null;
       fit = null;
+      search = null;
     });
   });
 

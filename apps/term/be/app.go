@@ -11,6 +11,8 @@
 //
 //	wash-term                # spawn the user's $SHELL
 //	wash-term --exec ARGS... # spawn ARGS instead; tab closes on exit
+//	wash-term --open DIR     # first shell starts in DIR (the router's
+//	                         # open-routing argv, sdk LaunchOpenPath)
 //
 // --exec is what wash-priv uses to run a single command as root in a
 // real terminal window — sudo doesn't need to live in this app
@@ -30,6 +32,7 @@ import (
 	"log"
 	"os"
 	osuser "os/user"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -51,6 +54,11 @@ var execArgv []string
 // pick up profile-sourced PATH, prompt colours, and root's
 // environment for Root Terminal launches.
 var loginShell bool
+
+// openDir is the directory the first tab starts in — `--open <dir>`,
+// validated in onReady. Empty means "inherit the process cwd", which is
+// what every launch did before.
+var openDir string
 
 // loginShellPath picks the shell for --login. It does NOT trust
 // $SHELL first — when wash-term has been exec'd by sudo, $SHELL is
@@ -101,6 +109,10 @@ type state struct {
 	// closes only once every session AND every held tab is gone, so a
 	// `wash-term --exec` whose command fails fast is read, not lost.
 	held map[uint32]*pty.Session
+	// cwd is the directory each tab's shell last REPORTED via OSC 7 (the
+	// FE forwards it as tab_cwd). A shell that never emits OSC 7 — stock
+	// bash — has no entry, and cwdOf falls back to /proc/<pid>/cwd.
+	cwd map[uint32]string
 }
 
 // initState allocates the per-window maps. Both entrypoints (Def for the
@@ -109,6 +121,78 @@ func initState() {
 	st.sessions = make(map[uint32]*pty.Session)
 	st.statusSent = make(map[uint32]string)
 	st.held = make(map[uint32]*pty.Session)
+	st.cwd = make(map[uint32]string)
+}
+
+// maxProbePaths caps one path_probe: a link provider asks per line, and a
+// line of terminal output that genuinely holds more than this many paths is
+// a haystack nobody is going to click in.
+const maxProbePaths = 64
+
+// resolveTermPath turns a token as it appeared in terminal output into an
+// absolute path: `~/x` against $HOME, `./x` and `../x` against the tab's
+// cwd, `/x` as itself. Empty when there is nothing sane to resolve against
+// (a relative token in a tab whose cwd is unknown), which reads as "not a
+// path" to both callers.
+func resolveTermPath(base, tok string) string {
+	if tok == "" {
+		return ""
+	}
+	switch {
+	case tok == "~" || strings.HasPrefix(tok, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		return filepath.Join(home, strings.TrimPrefix(tok[1:], "/"))
+	case filepath.IsAbs(tok):
+		return filepath.Clean(tok)
+	case strings.HasPrefix(tok, "./") || strings.HasPrefix(tok, "../"):
+		if base == "" {
+			return ""
+		}
+		return filepath.Join(base, tok)
+	}
+	return ""
+}
+
+// cwdOf is the directory a tab "is in": what its shell reported through
+// OSC 7 if it ever did, else what the kernel says the shell's cwd is.
+// Empty for a tab that is gone or unreadable — the caller inherits.
+func cwdOf(id uint32) string {
+	st.mu.Lock()
+	reported := st.cwd[id]
+	sess := st.sessions[id]
+	st.mu.Unlock()
+	if reported != "" {
+		if fi, err := os.Stat(reported); err == nil && fi.IsDir() {
+			return reported
+		}
+	}
+	if sess == nil {
+		return ""
+	}
+	return sess.Cwd()
+}
+
+// resolveOpenDir validates the --open argument: it must name an existing
+// directory. Anything else is logged and ignored, so a stale path never
+// stops a terminal from opening — you just get one in the default cwd.
+func resolveOpenDir(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		log.Printf("wash-term: --open %q: %v (ignored)", path, err)
+		return ""
+	}
+	fi, err := os.Stat(abs)
+	if err != nil || !fi.IsDir() {
+		log.Printf("wash-term: --open %q is not a directory (ignored)", path)
+		return ""
+	}
+	return abs
 }
 
 // exitBanner is the in-band epilogue written into a held tab's channel
@@ -227,7 +311,12 @@ func init() {
 			Icon:            termIcon,
 			Accent:          "#6dc878",
 			Instancing:      sdk.InstancingMulti,
-			Window:          &sdk.WindowHints{DefaultWidth: 800, DefaultHeight: 480},
+			// CapOpen routes a clicked file path in terminal output
+			// through the router's open routing (edit / imageview by
+			// extension); CapSpawn is what lets a clicked DIRECTORY
+			// open in fm, which open routing has no extension for.
+			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
+			Window:       &sdk.WindowHints{DefaultWidth: 800, DefaultHeight: 480},
 			// "Root Terminal" launcher row. --login makes root's shell
 			// source profile/bashrc so PATH / PS1 / colour match a
 			// fresh login rather than wash-priv's parent env.
@@ -293,10 +382,32 @@ func parseFlags() {
 // foreground sync path so a goroutine is the safer pattern uniformly.
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-term ready instance=%s window=%d", instanceID, windowID)
+	openDir = resolveOpenDir(c.LaunchOpenPath())
+	if openDir != "" {
+		log.Printf("wash-term: open dir=%s", openDir)
+	}
+	// PATH shims (apps/term/be/shims.go): xdg-open, so programs that
+	// already know how to open things reach `wash open`. Set in this
+	// process's own env because pty.WithWashEnv reads WASH_SHIM_DIR from
+	// the env each shell inherits.
+	if dir := installShims(); dir != "" {
+		_ = os.Setenv("WASH_SHIM_DIR", dir)
+	}
+	// WASH_TERM_INSTANCE is how `wash open` (and the xdg-open shim) finds
+	// its way back here: it addresses this window over the control socket
+	// and lets THIS process do the opening, which is the half that holds
+	// CapOpen and CapSpawn. Deliberately not called WASH_INSTANCE_ID —
+	// that name means "you ARE this instance" to the SDK's attach path,
+	// and a shell full of children must not claim to be the terminal.
+	_ = os.Setenv("WASH_TERM_INSTANCE", instanceID)
 	bus := sdk.NewBus(c)
 	registerHandlers(bus)
-	go openTab(c, windowID, 80, 24)
+	go openTabExec(c, windowID, 80, 24, nil, "", openDir)
 	go pollTabStatus(c)
+	// Desktop-wide prefs: push what is on disk, then keep pushing when
+	// another terminal window changes it (apps/term/be/prefs.go).
+	pushPrefs(c, true)
+	watchPrefs(c)
 }
 
 // pollTabStatus walks every live PTY's foreground process group once a
@@ -363,6 +474,16 @@ type newTabReq struct {
 	// produces so the FE can match the reply to what it asked for (a split
 	// records its placement against this id).
 	Req string `json:"req"`
+	// From is the tab the new one inherits its working directory from —
+	// the focused tab, by channel id. Zero (or a tab that is gone) means
+	// the default cwd.
+	From uint64 `json:"from"`
+}
+
+// tabCwdReq is the FE forwarding a shell's OSC 7 report for one tab.
+type tabCwdReq struct {
+	ChannelID uint64 `json:"channel_id"`
+	Cwd       string `json:"cwd"`
 }
 
 // execTabReq is the resume path's tab request (§13). Exec is the argv to
@@ -372,6 +493,46 @@ type execTabReq struct {
 	Rows uint64   `json:"rows"`
 	Exec []string `json:"exec"`
 	Cwd  string   `json:"cwd,omitempty"`
+}
+
+// prefsSetReq is a partial preferences update from the FE.
+type prefsSetReq struct {
+	Prefs termPrefs `json:"prefs"`
+}
+
+// setTitleReq is the FE's window title (the focused tab's label).
+type setTitleReq struct {
+	Title string `json:"title"`
+}
+
+// restartTabReq replaces one tab's shell in place.
+type restartTabReq struct {
+	ChannelID uint64 `json:"channel_id"`
+	Cols      uint64 `json:"cols"`
+	Rows      uint64 `json:"rows"`
+}
+
+// bellReq is a BEL from one tab's program.
+type bellReq struct {
+	ChannelID uint64 `json:"channel_id"`
+}
+
+// pathProbeReq asks which of Paths exist, resolved against the tab's cwd.
+// The FE sends the tokens exactly as they appear in the output; Ok comes
+// back holding the same strings, so the FE can key its cache on them.
+type pathProbeReq struct {
+	ChannelID uint64   `json:"channel_id"`
+	Paths     []string `json:"paths"`
+}
+
+type pathProbeReply struct {
+	Ok []string `json:"ok"`
+}
+
+// pathOpenReq is the click on one of those tokens.
+type pathOpenReq struct {
+	ChannelID uint64 `json:"channel_id"`
+	Path      string `json:"path"`
 }
 
 type closeTabReq struct {
@@ -409,8 +570,90 @@ func registerHandlers(b *sdk.Bus) {
 		if rows == 0 {
 			rows = 24
 		}
-		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), nil, req.Req)
+		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), nil, req.Req, cwdOf(uint32(req.From)))
 		return nil
+	})
+	// tab_cwd: the FE saw an OSC 7 (file://host/path) from this tab's
+	// shell. Recorded per tab so a New Tab / split inherits it even when
+	// /proc is not readable (a root shell under a user-owned wash-term).
+	sdk.HandleVoid(b, "tab_cwd", func(_ *sdk.Conn, _ string, req tabCwdReq) error {
+		if req.ChannelID == 0 {
+			return nil
+		}
+		st.mu.Lock()
+		if req.Cwd == "" {
+			delete(st.cwd, uint32(req.ChannelID))
+		} else {
+			st.cwd[uint32(req.ChannelID)] = req.Cwd
+		}
+		st.mu.Unlock()
+		// Deduped FE-side (one line per change, not per prompt).
+		log.Printf("wash-term tab cwd ch=%d cwd=%q", req.ChannelID, req.Cwd)
+		return nil
+	})
+	// prefs_set: the FE changed a desktop-wide preference (font, palette,
+	// smart-paste mode, cursor, scrollback). Merged into the file and
+	// pushed back; every OTHER terminal window picks it up through its
+	// watch on the file.
+	sdk.HandleVoid(b, "prefs_set", func(c *sdk.Conn, _ string, req prefsSetReq) error {
+		setPrefs(c, req.Prefs)
+		return nil
+	})
+	// prefs_get: a freshly mounted FE asking for the file. A reload
+	// reattaches to this same process, whose onReady has long since run,
+	// so without this the new FE would sit on the defaults.
+	sdk.HandleVoid(b, "prefs_get", func(c *sdk.Conn, _ string, _ struct{}) error {
+		pushPrefs(c, true)
+		return nil
+	})
+	// bell: a program in this tab rang BEL. The window asks for the human;
+	// the router shows that only while the window is not focused, and
+	// clears it the moment it is (docs/AGENT_UX.md N6) — so this is
+	// unconditional here on purpose, rather than the FE guessing at focus.
+	sdk.HandleVoid(b, "bell", func(c *sdk.Conn, _ string, req bellReq) error {
+		log.Printf("wash-term bell ch=%d", req.ChannelID)
+		return c.Attention(true)
+	})
+	// path_probe / path_open: the FE's link provider found path-shaped
+	// tokens on a line and wants to know which are real (only real ones
+	// get underlined), then opens the one that was clicked. Resolution is
+	// the tab's cwd, so `./build.sh` in a shell that cd'd somewhere means
+	// what the user sees, not what wash-term's own process cwd is.
+	sdk.Handle(b, "path_probe", func(_ *sdk.Conn, _ string, req pathProbeReq) (pathProbeReply, error) {
+		base := cwdOf(uint32(req.ChannelID))
+		ok := make([]string, 0, len(req.Paths))
+		for i, tok := range req.Paths {
+			if i >= maxProbePaths {
+				break
+			}
+			if abs := resolveTermPath(base, tok); abs != "" {
+				if _, err := os.Lstat(abs); err == nil {
+					ok = append(ok, tok)
+				}
+			}
+		}
+		return pathProbeReply{Ok: ok}, nil
+	})
+	sdk.HandleVoid(b, "path_open", func(c *sdk.Conn, _ string, req pathOpenReq) error {
+		abs := resolveTermPath(cwdOf(uint32(req.ChannelID)), req.Path)
+		if abs == "" {
+			return nil
+		}
+		fi, err := os.Stat(abs)
+		if err != nil {
+			log.Printf("term: path_open %q: %v", req.Path, err)
+			c.Warn("Cannot open", req.Path+": "+err.Error())
+			return nil
+		}
+		// A directory has no extension for the router to route on, so
+		// term names the handler itself; anything else goes through open
+		// routing, which is where the edit/imageview association lives.
+		if fi.IsDir() {
+			log.Printf("term: path_open dir=%q -> com.wash.fm", abs)
+			return c.SpawnRequestOpen("com.wash.fm", abs)
+		}
+		log.Printf("term: path_open file=%q -> open routing", abs)
+		return c.OpenPath(abs)
 	})
 	// exec_tab opens a tab running a specific command — the session-resume
 	// path (docs/AGENT_TERM.md §13). Honoured ONLY from com.wash.agentd,
@@ -438,8 +681,8 @@ func registerHandlers(b *sdk.Bus) {
 		if rows == 0 {
 			rows = 24
 		}
-		log.Printf("term: exec_tab from=%s argv=%q", from.AppID, req.Exec)
-		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), req.Exec, "")
+		log.Printf("term: exec_tab from=%s argv=%q cwd=%q", from.AppID, req.Exec, req.Cwd)
+		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), req.Exec, "", req.Cwd)
 		return nil
 	})
 	// list_sessions is the FE's mount-time reconcile: a `tab_closed`
@@ -521,21 +764,64 @@ func registerHandlers(b *sdk.Bus) {
 		sess.CloseWithReason("user requested")
 		return nil
 	})
+	// set_title: the FE's focused tab changed (or was renamed). The
+	// titlebar verb existed and had never been used, so every terminal
+	// window was called "Terminal" however many were open.
+	sdk.HandleVoid(b, "set_title", func(c *sdk.Conn, _ string, req setTitleReq) error {
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			title = "Terminal"
+		}
+		return c.SetTitle(title)
+	})
+	// restart_tab: kill this tab's shell and start a fresh one in the same
+	// directory. For a shell that has wedged, or one whose environment has
+	// changed under it. The new pty is a NEW channel — the FE removes the
+	// old tab on tab_closed and places the replacement in the group it
+	// focused before asking, which is the pane the old one was in.
+	sdk.HandleVoid(b, "restart_tab", func(c *sdk.Conn, _ string, req restartTabReq) error {
+		if req.ChannelID == 0 {
+			return nil
+		}
+		id := uint32(req.ChannelID)
+		dir := cwdOf(id)
+		st.mu.Lock()
+		sess := st.sessions[id]
+		st.mu.Unlock()
+		cols := req.Cols
+		rows := req.Rows
+		if cols == 0 {
+			cols = 80
+		}
+		if rows == 0 {
+			rows = 24
+		}
+		log.Printf("wash-term restart ch=%d cwd=%q", id, dir)
+		// Open the replacement BEFORE killing the old shell. The window
+		// closes itself once the last session and the last held tab are
+		// gone, so a restart that killed first would tear down the window
+		// it was restarting a tab in.
+		go func() {
+			openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), nil, "", dir)
+			if sess != nil {
+				sess.CloseWithReason("restart requested")
+			} else {
+				dismissHeld(c, id)
+			}
+		}()
+		return nil
+	})
 }
 
-// openTab forks a shell (or --exec argv), opens a raw channel, and
-// hands both to internal/pty.Open which wires them with io.Copy
-// pairs. Reports tab_opened / tab_closed app_msgs to the FE.
-func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
-	openTabExec(c, windowID, cols, rows, nil, "")
-}
-
-// openTabExec is openTab with an optional argv override — the resume path
-// (§13) runs a specific command instead of the user's shell. An overridden
-// tab autocloses when the command exits, matching --exec semantics. req is
-// the FE's request id, echoed on the reply (empty for tabs nobody in the
-// FE asked for, so a reconcile or an exec_tab can never claim a split).
-func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []string, req string) {
+// openTabExec forks a shell (or --exec argv), opens a raw channel, and
+// hands both to internal/pty.Open which wires them with io.Copy pairs.
+// Reports tab_opened / tab_closed app_msgs to the FE. override runs a
+// specific command instead of the user's shell — the resume path (§13);
+// such a tab autocloses when the command exits, matching --exec
+// semantics. req is the FE's request id, echoed on the reply (empty for
+// tabs nobody in the FE asked for, so a reconcile or an exec_tab can
+// never claim a split). dir is where the child starts; empty inherits.
+func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []string, req string, dir string) {
 	var argv []string
 	switch {
 	case len(override) > 0:
@@ -574,6 +860,7 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 		_, found := st.sessions[s.ID()]
 		delete(st.sessions, s.ID())
 		delete(st.statusSent, s.ID())
+		delete(st.cwd, s.ID())
 		st.mu.Unlock()
 		if !found {
 			return
@@ -609,7 +896,7 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 			// the user doesn't sit looking at an empty terminal.
 			_ = c.ConfirmClose(c.WindowID(), true)
 		}
-	}, pty.WithExitHold(holdFn))
+	}, pty.WithExitHold(holdFn), pty.WithDir(dir))
 	if err != nil {
 		log.Printf("wash-term open: %v", err)
 		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error(), "req": req})
@@ -619,7 +906,7 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 	st.sessions[sess.ID()] = sess
 	st.mu.Unlock()
 
-	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d cols=%d rows=%d", sess.ID(), sess.Shell, sess.Cmd().Process.Pid, cols, rows)
+	log.Printf("wash-term tab opened ch=%d shell=%s pid=%d cols=%d rows=%d cwd=%q", sess.ID(), sess.Shell, sess.Cmd().Process.Pid, cols, rows, dir)
 	_ = c.SendAppMsg(map[string]any{
 		"kind":       "tab_opened",
 		"channel_id": uint64(sess.ID()),

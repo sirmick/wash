@@ -17,22 +17,23 @@
 // handle from each <Terminal> via onReady so tab activation can
 // trigger focus/fit.
 
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Check, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User } from 'lucide-solid';
+import { Bell, Check, ChevronDown, ChevronUp, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
-  Button, ConfirmDialog,
+  Button, Checkbox, ConfirmDialog, Input,
   Menu, MenuItem, MenuSeparator, Tab, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
-  TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
+  TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_SCROLLBACK_LINES, TERM_THEMES, themeById,
   defineWashApp, tokens, WASH_SCROLL_CLASS,
 } from '@wash/ui';
-import type { PasteAnalysis, TermModes, TerminalAPI } from '@wash/ui';
+import type { PasteAnalysis, TermCursorStyle, TermModes, TermSearchOptions, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
 import { SplitIntents } from './intents';
 import type { SplitIntent } from './intents';
-import { fullTabLabel, shortShellName, tabLabelFor } from './tab-label';
+import { TAB_LABEL_MAX, fullTabLabel, shortShellName, tabLabelFor } from './tab-label';
+import { acceptsDrop, dropText, pathsFrom } from './drop-paths';
 import {
   DEFAULT_GUTTER, ROOT,
   addTab as treeAddTab, canSplit, channels as treeChannels, closeTab as treeCloseTab,
@@ -112,6 +113,10 @@ interface PersistedTabRow {
   modes?: TermModes;
   // color: tag color id (see TAG_COLORS), or absent for untagged.
   color?: string;
+  // name: a manual tab name. Beats the OSC title until it is cleared,
+  // which is the point of typing one — a shell that retitles on every
+  // prompt must not undo it.
+  name?: string;
 }
 
 // One row of the BE's `sessions` reply (list_sessions).
@@ -123,7 +128,7 @@ interface SessionRow {
 }
 
 // Menubar menus, in bar order.
-type MenuId = 'edit' | 'tab' | 'split' | 'theme' | 'font' | 'paste';
+type MenuId = 'edit' | 'tab' | 'split' | 'theme' | 'font' | 'paste' | 'cursor';
 
 // SmartPaste is the window-wide policy for the paste filter
 // (docs/AGENT_TERM.md §10):
@@ -149,6 +154,9 @@ interface PersistedState {
   // migrated to theme_id. No longer written.
   appearance?: 'dark' | 'light';
   smart_paste?: SmartPaste;
+  // Cursor shape / blink, window-wide like the font.
+  cursor_style?: TermCursorStyle;
+  cursor_blink?: boolean;
 }
 
 // STRIP_HEIGHT — every group carries its own tab strip, so this is paid
@@ -157,6 +165,14 @@ interface PersistedState {
 // three-way split doesn't eat a fifth of the window. (The old single bar
 // was 32 with a 4px gap above; there is no window titlebar to separate
 // from any more once strips sit inside the stage.)
+// CURSOR_STYLES — xterm's three shapes, in the order a preferences menu
+// wants them (the default first).
+const CURSOR_STYLES: { id: TermCursorStyle; label: string }[] = [
+  { id: 'block', label: 'Block' },
+  { id: 'underline', label: 'Underline' },
+  { id: 'bar', label: 'Bar' },
+];
+
 const STRIP_HEIGHT = 26;
 // Each split pane carries its own status bar. A single window-level bar made
 // the unfocused panes' ssh/root state invisible.
@@ -244,6 +260,34 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // apply across all tabs at once.
   const [fontId, setFontId] = createSignal(TERM_DEFAULT_FONT_ID);
   const [fontSize, setFontSize] = createSignal(TERM_DEFAULT_FONT_SIZE);
+  // Cursor shape / blink — window-wide, like the font, and applied live to
+  // every mounted <Terminal>.
+  const [cursorStyle, setCursorStyle] = createSignal<TermCursorStyle>('block');
+  const [cursorBlink, setCursorBlink] = createSignal(true);
+  // Scrollback lines, desktop-wide. 0 is never stored — the BE treats it
+  // as "unset" — so the component's own default stands until a preference
+  // is written.
+  const [scrollback, setScrollback] = createSignal(TERM_SCROLLBACK_LINES);
+  // ---- bell + activity ----
+  //
+  // bells: tabs that rang since you last looked at them. activity: tabs
+  // that produced OUTPUT while not visible. Both are per-tab marks, both
+  // cleared by looking at the tab, and neither is persisted — they are
+  // about this sitting, not about the window's shape.
+  // Manual tab names, and the tab currently being renamed. A name beats
+  // the OSC title until cleared; clearing it (an empty box) hands the tab
+  // back to whatever the program is calling itself.
+  const [tabNames, setTabNames] = createSignal<Map<number, string>>(new Map());
+  const [renaming, setRenaming] = createSignal<number | null>(null);
+  const [renameDraft, setRenameDraft] = createSignal('');
+  let renameInputEl: HTMLInputElement | undefined;
+  const [bells, setBells] = createSignal<Set<number>>(new Set());
+  const [activity, setActivity] = createSignal<Set<number>>(new Set());
+  // flashes: the tab whose pane is mid visual-bell, with a nonce so two
+  // bells in a row restart the flash rather than merging into one.
+  const [flash, setFlash] = createSignal<{ id: number; n: number } | null>(null);
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  let flashSeq = 0;
   // Window-wide terminal palette: undefined follows the desktop pack
   // appearance (default); a TERM_THEMES id pins a named palette (Dark,
   // Solarized Dark, Dracula, …). Set via the Theme menu; persisted like
@@ -259,6 +303,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     analysis: PasteAnalysis;
     resolve: (text: string | null) => void;
   } | null>(null);
+
+  // Find in scrollback. The bar targets ONE tab (the one focused when it
+  // opened) and floats over that pane's top-right corner; its query and
+  // toggles are window-wide so reopening it elsewhere keeps the last
+  // search. results is the addon's live "n of m" (count -1: past the
+  // highlight limit, so it stopped counting).
+  const [findTab, setFindTab] = createSignal<number | null>(null);
+  const [findQuery, setFindQuery] = createSignal('');
+  const [findRegex, setFindRegex] = createSignal(false);
+  const [findCase, setFindCase] = createSignal(false);
+  const [findResults, setFindResults] = createSignal<{ index: number; count: number } | null>(null);
+  let findInputEl: HTMLInputElement | undefined;
+  let unsubFind: (() => void) | undefined;
 
   // A close the BE refused because work is in the foreground, awaiting the
   // user's answer. scope 'tab' carries the one tab; scope 'window' carries
@@ -281,6 +338,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [tabTitles, setTabTitles] = createSignal<Map<number, string>>(new Map());
   // Per-tab user badge/status from the BE poll (see TabStatus).
   const [tabStatus, setTabStatus] = createSignal<Map<number, TabStatus>>(new Map());
+  // Per-tab cwd as the shell reported it via OSC 7 — forwarded to the BE
+  // (tab_cwd) so New Tab / split start there. Not reactive: nothing
+  // renders it; the BE is the reader. Shells that never emit OSC 7 leave
+  // no entry and the BE reads /proc instead.
+  const tabCwds = new Map<number, string>();
   // Tabs whose pty has ended but which the BE HELD open (`tab_exited`):
   // the command failed, was killed, or finished before anyone could read
   // it. The BE wrote the exit banner in-band; here the xterm just stays,
@@ -343,6 +405,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const removeTab = (channelID: number) => {
+    if (findTab() === channelID) closeFind();
+    pathCache.delete(channelID);
+    clearMarks(channelID);
+    if (flash()?.id === channelID) setFlash(null);
+    if (renaming() === channelID) setRenaming(null);
+    if (tabNames().has(channelID)) {
+      const next = new Map(tabNames());
+      next.delete(channelID);
+      setTabNames(next);
+    }
     apis.delete(channelID);
     sizes.delete(channelID);
     if (tagColors().has(channelID)) {
@@ -360,6 +432,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       next.delete(channelID);
       setTabStatus(next);
     }
+    tabCwds.delete(channelID);
     if (exitedTabs().has(channelID)) {
       const next = new Map(exitedTabs());
       next.delete(channelID);
@@ -431,7 +504,52 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // activate makes a channel the visible tab of its group AND focuses that
   // group — clicking a tab in an unfocused pane moves you there.
+  // visibleTab: this tab is the one its group is showing. An invisible
+  // tab is what "background" means here — a pane you can see is not
+  // something you need a dot to tell you about, even if another pane has
+  // the keyboard.
+  const visibleTab = (channelID: number): boolean =>
+    placement().groups.some((g) => g.group.active === channelID);
+
+  const clearMarks = (channelID: number) => {
+    if (bells().has(channelID)) {
+      const next = new Set(bells());
+      next.delete(channelID);
+      setBells(next);
+    }
+    if (activity().has(channelID)) {
+      const next = new Set(activity());
+      next.delete(channelID);
+      setActivity(next);
+    }
+  };
+
+  // onBell: the program rang. The pane flashes (a terminal bell you can
+  // see), the tab keeps a mark until you look at it, and the BE raises the
+  // window's attention flag — which the router shows only while the window
+  // is NOT focused and clears the moment it is, so an audible-bell-shaped
+  // annoyance can't follow you into the window you are already in.
+  const onBell = (channelID: number) => {
+    if (!visibleTab(channelID)) {
+      const next = new Set(bells());
+      next.add(channelID);
+      setBells(next);
+    }
+    setFlash({ id: channelID, n: ++flashSeq });
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => setFlash(null), 180);
+    send({ kind: 'bell', channel_id: channelID });
+  };
+
+  const onActivity = (channelID: number) => {
+    if (visibleTab(channelID) || activity().has(channelID)) return;
+    const next = new Set(activity());
+    next.add(channelID);
+    setActivity(next);
+  };
+
   const activate = (channelID: number) => {
+    clearMarks(channelID);
     const path = pathOfChannel(tree(), channelID);
     if (path === undefined) return;
     const already = active() === channelID && focusPath() === path;
@@ -468,11 +586,62 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // the tab's pane will have, so the pty opens at that size and the first
   // prompt is drawn at the right width instead of at 80×24 and reflowed a
   // frame later.
+  // The new tab starts in the focused tab's directory: `from` names it and
+  // the BE resolves the cwd (OSC 7 report, else /proc) at spawn time.
   const openNewTab = (intent?: SplitIntent) => {
     const req = splitIntents.mint();
     if (intent) splitIntents.set(req, intent);
     const grid = intent ? gridAfterSplit(intent) : gridOfGroup(focusPath());
-    send({ kind: 'new_tab', req, ...(grid ?? {}) });
+    send({ kind: 'new_tab', req, from: active(), ...(grid ?? {}) });
+  };
+
+  // onTabCwd forwards a shell's OSC 7 report. Deduped: a prompt hook emits
+  // it on every prompt, and an idle tab should stay off the wire.
+  const onTabCwd = (channelID: number, cwd: string) => {
+    if (tabCwds.get(channelID) === cwd) return;
+    tabCwds.set(channelID, cwd);
+    // Relative tokens resolve against this, so every cached verdict for
+    // this tab is now about a different file.
+    pathCache.delete(channelID);
+    send({ kind: 'tab_cwd', channel_id: channelID, cwd });
+  };
+
+  // ---- clickable paths ----
+  //
+  // <Terminal> finds path-shaped tokens on a line and asks whether they
+  // are real; only the BE can answer that (it is the side with a
+  // filesystem and with the tab's cwd), so the answer is a round trip —
+  // which is why it is cached per tab. xterm asks again for every line the
+  // pointer crosses, so an uncached provider would put a message on the
+  // wire for every mouse move.
+  const pathCache = new Map<number, Map<string, boolean>>();
+  const pendingProbes = new Map<string, (ok: string[]) => void>();
+  let probeSeq = 0;
+
+  const probePaths = async (channelID: number, tokens: string[]): Promise<string[]> => {
+    let cache = pathCache.get(channelID);
+    if (!cache) { cache = new Map(); pathCache.set(channelID, cache); }
+    const known: string[] = [];
+    const ask: string[] = [];
+    for (const t of tokens) {
+      const hit = cache.get(t);
+      if (hit === undefined) ask.push(t);
+      else if (hit) known.push(t);
+    }
+    if (!ask.length) return known;
+    const id = `p${++probeSeq}`;
+    const answered = await new Promise<string[]>((resolve) => {
+      // A BE that never answers (window tearing down) must not leave the
+      // provider's promise dangling — xterm holds its callback.
+      const timer = setTimeout(() => { pendingProbes.delete(id); resolve([]); }, 4000);
+      pendingProbes.set(id, (ok) => { clearTimeout(timer); resolve(ok); });
+      send({ kind: 'path_probe', id, channel_id: channelID, paths: ask });
+    });
+    const real = new Set(answered);
+    // Cache both verdicts: "not a path" is the common answer and the one
+    // worth not asking twice.
+    for (const t of ask) cache.set(t, real.has(t));
+    return [...known, ...answered];
   };
 
   // gridOfGroup is the grid a new tab in an existing group gets: that
@@ -612,27 +781,96 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (to !== undefined) focusGroup(to);
   };
 
-  // ---- font choice (window-wide, persisted) ----
+  // ---- appearance preferences (DESKTOP-wide, not per window) ----
+  //
+  // These used to live in this window's persisted blob, which made them
+  // per window: set a font, open a second terminal, get the default back.
+  // They now live in the BE's ~/.config/wash/term.json, which is also how
+  // they reach the other windows — wash-term is one process per window, so
+  // the file is the only channel they share (apps/term/be/prefs.go).
+  // Every setter applies LOCALLY at once (so the change is instant) and
+  // sends the patch; the echo back is a no-op, and the other windows'
+  // watches turn it into their own update.
+  const sendPrefs = (patch: Record<string, unknown>) => send({ kind: 'prefs_set', prefs: patch });
+  // prefsSeen: the BE has pushed the file at least once. Until then a
+  // restored window blob may still speak (the migration path).
+  let prefsSeen = false;
 
   const changeFontId = (id: string) => {
     if (fontId() === id) return;
     setFontId(id);
-    persist();
+    sendPrefs({ font_id: id });
   };
   const changeFontSize = (px: number) => {
     if (fontSize() === px) return;
     setFontSize(px);
-    persist();
+    sendPrefs({ font_size: px });
   };
-
-  // ---- theme (window-wide, persisted) ----
 
   // changeTheme pins a named palette by id, or undefined to follow the
   // desktop pack. The live switch reaches the mounted xterm via the
   // Terminal's `theme` prop effect — no remount.
   const changeTheme = (id: string | undefined) => {
     setThemeId(id);
-    persist();
+    // 'auto' is how "no pinned palette" travels: an absent key would mean
+    // "unchanged" to the BE's merge, which is the opposite.
+    sendPrefs({ theme_id: id ?? 'auto' });
+  };
+
+  const changeCursorStyle = (style: TermCursorStyle) => {
+    setCursorStyle(style);
+    sendPrefs({ cursor_style: style });
+  };
+  const changeCursorBlink = (on: boolean) => {
+    setCursorBlink(on);
+    sendPrefs({ cursor_blink: on });
+  };
+  const changeScrollback = (lines: number) => {
+    if (scrollback() === lines) return;
+    setScrollback(lines);
+    sendPrefs({ scrollback: lines });
+  };
+
+  // applyPrefs folds a BE push into the window. An absent key means "no
+  // preference stated", which is the default — never a reset of what this
+  // window already shows, so an older build's file can't blank the rest.
+  const applyPrefs = (p: Record<string, unknown>) => {
+    if (typeof p.font_id === 'string' && p.font_id) setFontId(p.font_id);
+    if (typeof p.font_size === 'number' && p.font_size > 0) setFontSize(p.font_size);
+    // theme_id absent = follow the pack, which IS a value here (the BE
+    // stores 'auto' as absent), so it is applied either way.
+    setThemeId(typeof p.theme_id === 'string' && p.theme_id ? p.theme_id : undefined);
+    if (p.smart_paste === 'ask' || p.smart_paste === 'always' || p.smart_paste === 'off') {
+      setSmartPaste(p.smart_paste);
+    }
+    if (p.cursor_style === 'block' || p.cursor_style === 'underline' || p.cursor_style === 'bar') {
+      setCursorStyle(p.cursor_style);
+    }
+    if (typeof p.cursor_blink === 'boolean') setCursorBlink(p.cursor_blink);
+    if (typeof p.scrollback === 'number' && p.scrollback > 0) setScrollback(p.scrollback);
+  };
+
+  // ---- zoom ----
+  //
+  // Ctrl+= / Ctrl+- / Ctrl+0 and Ctrl+wheel, the browser gesture, applied
+  // to the terminal font rather than to the page (which is the shell's and
+  // would zoom every window). Persisted like any other font change, so it
+  // is the same setting the Font menu shows.
+  const zoomBy = (delta: number) => stepFontSize(delta);
+  const zoomReset = () => changeFontSize(TERM_DEFAULT_FONT_SIZE);
+
+  // Scrollback steps by powers of two between 1k and 200k lines. Lines are
+  // allocated as they arrive, so a high ceiling costs nothing until it is
+  // used; the low end is for a machine where it isn't free.
+  const SCROLLBACK_MIN = 1_000;
+  const SCROLLBACK_MAX = 200_000;
+  const stepScrollback = (delta: number) => {
+    const next = delta > 0 ? scrollback() * 2 : Math.round(scrollback() / 2);
+    changeScrollback(Math.max(SCROLLBACK_MIN, Math.min(SCROLLBACK_MAX, next)));
+  };
+  const scrollbackLabel = (): string => {
+    const n = scrollback();
+    return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
   };
 
   // ---- menubar ----
@@ -700,7 +938,99 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const changeSmartPaste = (mode: SmartPaste) => {
     if (smartPaste() === mode) return;
     setSmartPaste(mode);
-    persist();
+    sendPrefs({ smart_paste: mode });
+  };
+
+  // ---- find in scrollback ----
+
+  const findOpts = (incremental = false): TermSearchOptions => ({
+    regex: findRegex(),
+    caseSensitive: findCase(),
+    incremental,
+  });
+
+  // openFind targets the focused tab (or re-targets an open bar to it —
+  // Ctrl+Shift+F in another pane moves the bar there). The previous
+  // target's highlights are dropped first, so at most one pane is decorated.
+  const openFind = () => {
+    const id = active();
+    if (!id || !apis.has(id)) return;
+    const prev = findTab();
+    if (prev !== null && prev !== id) apis.get(prev)?.clearSearch();
+    unsubFind?.();
+    unsubFind = apis.get(id)?.onSearchResults((r) => setFindResults({ index: r.resultIndex, count: r.resultCount }));
+    setFindTab(id);
+    setFindResults(null);
+    requestAnimationFrame(() => {
+      findInputEl?.focus();
+      findInputEl?.select();
+      if (findQuery()) apis.get(id)?.findNext(findQuery(), findOpts());
+    });
+  };
+
+  const closeFind = () => {
+    const id = findTab();
+    if (id === null) return;
+    apis.get(id)?.clearSearch();
+    unsubFind?.();
+    unsubFind = undefined;
+    setFindTab(null);
+    setFindResults(null);
+    apis.get(id)?.focus();
+  };
+
+  // findStep runs the search on the bar's tab. Empty query: clear, so the
+  // highlights follow what the box says rather than a stale term.
+  const findStep = (dir: 1 | -1, incremental = false) => {
+    const id = findTab();
+    if (id === null) return;
+    const api = apis.get(id);
+    if (!api) return;
+    const q = findQuery();
+    if (!q) { api.clearSearch(); setFindResults(null); return; }
+    if (dir > 0) api.findNext(q, findOpts(incremental));
+    else api.findPrevious(q, findOpts(incremental));
+  };
+
+  const onFindInput = (q: string) => {
+    setFindQuery(q);
+    findStep(1, true);
+  };
+  const toggleFindRegex = (v: boolean) => { setFindRegex(v); findStep(1); };
+  const toggleFindCase = (v: boolean) => { setFindCase(v); findStep(1); };
+
+  // Keys inside the bar: Enter next, Shift+Enter previous, Esc closes.
+  const onFindKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); findStep(ev.shiftKey ? -1 : 1); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); closeFind(); }
+  };
+
+  // findResultText is the bar's "n of m" — or nothing to say while there
+  // is no query, "no matches", or "many" past the addon's count limit.
+  const findResultText = (): string => {
+    if (!findQuery()) return '';
+    const r = findResults();
+    if (!r) return '';
+    if (r.count === 0) return 'no matches';
+    if (r.count < 0) return r.index >= 0 ? `${r.index + 1} of many` : 'many';
+    return r.index >= 0 ? `${r.index + 1} of ${r.count}` : `${r.count}`;
+  };
+
+  // flashRect is the ringing tab's pane content box, or nothing when its
+  // tab is not the visible one (you cannot flash a pane you can't see).
+  const flashRect = (): Rect | undefined => {
+    const f = flash();
+    if (!f) return undefined;
+    const g = placement().groups.find((pg) => pg.group.tabs.includes(f.id));
+    return g && g.group.active === f.id ? g.content : undefined;
+  };
+
+  // A find bar whose tab closed goes with it; a tab that moves keeps it.
+  const findRect = (): Rect | undefined => {
+    const id = findTab();
+    if (id === null) return undefined;
+    const g = placement().groups.find((pg) => pg.group.tabs.includes(id));
+    return g && g.group.active === id ? g.content : undefined;
   };
 
   // ---- tab title (live OSC title, ephemeral) ----
@@ -720,8 +1050,75 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // shows: the user@host prefix stripped and a long path kept from its
   // tail (tab-label.ts), so tabs read "…/apps/term" rather than every one
   // of them saying "mick@ai: ~/…".
-  const fullLabel = (tab: TabMeta): string => fullTabLabel(tabTitles().get(tab.channelID), tab.shell);
-  const tabLabel = (tab: TabMeta): string => tabLabelFor(tabTitles().get(tab.channelID), tab.shell);
+  const fullLabel = (tab: TabMeta): string =>
+    tabNames().get(tab.channelID) ?? fullTabLabel(tabTitles().get(tab.channelID), tab.shell);
+  const tabLabel = (tab: TabMeta): string => {
+    const named = tabNames().get(tab.channelID);
+    // A manual name is shown as typed — it was chosen to fit, and the
+    // user@host stripping that a shell title needs would be meddling.
+    if (named !== undefined) return named.length <= TAB_LABEL_MAX ? named : named.slice(0, TAB_LABEL_MAX - 1) + '…';
+    return tabLabelFor(tabTitles().get(tab.channelID), tab.shell);
+  };
+
+  // ---- rename ----
+
+  const startRename = (channelID: number) => {
+    const tab = tabs().find((t) => t.channelID === channelID);
+    if (!tab) return;
+    setRenameDraft(tabNames().get(channelID) ?? fullLabel(tab));
+    setRenaming(channelID);
+    requestAnimationFrame(() => { renameInputEl?.focus(); renameInputEl?.select(); });
+  };
+
+  const commitRename = () => {
+    const id = renaming();
+    if (id === null) return;
+    const name = renameDraft().trim();
+    const next = new Map(tabNames());
+    // An empty box clears the name rather than setting one: that is how
+    // you hand the tab back to the program's own titles.
+    if (name) next.set(id, name);
+    else next.delete(id);
+    setTabNames(next);
+    setRenaming(null);
+    persist();
+    syncWindowTitle();
+    apis.get(id)?.focus();
+  };
+
+  const cancelRename = () => {
+    const id = renaming();
+    setRenaming(null);
+    if (id !== null) apis.get(id)?.focus();
+  };
+
+  // ---- window title ----
+  //
+  // The titlebar says what the focused tab says. window.set_title existed
+  // and was never used, so every terminal window was called "Terminal"
+  // however many were open.
+  const syncWindowTitle = () => {
+    const tab = tabs().find((t) => t.channelID === active());
+    const title = tab ? fullLabel(tab) : '';
+    if (title === lastTitleSent) return;
+    lastTitleSent = title;
+    send({ kind: 'set_title', title });
+  };
+  let lastTitleSent = '';
+
+  // ---- restart shell ----
+  //
+  // A hung shell, or one whose environment you have just changed, wants a
+  // fresh pty in the SAME place — same pane, same directory. The BE kills
+  // the old pty and opens a new one in the tab's cwd; focusing the group
+  // first is what puts the replacement where the old one was, since a new
+  // tab lands in the focused group.
+  const restartTab = (channelID: number) => {
+    const path = pathOfChannel(tree(), channelID);
+    if (path !== undefined) setFocusPath(path);
+    const grid = path !== undefined ? gridOfGroup(path) : undefined;
+    send({ kind: 'restart_tab', channel_id: channelID, ...(grid ?? {}) });
+  };
   // Same label by channel id, for callers that only carry the id (the
   // close-confirmation names each busy tab). A tab that has already gone
   // falls back to its id rather than rendering an empty bullet.
@@ -830,6 +1227,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (api) api.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
         return;
       }
+      case 'prefs': {
+        prefsSeen = true;
+        applyPrefs((m.prefs ?? {}) as Record<string, unknown>);
+        return;
+      }
+      case 'path_probe_ok': {
+        const done = pendingProbes.get(String(m.id));
+        if (done) { pendingProbes.delete(String(m.id)); done(((m.ok ?? []) as string[]).map(String)); }
+        return;
+      }
+      case 'path_probe_err': {
+        const done = pendingProbes.get(String(m.id));
+        if (done) { pendingProbes.delete(String(m.id)); done([]); }
+        return;
+      }
       case 'sessions':
         reconcile((m.sessions ?? []) as SessionRow[]);
         return;
@@ -934,12 +1346,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         shell: t.shell,
         modes: t.modes,
         color: tagColors().get(t.channelID),
+        name: tabNames().get(t.channelID),
       })),
       layout: toPersisted(tree()),
-      font_id: fontId(),
-      font_size: fontSize(),
-      theme_id: themeId(),
-      smart_paste: smartPaste(),
+      // Appearance is NOT here any more — it is desktop-wide, in the BE's
+      // prefs file. The keys are still READ on restore, to migrate a blob
+      // written by an older build (see restoreFrom).
     };
     send({ kind: 'save_state', state });
   };
@@ -954,15 +1366,35 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const restoreFrom = (s: PersistedState) => {
-    if (s.font_id) setFontId(s.font_id);
-    if (s.font_size) setFontSize(s.font_size);
-    // theme_id is the current field; fall back to the legacy `appearance`
-    // ('dark'/'light' map 1:1 to the same-named theme ids) so windows
-    // saved before named themes keep their palette.
-    if (s.theme_id) setThemeId(s.theme_id);
-    else if (s.appearance) setThemeId(s.appearance);
-    if (s.smart_paste === 'ask' || s.smart_paste === 'always' || s.smart_paste === 'off') {
-      setSmartPaste(s.smart_paste);
+    // Appearance keys in a window blob are a MIGRATION path only: a window
+    // saved before these went desktop-wide carries them, and the first
+    // restore promotes them into the prefs file (where the BE's merge only
+    // takes keys that are actually present, so nothing else is disturbed).
+    // Once prefsSeen is true the file has spoken and the blob must not
+    // overwrite it — a stale blob would otherwise undo every change made
+    // from another window.
+    if (!prefsSeen) {
+      const migrate: Record<string, unknown> = {};
+      if (s.font_id) { setFontId(s.font_id); migrate.font_id = s.font_id; }
+      if (s.font_size) { setFontSize(s.font_size); migrate.font_size = s.font_size; }
+      // theme_id is the current field; fall back to the legacy `appearance`
+      // ('dark'/'light' map 1:1 to the same-named theme ids) so windows
+      // saved before named themes keep their palette.
+      const theme = s.theme_id ?? s.appearance;
+      if (theme) { setThemeId(theme); migrate.theme_id = theme; }
+      if (s.cursor_style === 'block' || s.cursor_style === 'underline' || s.cursor_style === 'bar') {
+        setCursorStyle(s.cursor_style);
+        migrate.cursor_style = s.cursor_style;
+      }
+      if (typeof s.cursor_blink === 'boolean') {
+        setCursorBlink(s.cursor_blink);
+        migrate.cursor_blink = s.cursor_blink;
+      }
+      if (s.smart_paste === 'ask' || s.smart_paste === 'always' || s.smart_paste === 'off') {
+        setSmartPaste(s.smart_paste);
+        migrate.smart_paste = s.smart_paste;
+      }
+      if (Object.keys(migrate).length) sendPrefs(migrate);
     }
     // The restored list may be stale (ptys that died while the
     // browser was detached); ask the BE for the live set and
@@ -974,11 +1406,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     send({ kind: 'list_sessions' });
     if (!s.tabs?.length) return;
     const tags = new Map<number, string>();
+    const names = new Map<number, string>();
     for (const t of s.tabs) {
       addTab(Number(t.channel_id), t.shell, { pending: true, modes: t.modes });
       if (t.color) tags.set(Number(t.channel_id), t.color);
+      if (t.name) names.set(Number(t.channel_id), t.name);
     }
     if (tags.size) setTagColors(tags);
+    if (names.size) setTabNames(names);
     // Placement: a v2 blob restores its tree; a v1 blob (no layout, just an
     // ordered tab list and one active id) migrates to a single group, which
     // is the same window it was saved from. Either way the tree is then
@@ -1023,6 +1458,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) {
       const code = ev.code;
       if (code === 'KeyT') { ev.preventDefault(); openNewTab(); return false; }
+      if (code === 'KeyF') { ev.preventDefault(); openFind(); return false; }
       if (code === 'KeyW') { ev.preventDefault(); requestCloseTab(active()); return false; }
       if (code === 'PageDown') { ev.preventDefault(); cycleTabs(1); return false; }
       if (code === 'PageUp') { ev.preventDefault(); cycleTabs(-1); return false; }
@@ -1032,6 +1468,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (ev.ctrlKey && ev.shiftKey) {
       const k = ev.key.toLowerCase();
       if (k === 't') { openNewTab(); return false; }
+      if (k === 'f') { ev.preventDefault(); openFind(); return false; }
       // Closes the TAB; when it is the last one in its group the pane goes
       // with it and the tree hands the space back (docs/TERM_LAYOUT.md §5).
       if (k === 'w') { requestCloseTab(active()); return false; }
@@ -1043,6 +1480,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       };
       const dir = arrows[k];
       if (dir) { ev.preventDefault(); focusDir(dir); return false; }
+    }
+    // Zoom: the browser's own gesture, aimed at the terminal font rather
+    // than at the page (zooming the page would take every other window
+    // with it). Shift is allowed on '+' because that is how '=' is typed
+    // on most layouts; every other modifier combination is left alone.
+    if (ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+      if (ev.key === '=' || ev.key === '+') { ev.preventDefault(); zoomBy(1); return false; }
+      if (ev.key === '-' || ev.key === '_') { ev.preventDefault(); zoomBy(-1); return false; }
+      if (ev.key === '0') { ev.preventDefault(); zoomReset(); return false; }
     }
     if (ev.ctrlKey && ev.key === 'Tab') {
       ev.preventDefault();
@@ -1092,8 +1538,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const isDropBefore = () => dropTarget() === channelID && dragId() !== channelID;
     return (
       <Show when={tab()}>
+        <Show
+          when={renaming() !== channelID}
+          fallback={
+            <Input
+              ref={(el) => { renameInputEl = el; }}
+              data-testid={`term-tab-rename-${channelID}`}
+              value={renameDraft()}
+              onInput={(ev) => setRenameDraft((ev.currentTarget as HTMLInputElement).value)}
+              onKeyDown={(ev) => {
+                if (ev.key === 'Enter') { ev.preventDefault(); commitRename(); }
+                else if (ev.key === 'Escape') { ev.preventDefault(); cancelRename(); }
+              }}
+              onBlur={commitRename}
+              style={{ height: '22px', width: '150px', margin: '2px 4px 0 4px', font: tokens.type.monoMd }}
+            />
+          }
+        >
         <Tab
           draggable={true}
+          onDblClick={() => startRename(channelID)}
           data-testid={`term-tab-${channelID}`}
           title={fullLabel(tab()!)}
           active={isActive()}
@@ -1104,6 +1568,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           leading={
             <span data-testid={`term-tab-badge-${channelID}`} style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px' }}>
               {statusBadge(tabStatus().get(channelID))}
+              <Show when={bells().has(channelID)}>
+                <Bell size={11} data-testid={`term-tab-bell-${channelID}`} color={tokens.accentAmber} />
+              </Show>
+              <Show when={!bells().has(channelID) && activity().has(channelID)}>
+                <span
+                  data-testid={`term-tab-activity-${channelID}`}
+                  title="Output while you were elsewhere"
+                  style={{
+                    width: '6px', height: '6px', 'border-radius': '50%',
+                    background: tokens.accentBlue, display: 'inline-block',
+                  }}
+                />
+              </Show>
             </span>
           }
           onClose={() => requestCloseTab(channelID)}
@@ -1147,6 +1624,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         >
           {tabLabel(tab()!)}
         </Tab>
+        </Show>
       </Show>
     );
   };
@@ -1159,8 +1637,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       const s = (ev as CustomEvent).detail as PersistedState | null;
       if (s) restoreFrom(s);
     };
+    // The window titlebar follows the focused tab's label. An effect
+    // rather than a call at each site, because the label moves for four
+    // unrelated reasons (OSC title, rename, tab switch, tab close).
+    createEffect(() => {
+      const tab = tabs().find((t) => t.channelID === active());
+      void (tab ? fullLabel(tab) : '');
+      void tabNames();
+      void tabTitles();
+      syncWindowTitle();
+    });
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
+    // Ask for the desktop-wide prefs. The BE pushes them at ready, but a
+    // RELOAD reattaches to the same BE process — which has already had its
+    // ready — so a fresh FE would otherwise sit on the defaults while the
+    // file said something else.
+    send({ kind: 'prefs_get' });
 
     // Stage size → rects. Seeded synchronously so the first paint has a
     // real layout rather than a 0×0 one (which would leave every pane
@@ -1184,6 +1677,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       props.host.removeEventListener('wash:state', onState);
       if (pendingFallback) clearTimeout(pendingFallback);
       if (modesTimer) clearTimeout(modesTimer);
+      unsubFind?.();
       apis.clear();
       sizes.clear();
     });
@@ -1240,6 +1734,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <button
           data-wash-hit
           type="button"
+          data-testid="term-menu-cursor-btn"
+          style={menuBarBtnStyle(openMenu() === 'cursor')}
+          onClick={(ev) => openMenuFor('cursor', ev)}
+        >
+          Cursor
+        </button>
+        <button
+          data-wash-hit
+          type="button"
           data-testid="term-menu-font-btn"
           style={menuBarBtnStyle(openMenu() === 'font')}
           onClick={(ev) => openMenuFor('font', ev)}
@@ -1252,6 +1755,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <MenuItem label="Copy" data-testid="term-menu-copy" onClick={run(() => activeApi()?.copySelection())} />
           <MenuItem label="Paste" data-testid="term-menu-paste" onClick={run(() => activeApi()?.paste())} />
           <MenuItem label="Select All" data-testid="term-menu-selectall" onClick={run(() => activeApi()?.selectAll())} />
+          <MenuSeparator />
+          <MenuItem
+            label="Find…"
+            data-testid="term-menu-find"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+F · Alt+F</span>}
+            onClick={() => { closeMenu(); openFind(); }}
+          />
           <MenuSeparator />
           <MenuItem label="Clear" data-testid="term-menu-clear" onClick={run(() => activeApi()?.clearScreen())} />
         </Menu>
@@ -1415,6 +1925,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <Button variant="icon" data-testid="term-menu-size-inc" title="Larger font" style={stepBtnStyle} onClick={() => stepFontSize(1)}>+</Button>
           </div>
           <MenuSeparator />
+          {/* Scrollback: how much output a terminal keeps. Desktop-wide,
+              like the font — a per-window answer to "how much history do I
+              have" is not an answer. Halve / double rather than a free
+              number, because the useful range spans two orders of
+              magnitude and no one wants to type 20000. */}
+          <div style={sizeRowStyle}>
+            <span style={{ flex: 1 }}>Scrollback</span>
+            <Button variant="icon" data-testid="term-menu-scroll-dec" title="Less scrollback" style={stepBtnStyle} onClick={() => stepScrollback(-1)}>−</Button>
+            <span data-testid="term-menu-scroll-val" style={sizeValStyle}>{scrollbackLabel()}</span>
+            <Button variant="icon" data-testid="term-menu-scroll-inc" title="More scrollback" style={stepBtnStyle} onClick={() => stepScrollback(1)}>+</Button>
+          </div>
+          <MenuSeparator />
           <For each={TERM_FONTS}>
             {(f) => (
               <MenuItem
@@ -1427,9 +1949,42 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           </For>
         </Menu>
       </Show>
+      <Show when={openMenu() === 'cursor'}>
+        <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-cursor" onDismiss={closeMenu}>
+          <For each={CURSOR_STYLES}>
+            {(c) => (
+              <MenuItem
+                label={c.label}
+                data-testid={`term-menu-cursor-${c.id}`}
+                trailing={cursorStyle() === c.id ? <Check size={12} /> : undefined}
+                onClick={run(() => changeCursorStyle(c.id))}
+              />
+            )}
+          </For>
+          <MenuSeparator />
+          <MenuItem
+            label="Blink"
+            data-testid="term-menu-cursor-blink"
+            trailing={cursorBlink() ? <Check size={12} /> : undefined}
+            onClick={run(() => changeCursorBlink(!cursorBlink()))}
+          />
+        </Menu>
+      </Show>
       <Show when={ctxMenu()}>
         {(menu) => (
           <Menu x={menu().x} y={menu().y} data-testid="term-tab-ctx" onDismiss={() => setCtxMenu(null)}>
+            <MenuItem
+              label="Rename…"
+              data-testid="term-tab-rename"
+              trailing={<span style={shortcutStyle}>Double-click</span>}
+              onClick={() => { const id = menu().id; setCtxMenu(null); startRename(id); }}
+            />
+            <MenuItem
+              label="Restart shell"
+              data-testid="term-tab-restart"
+              onClick={() => { const id = menu().id; setCtxMenu(null); restartTab(id); }}
+            />
+            <MenuSeparator />
             <MenuItem
               label="No color"
               data-testid="term-tag-none"
@@ -1457,6 +2012,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         data-testid="term-stage"
         ref={(el) => { stageEl = el; }}
         style={{ flex: 1, position: 'relative', 'min-height': 0, overflow: 'hidden' }}
+        onWheel={(ev) => {
+          // Ctrl+wheel zooms the terminal font. Taken here rather than in
+          // <Terminal> because the size is window-wide: one wheel notch
+          // should not resize only the pane the pointer happens to be over.
+          if (!ev.ctrlKey || ev.altKey || ev.metaKey) return;
+          ev.preventDefault();
+          zoomBy(ev.deltaY < 0 ? 1 : -1);
+        }}
       >
         <For each={tabs()}>
           {(tab) => {
@@ -1481,6 +2044,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   height: `${place()?.h ?? 0}px`,
                 }}
                 ref={(el) => { hostEl = el; }}
+                // Dropping files onto a pane types their paths: the shell
+                // is mid-command-line and they are its next arguments
+                // (drop-paths.ts). Quoted, space-separated, NO Enter — the
+                // terminal must never run a command the user did not.
+                onDragOver={(ev) => {
+                  if (!acceptsDrop(ev.dataTransfer)) return;
+                  ev.preventDefault();
+                  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+                }}
+                onDrop={(ev) => {
+                  const paths = pathsFrom(ev.dataTransfer);
+                  if (!paths.length) return;
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  const api = apis.get(tab.channelID);
+                  if (!api) return;
+                  activate(tab.channelID);
+                  api.pasteText(dropText(paths));
+                }}
                 onMouseDown={() => {
                   const path = pathOfChannel(tree(), tab.channelID);
                   if (path !== undefined) focusGroup(path);
@@ -1498,11 +2080,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   fontSize={fontSize()}
                   theme={themeById(themeId())?.theme}
                   onTitle={(t) => setTabTitle(tab.channelID, t)}
+                  onCwd={(cwd) => onTabCwd(tab.channelID, cwd)}
                   initialCols={tab.init?.cols}
                   initialRows={tab.init?.rows}
                   initialModes={tab.modes}
                   onModesChanged={(m) => onTabModes(tab, m)}
                   beforePaste={beforePaste}
+                  cursorStyle={cursorStyle()}
+                  cursorBlink={cursorBlink()}
+                  scrollback={scrollback()}
+                  onBell={() => onBell(tab.channelID)}
+                  onActivity={() => onActivity(tab.channelID)}
+                  links={{
+                    openUrl: (uri) => window.open(uri, '_blank', 'noopener,noreferrer'),
+                    probePaths: (tokens) => probePaths(tab.channelID, tokens),
+                    openPath: (token) => send({ kind: 'path_open', channel_id: tab.channelID, path: token }),
+                  }}
                   menuExtras={(close) => {
                     // Shift+right-click inside a pane: the pane verbs, in
                     // the menu the terminal already owns. Plain
@@ -1691,6 +2284,58 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             />
           )}
         </Show>
+        {/* Visual bell: a brief wash over the ringing tab's pane. Keyed on
+            the nonce so a second bell restarts the animation instead of
+            being swallowed by the one still running. */}
+        <Show when={flashRect()}>
+          {(r) => (
+            <div
+              data-testid="term-bell-flash"
+              style={{
+                position: 'absolute',
+                left: `${r().x}px`, top: `${r().y}px`,
+                width: `${r().w}px`, height: `${r().h}px`,
+                background: tokens.fg,
+                opacity: 0.18,
+                'pointer-events': 'none',
+                'z-index': 5,
+              }}
+            />
+          )}
+        </Show>
+        {/* Find bar: floats over the top-right of its tab's pane. Rendered
+            from the placement so it follows the pane through splits and
+            resizes, and disappears while its tab is not the visible one. */}
+        <Show when={findRect()}>
+          {(r) => (
+            <div
+              data-testid="term-find"
+              style={{
+                ...findBarStyle,
+                left: `${r().x + r().w - FIND_WIDTH - 14}px`,
+                top: `${r().y + 4}px`,
+                width: `${FIND_WIDTH}px`,
+              }}
+              onMouseDown={(ev) => ev.stopPropagation()}
+            >
+              <Input
+                ref={(el) => { findInputEl = el; }}
+                data-testid="term-find-input"
+                placeholder="Find"
+                value={findQuery()}
+                onInput={(ev) => onFindInput((ev.currentTarget as HTMLInputElement).value)}
+                onKeyDown={onFindKey}
+                style={{ flex: 1, 'min-width': 0, font: tokens.type.monoMd }}
+              />
+              <span data-testid="term-find-count" style={findCountStyle}>{findResultText()}</span>
+              <Checkbox data-testid="term-find-regex" checked={findRegex()} onChange={toggleFindRegex} label={<span title="Regular expression">.*</span>} />
+              <Checkbox data-testid="term-find-case" checked={findCase()} onChange={toggleFindCase} label={<span title="Match case">Aa</span>} />
+              <Button variant="icon" data-testid="term-find-prev" title="Previous (Shift+Enter)" style={ctlBtnStyle} onClick={() => findStep(-1)}><ChevronUp size={14} /></Button>
+              <Button variant="icon" data-testid="term-find-next" title="Next (Enter)" style={ctlBtnStyle} onClick={() => findStep(1)}><ChevronDown size={14} /></Button>
+              <Button variant="icon" data-testid="term-find-close" title="Close (Esc)" style={ctlBtnStyle} onClick={closeFind}><X size={14} /></Button>
+            </div>
+          )}
+        </Show>
       </div>
       <Show when={pendingPaste()}>
         {(p) => (
@@ -1825,6 +2470,33 @@ const ctlBtnStyle: JSX.CSSProperties = {
   opacity: 0.8,
   'flex-shrink': 0,
   padding: '0 3px',
+};
+
+// Find bar: a compact strip over the pane's top-right corner. Fixed width
+// so it never covers more than a corner of a wide pane; in a narrow pane
+// it simply hugs the right edge.
+const FIND_WIDTH = 360;
+const findBarStyle: JSX.CSSProperties = {
+  position: 'absolute',
+  'z-index': 4,
+  display: 'flex',
+  'align-items': 'center',
+  gap: '4px',
+  padding: '3px 4px',
+  background: tokens.bgMenu,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusMd}`,
+  'box-shadow': '0 2px 8px rgba(0,0,0,0.35)',
+  'box-sizing': 'border-box',
+  font: tokens.type.textMd,
+};
+const findCountStyle: JSX.CSSProperties = {
+  color: tokens.fgDim,
+  'font-size': '11px',
+  'white-space': 'nowrap',
+  'min-width': '52px',
+  'text-align': 'right',
 };
 
 // Shortcut hint in the Split menu's trailing slot.

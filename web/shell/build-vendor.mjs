@@ -134,20 +134,31 @@ await build({
   },
 });
 
-// Addon UMDs follow the same pattern as xterm itself.
-const XTERM_FIT_NAMED = ['FitAddon'];
-await build({
-  ...shared,
-  plugins: [externalExact(['@xterm/xterm'])],
-  stdin: {
-    contents:
-      `import * as fit from '@xterm/addon-fit';\n` +
-      XTERM_FIT_NAMED.map((n) => `export const ${n} = fit.${n};`).join('\n'),
-    resolveDir: entryResolveDir,
-    sourcefile: 'xterm-fit.entry.js',
-  },
-  outfile: resolve(outDir, 'xterm-fit.js'),
-});
+// Addon UMDs follow the same pattern as xterm itself. Every addon here is
+// an import-map external for the terminal-using apps (web/shell/index.html,
+// the two wash-vm chromes, web/lib/vite-app.mjs, and the ALLOWED_EXTERNALS
+// list in e2e/tests/single-file.spec.ts) — a new addon touches all of them.
+const xtermAddon = async (pkg, out, named) => {
+  await build({
+    ...shared,
+    plugins: [externalExact(['@xterm/xterm'])],
+    stdin: {
+      contents:
+        `import * as addon from ${JSON.stringify(pkg)};\n` +
+        named.map((n) => `export const ${n} = addon.${n};`).join('\n'),
+      resolveDir: entryResolveDir,
+      sourcefile: `${out}.entry.js`,
+    },
+    outfile: resolve(outDir, `${out}.js`),
+  });
+};
+await xtermAddon('@xterm/addon-fit', 'xterm-fit', ['FitAddon']);
+// Find in scrollback (wash-term's find bar).
+await xtermAddon('@xterm/addon-search', 'xterm-search', ['SearchAddon']);
+// Clickable http(s) URLs in terminal output.
+await xtermAddon('@xterm/addon-web-links', 'xterm-web-links', ['WebLinksAddon']);
+// Unicode 11 grapheme widths (emoji / CJK under modern prompts).
+await xtermAddon('@xterm/addon-unicode11', 'xterm-unicode11', ['Unicode11Addon']);
 
 // @wash/ui is *not* built here — its Solid JSX requires the
 // babel-preset-solid transform that vite-plugin-solid provides.
