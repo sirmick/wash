@@ -158,8 +158,14 @@ test.describe('agent filesystem capability', () => {
     await ask(win, page, `readfile ${join(dir, 'notes.md')}`);
     await expect(win).toContainText('READ<<the-secret-inside', { timeout: 30_000 });
 
-    // Same session, a path outside the folder it was started in.
+    // Same session, a path outside the folder it was started in. Since
+    // per-session roots landed this ASKS rather than refusing silently
+    // (apps/agentd/be/roots.go) — the refusal a person never saw read to
+    // them as the agent being broken. Saying no still refuses.
     await ask(win, page, `readfile ${join(outside, 'private.txt')}`);
+    const deny = win.getByRole('button', { name: /^Deny/ }).first();
+    await expect(deny).toBeVisible({ timeout: 30_000 });
+    await deny.click();
     await expect(win).toContainText('READ<<REFUSED', { timeout: 30_000 });
     // And the content never appeared, in any form.
     await expect(win).not.toContainText('do-not-read-me');
@@ -177,6 +183,9 @@ test.describe('agent filesystem capability', () => {
     expect(readFileSync(join(dir, 'made.txt'), 'utf8')).toContain('hello-from-the-agent');
 
     await ask(win, page, `writefile ${join(outside, 'escaped.txt')} should-not-exist`);
+    const deny = win.getByRole('button', { name: /^Deny/ }).first();
+    await expect(deny).toBeVisible({ timeout: 30_000 });
+    await deny.click();
     await expect(win).toContainText('WROTE<<REFUSED', { timeout: 30_000 });
     expect(existsSync(join(outside, 'escaped.txt'))).toBe(false);
   });

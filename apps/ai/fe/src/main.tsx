@@ -543,35 +543,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         data-testid="ai-save-picker"
       />
 
-      <Show when={rootFor()}>
-        {(r) => (
-          <FilePicker
-            open
-            mode="directory"
-            host={props.host}
-            hostInstanceID={props.instance}
-            start={r().start}
-            onConfirm={(p) => {
-              setRootFor(null);
-              send({ kind: 'row_add_root', key: r().key, path: p });
-            }}
-            onCancel={() => setRootFor(null)}
-            data-testid="ai-root-picker"
-          />
-        )}
-      </Show>
-
-      <FilePicker
-        open={attaching()}
-        mode="open"
-        host={props.host}
-        hostInstanceID={props.instance}
-        start={row()?.cwd || cwd()}
-        onConfirm={(p) => finishAttach([p])}
-        onCancel={() => finishAttach([])}
-        data-testid="ai-attach-picker"
-      />
-
       <FilePicker
         open={picking()}
         mode="directory"
@@ -1027,6 +998,47 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </Show>
   );
 
+  // Both pickers live at the window's root rather than inside the
+  // launcher fragment: the launcher renders only while there is NO
+  // session, and both of these are reached from a running one.
+  const attachPicker = (
+    <FilePicker
+      open={attaching()}
+      mode="open"
+      host={props.host}
+      hostInstanceID={props.instance}
+      start={row()?.cwd || cwd()}
+      onConfirm={(p) => finishAttach([p])}
+      onCancel={() => finishAttach([])}
+      data-testid="ai-attach-picker"
+    />
+  );
+
+  const rootPicker = (
+    <Show when={rootFor()}>
+      {(r) => (
+        <FilePicker
+          open
+          mode="directory"
+          host={props.host}
+          hostInstanceID={props.instance}
+          start={r().start}
+          onConfirm={(p) => {
+            // Read the key BEFORE clearing: `r()` is <Show>'s accessor,
+            // and it stops reporting the row the moment the condition
+            // goes false — so reading it after the clear sent an empty
+            // key and the widening silently did nothing.
+            const key = r().key;
+            setRootFor(null);
+            send({ kind: 'row_add_root', key, path: p });
+          }}
+          onCancel={() => setRootFor(null)}
+          data-testid="ai-root-picker"
+        />
+      )}
+    </Show>
+  );
+
   const closeDialog = (
     <Show when={confirmClose()}>
       <Overlay onDismiss={() => setConfirmClose(false)} data-testid="ai-close-confirm">
@@ -1083,6 +1095,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     {renameDialog}
     {deleteDialog}
     {pruneDialog}
+    {attachPicker}
+    {rootPicker}
     <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
       {menubar}
       <div
@@ -1130,7 +1144,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               status={status}
               onSend={(text, blocks) => send({ kind: 'prompt', text, blocks })}
               onRemoveRoot={(path) => send({ kind: 'row_remove_root', key: sessionKey(), path })}
-              draftInsert={draftIn}
+              insertDraft={draftIn}
               onPickFiles={() =>
                 new Promise<string[]>((resolve) => {
                   // A picker already open would strand the earlier waiter.

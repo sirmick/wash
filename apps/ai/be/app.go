@@ -107,7 +107,12 @@ func init() {
 			Accent:          "violet",
 			Instancing:      sdk.InstancingMulti,
 			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
-			Window:          &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 720},
+			// 600, not 720: the composer grew a row (Attach…) and the
+			// status bar grew root chips, and a window as tall as a
+			// 720-line screen left both under the 40px taskbar. Sized so
+			// the whole window, status bar included, fits above it on the
+			// smallest screen this desktop targets.
+			Window: &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 600},
 		},
 		Assets:           sub,
 		OnReady:          onReady,
@@ -358,8 +363,10 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		// addressed like the verbs below: the row that opened the picker
 		// is not necessarily the session this window is showing.
 		if str(m["key"]) == "" || str(m["path"]) == "" {
+			log.Printf("wash-ai: %s ignored key=%q path=%q", str(m["kind"]), str(m["key"]), str(m["path"]))
 			return
 		}
+		log.Printf("wash-ai: %s key=%s path=%s", str(m["kind"]), str(m["key"]), str(m["path"]))
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind": "agent_" + strings.TrimPrefix(str(m["kind"]), "row_"),
 			"key":  str(m["key"]),

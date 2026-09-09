@@ -74,7 +74,7 @@ test.describe('per-session roots', () => {
     // Before: outside every root. With nobody having allowed it, the read
     // raises a question — which is the point: it used to fail silently.
     await ask(win, `readfile ${shared}`);
-    const askRow = win.getByRole('button', { name: 'Deny', exact: true }).first();
+    const askRow = win.getByRole('button', { name: /^Deny/ }).first();
     await expect(askRow).toBeVisible({ timeout: 20_000 });
     await askRow.click();
     await expect(win.getByText(/READ<<REFUSED/)).toBeVisible({ timeout: 20_000 });
@@ -104,7 +104,7 @@ test.describe('per-session roots', () => {
     await win.locator('[data-testid="agent-root-remove"]').click();
     await expect(win.locator('[data-testid="agent-root"]')).toHaveCount(0, { timeout: 15_000 });
     await ask(win, `readfile ${shared}`);
-    await expect(win.getByRole('button', { name: 'Deny', exact: true }).first()).toBeVisible({ timeout: 20_000 });
+    await expect(win.getByRole('button', { name: /^Deny/ }).first()).toBeVisible({ timeout: 20_000 });
   });
 
   test('the terminal confinement honours the same roots', async ({ page, router }) => {

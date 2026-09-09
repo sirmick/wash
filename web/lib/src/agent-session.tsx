@@ -62,6 +62,13 @@ export interface AgentEvent {
   text_len?: number;
 }
 
+/** Text pushed into the composer from outside, and a counter that says
+ *  "this is a new send" — see AgentSessionProps.insertDraft. */
+export interface InsertedDraft {
+  text: string;
+  seq: number;
+}
+
 /** One attachment on its way out with a prompt, in agentd's wire shape
  *  (apps/agentd/be/attach.go): an image travels by value because the
  *  bytes came from a clipboard and exist nowhere on disk; a file travels
@@ -148,11 +155,26 @@ export interface AgentSessionProps {
   /** Take back one of the extra folders the session was allowed. Absent
    *  leaves the status bar's root chips read-only. */
   onRemoveRoot?: (path: string) => void;
-  /** Text to drop into the composer from OUTSIDE the session — wash-edit's
-   *  "send selection to agent" arrives at the host as an `agent_draft` app
-   *  message and lands here. `seq` is what makes sending the same
-   *  selection twice insert it twice; the text alone could not. */
-  draftInsert?: () => { text: string; seq: number } | undefined;
+  /** Text to drop into the composer from OUTSIDE the session.
+   *
+   *  Two kinds of sender, one seam. A separate app sends the standalone
+   *  Agent window an `agent_draft` app message and wash-ai passes it
+   *  here; a host that EMBEDS this component (wash-edit's agent tab) has
+   *  no app on the other end of a message and pushes into the signal
+   *  directly:
+   *
+   *      const [draft, setDraft] = createSignal<InsertedDraft>();
+   *      let n = 0;
+   *      const sendToAgent = (text: string) => setDraft({ text, seq: ++n });
+   *      <AgentSession insertDraft={draft} … />
+   *
+   *  `seq` is what makes sending the same selection twice insert it
+   *  twice; the text alone could not say that. Inserted at the caret when
+   *  the composer has one, else at the end — and it QUEUES for free while
+   *  the session is still starting, because the composer is a controlled
+   *  input on a signal this writes to, so text set before `onSend` exists
+   *  is simply there when the box goes live. */
+  insertDraft?: () => InsertedDraft | undefined;
   /** Answer a pending question. `rule` is set when the user chose "always". */
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
   /** Click on a tool row — the host decides what that opens. */
@@ -633,7 +655,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
   // it goes to the composer rather than straight to the agent.
   let lastDraftSeq = -1;
   createEffect(() => {
-    const d = props.draftInsert?.();
+    const d = props.insertDraft?.();
     if (!d || d.seq === lastDraftSeq) return;
     lastDraftSeq = d.seq;
     if (!d.text) return;

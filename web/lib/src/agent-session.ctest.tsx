@@ -428,7 +428,7 @@ test('a draft from another app is inserted at the caret and not sent', async () 
   const sent: string[] = [];
   const [drafted, setDrafted] = createSignal<{ text: string; seq: number } | undefined>();
   const { container } = render(() => (
-    <AgentSession events={() => []} onSend={(t) => sent.push(t)} draftInsert={drafted} />
+    <AgentSession events={() => []} onSend={(t) => sent.push(t)} insertDraft={drafted} />
   ));
   const composer = composerOf(container);
   fireEvent.input(composer, { target: { value: 'about this:' } });

@@ -63,10 +63,8 @@ test.describe('agent prompt attachments', () => {
     await win.locator('[data-testid="agent-attach"]').click();
     const picker = page.locator('[data-testid="ai-attach-picker"]');
     await expect(picker).toBeVisible();
-    const bar = picker.locator('[data-testid="fp-path"]');
-    await bar.click();
-    await bar.fill(join(dir, 'notes.txt'));
-    await bar.press('Enter');
+    // The picker opens on the session's own folder; pick the file in it.
+    await picker.locator('[data-testid="fp-entry-notes.txt"]').click();
     await picker.locator('[data-testid="fp-confirm"]').click();
     await expect(picker).toBeHidden();
 
@@ -129,10 +127,7 @@ test.describe('agent prompt attachments', () => {
     await win.locator('[data-testid="agent-attach"]').click();
     const picker = page.locator('[data-testid="ai-attach-picker"]');
     await expect(picker).toBeVisible();
-    const bar = picker.locator('[data-testid="fp-path"]');
-    await bar.click();
-    await bar.fill(join(dir, 'a.txt'));
-    await bar.press('Enter');
+    await picker.locator('[data-testid="fp-entry-a.txt"]').click();
     await picker.locator('[data-testid="fp-confirm"]').click();
     await expect(win.locator('[data-testid="agent-attachment"]')).toHaveCount(1);
 

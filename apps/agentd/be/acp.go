@@ -519,6 +519,7 @@ func (h *hosted) setState(state, reason string) {
 		// published row from under its readers (the shallow-snapshot
 		// footgun the race gate caught once already).
 		r.Roots = append([]string(nil), h.extraRoots...)
+
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
@@ -601,6 +602,12 @@ func (h *hosted) republish() {
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
+		// Copied, not aliased, for the reason setState gives above.
+		// Republished HERE as well as there: allowing a folder changes no
+		// state, so setState never runs for it, and a row that only
+		// learned its roots on the next state change is a widening the
+		// person cannot see they made.
+		r.Roots = append([]string(nil), h.extraRoots...)
 		r.lastSeen = now
 		if sameRow(before, r.Row) {
 			return false
