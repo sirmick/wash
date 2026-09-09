@@ -618,6 +618,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
           {/* path bar */}
           <div style={pathBarStyle}>
             <button
+              data-wash-hit
               type="button"
               data-testid="fp-back"
               onClick={goBack}
@@ -628,6 +629,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
               ←
             </button>
             <button
+              data-wash-hit
               type="button"
               data-testid="fp-up"
               onClick={goUp}
@@ -637,6 +639,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
               ↑
             </button>
             <button
+              data-wash-hit
               type="button"
               data-testid="fp-root"
               onClick={goRoot}
@@ -646,6 +649,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
               /
             </button>
             <button
+              data-wash-hit
               type="button"
               data-testid="fp-home"
               onClick={goHome}
@@ -684,6 +688,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
           <div style={headerRowStyle}>
             {(['name', 'size', 'mtime'] as SortKey[]).map((k) => (
               <button
+                data-wash-hit
                 type="button"
                 data-testid={`fp-col-${k}`}
                 onClick={() => {
@@ -715,6 +720,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
                 const sel = () => selectedName() === e.name;
                 return (
                   <div
+                    data-wash-hit
                     data-testid={`fp-entry-${e.name}`}
                     data-type={e.type}
                     data-selected={sel() ? 'true' : undefined}
@@ -775,6 +781,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
             </Show>
             <div style={{ flex: 1 }} />
             <button
+              data-wash-hit
               type="button"
               data-testid="fp-cancel"
               onClick={props.onCancel}
@@ -783,6 +790,7 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
               Cancel
             </button>
             <button
+              data-wash-hit
               type="button"
               data-testid="fp-confirm"
               onClick={() => void onConfirmClick()}

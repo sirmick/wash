@@ -86,6 +86,7 @@ export const HostGroups: Component<HostGroupsProps> = (props) => {
                 style={{ opacity: stale() ? 0.55 : 1 }}
               >
                 <div
+                  data-wash-hit
                   onClick={() => props.onToggle(id())}
                   data-testid={`host-group-header-${props.section}-${row.origin}`}
                   style={{
@@ -155,6 +156,7 @@ export const HostGroups: Component<HostGroupsProps> = (props) => {
                       also fold the group you just looked at. */}
                   <Show when={props.onOpen}>
                     <span
+                      data-wash-hit
                       data-testid={`host-group-open-${props.section}-${row.origin}`}
                       title={props.openTitle?.(row.origin) ?? `Open on ${row.origin}`}
                       onClick={(ev) => {

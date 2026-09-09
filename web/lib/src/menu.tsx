@@ -135,6 +135,13 @@ export const MenuSeparator: Component = () => (
 // MenuItem is the row inside a Menu. Most uses are a label +
 // onClick; chrome menus add an icon; disabled is for unavailable
 // entries (greyed out, no hover, cursor not-allowed).
+//
+// The highlight comes from the interaction layer (hit.ts) rather than the
+// onMouseEnter/createSignal pair this used to carry — one stylesheet
+// instead of a signal per rendered row, and it brings the press and
+// keyboard-focus states the hand-rolled version never had. "strong" keeps
+// the emphatic solid-bar highlight a menu wants; the default 10% wash
+// reads too timid for a menu row.
 export interface MenuItemProps {
   label: string;
   icon?: JSX.Element;
@@ -145,10 +152,10 @@ export interface MenuItemProps {
 }
 
 export const MenuItem: Component<MenuItemProps> = (props) => {
-  const [hover, setHover] = createSignal(false);
   return (
     <button
       type="button"
+      data-wash-hit="strong"
       data-testid={props['data-testid']}
       // Disabled for real, not just dimmed: without the attribute the item
       // stays keyboard-focusable and assistive tech announces it as
@@ -156,8 +163,6 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
       // braces (a click can still be dispatched programmatically).
       disabled={props.disabled}
       aria-disabled={props.disabled ? 'true' : undefined}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       onClick={() => {
         if (!props.disabled) props.onClick();
       }}
@@ -167,7 +172,7 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
         gap: props.icon ? '8px' : undefined,
         width: '100%',
         'text-align': 'left',
-        background: !props.disabled && hover() ? tokens.bgRowSelected : 'transparent',
+        background: 'transparent',
         color: tokens.fg,
         border: 'none',
         'border-radius': `${tokens.radiusSm}`,
@@ -175,7 +180,6 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
         cursor: props.disabled ? 'not-allowed' : 'pointer',
         opacity: props.disabled ? 0.5 : 1,
         font: tokens.type.textMd,
-        transition: 'background 0.05s',
       }}
     >
       <Show when={props.icon}>

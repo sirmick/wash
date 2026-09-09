@@ -729,7 +729,7 @@ export function NetApp(props: WashAppProps) {
           <nav class="wash-net-tabs" data-testid="net-tabs">
             <For each={TABS}>
               {(t) => (
-                <button class="wash-net-tab" classList={{ active: tab() === t.id }} data-testid={`net-tab-${t.id}`}
+                <button data-wash-hit class="wash-net-tab" classList={{ active: tab() === t.id }} data-testid={`net-tab-${t.id}`}
                   aria-selected={tab() === t.id} onClick={() => setTab(t.id)}>{t.label}</button>
               )}
             </For>
@@ -745,27 +745,27 @@ export function NetApp(props: WashAppProps) {
           {/* Networks tab: the single router add path (+ Network materializes the
               carrier + segment bundle). */}
           <Show when={routerCaps() && tab() === "networks"}>
-            <button data-testid="add-network" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
+            <button data-wash-hit data-testid="add-network" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="git-branch" /> Network</button>
           </Show>
           {/* + Host belongs to the Hosts & DNS tab, not Networks. */}
           <Show when={routerCaps() && tab() === "hosts"}>
-            <button data-testid="add-host" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditHost(null); setAdding("host"); }}><Icon name="plus" /> Host</button>
+            <button data-wash-hit data-testid="add-host" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setEditHost(null); setAdding("host"); }}><Icon name="plus" /> Host</button>
           </Show>
           {/* Interfaces plane: link-level carriers. On a router, VLANs and bridging
               are owned by the box-wide fabric table (§4c), so +VLAN / +Bridge are
               workstation-only; +Ethernet/WireGuard/Wi-Fi stay on both. */}
           <Show when={carrierAdds()}>
-            <button data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
+            <button data-wash-hit data-testid="add-ethernet" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => { setConfigureDevice(""); setAdding("ethernet"); }}><Icon name="ethernet-port" /> Ethernet</button>
           </Show>
           <Show when={!routerCaps()}>
-            <button data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
-            <button data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
+            <button data-wash-hit data-testid="add-vlan" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("vlan")} onClick={() => setAdding("vlan")}><Icon name="git-branch" /> VLAN</button>
+            <button data-wash-hit data-testid="add-bridge" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy() || !can("bridge")} onClick={() => setAdding("bridge")}><Icon name="git-merge" /> Bridge</button>
           </Show>
           <Show when={can("wireguard") && carrierAdds()}>
-            <button data-testid="add-wireguard" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wireguard")}><Icon name="shield" /> WireGuard</button>
+            <button data-wash-hit data-testid="add-wireguard" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wireguard")}><Icon name="shield" /> WireGuard</button>
           </Show>
           <Show when={wifiCapable() && carrierAdds()}>
-            <button data-testid="add-wifi" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wifi")}><Icon name="wifi" /> Wi-Fi</button>
+            <button data-wash-hit data-testid="add-wifi" class="wash-net-btn" disabled={adding() !== null || editIface() !== null || busy()} onClick={() => setAdding("wifi")}><Icon name="wifi" /> Wi-Fi</button>
           </Show>
         </div>
       </Show>
@@ -844,8 +844,8 @@ export function NetApp(props: WashAppProps) {
                   </div>
                   <Show when={s.role !== "vpn"}>
                     <div class="wash-net-conn-actions">
-                      <button class="wash-net-btn ghost" data-testid={`segment-edit-${s.name}`} title="Edit this network" disabled={busy() || adding() !== null || editIface() !== null} onClick={() => { setEditSeg(s); setAdding("network"); }}><Icon name="git-branch" /> Edit</button>
-                      <button class="wash-net-btn ghost" data-testid={`segment-del-${s.name}`} title="Remove this network" disabled={busy() || adding() !== null} onClick={() => removeNetwork(s)}><Icon name="trash" /> Remove</button>
+                      <button data-wash-hit class="wash-net-btn ghost" data-testid={`segment-edit-${s.name}`} title="Edit this network" disabled={busy() || adding() !== null || editIface() !== null} onClick={() => { setEditSeg(s); setAdding("network"); }}><Icon name="git-branch" /> Edit</button>
+                      <button data-wash-hit class="wash-net-btn ghost" data-testid={`segment-del-${s.name}`} title="Remove this network" disabled={busy() || adding() !== null} onClick={() => removeNetwork(s)}><Icon name="trash" /> Remove</button>
                     </div>
                   </Show>
                 </div>
@@ -876,8 +876,8 @@ export function NetApp(props: WashAppProps) {
                     <span class="wash-net-conn-dev">{h.ip}{h.mac ? ` · ${h.mac}` : ""}</span>
                   </div>
                   <div class="wash-net-conn-actions">
-                    <button class="wash-net-btn ghost" data-testid={`host-edit-${h.name}`} title="Edit" disabled={busy() || adding() !== null} onClick={() => { setEditHost(h); setAdding("host"); }}><Icon name="git-branch" /> Edit</button>
-                    <button class="wash-net-btn ghost" data-testid={`host-del-${h.name}`} title="Remove" disabled={busy() || adding() !== null} onClick={() => delHost(h)}><Icon name="trash" /> Remove</button>
+                    <button data-wash-hit class="wash-net-btn ghost" data-testid={`host-edit-${h.name}`} title="Edit" disabled={busy() || adding() !== null} onClick={() => { setEditHost(h); setAdding("host"); }}><Icon name="git-branch" /> Edit</button>
+                    <button data-wash-hit class="wash-net-btn ghost" data-testid={`host-del-${h.name}`} title="Remove" disabled={busy() || adding() !== null} onClick={() => delHost(h)}><Icon name="trash" /> Remove</button>
                   </div>
                 </div>
               )}
@@ -887,7 +887,7 @@ export function NetApp(props: WashAppProps) {
 
         <Show when={routerCaps() && tab() === "advanced"}>
           <section class="wash-net-segments" data-testid="net-advanced">
-            <h2 class="wash-net-seg-h wash-net-adv-toggle" data-testid="adv-toggle" onClick={() => setShowAdv(!showAdv())}>Advanced (raw objects) {showAdv() ? "▾" : "▸"}</h2>
+            <h2 data-wash-hit class="wash-net-seg-h wash-net-adv-toggle" data-testid="adv-toggle" onClick={() => setShowAdv(!showAdv())}>Advanced (raw objects) {showAdv() ? "▾" : "▸"}</h2>
             <Show when={showAdv()}>
               <For each={ADVANCED_KINDS}>
                 {(k) => {
@@ -898,13 +898,13 @@ export function NetApp(props: WashAppProps) {
                     <div class="wash-net-adv-kind">
                       <div class="wash-net-adv-h">
                         <span>{k.title}</span>
-                        <button class="wash-net-btn ghost" data-testid={`adv-add-${k.field}`} disabled={busy()} onClick={() => advAdd(k.field)}><Icon name="plus" /> Add</button>
+                        <button data-wash-hit class="wash-net-btn ghost" data-testid={`adv-add-${k.field}`} disabled={busy()} onClick={() => advAdd(k.field)}><Icon name="plus" /> Add</button>
                       </div>
                       <For each={items()}>
                         {(item, i) => (
                           <div class="wash-net-adv-item">
                             <ObjectForm object={od} value={item} pathPrefix="" label={label} refOptions={advRefOptions} onChange={(path, v) => advChange(k.field, i(), path, v)} />
-                            <button class="wash-net-btn ghost" data-testid={`adv-del-${k.field}-${i()}`} disabled={busy()} onClick={() => advRemove(k.field, i())}><Icon name="trash" /> Remove</button>
+                            <button data-wash-hit class="wash-net-btn ghost" data-testid={`adv-del-${k.field}-${i()}`} disabled={busy()} onClick={() => advRemove(k.field, i())}><Icon name="trash" /> Remove</button>
                           </div>
                         )}
                       </For>
@@ -932,18 +932,18 @@ export function NetApp(props: WashAppProps) {
                   </div>
                   <Show when={c.serves}>
                     <div class="wash-net-conn-sub">
-                      → serves <button class="wash-net-link" data-testid={`carrier-serves-${c.name}`} onClick={() => setTab("networks")}>{c.serves!.name}</button>
+                      → serves <button data-wash-hit class="wash-net-link" data-testid={`carrier-serves-${c.name}`} onClick={() => setTab("networks")}>{c.serves!.name}</button>
                       <Show when={c.serves!.addr}><span> · {c.serves!.addr}</span></Show>
                     </div>
                   </Show>
                   <div class="wash-net-conn-actions">
                     <Show when={c.orphan && c.kind !== "Tunnel"}>
-                      <button class="wash-net-btn ghost" data-testid={`carrier-configure-${c.name}`} disabled={busy() || adding() !== null} title="Use this carrier for a network" onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="plus" /> Configure</button>
+                      <button data-wash-hit class="wash-net-btn ghost" data-testid={`carrier-configure-${c.name}`} disabled={busy() || adding() !== null} title="Use this carrier for a network" onClick={() => { setEditSeg(null); setAdding("network"); }}><Icon name="plus" /> Configure</button>
                     </Show>
                     {/* Remove a constructed carrier (bridge / VLAN / bond / tunnel).
                         Physical adapters are hardware — no remove. */}
                     <Show when={c.kind === "Bridge" || c.kind === "VLAN" || c.kind === "Bond" || c.kind === "Tunnel"}>
-                      <button class="wash-net-btn ghost" data-testid={`carrier-del-${c.name}`} disabled={busy() || adding() !== null}
+                      <button data-wash-hit class="wash-net-btn ghost" data-testid={`carrier-del-${c.name}`} disabled={busy() || adding() !== null}
                         title={c.serves ? `Removes this ${c.kind.toLowerCase()} and the ${c.serves.name} network on it` : `Remove this ${c.kind.toLowerCase()}`}
                         onClick={() => removeCarrierRow(c)}><Icon name="trash" /> Remove</button>
                     </Show>
@@ -967,7 +967,7 @@ export function NetApp(props: WashAppProps) {
                   <span class="wash-net-conn-dev">{w.device}</span>
                 </div>
                 <div class="wash-net-conn-actions">
-                  <button class="wash-net-btn ghost" title="Forget this network" disabled={busy()} onClick={() => forgetWifi(w.name)}><Icon name="trash" /> Forget</button>
+                  <button data-wash-hit class="wash-net-btn ghost" title="Forget this network" disabled={busy()} onClick={() => forgetWifi(w.name)}><Icon name="trash" /> Forget</button>
                 </div>
               </div>
             )}
@@ -990,9 +990,9 @@ export function NetApp(props: WashAppProps) {
                   </div>
                   <div class="wash-net-conn-actions">
                     <Show when={kindOf(iface) === "Ethernet"}>
-                      <button class="wash-net-btn ghost" title="Edit" disabled={busy() || adding() !== null} onClick={() => setEditIface(iface)}><Icon name="pencil" /> Edit</button>
+                      <button data-wash-hit class="wash-net-btn ghost" title="Edit" disabled={busy() || adding() !== null} onClick={() => setEditIface(iface)}><Icon name="pencil" /> Edit</button>
                     </Show>
-                    <button class="wash-net-btn ghost" title="Remove" disabled={busy()} onClick={() => removeConnection(iface)}><Icon name="trash" /> Remove</button>
+                    <button data-wash-hit class="wash-net-btn ghost" title="Remove" disabled={busy()} onClick={() => removeConnection(iface)}><Icon name="trash" /> Remove</button>
                   </div>
                 </div>
               );
@@ -1008,7 +1008,7 @@ export function NetApp(props: WashAppProps) {
                   <span class="wash-net-badge" data-badge="unconfigured">unconfigured</span>
                 </div>
                 <div class="wash-net-conn-actions">
-                  <button class="wash-net-btn ghost" title="Configure this adapter" disabled={busy() || adding() !== null || editIface() !== null} onClick={() => { setConfigureDevice(link); setAdding("ethernet"); }}><Icon name="plus" /> Configure</button>
+                  <button data-wash-hit class="wash-net-btn ghost" title="Configure this adapter" disabled={busy() || adding() !== null || editIface() !== null} onClick={() => { setConfigureDevice(link); setAdding("ethernet"); }}><Icon name="plus" /> Configure</button>
                 </div>
               </div>
             )}
@@ -1021,7 +1021,7 @@ export function NetApp(props: WashAppProps) {
                   <span class="wash-net-badge" data-badge="removed">removed</span>
                 </div>
                 <div class="wash-net-conn-actions">
-                  <button class="wash-net-btn ghost" disabled={busy()} onClick={() => undoRemove(iface)}><Icon name="undo-2" /> Undo</button>
+                  <button data-wash-hit class="wash-net-btn ghost" disabled={busy()} onClick={() => undoRemove(iface)}><Icon name="undo-2" /> Undo</button>
                 </div>
               </div>
             )}
@@ -1044,8 +1044,8 @@ export function NetApp(props: WashAppProps) {
           <span class="wash-net-pending-msg">
             {dirtyCount()} pending change{dirtyCount() === 1 ? "" : "s"} — not applied yet
           </span>
-          <button class="wash-net-btn" data-testid="discard-changes" disabled={busy()} onClick={discardDraft}><Icon name="x" /> Discard</button>
-          <button class="wash-net-btn primary" data-testid="apply-button" disabled={busy() || hasErrors()} title={hasErrors() ? "fix the validation errors above first" : ""} onClick={() => void applyDraft()}><Icon name="check" /> Apply</button>
+          <button data-wash-hit class="wash-net-btn" data-testid="discard-changes" disabled={busy()} onClick={discardDraft}><Icon name="x" /> Discard</button>
+          <button data-wash-hit class="wash-net-btn primary" data-testid="apply-button" disabled={busy() || hasErrors()} title={hasErrors() ? "fix the validation errors above first" : ""} onClick={() => void applyDraft()}><Icon name="check" /> Apply</button>
         </div>
       </Show>
 
@@ -1131,8 +1131,8 @@ function EthernetWizard(props: { nics: string[]; defaultDevice?: string; initial
       </label>
       <AddressingFields proto={proto} setProto={setProto} />
       <div class="wash-net-wizard-actions">
-        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
-        <button data-testid="eth-create" class="wash-net-btn primary" disabled={!name() || !device()} onClick={() => props.onSave(name(), device(), proto())}>{editing ? "Save" : "Create"}</button>
+        <button data-wash-hit class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-wash-hit data-testid="eth-create" class="wash-net-btn primary" disabled={!name() || !device()} onClick={() => props.onSave(name(), device(), proto())}>{editing ? "Save" : "Create"}</button>
       </div>
     </div>
   );
@@ -1158,8 +1158,8 @@ function VLANWizard(props: { parents: string[]; onCancel: () => void; onCreate: 
       <div class="wash-net-field"><span class="wash-net-label">Device</span><span class="wash-net-derived">{parent()}.{vid()}</span></div>
       <AddressingFields proto={proto} setProto={setProto} />
       <div class="wash-net-wizard-actions">
-        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
-        <button data-testid="vlan-create" class="wash-net-btn primary" disabled={!parent() || vid() < 1 || vid() > 4094} onClick={() => props.onCreate(parent(), vid(), proto())}>Create</button>
+        <button data-wash-hit class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-wash-hit data-testid="vlan-create" class="wash-net-btn primary" disabled={!parent() || vid() < 1 || vid() > 4094} onClick={() => props.onCreate(parent(), vid(), proto())}>Create</button>
       </div>
     </div>
   );
@@ -1187,8 +1187,8 @@ function BridgeWizard(props: { members: string[]; onCancel: () => void; onCreate
       </div>
       <AddressingFields proto={proto} setProto={setProto} />
       <div class="wash-net-wizard-actions">
-        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
-        <button data-testid="bridge-create" class="wash-net-btn primary" disabled={!name() || picked().size === 0} onClick={() => props.onCreate(name(), Array.from(picked()), proto())}>Create</button>
+        <button data-wash-hit class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-wash-hit data-testid="bridge-create" class="wash-net-btn primary" disabled={!name() || picked().size === 0} onClick={() => props.onCreate(name(), Array.from(picked()), proto())}>Create</button>
       </div>
     </div>
   );
@@ -1244,8 +1244,8 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans:
       <div class="wash-net-field">
         <span class="wash-net-label">Type</span>
         <div class="wash-net-chips" data-testid="net-role">
-          <button type="button" class="wash-net-chip" classList={{ on: role() === "lan" }} data-role="lan" data-testid="role-lan" disabled={editing} onClick={() => pickRole("lan")}><Icon name="git-branch" /> LAN segment</button>
-          <button type="button" class="wash-net-chip" classList={{ on: role() === "wan" }} data-role="wan" data-testid="role-wan" disabled={editing} onClick={() => pickRole("wan")}><Icon name="ethernet-port" /> WAN uplink</button>
+          <button data-wash-hit type="button" class="wash-net-chip" classList={{ on: role() === "lan" }} data-role="lan" data-testid="role-lan" disabled={editing} onClick={() => pickRole("lan")}><Icon name="git-branch" /> LAN segment</button>
+          <button data-wash-hit type="button" class="wash-net-chip" classList={{ on: role() === "wan" }} data-role="wan" data-testid="role-wan" disabled={editing} onClick={() => pickRole("wan")}><Icon name="ethernet-port" /> WAN uplink</button>
         </div>
       </div>
       <label class="wash-net-field">
@@ -1360,8 +1360,8 @@ function NetworkWizard(props: { parents: string[]; ports: string[]; fabricVlans:
       </Show>
       </Show>
       <div class="wash-net-wizard-actions">
-        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
-        <button data-testid="net-save" class="wash-net-btn primary" disabled={!valid()} onClick={submit}>{editing ? "Save" : "Create"}</button>
+        <button data-wash-hit class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-wash-hit data-testid="net-save" class="wash-net-btn primary" disabled={!valid()} onClick={submit}>{editing ? "Save" : "Create"}</button>
       </div>
     </div>
   );
@@ -1393,8 +1393,8 @@ function HostWizard(props: { initial?: HostEntry; onCancel: () => void; onSave: 
         <input data-testid="host-mac" value={mac()} onInput={(e) => setMac(e.currentTarget.value)} placeholder="optional — blank = DNS only" />
       </label>
       <div class="wash-net-wizard-actions">
-        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
-        <button data-testid="host-save" class="wash-net-btn primary" disabled={!valid()} onClick={() => props.onSave({ name: name(), ip: ip(), mac: mac().trim() || undefined })}>{editing ? "Save" : "Add"}</button>
+        <button data-wash-hit class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-wash-hit data-testid="host-save" class="wash-net-btn primary" disabled={!valid()} onClick={() => props.onSave({ name: name(), ip: ip(), mac: mac().trim() || undefined })}>{editing ? "Save" : "Add"}</button>
       </div>
     </div>
   );
@@ -1427,6 +1427,7 @@ function FirewallMatrix(props: {
                 {(col) => (
                   <Show when={row.name !== col.name} fallback={<div class="wash-net-cell" data-state="self">—</div>}>
                     <button
+                      data-wash-hit
                       class="wash-net-cell" data-testid={`cell-${row.name}-${col.name}`} data-state={props.state(row.name, col.name)}
                       disabled={props.state(row.name, col.name) === "custom"}
                       title={props.state(row.name, col.name) === "custom" ? "custom rules — edit in Advanced" : `${row.name} → ${col.name}`}
@@ -1435,7 +1436,7 @@ function FirewallMatrix(props: {
                   </Show>
                 )}
               </For>
-              <button class="wash-net-cell" data-testid={`input-${row.name}`} data-input={row.input}
+              <button data-wash-hit class="wash-net-cell" data-testid={`input-${row.name}`} data-input={row.input}
                 title={`${row.name} → router services`} onClick={() => props.onInput(row.name, row.input)}>{row.input === "ACCEPT" ? "✓" : "✕"}</button>
             </>
           )}
@@ -1471,7 +1472,7 @@ function FabricTable(props: { cfg: Config; links: string[]; busy: boolean; onCha
         <div class="wash-net-l2-addv">
           <input type="number" min="2" max="4094" data-testid="fabric-newvid" value={newVid()}
             onInput={(e) => setNewVid(parseInt(e.currentTarget.value || "0", 10))} />
-          <button class="wash-net-btn ghost" data-testid="fabric-addvlan"
+          <button data-wash-hit class="wash-net-btn ghost" data-testid="fabric-addvlan"
             disabled={props.busy || newVid() < 2 || newVid() > 4094 || cols().includes(newVid())}
             onClick={() => apply(fAddVlan(plan(), newVid()))}><Icon name="plus" /> VLAN</button>
         </div>
@@ -1482,9 +1483,9 @@ function FabricTable(props: { cfg: Config; links: string[]; busy: boolean; onCha
           <For each={cols()}>
             {(v) => (
               <div class="wash-net-grid-h" classList={{ "wash-net-l2-transit": v !== NATIVE && !isRouted(plan(), v) }}>
-                <span>{label(v)}<Show when={v !== NATIVE}><button class="wash-net-l2-vdel" data-testid={`fabric-delvlan-${v}`} title={`Remove VLAN ${v}`} disabled={props.busy} onClick={() => apply(fRemoveVlan(plan(), v))}>×</button></Show></span>
+                <span>{label(v)}<Show when={v !== NATIVE}><button data-wash-hit class="wash-net-l2-vdel" data-testid={`fabric-delvlan-${v}`} title={`Remove VLAN ${v}`} disabled={props.busy} onClick={() => apply(fRemoveVlan(plan(), v))}>×</button></Show></span>
                 <Show when={v !== NATIVE}>
-                  <button class="wash-net-l2-vmode" data-transit={!isRouted(plan(), v)} data-testid={`fabric-mode-${v}`} disabled={props.busy}
+                  <button data-wash-hit class="wash-net-l2-vmode" data-transit={!isRouted(plan(), v)} data-testid={`fabric-mode-${v}`} disabled={props.busy}
                     title={isRouted(plan(), v) ? `Routed — terminates at br-lan.${v} (bindable on Networks). Click for switch-only.` : `Transit — switched only, no br-lan.${v} adapter. Click to route.`}
                     onClick={() => apply(setRouted(plan(), v, !isRouted(plan(), v)))}>{isRouted(plan(), v) ? "routed" : "transit"}</button>
                 </Show>
@@ -1497,7 +1498,7 @@ function FabricTable(props: { cfg: Config; links: string[]; busy: boolean; onCha
                 <div class="wash-net-grid-rh">{port}</div>
                 <For each={cols()}>
                   {(v) => (
-                    <button class="wash-net-cell wash-net-l2-cell" data-testid={`fabric-cell-${port}-${v}`}
+                    <button data-wash-hit class="wash-net-cell wash-net-l2-cell" data-testid={`fabric-cell-${port}-${v}`}
                       data-state={cellOf(plan(), port, v)} disabled={props.busy}
                       title={`${port} in ${label(v)} — click: untagged → tagged → none`}
                       onClick={() => apply(fCycle(plan(), port, v))}>{glyph(cellOf(plan(), port, v))}</button>
@@ -1574,10 +1575,10 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
           placeholder="Paste a WireGuard config (a QR code's contents), or load a .conf file — it fills in everything below."
           value={importText()} onInput={(e) => setImportText(e.currentTarget.value)} />
         <div class="wash-net-wg-importbar">
-          <button type="button" class="wash-net-btn ghost" data-testid="wg-import-file" onClick={() => fileInput?.click()}>Load .conf…</button>
+          <button data-wash-hit type="button" class="wash-net-btn ghost" data-testid="wg-import-file" onClick={() => fileInput?.click()}>Load .conf…</button>
           <input ref={fileInput} type="file" accept=".conf,text/plain" style={{ display: "none" }}
             onChange={(e) => { const f = e.currentTarget.files?.[0]; if (f) void f.text().then(applyImport); e.currentTarget.value = ""; }} />
-          <button type="button" class="wash-net-btn" data-testid="wg-import-apply" disabled={!importText().trim()} onClick={() => applyImport(importText())}>Import</button>
+          <button data-wash-hit type="button" class="wash-net-btn" data-testid="wg-import-apply" disabled={!importText().trim()} onClick={() => applyImport(importText())}>Import</button>
           <Show when={importErr()}><span class="wash-net-wg-importerr" data-testid="wg-import-err">{importErr()}</span></Show>
         </div>
       </div>
@@ -1590,14 +1591,14 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
         <span class="wash-net-label">Private key</span>
         <span class="wash-net-wg-key">
           <input data-testid="wg-privkey" type="password" value={privKey()} onInput={(e) => setPrivKey(e.currentTarget.value)} />
-          <button type="button" class="wash-net-btn ghost" data-testid="wg-genkey" onClick={() => setPrivKey(genWGPrivateKey())}>Generate</button>
+          <button data-wash-hit type="button" class="wash-net-btn ghost" data-testid="wg-genkey" onClick={() => setPrivKey(genWGPrivateKey())}>Generate</button>
         </span>
       </label>
       <label class="wash-net-field">
         <span class="wash-net-label">Public key</span>
         <span class="wash-net-wg-key">
           <input data-testid="wg-pubkey" readOnly value={pubKey()} placeholder="(derived from the private key)" />
-          <button type="button" class="wash-net-btn ghost" data-testid="wg-copy-pubkey" disabled={!pubKey()} onClick={() => washCopyText(pubKey())}>Copy</button>
+          <button data-wash-hit type="button" class="wash-net-btn ghost" data-testid="wg-copy-pubkey" disabled={!pubKey()} onClick={() => washCopyText(pubKey())}>Copy</button>
         </span>
       </label>
       <label class="wash-net-field">
@@ -1627,16 +1628,16 @@ function WireGuardWizard(props: { onCancel: () => void; onCreate: (name: string,
             <label class="wash-net-field"><span class="wash-net-label">Keepalive (s)</span>
               <input data-testid={`wg-peer-keepalive-${i()}`} type="number" placeholder="off" value={p.keepalive} onInput={(e) => setPeer(i(), { keepalive: e.currentTarget.value })} /></label>
             <Show when={peers().length > 1}>
-              <button type="button" class="wash-net-btn ghost" data-testid={`wg-peer-remove-${i()}`} onClick={() => setPeers((ps) => ps.filter((_, j) => j !== i()))}><Icon name="trash" /> Remove peer</button>
+              <button data-wash-hit type="button" class="wash-net-btn ghost" data-testid={`wg-peer-remove-${i()}`} onClick={() => setPeers((ps) => ps.filter((_, j) => j !== i()))}><Icon name="trash" /> Remove peer</button>
             </Show>
           </div>
         )}
       </For>
-      <button type="button" class="wash-net-btn ghost" data-testid="wg-add-peer" onClick={() => setPeers((ps) => [...ps, blankPeer()])}><Icon name="plus" /> Add peer</button>
+      <button data-wash-hit type="button" class="wash-net-btn ghost" data-testid="wg-add-peer" onClick={() => setPeers((ps) => [...ps, blankPeer()])}><Icon name="plus" /> Add peer</button>
 
       <div class="wash-net-wizard-actions">
-        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
-        <button data-testid="wg-create" class="wash-net-btn primary" disabled={!canCreate()} onClick={create}>Create</button>
+        <button data-wash-hit class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-wash-hit data-testid="wg-create" class="wash-net-btn primary" disabled={!canCreate()} onClick={create}>Create</button>
       </div>
     </div>
   );
