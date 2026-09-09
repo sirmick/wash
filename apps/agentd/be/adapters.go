@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
@@ -184,6 +185,11 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = cwd
+	// Its own process group, so stop() can kill the whole tree. The common
+	// launch is `npx --yes <package>`, which is a node wrapper around the
+	// node adapter around the agent: killing the pid alone reaped the
+	// wrapper and orphaned the rest, still holding its half of the wire.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -214,7 +220,7 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		once.Do(func() {
 			_ = stdin.Close()
 			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+				killGroup(cmd.Process)
 			}
 			_ = cmd.Wait()
 		})
@@ -277,6 +283,18 @@ func promptHosted(h *hosted, text string) {
 		h.endTurn("done", "cancelled")
 	default:
 		h.endTurn("done", res.StopReason)
+	}
+}
+
+// killGroup ends a process started with Setpgid and everything it forked.
+// SIGKILL, not SIGTERM: an adapter is a stateless bridge (the agent's
+// own session state is the vendor's and already on disk), and this runs
+// on the bus handler's goroutine, so there is nothing to wait politely
+// for. The direct kill is the fallback for a process that somehow is not
+// its own group leader.
+func killGroup(p *os.Process) {
+	if err := syscall.Kill(-p.Pid, syscall.SIGKILL); err != nil {
+		_ = p.Kill()
 	}
 }
 

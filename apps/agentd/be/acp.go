@@ -26,6 +26,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
@@ -101,6 +102,9 @@ type hosted struct {
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
+	// closing is set the moment retire starts, before the adapter is
+	// killed, so the exit watcher can tell "we ended it" from "it died".
+	closing atomic.Bool
 
 	// turnMu guards turnLive, and — crucially — is held ACROSS the
 	// state write that depends on it, so the two orderings below cannot
@@ -193,6 +197,19 @@ func (h *hosted) register() {
 
 // retire ends a session: off the roster, out of the registry, adapter
 // stopped. Safe to call twice.
+//
+// "Ends" means everything the session owns, in this order:
+//
+//  1. its pending questions — answered cancelled toward the agent while
+//     it can still hear, and off every rail that was showing them;
+//  2. the adapter, as a process group, so an `npx` wrapper's node child
+//     does not outlive the adapter it wrapped;
+//  3. the terminals it created, which have no agent left to release them.
+//
+// Killing only the adapter (what this did before) left the rail asking a
+// question for a dead session, "Always allow" writing a rule for it, and
+// any `sleep 600` the agent had started still running with its channel
+// mounted in a transcript nobody could act on.
 func (h *hosted) retire() {
 	hostedMu.Lock()
 	_, live := hostedAll[h.key]
@@ -201,9 +218,8 @@ func (h *hosted) retire() {
 	if !live {
 		return
 	}
-	if h.stop != nil {
-		h.stop()
-	}
+	h.closing.Store(true)
+	h.releaseOwned(ReasonSessionEnded)
 	forgetTranscriptWatchers(h.key)
 	// Seal the history entry before the events are freed: the count comes
 	// from the in-memory transcript, which is about to go.
@@ -220,6 +236,45 @@ func (h *hosted) retire() {
 	})
 	saveHistory()
 	log.Printf("agentd: acp session ended key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
+}
+
+// releaseOwned cancels the session's questions, stops its adapter and
+// closes its terminals — the part of ending a session that is the same
+// whether a human ended it or the adapter died under it.
+func (h *hosted) releaseOwned(why string) {
+	if n := cancelAsksFor(h.key, why); n > 0 {
+		log.Printf("agentd: acp session %s key=%s asks_cancelled=%d", why, h.key, n)
+	}
+	if h.stop != nil {
+		h.stop()
+	}
+	if n := closeTerminalsFor(h.key, why); n > 0 {
+		log.Printf("agentd: acp session %s key=%s terminals_closed=%d", why, h.key, n)
+	}
+}
+
+// stopAllHosted is the shutdown sweep, registered with sdk.OnTerminate:
+// when agentd itself goes down — the router's SIGTERM, or its connection
+// closing under us — every adapter it launched and every terminal those
+// adapters opened go with it. Without this they orphan to PID 1: the
+// adapter keeps its stdio to a dead process and its node children keep
+// running, which is the child-process leak class the audit already cost
+// us once (docs/CORE_AUDIT.md).
+func stopAllHosted() {
+	hostedMu.Lock()
+	all := make([]*hosted, 0, len(hostedAll))
+	for _, h := range hostedAll {
+		all = append(all, h)
+	}
+	hostedMu.Unlock()
+	for _, h := range all {
+		h.closing.Store(true)
+		if h.stop != nil {
+			h.stop()
+		}
+		log.Printf("agentd: acp session stopped on shutdown key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
+	}
+	closeAllTerminals("agentd shutting down")
 }
 
 // setState upserts this session's roster row. Same four wire states the
@@ -581,6 +636,10 @@ func unansweredReason(why string) string {
 		return "too many questions already waiting on this agent"
 	case reasonAskOff:
 		return "asking is switched off in agents.json"
+	case ReasonSessionEnded:
+		return "the session was ended"
+	case ReasonTurnCancelled:
+		return "the turn was stopped"
 	}
 	if why == "" {
 		return "no answer"

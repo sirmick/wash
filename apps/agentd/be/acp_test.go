@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -490,5 +492,120 @@ func TestACancelledTurnIsStillDone(t *testing.T) {
 	}
 	if r.State != "done" {
 		t.Errorf("State = %q, want done", r.State)
+	}
+}
+
+// End session must end EVERYTHING the session owns: its pending question
+// (cancelled toward the agent, gone from the rail), its adapter, and the
+// terminals it created. Killing only the adapter left the rail asking a
+// question for a dead session — with "Always allow" still writing a rule
+// for it — and any long-running command the agent had started still
+// running with nothing able to release it.
+func TestRetireEndsEverything(t *testing.T) {
+	reset()
+	resetAsks()
+	withState(t, 1)
+	withPolicy(t, agentpolicy.Policy{Enabled: true, Default: agentpolicy.DecisionAsk})
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	var stopped atomic.Bool
+	h := &hosted{key: "acp:end", agent: "codex", stop: func() { stopped.Store(true) }}
+	h.register()
+
+	// A terminal the session owns, and one belonging to another session
+	// that must be left alone.
+	var mu sync.Mutex
+	closed := map[string]string{}
+	closer := func(id string) func(string) {
+		return func(reason string) {
+			mu.Lock()
+			closed[id] = reason
+			mu.Unlock()
+		}
+	}
+	termMu.Lock()
+	termAll = map[string]*terminal{
+		"71": {id: "71", key: h.key, closeFn: closer("71")},
+		"72": {id: "72", key: "acp:other", closeFn: closer("72")},
+	}
+	termEarly = map[string]bool{"71": true}
+	termMu.Unlock()
+	t.Cleanup(func() {
+		termMu.Lock()
+		termAll = map[string]*terminal{}
+		termEarly = map[string]bool{}
+		termMu.Unlock()
+	})
+
+	// A question blocked on the human.
+	done := make(chan acp.RequestPermissionResponse, 1)
+	go func() {
+		res, _ := h.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+			SessionID: "s1",
+			ToolCall:  acp.ToolCall{Kind: acp.ToolKindExecute, RawInput: json.RawMessage(`{"command":"git push"}`)},
+			Options:   stdOptions,
+		})
+		done <- res
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var found bool
+		mutateState(func(*State) { found = countForRow(h.key) > 0 })
+		if found {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	h.retire()
+
+	// The adapter is stopped.
+	if !stopped.Load() {
+		t.Error("retire did not stop the adapter")
+	}
+	// Its terminal is closed, with the reason; the other session's is not.
+	mu.Lock()
+	if closed["71"] != ReasonSessionEnded {
+		t.Errorf("session terminal close reason = %q, want %q", closed["71"], ReasonSessionEnded)
+	}
+	if _, touched := closed["72"]; touched {
+		t.Error("retire closed a terminal belonging to another session")
+	}
+	mu.Unlock()
+	termMu.Lock()
+	_, gone := termAll["71"]
+	_, other := termAll["72"]
+	_, early := termEarly["71"]
+	termMu.Unlock()
+	if gone || early {
+		t.Error("the session's terminal record survived retire")
+	}
+	if !other {
+		t.Error("another session's terminal record was dropped")
+	}
+	// The question is gone — from the queue and from the published state
+	// the rail renders.
+	var pendingForRow, published int
+	mutateState(func(s *State) {
+		pendingForRow = countForRow(h.key)
+		published = len(s.Asks)
+	})
+	if pendingForRow != 0 || published != 0 {
+		t.Errorf("after retire: queue=%d published=%d asks for the row, want none", pendingForRow, published)
+	}
+	// And the agent heard cancelled rather than waiting out the backstop.
+	select {
+	case res := <-done:
+		if res.Outcome.Outcome != acp.OutcomeCancelled {
+			t.Errorf("agent got %+v, want cancelled", res.Outcome)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the pending permission request never returned — the turn would hang until the backstop")
+	}
+	if lookupHosted(h.key) != nil {
+		t.Error("session still registered after retire")
+	}
+	if _, live := rows[h.key]; live {
+		t.Error("roster row survived retire")
 	}
 }

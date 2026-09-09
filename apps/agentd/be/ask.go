@@ -76,6 +76,14 @@ const (
 	ReasonTooMany   = "too many pending"
 	ReasonTimeout   = "timeout"
 	ReasonDesktop   = "desktop"
+	// ReasonSessionEnded: the session the question belonged to ended —
+	// the human ended it, or its adapter exited — while it was waiting.
+	// The requester (if it is still there) hears cancelled; the question
+	// leaves every rail that was showing it.
+	ReasonSessionEnded = "session ended"
+	// ReasonTurnCancelled: the turn the question was blocking was
+	// stopped from the desktop. A cancel is not an answer.
+	ReasonTurnCancelled = "turn cancelled"
 )
 
 // maxPendingPerRow caps outstanding questions from one roster row. A
@@ -384,6 +392,45 @@ func expireAsk(id string) {
 	log.Printf("agentd: ask expired id=%s row=%s tool=%s after=%s age=%s subscribers=%d",
 		id, p.RowKey, p.Tool, p.softTTL, now.Sub(p.asked).Round(time.Second), watching)
 	_ = p.reply(DecisionDefer, ReasonTimeout)
+}
+
+// cancelAsksFor resolves every pending question on one roster row with a
+// defer, and takes them off the rail. The ONLY other deletes are the
+// human's answer and the expiry timer, which is why an ended session used
+// to keep its question on screen for up to 30 minutes: nothing about
+// ending a session touched the queue, so the rail showed "claude wants to
+// run…" for an agent that no longer existed, the attention badge counted
+// it, and "Always allow" still wrote a rule for it.
+//
+// Every dropped ask is answered exactly once, through its own reply
+// route, so a hosted RequestPermission still blocked on the queue returns
+// (cancelled toward the agent) rather than waiting out its backstop.
+func cancelAsksFor(rowKey, why string) int {
+	var dropped []*pending
+	now := time.Now()
+	mutateStateIf(func(s *State) bool {
+		for id, p := range asks {
+			if p.RowKey != rowKey {
+				continue
+			}
+			delete(asks, id)
+			dropped = append(dropped, p)
+		}
+		if len(dropped) == 0 {
+			return false
+		}
+		s.Asks = publishAsks(now)
+		return true
+	})
+	for _, p := range dropped {
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		log.Printf("agentd: ask cancelled id=%s row=%s tool=%s reason=%q age=%s",
+			p.ID, p.RowKey, p.Tool, why, now.Sub(p.asked).Round(time.Second))
+		_ = p.reply(DecisionDefer, why)
+	}
+	return len(dropped)
 }
 
 // replyToInstance is the reply route for a question that arrived over the
