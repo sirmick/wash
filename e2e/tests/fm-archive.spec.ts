@@ -62,7 +62,10 @@ test.describe('fm archives', () => {
     // strewn across the current one.
     await expect(row(page, 'bundle')).toBeVisible({ timeout: 15_000 });
     await row(page, 'bundle').dblclick();
-    await expect(row(page, 'proj')).toBeVisible({ timeout: 15_000 });
+    // By path, not by name: the seed's own "proj" is still in the tree.
+    await expect(
+      page.locator(`[data-path="${join(router.fmRoot, 'bundle', 'proj')}"]`),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test('Extract here is not offered for a file that is not an archive', async ({ page, router }) => {
