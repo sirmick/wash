@@ -99,6 +99,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
       {props.children}
       <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end', 'margin-top': '14px' }}>
         <button
+          data-wash-hit
           type="button"
           data-testid={props.cancelTestid}
           onClick={props.onCancel}
@@ -108,6 +109,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
         </button>
         {props.altLabel ? (
           <button
+            data-wash-hit
             type="button"
             data-testid={props.altTestid}
             onClick={props.onAlt}
@@ -117,6 +119,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
           </button>
         ) : null}
         <button
+          data-wash-hit
           type="button"
           data-testid={props.confirmTestid}
           onClick={props.onConfirm}

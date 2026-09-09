@@ -288,6 +288,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           version hit. */}
       <div style={menubarStyle}>
         <button
+          data-wash-hit
           type="button"
           data-testid="pkg-actions-button"
           disabled={!canRunActions() || menuActions().length === 0}

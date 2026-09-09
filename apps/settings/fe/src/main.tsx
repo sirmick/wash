@@ -439,6 +439,7 @@ const PanelHost: Component<{
 
 const RailItem: Component<{ label: string; active: boolean; onClick: () => void }> = (props) => (
   <button
+    data-wash-hit
     type="button"
     onClick={props.onClick}
     data-active={props.active}
@@ -609,6 +610,7 @@ const PackCard: Component<{ pack: Pack; active: boolean; onSelect: () => void }>
   const swatch = (name: string, fallbackHex: string) => props.pack.scheme[name] || fallbackHex;
   return (
     <button
+      data-wash-hit
       type="button"
       onClick={props.onSelect}
       data-testid={`pack-card-${props.pack.id}`}

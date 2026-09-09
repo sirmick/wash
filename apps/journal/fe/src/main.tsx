@@ -412,6 +412,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </div>
         <div style={{ overflow: 'auto', flex: 1 }}>
           <div
+            data-wash-hit
             data-testid="journal-system-row"
             data-selected={selected() === SYSTEM_KEY ? 'true' : undefined}
             style={unitRowStyle(true, selected() === SYSTEM_KEY)}
@@ -429,6 +430,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               const failed = u.active === 'failed';
               return (
                 <div
+                  data-wash-hit
                   data-testid="journal-unit-row"
                   data-unit-name={u.name}
                   data-selected={selected() === u.name ? 'true' : undefined}
@@ -452,31 +454,31 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         {/* toolbar */}
         <div style={toolbarStyle} data-testid="journal-toolbar">
           <div style={segGroupStyle}>
-            <button style={segBtn(range() === 'boot')} onClick={() => onPickRange('boot')} title="Since last boot">
+            <button data-wash-hit style={segBtn(range() === 'boot')} onClick={() => onPickRange('boot')} title="Since last boot">
               boot
             </button>
-            <button style={segBtn(range() === 'hour')} onClick={() => onPickRange('hour')} title="Last hour">
+            <button data-wash-hit style={segBtn(range() === 'hour')} onClick={() => onPickRange('hour')} title="Last hour">
               1h
             </button>
-            <button style={segBtn(range() === 'day')} onClick={() => onPickRange('day')} title="Last 24 hours">
+            <button data-wash-hit style={segBtn(range() === 'day')} onClick={() => onPickRange('day')} title="Last 24 hours">
               1d
             </button>
-            <button style={segBtn(range() === 'all')} onClick={() => onPickRange('all')} title="All retained history">
+            <button data-wash-hit style={segBtn(range() === 'all')} onClick={() => onPickRange('all')} title="All retained history">
               all
             </button>
           </div>
 
           <div style={segGroupStyle}>
-            <button style={segBtn(priority() === 0)} onClick={() => onPickPriority(0)} title="All priorities">
+            <button data-wash-hit style={segBtn(priority() === 0)} onClick={() => onPickPriority(0)} title="All priorities">
               all
             </button>
-            <button style={segBtn(priority() === 6)} onClick={() => onPickPriority(6)} title="Info and above">
+            <button data-wash-hit style={segBtn(priority() === 6)} onClick={() => onPickPriority(6)} title="Info and above">
               ≥info
             </button>
-            <button style={segBtn(priority() === 4)} onClick={() => onPickPriority(4)} title="Warning and above">
+            <button data-wash-hit style={segBtn(priority() === 4)} onClick={() => onPickPriority(4)} title="Warning and above">
               ≥warn
             </button>
-            <button style={segBtn(priority() === 3)} onClick={() => onPickPriority(3)} title="Error and above">
+            <button data-wash-hit style={segBtn(priority() === 3)} onClick={() => onPickPriority(3)} title="Error and above">
               ≥err
             </button>
           </div>
@@ -527,6 +529,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               <span style={{ opacity: 0.7 }}>{statusError()}</span>
             </span>
             <button
+              data-wash-hit
               data-testid="journal-retry-root"
               onClick={retryAsRoot}
               style={{
@@ -549,6 +552,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               journalctl: <span style={{ opacity: 0.85 }}>{statusError() || 'failed'}</span>
             </span>
             <button
+              data-wash-hit
               onClick={() => requestStream()}
               style={{
                 background: 'transparent',

@@ -39,6 +39,7 @@ export const TransportControls: Component<TransportControlsProps> = (props) => {
   return (
     <div style={{ display: 'flex', gap: '6px', 'justify-content': 'center' }}>
       <button
+        data-wash-hit
         type="button"
         data-testid="audio-prev"
         style={transportBtn}
@@ -52,6 +53,7 @@ export const TransportControls: Component<TransportControlsProps> = (props) => {
         when={props.status === 'playing'}
         fallback={
           <button
+            data-wash-hit
             type="button"
             data-testid="audio-play"
             style={transportBtn}
@@ -64,6 +66,7 @@ export const TransportControls: Component<TransportControlsProps> = (props) => {
         }
       >
         <button
+          data-wash-hit
           type="button"
           data-testid="audio-pause"
           style={transportBtn}
@@ -75,6 +78,7 @@ export const TransportControls: Component<TransportControlsProps> = (props) => {
         </button>
       </Show>
       <button
+        data-wash-hit
         type="button"
         data-testid="audio-next"
         style={transportBtn}
@@ -265,6 +269,7 @@ export function MediaList<T>(props: MediaListProps<T>): JSX.Element {
             const isPlaying = () => props.playing === i();
             return (
               <div
+                data-wash-hit="subtle"
                 data-testid={`media-row-${i()}`}
                 data-selected={sel() ? 'true' : undefined}
                 data-playing={isPlaying() ? 'true' : undefined}

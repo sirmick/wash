@@ -1148,6 +1148,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           at the taskbar's edge. pointer-events:none; painted by
           applyWallpaper. */}
       <div
+        data-wash-hit
         ref={wallpaperEl}
         data-testid="desktop-wallpaper"
         style={{
@@ -1167,6 +1168,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           Same inset as the wallpaper so the frame keeps hugging the
           painting; pointer-events:none so it never intercepts clicks. */}
       <div
+        data-wash-hit
         data-testid="viewport-frame"
         style={{
           position: 'absolute',
@@ -1484,7 +1486,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           });
         }}
       />
-      <div style={taskbarPosition() === 'top' ? taskbarStyleTop : taskbarStyle}>
+      <div data-wash-hit style={taskbarPosition() === 'top' ? taskbarStyleTop : taskbarStyle}>
         <IconButton
           title="Apps"
           onClick={toggleMenu}
@@ -1494,6 +1496,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             fallback={<img src={washAssetUrl('wash-logo.svg')} width="20" height="20" alt="wash" style={{ display: 'block' }} />}
           >
             <span
+              data-wash-hit
               style={{ display: 'block', width: '20px', height: '20px' }}
               // eslint-disable-next-line solid/no-innerhtml -- pack start icons are built-in, trusted SVG markup
               innerHTML={activePack().startIconSVG}
@@ -1507,8 +1510,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         >
           <Search size={16} />
         </IconButton>
-        <div style={separatorStyle} />
-        <div style={windowListStyle}>
+        <div data-wash-hit style={separatorStyle} />
+        <div data-wash-hit style={windowListStyle}>
           <For each={windows()}>
             {(w) => (
               // Two roads to the same dot. The notification one is
@@ -1528,6 +1531,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           </For>
         </div>
         <span
+          data-wash-hit
           data-testid="screenshot-status"
           style={{ ...screenshotStatusStyle, opacity: screenshotVisible() ? 1 : 0 }}
         >
@@ -1550,7 +1554,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         >
           <PanelRightOpen size={17} />
         </IconButton>
-        <span style={clockStyle}>{clock()}</span>
+        <span data-wash-hit style={clockStyle}>{clock()}</span>
       </div>
 
       <Show when={menuOpen()}>
@@ -1662,13 +1666,14 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
     <Show
       when={info()}
       fallback={
-        <div style={placeholderStyle} data-testid="desktop-banner-placeholder">
+        <div data-wash-hit style={placeholderStyle} data-testid="desktop-banner-placeholder">
           wash
         </div>
       }
     >
       {(s) => (
         <div
+          data-wash-hit
           data-testid="desktop-banner"
           style={{
             position: 'absolute',
@@ -1699,6 +1704,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           }}
         >
           <div
+            data-wash-hit
             data-testid="desktop-banner-host"
             style={{
               font: tokens.type.titleLg,
@@ -1714,6 +1720,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           >
             <span>{s().fqdn || s().hostname || 'wash'}</span>
             <span
+              data-wash-hit
               data-testid="desktop-banner-user"
               style={{
                 font: tokens.type.titleSm,
@@ -1724,6 +1731,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             </span>
             <Show when={s().session_name}>
               <span
+                data-wash-hit
                 data-testid="desktop-banner-session-name"
                 style={{
                   font: tokens.type.monoMd,
@@ -1736,6 +1744,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
             </Show>
           </div>
           <div
+            data-wash-hit
             data-testid="desktop-banner-hw"
             style={{
               'margin-top': '2px',
@@ -1748,6 +1757,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           </div>
           <Show when={s().interfaces && s().interfaces.length > 0}>
             <div
+              data-wash-hit
               data-testid="desktop-banner-ifaces"
               style={{
                 'margin-top': '2px',
@@ -1759,10 +1769,11 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               <For each={s().interfaces}>
                 {(iface) => (
                   <div
+                    data-wash-hit
                     data-testid={`desktop-banner-iface-${iface.name}`}
                     style={{ 'word-break': 'break-all' }}
                   >
-                    <span style={{ opacity: 0.7 }}>{iface.name}</span>
+                    <span data-wash-hit style={{ opacity: 0.7 }}>{iface.name}</span>
                     {' '}
                     {iface.ips.join('  ')}
                   </div>
@@ -1773,6 +1784,7 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
           <Show when={s().router}>
             {(r) => (
               <div
+                data-wash-hit
                 data-testid="desktop-banner-router"
                 style={{
                   'margin-top': '6px',
@@ -1787,13 +1799,14 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
               >
                 <span>wash-router v{r().version}</span>
                 <Show when={r().commit}>
-                  <span style={{ opacity: 0.7 }}>{r().commit}</span>
+                  <span data-wash-hit style={{ opacity: 0.7 }}>{r().commit}</span>
                 </Show>
                 <Show when={r().built}>
-                  <span style={{ opacity: 0.7 }}>{formatBuilt(r().built!)}</span>
+                  <span data-wash-hit style={{ opacity: 0.7 }}>{formatBuilt(r().built!)}</span>
                 </Show>
                 <Show when={r().dev}>
                   <span
+                    data-wash-hit
                     data-testid="desktop-banner-router-dev"
                     style={{
                       background: tokens.accentRed,
@@ -1870,8 +1883,9 @@ const Pager: Component<{
     return out;
   };
   return (
-    <div data-testid="pager" style={containerStyle()}>
+    <div data-wash-hit data-testid="pager" style={containerStyle()}>
       <div
+        data-wash-hit
         style={{
           position: 'relative',
           width: '100%',
@@ -1949,6 +1963,7 @@ const PagerCell: Component<{
   };
   return (
     <div
+      data-wash-hit
       data-testid={`pager-cell-${props.cell.vx}-${props.cell.vy}`}
       data-active={props.active ? 'true' : 'false'}
       style={cellStyle()}
@@ -2008,6 +2023,7 @@ const PagerWindow: Component<{
   };
   return (
     <div
+      data-wash-hit
       data-testid={`pager-window-${props.win.windowID}-${props.cell.vx}-${props.cell.vy}`}
       style={style()}
       onClick={onClick}
@@ -2026,6 +2042,7 @@ const IconButton: Component<{
   const [hover, setHover] = createSignal(false);
   return (
     <button
+      data-wash-hit
       type="button"
       title={props.title}
       data-testid={props.testid}
@@ -2067,6 +2084,7 @@ const WindowPill: Component<{
   };
   return (
     <button
+      data-wash-hit
       type="button"
       data-testid="taskbar-pill"
       data-attention={props.attention ? 'true' : undefined}
@@ -2108,11 +2126,12 @@ const WindowPill: Component<{
       <Show when={props.win.icon}>
         <SpriteIcon name={props.win.icon!} size={14} />
       </Show>
-      <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
+      <span data-wash-hit style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.win.title}</span>
       {/* Amber dot = this window said something urgent you haven't read.
           Placed after the title so it reads as a status, not an icon. */}
       <Show when={props.attention}>
         <span
+          data-wash-hit
           data-testid="taskbar-pill-attention"
           style={{
             width: '7px',
@@ -2172,6 +2191,7 @@ const StartMenu: Component<{
       {/* Brand header: the wash logo + "wash <version>" in a larger
           italic face, sitting above the launcher rows. */}
       <div
+        data-wash-hit
         data-testid="start-menu-brand"
         style={{
           display: 'flex',
@@ -2190,6 +2210,7 @@ const StartMenu: Component<{
           style={{ display: 'block', 'flex-shrink': 0 }}
         />
         <span
+          data-wash-hit
           style={{
             'font-size': '18px',
             'font-style': 'italic',
@@ -2202,8 +2223,8 @@ const StartMenu: Component<{
           wash{props.version ? ` ${props.version}` : ''}
         </span>
       </div>
-      <div style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }}>
-      <Show when={items().length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
+      <div data-wash-hit style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }}>
+      <Show when={items().length > 0} fallback={<div data-wash-hit style={emptyStyle}>no apps registered</div>}>
         <For each={items()}>
           {(app) => {
             const root = isRootRow(app.id);
@@ -2222,7 +2243,7 @@ const StartMenu: Component<{
                   : `start-menu-root-${app.id.slice(ROOT_PREFIX.length)}`)
               : `start-menu-${app.id}`;
             const iconNode = app.icon ? (
-              <span style={{ color: root ? ROOT_ICON_COLOR : accentFor(app), display: 'inline-flex' }}>
+              <span data-wash-hit style={{ color: root ? ROOT_ICON_COLOR : accentFor(app), display: 'inline-flex' }}>
                 <SpriteIcon name={app.icon} size={16} />
               </span>
             ) : undefined;
@@ -2234,7 +2255,7 @@ const StartMenu: Component<{
                 icon={iconNode}
                 trailing={
                   app.disabled ? (
-                    <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
+                    <span data-wash-hit style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
                       {app.reason ? '· ' + app.reason : '· disabled'}
                     </span>
                   ) : undefined
@@ -2247,6 +2268,7 @@ const StartMenu: Component<{
       </Show>
       </div>
       <div
+        data-wash-hit
         aria-hidden="true"
         style={{
           height: '1px',
@@ -2284,6 +2306,7 @@ const Palette: Component<{
 }> = (props) => {
   return (
     <div
+      data-wash-hit
       data-testid="palette"
       onClick={(ev) => {
         if (ev.currentTarget === ev.target) props.onClose();
@@ -2301,6 +2324,7 @@ const Palette: Component<{
       }}
     >
       <div
+        data-wash-hit
         style={{
           background: tokens.bgWindow,
           border: `1px solid ${tokens.borderMenu}`,
@@ -2332,10 +2356,10 @@ const Palette: Component<{
             font: tokens.type.textLg,
           }}
         />
-        <div data-testid="palette-list" style={{ 'max-height': '50vh', overflow: 'auto' }}>
+        <div data-wash-hit data-testid="palette-list" style={{ 'max-height': '50vh', overflow: 'auto' }}>
           <Show
             when={props.results.length > 0}
-            fallback={<div style={emptyStyle}>no matches</div>}
+            fallback={<div data-wash-hit style={emptyStyle}>no matches</div>}
           >
             <For each={props.results}>
               {(app, i) => (
@@ -2369,6 +2393,7 @@ const PaletteRow: Component<{
   });
   return (
     <button
+      data-wash-hit
       type="button"
       data-testid={`palette-item-${props.app.id}`}
       ref={el!}
@@ -2389,6 +2414,7 @@ const PaletteRow: Component<{
       }}
     >
       <span
+        data-wash-hit
         style={{
           width: '20px',
           height: '20px',
@@ -2405,8 +2431,8 @@ const PaletteRow: Component<{
           <SpriteIcon name={props.app.icon!} size={18} />
         </Show>
       </span>
-      <span style={{ flex: 1 }}>{props.app.name}</span>
-      <span style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.id}</span>
+      <span data-wash-hit style={{ flex: 1 }}>{props.app.name}</span>
+      <span data-wash-hit style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.id}</span>
     </button>
   );
 };

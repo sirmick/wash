@@ -86,6 +86,7 @@ const HostEntry: Component<{
   return (
     <div style={{ position: 'relative' }}>
       <button
+        data-wash-hit
         type="button"
         data-testid={`remote-host-${props.host.origin}`}
         data-status={props.host.status}
@@ -131,6 +132,7 @@ const HostEntry: Component<{
             <For each={props.appsFor(props.host.origin)}>
               {(app) => (
                 <button
+                  data-wash-hit
                   type="button"
                   style={menuItemStyle}
                   data-testid={`remote-launch-${props.host.origin}-${app.id}`}
@@ -177,6 +179,7 @@ export const RemoteWidget: Component<RemoteWidgetProps> = (props) => (
     </Show>
 
     <button
+      data-wash-hit
       type="button"
       data-testid="remote-manage"
       onClick={() => props.onManage()}

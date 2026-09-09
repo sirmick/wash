@@ -954,6 +954,7 @@ const MoreMenu: Component<{
         <For each={props.apps}>
           {(app) => (
             <button
+              data-wash-hit
               type="button"
               style={menuItemStyle}
               onClick={() => props.onPick(app.id)}

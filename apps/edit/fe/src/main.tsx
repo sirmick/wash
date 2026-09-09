@@ -2901,6 +2901,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 const isDirty = () => dirtyIDs().has(t.id);
                 return (
                   <div
+                    data-wash-hit
                     data-testid={`edit-tab-${t.id}`}
                     data-active={isActive() ? 'true' : undefined}
                     data-dirty={isDirty() ? 'true' : undefined}
@@ -2911,6 +2912,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                       {t.displayName}
                     </span>
                     <span
+                      data-wash-hit
                       data-testid={`edit-tab-close-${t.id}`}
                       onClick={(ev) => { ev.stopPropagation(); requestCloseTab(t.id); }}
                       style={tabCloseStyle}
@@ -3041,6 +3043,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 const isActive = () => activeTermID() === t.id;
                 return (
                   <div
+                    data-wash-hit
                     data-testid={`edit-term-tab-${t.id}`}
                     data-active={isActive() ? 'true' : undefined}
                     onClick={() => setActiveTermID(t.id)}
@@ -3050,6 +3053,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                       {t.title}
                     </span>
                     <span
+                      data-wash-hit
                       data-testid={`edit-term-tab-close-${t.id}`}
                       onClick={(ev) => { ev.stopPropagation(); closeTerm(t.id); }}
                       style={tabCloseStyle}
@@ -3062,6 +3066,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               }}
             </For>
             <button
+              data-wash-hit
               type="button"
               data-testid="edit-term-new"
               onClick={openNewTerm}
@@ -3074,6 +3079,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 both are a process working on your behalf that you watch
                 and interrupt. */}
             <button
+              data-wash-hit
               type="button"
               data-testid="edit-agent-new"
               onClick={(ev) => {
@@ -3550,10 +3556,10 @@ const WysFindBar: Component<{
           onKeyDown={onReplKey}
           style={{ padding: '0 6px', height: '22px', width: '160px', 'box-sizing': 'border-box', font: tokens.type.monoMd }}
         />
-        <button type="button" data-testid="edit-wf-replace-one" onMouseDown={(e) => e.preventDefault()} title="Replace current match (Enter)" onClick={() => doReplace(false)} style={findButtonStyle}>
+        <button data-wash-hit type="button" data-testid="edit-wf-replace-one" onMouseDown={(e) => e.preventDefault()} title="Replace current match (Enter)" onClick={() => doReplace(false)} style={findButtonStyle}>
           Replace
         </button>
-        <button type="button" data-testid="edit-wf-replace-all" onMouseDown={(e) => e.preventDefault()} title="Replace all matches" onClick={() => doReplace(true)} style={findButtonStyle}>
+        <button data-wash-hit type="button" data-testid="edit-wf-replace-all" onMouseDown={(e) => e.preventDefault()} title="Replace all matches" onClick={() => doReplace(true)} style={findButtonStyle}>
           All
         </button>
       </div>
@@ -3654,6 +3660,7 @@ const MenuBarButton: Component<{
 }> = (props) => {
   return (
     <button
+      data-wash-hit
       type="button"
       data-testid={`edit-menubar-${props.id}`}
       onClick={(ev) => props.onClick(props.id, ev)}

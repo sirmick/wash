@@ -1,5 +1,6 @@
 import { splitProps } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
+import { HIT_ATTR } from './hit';
 import { tokens } from './tokens';
 
 // Variants:
@@ -7,6 +8,13 @@ import { tokens } from './tokens';
 //   danger  — destructive action (Delete, Replace, Replace All)
 //   ghost   — transparent / chrome (button with hover background)
 //   icon    — small square icon-only chrome button (toolbar)
+//
+// Every variant carries the interaction layer (hit.ts): hover tint,
+// press well, keyboard focus ring, and the inert treatment when
+// `disabled` is set. That is why the styles below declare no :hover
+// colours of their own — an inline style object cannot, and the
+// pseudo-element overlay derives its tint from whatever the variant
+// paints, so `danger` darkens red on press without a second palette.
 //
 // Spreads the full HTMLButtonElement attribute set so callers can
 // pass title, data-testid, type, disabled, etc. without bespoke
@@ -25,6 +33,9 @@ export const Button: Component<ButtonProps> = (props) => {
   return (
     <button
       type={local.type ?? 'button'}
+      // Before {...rest} so a caller can still dial the intensity
+      // (data-wash-hit="subtle") on a specific button.
+      {...{ [HIT_ATTR]: '' }}
       style={{
         ...baseStyle(local.variant ?? 'default', local.size ?? 'md'),
         ...((local.style as JSX.CSSProperties | undefined) ?? {}),

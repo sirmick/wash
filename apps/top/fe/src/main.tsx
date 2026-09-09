@@ -477,6 +477,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <div style={layoutStyle}>
         <div style={metersStyle}>
           <div
+            data-wash-hit
             ref={cpuTriggerEl}
             data-testid="top-cpu-meter"
             onClick={() => setCpuPopover(!cpuPopover())}
@@ -494,6 +495,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <MemMeter mem={snap()?.mem} history={memHistory()} load={snap()?.load} />
           </div>
           <div
+            data-wash-hit
             ref={netTriggerEl}
             data-testid="top-net-meter"
             onClick={() => setNetPopover(!netPopover())}
@@ -503,6 +505,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <NetMeter rx={netRxHistory()} tx={netTxHistory()} />
           </div>
           <div
+            data-wash-hit
             ref={diskTriggerEl}
             data-testid="top-disk-meter"
             onClick={() => setDiskPopover(!diskPopover())}
@@ -1011,6 +1014,7 @@ const ProcHeader: Component<{
 }> = (props) => {
   const Cell = (p: { k: SortKey; label: string; width?: string; align?: 'left' | 'right' }) => (
     <button
+      data-wash-hit
       type="button"
       onClick={() => props.onSort(p.k)}
       data-testid={`top-sort-${p.k}`}
@@ -1030,10 +1034,10 @@ const ProcHeader: Component<{
     <div style={rowStyle(true, false)}>
       <Cell k="pid" label="PID" width="56px" align="right" />
       <Cell k="user" label="USER" width="76px" />
-      <span style={{ ...headerCellStyle, width: '28px' }}>ST</span>
+      <span data-wash-hit style={{ ...headerCellStyle, width: '28px' }}>ST</span>
       <Cell k="cpu" label="%CPU" width="56px" align="right" />
       <Cell k="mem" label="%MEM" width="56px" align="right" />
-      <span style={{ ...headerCellStyle, width: '64px', 'text-align': 'right' }}>RSS</span>
+      <span data-wash-hit style={{ ...headerCellStyle, width: '64px', 'text-align': 'right' }}>RSS</span>
       <Cell k="time" label="TIME" width="60px" align="right" />
       <Cell k="cmd" label="COMMAND" />
     </div>
@@ -1054,6 +1058,7 @@ const ProcRow: Component<{
     <div
       style={rowStyle(false, props.selected)}
       data-pid={props.proc.PID}
+      data-wash-hit="subtle"
       data-testid={`top-row-${props.proc.PID}`}
       onClick={props.onSelect}
     >
@@ -1070,6 +1075,7 @@ const ProcRow: Component<{
         <span style={{ 'padding-left': `${indent()}px`, display: 'inline-flex', 'align-items': 'center', gap: '2px' }}>
           <Show when={props.hasKids} fallback={<span style={{ width: '12px', display: 'inline-block' }} />}>
             <button
+              data-wash-hit
               type="button"
               onClick={(e) => { e.stopPropagation(); props.onToggle?.(); }}
               style={chevronStyle}

@@ -1093,6 +1093,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return (
       <Show when={tab()}>
         <button
+          data-wash-hit
           type="button"
           draggable={true}
           data-testid={`term-tab-${channelID}`}
@@ -1173,6 +1174,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             {tabLabel(tab()!)}
           </span>
           <span
+            data-wash-hit
             data-testid={`term-tab-close-${channelID}`}
             style={{
               opacity: 0.6,
@@ -1235,6 +1237,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     <>
       <div data-testid="term-menubar" style={menuBarStyle}>
         <button
+          data-wash-hit
           type="button"
           data-testid="term-menu-edit-btn"
           style={menuBarBtnStyle(openMenu() === 'edit')}
@@ -1243,6 +1246,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           Edit
         </button>
         <button
+          data-wash-hit
           type="button"
           data-testid="term-menu-tab-btn"
           style={menuBarBtnStyle(openMenu() === 'tab')}
@@ -1251,6 +1255,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           Tab
         </button>
         <button
+          data-wash-hit
           type="button"
           data-testid="term-menu-split-btn"
           style={menuBarBtnStyle(openMenu() === 'split')}
@@ -1259,6 +1264,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           Split
         </button>
         <button
+          data-wash-hit
           type="button"
           data-testid="term-menu-theme-btn"
           style={menuBarBtnStyle(openMenu() === 'theme')}
@@ -1267,6 +1273,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           Theme
         </button>
         <button
+          data-wash-hit
           type="button"
           data-testid="term-menu-paste-btn"
           style={menuBarBtnStyle(openMenu() === 'paste')}
@@ -1275,6 +1282,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           Paste
         </button>
         <button
+          data-wash-hit
           type="button"
           data-testid="term-menu-font-btn"
           style={menuBarBtnStyle(openMenu() === 'font')}
