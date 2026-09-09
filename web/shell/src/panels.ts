@@ -11,7 +11,7 @@
 //   router → shell:  { t: "channel.unbind", channel_id, reason }
 //   on error:        { t: "panel.read.err", req_id, code, msg }
 
-import { wlog } from './diag';
+import { wlog } from './diag.ts';
 
 interface Pending {
   reqID: number;
