@@ -32,6 +32,7 @@ import { analyzePaste } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
 import { SplitIntents } from './intents';
 import type { SplitIntent } from './intents';
+import { fullTabLabel, shortShellName, tabLabelFor } from './tab-label';
 import {
   DEFAULT_GUTTER, ROOT,
   addTab as treeAddTab, canSplit, channels as treeChannels, closeTab as treeCloseTab,
@@ -162,10 +163,6 @@ const STRIP_HEIGHT = 26;
 const STATUS_HEIGHT = 20;
 // Divider thickness between sibling panes.
 const GUTTER = DEFAULT_GUTTER;
-
-// Tab labels cap here (chars) before ellipsis — a shell sets the OSC
-// title to "user@host: /long/cwd", which would otherwise stretch the tab.
-const TAB_LABEL_MAX = 12;
 
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   // tabs is the channel INVENTORY — one entry per live pty, in no
@@ -719,15 +716,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   // fullLabel is the untruncated tab label (OSC title, else shell
-  // basename) — also used as the button's hover tooltip. tabLabel caps
-  // it to TAB_LABEL_MAX chars with an ellipsis so a long "user@host: cwd"
-  // title can't blow out the tab width.
-  const fullLabel = (tab: TabMeta): string =>
-    (tabTitles().get(tab.channelID) ?? '').trim() || shortShellName(tab.shell);
-  const tabLabel = (tab: TabMeta): string => {
-    const s = fullLabel(tab);
-    return s.length > TAB_LABEL_MAX ? s.slice(0, TAB_LABEL_MAX - 1) + '…' : s;
-  };
+  // basename) — the button's hover tooltip. tabLabel is what the strip
+  // shows: the user@host prefix stripped and a long path kept from its
+  // tail (tab-label.ts), so tabs read "…/apps/term" rather than every one
+  // of them saying "mick@ai: ~/…".
+  const fullLabel = (tab: TabMeta): string => fullTabLabel(tabTitles().get(tab.channelID), tab.shell);
+  const tabLabel = (tab: TabMeta): string => tabLabelFor(tabTitles().get(tab.channelID), tab.shell);
   // Same label by channel id, for callers that only carry the id (the
   // close-confirmation names each busy tab). A tab that has already gone
   // falls back to its id rather than rendering an empty bullet.
@@ -1735,11 +1729,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 };
 
 // ---- helpers / styles ----
-
-function shortShellName(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.slice(i + 1) : p;
-}
 
 // swatchStyle — the color dot shown beside each entry in the tag menu.
 // hollow renders the outlined "No color" chip.
