@@ -16,6 +16,7 @@
 // Behaviour is driven by the prompt text, which keeps the e2e readable:
 //
 //	"ask"    → requests permission, then reports what was answered
+//	"crash"  → says why on stderr and exits mid-turn (the adapter died)
 //	anything → a short markdown reply with a tool call
 package main
 
@@ -169,6 +170,15 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 	notify(out, update(map[string]any{
 		"sessionUpdate": "usage_update", "used": 14689, "size": 258400,
 	}))
+
+	if strings.Contains(text, "crash") {
+		// The adapter dies mid-turn: the prompt is never answered, the
+		// pipe closes, and the last thing on stderr is the only clue. This
+		// is what an expired token or a bubblewrap refusal looks like from
+		// wash's side, and it is what the exit watcher exists for.
+		fmt.Fprintln(os.Stderr, "acp-fake: fatal: simulated crash (token expired)")
+		os.Exit(3)
+	}
 
 	if strings.Contains(text, "ask") {
 		// A permission request, with the option kinds a real adapter

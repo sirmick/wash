@@ -290,3 +290,24 @@ func TestRecentPublishCapIsSmallerThanTheStore(t *testing.T) {
 		t.Error("the published slice must be the smaller of the two, or raising the store bloats every push")
 	}
 }
+
+// A row whose adapter exited stays on the roster as failed/exited until
+// the sweep drops it, so the failure is visible — but nothing is behind
+// it, and History must offer to RESUME it rather than "go to" a window
+// on a dead session.
+func TestRosterIndexTreatsAnExitedRowAsNotLive(t *testing.T) {
+	idx := rosterIndex([]Row{
+		{Key: "acp:1", SessionID: "alive", State: "working"},
+		{Key: "acp:2", SessionID: "dead", State: "failed", Reason: "exited"},
+		{Key: "acp:3", SessionID: "errored", State: "failed", Reason: "error"},
+	})
+	if !idx["alive"].Live {
+		t.Error("a working row is live")
+	}
+	if idx["dead"].Live {
+		t.Error("an exited row was reported live — History would say 'go to it'")
+	}
+	if !idx["errored"].Live {
+		t.Error("a row that failed a turn but whose adapter is still up must stay live — its composer works")
+	}
+}

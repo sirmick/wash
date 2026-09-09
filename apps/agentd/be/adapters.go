@@ -154,6 +154,7 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	bindTranscript(h.key, h.sessionID, agentID, h.cwd, time.Now())
 	h.applyModes(res2.Modes)
 	h.register()
+	go h.watchExit()
 	// The settings block arrives with the session, not only on later
 	// updates — without this the controls were empty until the agent
 	// happened to change something itself.
@@ -206,10 +207,20 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		return nil, fmt.Errorf("start %s: %w", bin, err)
 	}
 
+	hostedMu.Lock()
+	hostedSeq++
+	key := "acp:" + itoa(hostedSeq)
+	hostedMu.Unlock()
+
+	h := &hosted{key: key, agent: a.ID, cwd: cwd, conn: svcConn}
+
 	// The adapter's own diagnostics. Without this, "needs authentication"
-	// is indistinguishable from "hung".
+	// is indistinguishable from "hung". The tail is also kept on the
+	// session, because when the adapter dies the last thing it said is
+	// the one line that explains why — and it belongs in the transcript,
+	// not only in a log the person watching the window never sees.
 	go func() {
-		b, _ := io.ReadAll(stderr)
+		b, _ := io.ReadAll(io.TeeReader(stderr, h.stderrTail()))
 		if len(b) > 0 {
 			log.Printf("agentd: adapter %s stderr: %s", a.ID, truncate(b, 2000))
 		}
@@ -226,12 +237,7 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		})
 	}
 
-	hostedMu.Lock()
-	hostedSeq++
-	key := "acp:" + itoa(hostedSeq)
-	hostedMu.Unlock()
-
-	h := &hosted{key: key, agent: a.ID, cwd: cwd, stop: stop, conn: svcConn}
+	h.stop = stop
 	h.client = acp.NewClient(stdout, stdin, h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
@@ -277,8 +283,13 @@ func promptHosted(h *hosted, text string) {
 		// "failed", not "done": a turn that died on an adapter error is
 		// not a turn that finished, and reporting it as done made every
 		// surface paint it GREEN — indistinguishable from success
-		// (docs/AGENT_MESSENGER.md M5).
-		h.endTurn("failed", "error")
+		// (docs/AGENT_MESSENGER.md M5). A turn that died because the
+		// adapter went away is "exited", which the exit watcher explains.
+		if h.closing.Load() {
+			h.endTurn("failed", "exited")
+		} else {
+			h.endTurn("failed", "error")
+		}
 	case res.StopReason == acp.StopCancelled:
 		h.endTurn("done", "cancelled")
 	default:
@@ -378,6 +389,7 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	// Register BEFORE loading: the replay arrives as notifications, and
 	// they need a roster row and a transcript to land in.
 	h.register()
+	go h.watchExit()
 	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, nil)
 	if err != nil {
 		h.retire()

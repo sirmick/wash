@@ -3,6 +3,7 @@ package agentd
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -607,5 +608,123 @@ func TestRetireEndsEverything(t *testing.T) {
 	}
 	if _, live := rows[h.key]; live {
 		t.Error("roster row survived retire")
+	}
+}
+
+// Nothing used to watch the adapter's exit: a crashed adapter kept its
+// roster row and its idle-hold, its pending question outlived it, and the
+// next prompt failed silently. The watcher turns the exit into what the
+// desktop can see — a failed row, a transcript note with the reason and
+// the adapter's last stderr, no question left on any rail, no terminal
+// left running — while keeping the History entry to resume from.
+//
+// Driven through a REAL acp.Client over pipes, so the permission request
+// arrives on the conn's own context and it is that context ending — not a
+// test poking a channel — that releases the blocked handler.
+func TestAdapterExitFailsTheRowAndCancelsAsks(t *testing.T) {
+	withStateDir(t)
+	reset()
+	resetAsks()
+	withState(t, 1)
+	withPolicy(t, agentpolicy.Policy{Enabled: true, Default: agentpolicy.DecisionAsk})
+
+	toAgentR, toAgentW := io.Pipe()
+	toClientR, toClientW := io.Pipe()
+	var stopped atomic.Bool
+	h := &hosted{key: "acp:exit", agent: "codex", sessionID: "sess-exit", cwd: t.TempDir(),
+		stop: func() { stopped.Store(true) }}
+	h.client = acp.NewClient(toClientR, toAgentW, h)
+	t.Cleanup(func() { h.client.Close(); toAgentW.Close(); toClientW.Close() })
+	// Drain what the client writes toward the "adapter" so nothing blocks
+	// on the pipe. (The cancelled outcome itself is refused by the conn
+	// once its read loop has ended — there is nobody left to hear it —
+	// so the proof that the handler was released is the log line and the
+	// empty queue below, not a frame on the wire.)
+	go func() { _, _ = io.Copy(io.Discard, toAgentR) }()
+	// The adapter said something on stderr before dying.
+	_, _ = h.stderrTail().Write([]byte("fatal: token expired\n"))
+
+	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+	h.register()
+	go h.watchExit()
+	// A terminal it owns.
+	var closedReason atomic.Value
+	termMu.Lock()
+	termAll["91"] = &terminal{id: "91", key: h.key, closeFn: func(r string) { closedReason.Store(r) }}
+	termMu.Unlock()
+	t.Cleanup(func() {
+		termMu.Lock()
+		delete(termAll, "91")
+		termMu.Unlock()
+	})
+
+	// The adapter asks permission, then dies with the question outstanding.
+	_, _ = io.WriteString(toClientW, `{"jsonrpc":"2.0","id":3,"method":"session/request_permission","params":{"sessionId":"sess-exit","toolCall":{"toolCallId":"t1","kind":"execute","rawInput":{"command":"git push"}},"options":[{"optionId":"allow","kind":"allow_once"},{"optionId":"no","kind":"reject_once"}]}}`+"\n")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		mutateState(func(*State) { n = countForRow(h.key) })
+		if n > 0 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	toClientW.Close()
+
+	// Everything the watcher promises, polled: it runs on its own goroutine.
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && (lookupHosted(h.key) != nil || !stopped.Load()) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if lookupHosted(h.key) != nil {
+		t.Fatal("session still registered after its adapter exited")
+	}
+	if !stopped.Load() {
+		t.Error("the dead adapter was not reaped")
+	}
+	var state, reason string
+	var asksLeft, published int
+	mutateState(func(s *State) {
+		if r := rows[h.key]; r != nil {
+			state, reason = r.State, r.Reason
+		}
+		asksLeft = countForRow(h.key)
+		published = len(s.Asks)
+	})
+	if state != "failed" || reason != "exited" {
+		t.Errorf("row = %s/%s, want failed/exited", state, reason)
+	}
+	if asksLeft != 0 || published != 0 {
+		t.Errorf("asks after exit: queue=%d published=%d, want none", asksLeft, published)
+	}
+	if got, _ := closedReason.Load().(string); got != ReasonAgentExited {
+		t.Errorf("terminal close reason = %q, want %q", got, ReasonAgentExited)
+	}
+	// The transcript says what happened, with the adapter's last words —
+	// read back from disk, since the in-memory copy is released with the
+	// session, exactly as a window reopening it would.
+	waitForTranscriptWrites()
+	events := snapshot(h.key)
+	var note string
+	for _, e := range events {
+		if strings.Contains(e.Text, "exited") {
+			note = e.Text
+		}
+	}
+	if note == "" {
+		t.Fatalf("no exit note in the transcript: %+v", events)
+	}
+	if !strings.Contains(note, "token expired") {
+		t.Errorf("exit note lacks the stderr tail: %q", note)
+	}
+	// And the history entry is still there to resume from.
+	found := false
+	for _, s := range history {
+		if s.SessionID == h.sessionID {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("history entry dropped by the exit — the session would not be resumable")
 	}
 }

@@ -36,6 +36,12 @@ import (
 	"github.com/sirmick/wash/pkg/wire"
 )
 
+// stderrTailBytes is how much of the adapter's stderr a session keeps for
+// the moment it dies: enough for the stack trace's last lines or the
+// "not logged in" it printed on the way out, small enough to sit on every
+// session for its lifetime.
+const stderrTailBytes = 2048
+
 // hostedAskTTL bounds how long the agent waits on a human. Slightly longer
 // than the queue's own ceiling so the queue's expiry is what fires, and the
 // agent hears "cancelled" once rather than racing two deadlines.
@@ -105,6 +111,9 @@ type hosted struct {
 	// closing is set the moment retire starts, before the adapter is
 	// killed, so the exit watcher can tell "we ended it" from "it died".
 	closing atomic.Bool
+	// tail is the adapter's last stderr bytes (see stderrTail).
+	tailMu sync.Mutex
+	tail   []byte
 
 	// turnMu guards turnLive, and — crucially — is held ACROSS the
 	// state write that depends on it, so the two orderings below cannot
@@ -236,6 +245,86 @@ func (h *hosted) retire() {
 	})
 	saveHistory()
 	log.Printf("agentd: acp session ended key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
+}
+
+// stderrTail is an io.Writer that keeps the last stderrTailBytes of what
+// the adapter wrote to stderr.
+func (h *hosted) stderrTail() *tailWriter { return &tailWriter{h: h} }
+
+type tailWriter struct{ h *hosted }
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.h.tailMu.Lock()
+	w.h.tail = append(w.h.tail, p...)
+	if over := len(w.h.tail) - stderrTailBytes; over > 0 {
+		w.h.tail = append([]byte(nil), w.h.tail[over:]...)
+	}
+	w.h.tailMu.Unlock()
+	return len(p), nil
+}
+
+// stderrText is the kept tail, trimmed for a transcript note.
+func (h *hosted) stderrText() string {
+	h.tailMu.Lock()
+	defer h.tailMu.Unlock()
+	return strings.TrimSpace(string(h.tail))
+}
+
+// watchExit is the per-session goroutine that turns an adapter exit into
+// a fact the desktop can see. Nothing used to select on client.Done()
+// outside acpterm: a crashed adapter kept its roster row and its
+// idle-hold, its pending question outlived it, and the next prompt failed
+// with nothing on screen to say why.
+//
+// On exit — unless retire already claimed the session, in which case the
+// exit is ours — the row goes to failed/exited (it lingers on the roster
+// for the sweep's dropAfter, then goes), the transcript gets a note with
+// the reason and the adapter's last stderr lines, the pending asks are
+// cancelled and the terminals closed, and the session leaves the
+// registry. The HISTORY entry and the transcript file are kept as they
+// are, so the row in History remains something to resume.
+func (h *hosted) watchExit() {
+	if h.client == nil {
+		return
+	}
+	<-h.client.Done()
+	if h.closing.Load() {
+		return
+	}
+	hostedMu.Lock()
+	live := hostedAll[h.key] == h
+	if live {
+		delete(hostedAll, h.key)
+	}
+	hostedMu.Unlock()
+	if !live {
+		return
+	}
+	h.closing.Store(true)
+	err := h.client.Err()
+	tail := h.stderrText()
+	log.Printf("agentd: acp adapter exited key=%s agent=%s session=%s err=%v stderr=%q",
+		h.key, h.agent, h.sessionID, err, truncate([]byte(tail), 300))
+
+	// The row first, so the status line changes colour before the note
+	// lands; then the note, which is what explains the colour.
+	h.endTurn("failed", "exited")
+	text := "The agent exited unexpectedly"
+	if err != nil && err != acp.ErrClosed {
+		text += " (" + err.Error() + ")"
+	}
+	text += "."
+	if tail != "" {
+		text += "\n\nIts last output:\n```\n" + tail + "\n```"
+	}
+	text += "\n\nThis session can be reopened from History."
+	h.note(text)
+
+	h.releaseOwned(ReasonAgentExited)
+	h.noteSession("exited", time.Now())
+	releaseTranscript(h.key)
+	mutateState(func(s *State) { s.Recent = publishHistory() })
+	saveHistory()
 }
 
 // releaseOwned cancels the session's questions, stops its adapter and
@@ -593,9 +682,11 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 
 	select {
 	case <-ctx.Done():
-		// The turn was cancelled out from under the question. That is a
-		// real cancel, so it needs no explaining — the human did it.
-		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, preq.ToolName, "turn ended")
+		// The adapter went away under the question (ctx is the ACP
+		// conn's, cancelled when its read loop ends). The question must
+		// go with it — nothing else will delete it for up to 30 minutes.
+		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, preq.ToolName, ReasonAgentExited)
+		cancelAsksFor(h.key, ReasonAgentExited)
 		return acp.Cancelled(), nil
 	case v := <-answer:
 		switch v.decision {
@@ -640,6 +731,8 @@ func unansweredReason(why string) string {
 		return "the session was ended"
 	case ReasonTurnCancelled:
 		return "the turn was stopped"
+	case ReasonAgentExited:
+		return "the agent exited"
 	}
 	if why == "" {
 		return "no answer"
@@ -657,10 +750,10 @@ func unansweredReason(why string) string {
 // differently. appendEvent's own doc comment names that trap; these were
 // the callers still in it.
 func (h *hosted) note(text string) {
-	if h.conn == nil {
-		return
+	e := appendEvent(h.key, Event{Kind: EventMessage, Text: text}, time.Now())
+	if h.conn != nil {
+		pushEvent(h.conn, h.key, e)
 	}
-	pushEvent(h.conn, h.key, appendEvent(h.key, Event{Kind: EventMessage, Text: text}, time.Now()))
 }
 
 // narrateUnanswered puts a refusal nobody chose into the transcript.
@@ -852,10 +945,14 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	})
 
 	// agent_prompt: another turn on a live session.
-	sdk.HandleFromVoid(bus, "agent_prompt", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_prompt", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
+			// A window still pointed at a session whose adapter exited (or
+			// that was ended elsewhere). Say so where the person is,
+			// rather than in a log they never see.
 			log.Printf("agentd: acp prompt for unknown session key=%s", req.Key)
+			conn.Warn("That session has ended", "Its agent is no longer running. Reopen it from History to continue.")
 			return nil
 		}
 		go promptHosted(h, req.Text)
@@ -1006,6 +1103,10 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			return nil
 		}
 		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
+		// A question the turn was blocked on goes with the turn: the
+		// agent hears cancelled on it and then ends the turn, and the
+		// rail stops asking about a turn that is over.
+		cancelAsksFor(h.key, ReasonTurnCancelled)
 		return h.client.Cancel(h.sessionID)
 	})
 

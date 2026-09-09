@@ -109,6 +109,13 @@ func rosterIndex(rs []Row) map[string]rosterState {
 		if r.SessionID == "" {
 			continue
 		}
+		// A row whose adapter exited lingers on the roster (failed/exited,
+		// until the sweep drops it) so the failure is visible — but there
+		// is no session behind it. It must read as resumable, not as
+		// "running — go to it".
+		if r.State == "failed" && r.Reason == "exited" {
+			continue
+		}
 		out[r.SessionID] = rosterState{Live: true, Detached: r.Detached, RowKey: r.Key}
 	}
 	return out

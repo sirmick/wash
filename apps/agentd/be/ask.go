@@ -84,6 +84,8 @@ const (
 	// ReasonTurnCancelled: the turn the question was blocking was
 	// stopped from the desktop. A cancel is not an answer.
 	ReasonTurnCancelled = "turn cancelled"
+	// ReasonAgentExited: the adapter died with the question outstanding.
+	ReasonAgentExited = "agent exited"
 )
 
 // maxPendingPerRow caps outstanding questions from one roster row. A
