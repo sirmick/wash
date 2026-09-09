@@ -322,6 +322,15 @@ const readOnlyText = (t: Tab): string => {
   }
 };
 
+// Editor font size, in px: the token default, and the range the zoom
+// keys stay inside (below ~8 the gutter stops being legible, above ~40
+// a line of code no longer fits).
+const DEFAULT_FONT_PX = 13;
+const FONT_MIN_PX = 8;
+const FONT_MAX_PX = 40;
+const clampFont = (px: number): number =>
+  Math.max(FONT_MIN_PX, Math.min(FONT_MAX_PX, Math.round(Number.isFinite(px) ? px : DEFAULT_FONT_PX)));
+
 // Mirrors the BE's maxReadBytes; only used for wording.
 const MAX_EDIT_BYTES = 4 * 1024 * 1024;
 const formatSize = (n: number): string => {
@@ -593,6 +602,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     markTabDirty(t.id, true);
     persist();
   };
+  // ---- font zoom ----
+  //
+  // One size for every editor window on the desktop (it lives in prefs,
+  // not in a window's state) — the alternative is discovering that the
+  // window you just opened is the one that did not get the change.
+
+  const fontSize = (): number => clampFont(prefs().font_size ?? DEFAULT_FONT_PX);
+  let fontSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  const setFontSize = (px: number) => {
+    const next = clampFont(px);
+    if (next === fontSize()) return;
+    // Applied locally at once; the file write is debounced because a
+    // wheel gesture arrives as a stream of notches and each one would
+    // otherwise be a read-merge-write.
+    setPrefs({ ...prefs(), font_size: next });
+    clearTimeout(fontSaveTimer);
+    fontSaveTimer = setTimeout(() => { void setPref({ font_size: next }); }, 400);
+  };
+  const zoomFont = (delta: number) => setFontSize(fontSize() + delta);
+  onCleanup(() => clearTimeout(fontSaveTimer));
+
   // syncCursor reads the status bar's Ln/Col out of the live view.
   // Called on tab switch: view.setState() does not report a selection
   // change, so the update listener alone would show the old position.
@@ -2579,7 +2609,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
     EditorView.theme({
       '&': { height: '100%', background: tokens.bgCanvas, color: tokens.fg },
-      '.cm-scroller': { font: `${tokens.fontSizeBase} ${tokens.fontMono}` },
+      // Size through a custom property, not a literal: zooming sets the
+      // property on the mount element, where an inline style beats every
+      // stylesheet rule. A second CM theme would not — StyleModule
+      // PREPENDS new modules, so a compartment reconfigured later ends
+      // up EARLIER in the sheet and loses the tie to this shorthand.
+      '.cm-scroller': { font: `var(--wash-edit-font-size, ${tokens.fontSizeBase}) ${tokens.fontMono}` },
       '.cm-content': { padding: '8px 0', caretColor: tokens.fg },
       '.cm-cursor': { borderLeftColor: tokens.fg },
       '.cm-activeLine': { backgroundColor: `color-mix(in srgb, ${tokens.fg} 4%, transparent)` },
@@ -2980,6 +3015,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         toggleWysiwyg();
         return;
       }
+      // Ctrl+= / Ctrl+- / Ctrl+0: font zoom. Chromium's own page zoom is
+      // not the same thing (it scales the whole desktop, chrome and all)
+      // and is not reachable from a keydown anyway.
+      if (ev.key === '=' || ev.key === '+') { ev.preventDefault(); zoomFont(1); return; }
+      if (ev.key === '-' || ev.key === '_') { ev.preventDefault(); zoomFont(-1); return; }
+      if (ev.key === '0') { ev.preventDefault(); setFontSize(DEFAULT_FONT_PX); return; }
       // Ctrl+G: go to line. The editor's own keymap covers the focused
       // editor; this is the same command reached from the sidebar or the
       // tab strip, where CM never sees the key.
@@ -2995,6 +3036,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         return;
       }
     };
+    // Ctrl+wheel zooms, the other half of the same gesture. Non-passive
+    // because the default is the browser's page zoom, which has to be
+    // suppressed; bound on the editor pane so wheeling over the sidebar
+    // or the terminal is left alone.
+    const onWheel = (ev: WheelEvent) => {
+      if (!ev.ctrlKey && !ev.metaKey) return;
+      ev.preventDefault();
+      if (ev.deltaY === 0) return;
+      zoomFont(ev.deltaY < 0 ? 1 : -1);
+    };
+    editPaneEl.addEventListener('wheel', onWheel, { passive: false });
+    onCleanup(() => editPaneEl.removeEventListener('wheel', onWheel));
+
     props.host.addEventListener('keydown', onKey);
     if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
     editPaneEl.addEventListener('dragover', onPaneDragOver, true);
@@ -3560,6 +3614,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 position: 'absolute',
                 inset: 0,
                 display: activeTab()?.mode === 'wysiwyg' ? 'none' : 'block',
+                // What Ctrl+± / Ctrl+wheel move; see the .cm-scroller
+                // rule in baseExtensions.
+                '--wash-edit-font-size': `${fontSize()}px`,
               }}
             />
             <For each={wysiwygTabIDs()}>
