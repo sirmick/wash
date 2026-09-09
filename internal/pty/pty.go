@@ -573,7 +573,9 @@ func userShell() string {
 
 // WithWashEnv returns env with two wash-specific tweaks applied:
 //
-//   - TERM=xterm-256color (always — the shell side renders via xterm.js)
+//   - TERM=xterm-256color and COLORTERM=truecolor (always — the shell
+//     side renders via xterm.js, which does 24-bit colour; bat, delta
+//     and neovim key on COLORTERM to use it)
 //   - PATH prefixed with $WASH_BIN_DIR when set, deduped — so the user
 //     can run sibling wash CLIs (wash-launch, wash-fm, …) without an
 //     absolute path. The router publishes WASH_BIN_DIR; if absent,
@@ -583,24 +585,16 @@ func userShell() string {
 // interactive shell to feel like a wash session.
 func WithWashEnv(env []string) []string {
 	binDir := lookupEnv(env, "WASH_BIN_DIR")
-	out := make([]string, 0, len(env)+1)
-	termSet := false
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "PATH=") && binDir != "" {
 			cur := kv[len("PATH="):]
 			out = append(out, "PATH="+prependPath(cur, binDir))
 			continue
 		}
-		if strings.HasPrefix(kv, "TERM=") {
-			out = append(out, "TERM=xterm-256color")
-			termSet = true
-			continue
-		}
 		out = append(out, kv)
 	}
-	if !termSet {
-		out = append(out, "TERM=xterm-256color")
-	}
+	out = PinTerm(out)
 	if binDir != "" && lookupEnv(out, "PATH") == "" {
 		out = append(out, "PATH="+binDir)
 	}
@@ -629,25 +623,24 @@ func mapDisplayEnv(env []string) []string {
 	return env
 }
 
-// PinTerm returns env with TERM forced to xterm-256color but PATH
-// untouched. wash-edit's embedded terminal uses this — it doesn't
-// run user shell scripts that need wash CLIs on PATH, so the extra
-// dance from WithWashEnv would be noise.
+// PinTerm returns env with TERM forced to xterm-256color and COLORTERM
+// to truecolor, PATH untouched. wash-edit's embedded terminal uses this
+// directly — it doesn't run user shell scripts that need wash CLIs on
+// PATH, so the extra dance from WithWashEnv would be noise — and
+// WithWashEnv uses it for the same two pins. Both describe the one
+// renderer every wash pty has behind it: xterm.js, 256-colour palette
+// and 24-bit RGB. An inherited value is replaced, not kept: it came from
+// whatever launched the router, not from the terminal in front of the
+// user.
 func PinTerm(env []string) []string {
-	out := make([]string, 0, len(env)+1)
-	termSet := false
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "TERM=") {
-			out = append(out, "TERM=xterm-256color")
-			termSet = true
+		if strings.HasPrefix(kv, "TERM=") || strings.HasPrefix(kv, "COLORTERM=") {
 			continue
 		}
 		out = append(out, kv)
 	}
-	if !termSet {
-		out = append(out, "TERM=xterm-256color")
-	}
-	return out
+	return append(out, "TERM=xterm-256color", "COLORTERM=truecolor")
 }
 
 func lookupEnv(env []string, key string) string {
