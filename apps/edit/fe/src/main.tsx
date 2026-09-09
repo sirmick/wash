@@ -121,6 +121,7 @@ import {
   List,
   ListOrdered,
   ListTodo,
+  Lock,
   Minus,
   Quote,
   Strikethrough,
@@ -258,6 +259,11 @@ interface Tab {
   size?: number;
   // Line endings on disk. The buffer is always LF; see toDisk.
   eol?: Eol;
+  // The file's mode (or its mount) denies this process a write. Not a
+  // `blocked` reason: the buffer is a perfectly good editable buffer,
+  // it just cannot go back where it came from, so Ctrl+S routes to
+  // Save As instead of failing at the BE.
+  readOnlyFile?: boolean;
   // Indentation, detected from the file's own content on open and
   // falling back to the prefs default when there is nothing to detect
   // from. Drives CM's indentUnit + tabSize and the status bar.
@@ -728,6 +734,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       size: typeof reply.size === 'number' ? reply.size : undefined,
       eol: blocked ? undefined : detectEol(raw),
       indent: blocked ? undefined : detectedIndent(toBuffer(raw)),
+      readOnlyFile: reply.writable === false,
       mode: !blocked && isMarkdownPath(path) ? 'wysiwyg' : 'source',
     };
     setTabs([...tabs(), tab]);
@@ -906,6 +913,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // stale tab resurrects a file someone just renamed or removed;
       // the picker, seeded with the old name in the old folder, makes
       // that an explicit choice (confirming the same path recreates it).
+      setPicker({ mode: 'save', tabID: t.id, suggestedName: baseName(t.path), start: parentPath(t.path) });
+      return 'needs_path';
+    }
+    if (t.readOnlyFile) {
+      // The mode bits say this write would fail. Offering Save As is
+      // the only useful answer, and it is better made before the edit
+      // is thrown at the BE and bounced.
+      setStatusError(`${t.displayName} is a read-only file — Save As?`);
       setPicker({ mode: 'save', tabID: t.id, suggestedName: baseName(t.path), start: parentPath(t.path) });
       return 'needs_path';
     }
@@ -1175,6 +1190,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           displayName: baseName(newPath) || newPath,
           baseline: content,
           state: liveState,
+          // The write to the new path just succeeded, so whatever the
+          // OLD path's mode said no longer applies.
+          readOnlyFile: false,
           // The remounted TipTap seeds from wysCache; leaving the
           // pre-save cache would show older text than we just wrote.
           wysCache: x.mode === 'wysiwyg' ? content : x.wysCache,
@@ -3809,6 +3827,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           </Show>
           <Show when={activeTab()!.missing}>
             <span data-testid="edit-status-missing" style={{ 'margin-left': '8px', color: tokens.fgDanger }}>· deleted on disk — Ctrl+S saves as…</span>
+          </Show>
+          <Show when={activeTab()!.readOnlyFile && !activeTab()!.blocked}>
+            <span
+              data-testid="edit-status-lock"
+              title="Read-only file — Ctrl+S offers Save As"
+              style={{ 'margin-left': '8px', display: 'inline-flex', 'align-items': 'center', gap: '3px', color: tokens.fgDim }}
+            >
+              <Lock size={11} /> read-only
+            </span>
           </Show>
           <Show when={activeTab()!.blocked}>
             <span data-testid="edit-status-readonly" style={{ 'margin-left': '8px', color: tokens.fgDim }}>· read-only: {readOnlyText(activeTab()!)}</span>
