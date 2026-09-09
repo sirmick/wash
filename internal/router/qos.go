@@ -326,6 +326,12 @@ func writeChunked(payload []byte, write func([]byte) error) error {
 	return nil
 }
 
+// errReplayRefused stops a chunked replay at the first frame the
+// scheduler refuses. The caller reports the whole replay as undelivered
+// and leaves the channel marked behind, so the watchdog retries the
+// snapshot from the ring rather than the FE keeping a partial one.
+var errReplayRefused = errors.New("router: replay chunk refused")
+
 // telemetryClass is where link-health pushes ride. Background, not
 // Control: telemetry is the definition of best-effort, and describing
 // the link must never be able to delay using it. It rode Control — the

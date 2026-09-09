@@ -1693,10 +1693,17 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			}
 		}
 		if len(replay) > 0 {
-			// Interactive class so the replay arrives in the same
-			// transactional window as the Bind that preceded it —
-			// see replayBundleToShell for the same rule.
-			if err := s.WriteRawFrameClass(id, replay, wire.ClassInteractive); err != nil {
+			// Bulk, chunked — matching resyncChannel, which already moved
+			// this traffic off the interactive lane. A reattached terminal
+			// replays its whole ring, up to ChannelScrollbackMaxBytes: 4
+			// MiB in ONE frame, on the lane that carries pointer motion,
+			// is a second of frozen UI on a slow link and the scheduler
+			// cannot preempt a frame it has already committed. The Bind
+			// above rides Interactive and so still lands first; live
+			// output that follows is Bulk too, so it stays behind this.
+			if err := writeChunked(replay, func(p []byte) error {
+				return s.WriteRawFrameClass(id, p, wire.ClassBulk)
+			}); err != nil {
 				// The FE just got a reset (channel.resync) but the
 				// scrollback snapshot behind it was lost — without a
 				// retry the terminal sits WIPED until new output
@@ -1784,7 +1791,20 @@ func (r *Router) resyncChannel(b *channelBinding) {
 		r.log("channel %d: resync deferred (bulk queue full) conn=%d", b.channelID, sh.connID)
 		return
 	}
-	if len(replay) > 0 && !sh.tryWriteRawClass(b.channelID, replay, wire.ClassBulk) {
+	replayOK := true
+	if len(replay) > 0 {
+		// Chunked: one 4 MiB frame is not preemptible once the writer has
+		// committed it, so it blocks every higher lane for its whole
+		// duration even from down here.
+		_ = writeChunked(replay, func(p []byte) error {
+			if !sh.tryWriteRawClass(b.channelID, p, wire.ClassBulk) {
+				replayOK = false
+				return errReplayRefused
+			}
+			return nil
+		})
+	}
+	if !replayOK {
 		// Reset went out but the snapshot didn't fit; leave behind set so
 		// the next grant resends reset + snapshot (re-reset is harmless).
 		r.log("channel %d: resync reset sent, snapshot deferred (%d bytes) conn=%d", b.channelID, len(replay), sh.connID)

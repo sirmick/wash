@@ -215,3 +215,64 @@ func TestResync_GenericKindNoForceFrame(t *testing.T) {
 		// no frame — correct (generic resync sends nothing to the app)
 	}
 }
+
+// A reattached or resynced terminal replays its whole ring — up to
+// ChannelScrollbackMaxBytes. Sent as one frame that is 4 MiB of writer
+// the scheduler cannot preempt once committed, which freezes every
+// higher lane for its duration. It must arrive as small frames whose
+// concatenation is still exactly the scrollback.
+func TestResyncReplayIsChunked(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+
+	sess := &ShellSession{
+		scheduler:   NewScheduler(),
+		drainerDone: make(chan struct{}),
+	}
+	sess.router = r
+	defer sess.scheduler.Close()
+	r.registerShell(sess)
+
+	const channelID = 43
+	b := &channelBinding{
+		channelID: channelID,
+		kind:      wire.ChannelKindGeneric,
+		shell:     sess,
+		buf:       newRingBuffer(ChannelScrollbackBytes),
+		credit:    NewChannelCredit(0),
+	}
+	r.registerChannel(b)
+
+	// Bigger than one chunk, and not a multiple of it, so a remainder
+	// frame is exercised. Newline-free: realignReplay trims to a line
+	// boundary and would make the comparison below about that instead.
+	scrollback := make([]byte, 5*maxChunkBytes+123)
+	for i := range scrollback {
+		scrollback[i] = byte('a' + i%26)
+	}
+	b.buf.Write(scrollback)
+	b.shellMu.Lock()
+	b.behind = true
+	b.shellMu.Unlock()
+
+	r.resyncChannel(b)
+
+	var got []byte
+	frames := 0
+	for _, f := range drainAll(t, sess.scheduler) {
+		if f.Channel != channelID {
+			continue
+		}
+		frames++
+		if len(f.Payload) > maxChunkBytes {
+			t.Errorf("replay frame of %d bytes, over the %d cap", len(f.Payload), maxChunkBytes)
+		}
+		got = append(got, f.Payload...)
+	}
+	if frames < 2 {
+		t.Fatalf("replay arrived in %d frame(s) — not chunked", frames)
+	}
+	if string(got) != string(scrollback) {
+		t.Errorf("reassembled replay is %d bytes, want %d — chunking lost or reordered data",
+			len(got), len(scrollback))
+	}
+}
