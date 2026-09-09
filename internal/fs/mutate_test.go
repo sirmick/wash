@@ -305,3 +305,21 @@ func TestWriteDanglingSymlinkRefused(t *testing.T) {
 		t.Fatalf("dangling link was replaced by a %v", fi.Mode())
 	}
 }
+
+// A rename across filesystems fails with EXDEV, which os.Rename wraps in
+// a *LinkError. The sentinel and the wire code both have to come out of
+// that shape: fm's FE keys its bulk-move fallback on "cross_device".
+func TestRenameCrossDeviceClassified(t *testing.T) {
+	err := classifyMutateErr(&os.LinkError{Op: "rename", Old: "/a", New: "/b", Err: syscall.EXDEV})
+	if !errors.Is(err, ErrCrossDevice) {
+		t.Fatalf("classifyMutateErr(EXDEV) = %v, want ErrCrossDevice", err)
+	}
+	if code := ErrCode(err); code != "cross_device" {
+		t.Fatalf("ErrCode = %q, want cross_device", code)
+	}
+	// Anything else passes through untouched.
+	other := &os.LinkError{Op: "rename", Old: "/a", New: "/b", Err: syscall.EACCES}
+	if got := classifyMutateErr(other); got != other {
+		t.Fatalf("classifyMutateErr(EACCES) = %v, want the original error", got)
+	}
+}

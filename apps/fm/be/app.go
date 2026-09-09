@@ -245,7 +245,15 @@ func registerHandlers(b *sdk.Bus) {
 	fmWatch = sdk.NewWatchClient(c) // intercepts the service's fs_event pushes
 
 	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req wfs.ListReq) (wfs.ListReply, error) {
-		return listReplyFor("", req.Path)
+		reply, err := listReplyFor("", req.Path)
+		// Audit line for every explicit FE list (not the initial paint):
+		// e2e uses it to prove WHICH directory a Reload re-requested.
+		if err != nil {
+			log.Printf("fm: list path=%q: %v", req.Path, err)
+		} else {
+			log.Printf("fm: list path=%q n=%d truncated=%v total=%d", reply.Path, len(reply.Entries), reply.Truncated, max(reply.Total, len(reply.Entries)))
+		}
+		return reply, err
 	})
 	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (wfs.ReadReply, error) {
 		return readFile(req.Path)
@@ -407,11 +415,16 @@ func listReplyFor(_, path string) (wfs.ListReply, error) {
 	if path == "" {
 		return wfs.ListReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
 	}
-	entries, abs, truncated, err := fmFS.List(path, maxListEntries)
+	entries, abs, total, err := fmFS.ListN(path, maxListEntries)
 	if err != nil {
 		return wfs.ListReply{}, fsErr(err, path)
 	}
-	return wfs.ListReply{Path: abs, Entries: entries, Truncated: truncated}, nil
+	reply := wfs.ListReply{Path: abs, Entries: entries}
+	if total > len(entries) {
+		reply.Truncated = true
+		reply.Total = total
+	}
+	return reply, nil
 }
 
 // readFile loads up to maxReadBytes of path. Binary files report a

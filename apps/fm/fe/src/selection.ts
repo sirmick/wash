@@ -52,3 +52,44 @@ export function nextSelection(
   }
   return { selection: new Set([rowPath]), anchor: rowPath };
 }
+
+// rekeyPath maps a path that is `from` or lives under it onto the same
+// position under `to`; null when p is unaffected. Used after a rename to
+// re-key the selection, the cursor and the per-directory tree state so the
+// next F2/Delete/Ctrl+C acts on the path that now exists.
+export function rekeyPath(p: string, from: string, to: string): string | null {
+  if (p === from) return to;
+  if (p.startsWith(from + '/')) return to + p.slice(from.length);
+  return null;
+}
+
+// rekeySelection applies rekeyPath to every member of a selection,
+// leaving unaffected paths as they are. Always returns a new Set.
+export function rekeySelection(sel: Set<string>, from: string, to: string): Set<string> {
+  const out = new Set<string>();
+  for (const p of sel) out.add(rekeyPath(p, from, to) ?? p);
+  return out;
+}
+
+// successorAfterRemoval picks the row that inherits the selection when
+// `removed` is deleted — the desktop-FM convention: the next sibling in
+// display order, else the previous sibling, else nothing. Siblings only:
+// jumping into a different folder after a delete would move the user's
+// focus somewhere they weren't working. `rows` is the visible row paths in
+// display order.
+export function successorAfterRemoval(rows: string[], removed: string): string | null {
+  const idx = rows.indexOf(removed);
+  if (idx < 0) return null;
+  const parent = removed.slice(0, removed.lastIndexOf('/')) || '/';
+  const parentOf = (p: string) => p.slice(0, p.lastIndexOf('/')) || '/';
+  for (let i = idx + 1; i < rows.length; i++) {
+    if (rows[i] === removed || rows[i].startsWith(removed + '/')) continue;
+    if (parentOf(rows[i]) === parent) return rows[i];
+    // Left the removed row's folder: no next sibling.
+    break;
+  }
+  for (let i = idx - 1; i >= 0; i--) {
+    if (parentOf(rows[i]) === parent) return rows[i];
+  }
+  return null;
+}

@@ -17,7 +17,7 @@
 // just the views that read them. No more "I changed a field but
 // forgot to re-render" bugs.
 
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
+import { For, Show, batch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
@@ -42,7 +42,7 @@ import {
 import {
   type ClipboardState, parseClipboardState, planPaste, pasteStatus,
 } from './clipboard.ts';
-import { nextSelection } from './selection.ts';
+import { nextSelection, rekeyPath, rekeySelection, successorAfterRemoval } from './selection.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -94,6 +94,7 @@ import {
   Upload,
   Video,
   FolderUp,
+  X,
 } from 'lucide-solid';
 
 interface PersistedState {
@@ -216,6 +217,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const fileClient: FileClient = createFileClient({ instance: props.instance, host: props.host });
   onCleanup(() => fileClient.dispose());
   const [listings, setListings] = createStore<Record<string, Entry[]>>({});
+  // truncatedDirs records listings the BE capped (maxListEntries): dir →
+  // { shown, total }. The status line surfaces it for the viewed folder —
+  // a silently-capped /usr/bin is indistinguishable from a complete one
+  // otherwise. Cleared when a full listing (or list_err) replaces it.
+  const [truncatedDirs, setTruncatedDirs] = createStore<Record<string, { shown: number; total: number }>>({});
   const [expanded, setExpanded] = createStore<Record<string, true>>({});
   // Back/forward history. The push/back/forward index arithmetic lives
   // in ./nav-history.ts (unit-tested); this signal just holds the state
@@ -308,6 +314,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const activeJobs = createMemo(() =>
     bulkJobs().filter((j) => j.status === 'queued' || j.status === 'running'),
   );
+  // A FAILED job stays in the strip until dismissed — the error text is
+  // the whole point, and it used to vanish with the row the instant the
+  // job failed. The service ages terminal rows out on its own schedule,
+  // so fm remembers every failed job it has seen (by job_id) and forgets
+  // it only on the × (dismissedJobs keeps a later bulk.state from
+  // re-adding it).
+  const [failedJobs, setFailedJobs] = createSignal<BulkJob[]>([]);
+  const dismissedJobs = new Set<string>();
+  const rememberFailed = (jobs: BulkJob[]) => {
+    const failed = jobs.filter((j) => j.status === 'failed' && !dismissedJobs.has(j.job_id));
+    if (failed.length === 0) return;
+    setFailedJobs((prev) => {
+      const byID = new Map(prev.map((j) => [j.job_id, j]));
+      for (const j of failed) byID.set(j.job_id, j);
+      return Array.from(byID.values());
+    });
+  };
+  const dismissJob = (jobID: string) => {
+    dismissedJobs.add(jobID);
+    setFailedJobs((prev) => prev.filter((j) => j.job_id !== jobID));
+  };
   // Default helper: setStatusOverride(string) is an error; nulls clear.
   // Most failure paths predate the kind distinction and stay one-arg.
   const setStatusOverride = (text: string | null) => {
@@ -371,6 +398,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // Refs / latched state (no reactivity needed)
   let pendingNav: string | null = null;
+  // navSnapshot is the state selectPath commits over, kept until the
+  // target's listing arrives: on list_err the navigation is rolled back
+  // to it (see onListErr), so a path-bar typo neither moves the cursor
+  // nor lands in the Back history. The typed text stays in the bar.
+  let navSnapshot: {
+    target: string;
+    path: string;
+    history: NavHistory;
+    selectedEntry: Entry | null;
+    selectedPath: string;
+    gridDir: string;
+  } | null = null;
   let completePartial = '';
   let completeTimer: number | null = null;
   // (no manual click-timer state — we lean on native dblclick.)
@@ -454,10 +493,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- BE comms ----
 
-  const sendList = (p: string) => {
+  // Listing requests are correlated (bus.request) so a failure can be
+  // attributed to the path that failed — list_err carries no path — and
+  // deduped per path while one is in flight. A request that arrives
+  // while the same path is already being listed is coalesced; if it was
+  // a REFRESH (invalidateAndList) the path is listed once more after the
+  // in-flight reply lands, since that reply may predate the change that
+  // asked for the refresh. Entries older than LIST_INFLIGHT_STALE_MS are
+  // ignored so a lost reply can never wedge a directory.
+  const LIST_INFLIGHT_STALE_MS = 30_000;
+  const listInFlight = new Map<string, { again: boolean; at: number }>();
+  const requestList = (p: string, refresh: boolean) => {
     pendingNav = p;
-    send({ kind: 'list', path: p });
+    const cur = listInFlight.get(p);
+    if (cur && Date.now() - cur.at < LIST_INFLIGHT_STALE_MS) {
+      if (refresh) cur.again = true;
+      return;
+    }
+    listInFlight.set(p, { again: false, at: Date.now() });
+    void sendWithReply({ kind: 'list', path: p }, LIST_INFLIGHT_STALE_MS).then((reply) => {
+      const entry = listInFlight.get(p);
+      listInFlight.delete(p);
+      if (reply.kind === 'list_ok') onListOk(reply);
+      else onListErr(p, reply);
+      if (entry?.again) requestList(p, true);
+    });
   };
+  // sendList fetches a directory we have no listing for; invalidateAndList
+  // re-lists one we do. Both keep whatever listing is cached until the
+  // fresh one arrives (see invalidateAndList).
+  const sendList = (p: string) => requestList(p, false);
   const sendRead = (p: string) => {
     setPreviewContent({ binary: false, size: 0, text: 'loading…', truncated: false });
     send({ kind: 'read', path: p });
@@ -480,6 +545,53 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     fsWatch.unwatch(p);
   };
 
+  // subtreeKeys lists every listed/expanded dir at or under p — the
+  // per-directory state a rename or delete of p has to carry along or drop.
+  const subtreeKeys = (p: string): string[] => {
+    const under = (k: string) => k === p || k.startsWith(p + '/');
+    const keys = new Set<string>();
+    for (const k of Object.keys(listings)) if (under(k)) keys.add(k);
+    for (const k of Object.keys(expanded)) if (under(k)) keys.add(k);
+    return Array.from(keys);
+  };
+
+  // dropSubtreeState forgets the listings, expansion and watches of p and
+  // everything under it — after p was deleted or moved away. Without this
+  // a re-created dir at the same path would come back pre-expanded and the
+  // BE would keep a watch on a path that no longer exists.
+  const dropSubtreeState = (p: string) => {
+    for (const k of subtreeKeys(p)) {
+      if (expanded[k]) collapseDir(k);
+      if (listings[k]) setListings(produce((s) => { delete s[k]; }));
+      if (truncatedDirs[k]) setTruncatedDirs(produce((s) => { delete s[k]; }));
+    }
+  };
+
+  // rekeySubtreeState moves the listings/expansion/watches of `from` and
+  // its descendants to their paths under `to` (a rename or move of a dir),
+  // so an expanded folder stays expanded — with its rows — across a rename
+  // instead of collapsing until the user re-opens it.
+  const rekeySubtreeState = (from: string, to: string) => {
+    for (const k of subtreeKeys(from)) {
+      const nk = rekeyPath(k, from, to);
+      if (!nk) continue;
+      const wasExpanded = !!expanded[k];
+      const entries = listings[k];
+      if (wasExpanded) collapseDir(k);
+      if (entries) setListings(produce((s) => { delete s[k]; s[nk] = entries; }));
+      if (wasExpanded) expandDir(nk);
+    }
+  };
+
+  // patchListing edits one directory's cached entries in place — the
+  // optimistic local mirror of a mutation the BE just confirmed, applied
+  // BEFORE the re-list round-trip so the tree (and the selection invariant
+  // that checks every selected path is a visible row) never sees a gap.
+  const patchListing = (dir: string, fn: (entries: Entry[]) => Entry[]) => {
+    const cur = listings[dir];
+    if (cur) setListings(dir, fn(cur));
+  };
+
   const handleBE = (m: BEMessage) => {
     // If the BE echoes an id we issued via sendWithReply, the bus
     // resolves the matching promise and we stop. The remaining
@@ -493,6 +605,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // routinely describe work no open window owns.
         const st = m.state as { jobs?: BulkJob[]; conflicts?: BulkConflict[] } | undefined;
         setBulkJobs(st?.jobs ?? []);
+        rememberFailed(st?.jobs ?? []);
         setBulkConflicts(st?.conflicts ?? []);
         return;
       }
@@ -503,45 +616,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setOpenExts(new Set(raw.map((e) => e.replace(/^\./, '').toLowerCase())));
         return;
       }
-      case 'list_ok': {
-        const p = String(m.path);
-        const entries = m.entries as Entry[];
-        setListings(p, entries);
-        expandDir(p);
-        if (!rootInitialized()) {
-          setRootInitialized(true);
-          setHome(p);
-          // Only adopt this path as the current location if the user
-          // hasn't already navigated. Otherwise the late initial
-          // list_ok would stomp a navigation that ran while the
-          // request was in flight. The path-input value is gated
-          // separately on the input being untouched, so a user who
-          // typed but hasn't hit Enter yet doesn't lose their entry.
-          if (!path()) {
-            setPath(p);
-            setNavHistory(initAt(p));
-            if (!pathInputValue()) setPathInputValue(p);
-          }
-          setSelectedEntry(findEntry(path() || p));
-          setSelectedPath(path() || p);
-          expandPath(path() || p);
-        } else if (parentPath(path()) === p) {
-          // Parent listing just arrived — refresh the selection's
-          // entry metadata (info pane, etc.) which was stale while
-          // we were navigating with no parent listing in hand.
-          const fresh = findEntry(path());
-          if (fresh) {
-            setSelectedEntry(fresh);
-            setSelectedPath(path());
-          }
-        }
-        pendingNav = null;
+      case 'list_ok':
+        // Unsolicited (the BE's initial paint / request_initial); the
+        // correlated replies to requestList resolve through the bus and
+        // reach onListOk directly.
+        onListOk(m);
         return;
-      }
       case 'list_err':
-        // outside_root is expected in sandbox mode when expandPath
-        // probes ancestors above WASH_FM_ROOT. Don't pollute the
-        // status bar with that — it's the BE doing its job.
+        // Unsolicited failure with no path to attribute it to.
         if (m.code !== 'outside_root') {
           setStatusOverride(`error: ${String(m.msg)}`);
         }
@@ -644,6 +726,90 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
   };
 
+  // onListOk swaps in a directory's fresh listing (replacing whatever was
+  // cached — rows whose content is unchanged keep their DOM, see the
+  // <FileTree> identity-stabilising layer).
+  const onListOk = (m: BEMessage) => {
+    const p = String(m.path);
+    const entries = m.entries as Entry[];
+    if (navSnapshot?.target === p) navSnapshot = null; // navigation landed
+    setListings(p, entries);
+    if (m.truncated) setTruncatedDirs(p, { shown: entries.length, total: Number(m.total) || 0 });
+    else if (truncatedDirs[p]) setTruncatedDirs(produce((s) => { delete s[p]; }));
+    expandDir(p);
+    if (!rootInitialized()) {
+      setRootInitialized(true);
+      setHome(p);
+      // Only adopt this path as the current location if the user
+      // hasn't already navigated. Otherwise the late initial
+      // list_ok would stomp a navigation that ran while the
+      // request was in flight. The path-input value is gated
+      // separately on the input being untouched, so a user who
+      // typed but hasn't hit Enter yet doesn't lose their entry.
+      if (!path()) {
+        setPath(p);
+        setNavHistory(initAt(p));
+        if (!pathInputValue()) setPathInputValue(p);
+      }
+      setSelectedEntry(findEntry(path() || p));
+      setSelectedPath(path() || p);
+      expandPath(path() || p);
+    } else if (parentPath(path()) === p) {
+      // Parent listing just arrived — refresh the selection's
+      // entry metadata (info pane, etc.) which was stale while
+      // we were navigating with no parent listing in hand.
+      const fresh = findEntry(path());
+      if (fresh) {
+        setSelectedEntry(fresh);
+        setSelectedPath(path());
+      }
+    }
+    pendingNav = null;
+  };
+
+  // onListErr is the one place a cached listing is dropped: the
+  // directory could not be listed (gone, unreadable, outside the
+  // sandbox), so its rows — and any expanded subtree under it — go.
+  const onListErr = (p: string, m: BEMessage) => {
+    // A directory we HAD is gone/unreadable: drop it and everything under
+    // it. One we never had (an ancestor probe above the sandbox root, a
+    // path-bar typo) only loses its expansion flag — its descendants may
+    // well be the live tree (the sandbox root sits under a probed ancestor).
+    if (listings[p]) dropSubtreeState(p);
+    else collapseDir(p);
+    pendingNav = null;
+    const snap = navSnapshot;
+    if (snap && snap.target === p && path() === p) {
+      navSnapshot = null;
+      if (m.code === 'not_dir') {
+        // The typed path is a FILE whose parent we hadn't listed, so
+        // expandPath had no entry to tell it apart from a folder. The
+        // navigation is fine — show the file.
+        setGridDir('');
+        sendRead(p);
+        return;
+      }
+      // The navigation failed: put the cursor and the Back history
+      // back where they were. The path bar keeps the typed text so
+      // the user can fix it, and the status line says what went wrong.
+      batch(() => {
+        setPath(snap.path);
+        setNavHistory(snap.history);
+        setSelectedEntry(snap.selectedEntry);
+        setSelectedPath(snap.selectedPath);
+        setGridDir(snap.gridDir);
+      });
+      setStatusOverride(`error: ${String(m.msg)}`);
+      return;
+    }
+    // outside_root is expected in sandbox mode when expandPath
+    // probes ancestors above WASH_FM_ROOT. Don't pollute the
+    // status bar with that — it's the BE doing its job.
+    if (m.code !== 'outside_root') {
+      setStatusOverride(`error: ${String(m.msg)}`);
+    }
+  };
+
   // ---- navigation ----
 
   const findEntry = (p: string): Entry | null => {
@@ -692,6 +858,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // but the tree sticks on the old one). visibleRows lights up as
     // listings arrive.
     const entry = findEntry(p);  // may be null if par isn't listed
+    navSnapshot = {
+      target: p,
+      path: path(),
+      history: navHistory(),
+      selectedEntry: selectedEntry(),
+      selectedPath: selectedPath(),
+      gridDir: gridDir(),
+    };
     setPath(p);
     setSelectedEntry(entry);
     setSelectedPath(p);
@@ -792,18 +966,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const navigateTo = (p: string) => selectPath(p || '/', true);
   const goHome = () => navigateTo(home());
+  // Back/Forward move the history index first, so the rollback snapshot
+  // selectPath takes has to be the history as it stood BEFORE the move —
+  // a Back onto a since-deleted folder then leaves the index where it was.
   const goBack = () => {
     const move = back(navHistory());
     if (move) {
-      setNavHistory(at(navHistory(), move.idx));
+      const before = navHistory();
+      setNavHistory(at(before, move.idx));
       selectPath(move.path, false);
+      if (navSnapshot) navSnapshot.history = before;
     }
   };
   const goForward = () => {
     const move = forward(navHistory());
     if (move) {
-      setNavHistory(at(navHistory(), move.idx));
+      const before = navHistory();
+      setNavHistory(at(before, move.idx));
       selectPath(move.path, false);
+      if (navSnapshot) navSnapshot.history = before;
     }
   };
   const goUp = () => {
@@ -820,9 +1001,39 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (par !== p) navigateTo(par);
   };
 
-  const invalidateAndList = (p: string) => {
-    setListings(produce((s) => { delete s[p]; }));
-    sendList(p);
+  // invalidateAndList re-lists p. The cached listing is KEPT until the
+  // fresh one lands (swap on list_ok, drop only on list_err). Deleting it
+  // first — the old behaviour — made flattenTree stop at the missing
+  // listing, so every fs.watch tick unmounted the directory's rows and
+  // remounted them as new DOM: flicker, a scroll jump, clicks racing the
+  // rebuild, spurious ghost-selection logs, and a re-rooted tree when `/`
+  // was the one refreshed.
+  const invalidateAndList = (p: string) => requestList(p, true);
+
+  // viewDir is the directory the tree is showing — the folder itself
+  // when path() is a (listed or known) directory, else the folder that
+  // contains the file the cursor is on. This is what Reload refreshes:
+  // after navigating into a folder path() IS that folder, so refreshing
+  // parentPath(path()) — the old behaviour — re-listed the parent and
+  // never the folder being looked at.
+  const viewDir = (): string => {
+    const p = path();
+    if (!p) return home();
+    if (listings[p]) return p;
+    const entry = findEntry(p);
+    if (entry && isDirLike(entry)) return p;
+    return parentPath(p);
+  };
+
+  // reloadView re-lists the viewed directory plus every listed +
+  // expanded descendant of it, so a Reload refreshes the whole subtree
+  // the user can see, not just one level.
+  const reloadView = () => {
+    const dir = viewDir();
+    const under = (p: string) => p === dir || p.startsWith(dir === '/' ? '/' : dir + '/');
+    const targets = Object.keys(listings).filter((p) => under(p) && (p === dir || expanded[p]));
+    if (!targets.includes(dir)) targets.unshift(dir);
+    for (const p of targets) invalidateAndList(p);
   };
 
   const toggleExpand = (p: string) => {
@@ -910,9 +1121,33 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       'rename_err',
     );
     if (reply.kind === 'rename_ok') {
+      // Re-key everything that referred to the old path — the selection,
+      // the cursor, the info-pane entry and any expanded subtree — so the
+      // next F2/Delete/Ctrl+C/drag acts on the path that now exists. This
+      // was the "ghost selection": the selection kept the OLD path and the
+      // next verb failed not_found. The listing is patched in place first
+      // so the new name is a visible row before the re-list lands.
+      const oldName = baseName(r.path);
+      batch(() => {
+        patchListing(parent, (entries) =>
+          entries.filter((e) => e.name !== draft).map((e) => (e.name === oldName ? { ...e, name: draft } : e)));
+        rekeySubtreeState(r.path, to);
+        if (selection().size > 0) applySelection(rekeySelection(selection(), r.path, to), 'rename-rekey');
+        if (selectionAnchor) selectionAnchor = rekeyPath(selectionAnchor, r.path, to) ?? selectionAnchor;
+        const selP = rekeyPath(selectedPath(), r.path, to);
+        if (selP) {
+          setSelectedPath(selP);
+          setSelectedEntry(findEntry(selP));
+        }
+        const gd = rekeyPath(gridDir(), r.path, to);
+        if (gd) setGridDir(gd);
+        const cur = rekeyPath(path(), r.path, to);
+        if (cur) {
+          setPath(cur);
+          setPathInputValue(cur);
+        }
+      });
       invalidateAndList(parent);
-      setPath(to);
-      setPathInputValue(to);
     } else if (reply.kind === 'cancelled') {
       // User dismissed the Replace prompt — silent no-op.
     } else if (reply.kind === 'rename_err' && reply.code === 'not_empty_dir') {
@@ -1012,13 +1247,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const reply = await sendWithReply({ kind: 'delete', path: target });
     if (reply.kind === 'delete_ok') {
       const par = parentPath(target);
+      // Desktop-FM convention: the selection moves to the next sibling
+      // (else the previous), computed from the rows as they were BEFORE
+      // the row is dropped. The listing is patched in place so the
+      // deleted row disappears now and the successor is a visible row —
+      // no ghost between delete_ok and the re-list.
+      const next = successorAfterRemoval(flatRows().map((row) => row.path), target);
+      batch(() => {
+        patchListing(par, (entries) => entries.filter((e) => e.name !== baseName(target)));
+        dropSubtreeState(target);
+        if (rekeyPath(path(), target, par)) {
+          setPath(par);
+          setPathInputValue(par);
+        }
+        if (next) {
+          applySelection(new Set([next]), 'delete-select-next');
+          selectionAnchor = next;
+          const nextEntry = findEntry(next);
+          setSelectedEntry(nextEntry);
+          setSelectedPath(next);
+          setGridDir(nextEntry && isDirLike(nextEntry) ? next : '');
+        } else {
+          applySelection(new Set(), 'delete-clear');
+          selectionAnchor = null;
+          setSelectedEntry(null);
+          setSelectedPath('');
+          setGridDir('');
+        }
+        setPreviewContent(null);
+      });
       invalidateAndList(par);
-      setPath(par);
-      setPathInputValue(par);
-      setSelectedEntry(null);
-      setSelectedPath('');
-      setGridDir('');
-      setPreviewContent(null);
     } else if (reply.kind === 'delete_err' && reply.code === 'not_empty') {
       dispatchBulkDelete([target]);
     } else {
@@ -1829,6 +2087,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       'rename_err',
     );
     if (reply.kind === 'rename_ok') {
+      // The source row is gone: drop it from its listing now and clear
+      // the selection (the moved path is selected nowhere), so the next
+      // verb can't target the path that no longer exists.
+      batch(() => {
+        patchListing(srcParent, (entries) => entries.filter((e) => e.name !== baseName(src)));
+        rekeySubtreeState(src, dest);
+        if (selection().size > 0) applySelection(new Set(), 'move-clear');
+        selectionAnchor = null;
+        if (rekeyPath(selectedPath(), src, dest)) {
+          setSelectedEntry(null);
+          setSelectedPath('');
+        }
+        const gd = rekeyPath(gridDir(), src, dest);
+        if (gd) setGridDir(gd);
+        const cur = rekeyPath(path(), src, dest);
+        if (cur) {
+          setPath(cur);
+          setPathInputValue(cur);
+        }
+      });
       // Refresh both ends ourselves rather than waiting for
       // fs.watch — for a drop into a collapsed target dir, the
       // watch never fires (we only subscribe to expanded dirs).
@@ -1836,12 +2114,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       invalidateAndList(srcParent);
       expandDir(targetDir);
       invalidateAndList(targetDir);
-      if (path() === src) {
-        setPath(dest);
-        setPathInputValue(dest);
-      }
     } else if (reply.kind === 'cancelled') {
       // user dismissed Replace prompt — silent no-op.
+    } else if (reply.kind === 'rename_err' && reply.code === 'cross_device') {
+      // rename(2) can't cross filesystems (a FUSE mount, /tmp on tmpfs, a
+      // second disk). The single-item path is the fast fm-direct rename;
+      // bulk's move already degrades to copy+delete on EXDEV, so hand the
+      // same move to the queue rather than teaching fm a second copier.
+      // Copies always go that way (commitBulkCopy); this is the move
+      // analogue for the one case a rename can't serve.
+      setStatusInfo(`move: ${baseName(src)} is on another filesystem — copying via the queue`);
+      dispatchBulkMove([src], targetDir);
     } else if (reply.kind === 'rename_err' && reply.code === 'not_empty_dir') {
       setStatusOverride(`move: ${String(reply.msg)}`);
     } else {
@@ -2008,9 +2291,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     if (!rootInitialized()) return 'loading…';
     const sel = selection().size;
-    if (sel > 1) return `${sel} of ${visibleCount()} selected`;
-    return `${visibleCount()} entries`;
+    const count = sel > 1 ? `${sel} of ${visibleCount()} selected` : `${visibleCount()} entries`;
+    const trunc = truncationNotice();
+    if (trunc) {
+      return (
+        <>
+          {trunc.forView ? '' : `${count} · `}
+          <span data-status-kind="truncated" style={{ color: tokens.fgWarning }}>
+            {trunc.text}
+          </span>
+        </>
+      );
+    }
+    return count;
   });
+
+  // truncationNotice names a capped listing the user is looking at: the
+  // viewed folder first ("showing first 5,000 of 5,050 entries"), else the
+  // first expanded folder in the tree that was capped, by name.
+  const truncationNotice = (): { text: string; forView: boolean } | null => {
+    const fmt = (n: number) => n.toLocaleString();
+    const describe = (t: { shown: number; total: number }) =>
+      t.total > 0 ? `showing first ${fmt(t.shown)} of ${fmt(t.total)} entries` : `listing truncated at ${fmt(t.shown)} entries`;
+    const dir = viewDir();
+    const own = truncatedDirs[dir];
+    if (own) return { text: describe(own), forView: true };
+    for (const k of Object.keys(truncatedDirs)) {
+      if (expanded[k] && listings[k]) return { text: `${baseName(k)}: ${describe(truncatedDirs[k])}`, forView: false };
+    }
+    return null;
+  };
 
   // ---- menus ----
 
@@ -2075,11 +2385,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           startRename(Array.from(sel)[0]);
           return;
         }
-        if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel.size > 0) {
+        if (ev.key === 'Delete' && sel.size > 0) {
           ev.preventDefault();
           const paths = Array.from(sel);
           if (paths.length === 1) requestDelete(paths[0]);
           else requestBulkDelete(paths);
+          return;
+        }
+        if (ev.key === 'Backspace') {
+          // Up one level — the convention every desktop file manager
+          // follows (Finder, Nautilus, Dolphin, Explorer). This used to be
+          // a second Delete key, with the confirm dialog as the only
+          // backstop.
+          ev.preventDefault();
+          goUp();
           return;
         }
         if (ev.key === 'Enter' && sel.size === 1) {
@@ -2207,7 +2526,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           data-testid="fm-reload"
           title="Reload"
           style={{ padding: '4px 8px', 'min-width': '30px' }}
-          onClick={() => { if (path()) invalidateAndList(parentPath(path())); }}
+          onClick={reloadView}
         >
           <RotateCw size={14} />
         </Button>
@@ -2443,8 +2762,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         </Show>
       </div>
 
-      {/* the host's bulk queue — only while something is in flight */}
-      <Show when={activeJobs().length > 0}>
+      {/* the host's bulk queue — while something is in flight, or a
+          failure is waiting to be read and dismissed */}
+      <Show when={activeJobs().length > 0 || failedJobs().length > 0}>
         <div
           data-testid="fm-jobs"
           style={{
@@ -2454,12 +2774,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             'max-height': '30%',
             overflow: 'auto',
             'flex-shrink': 0,
+            display: 'flex',
+            'flex-direction': 'column',
+            gap: '6px',
           }}
         >
-          <BulkJobs
-            jobs={activeJobs}
-            onCancel={(jobID) => send({ kind: 'bulk_cancel', job_id: jobID })}
-          />
+          <Show when={activeJobs().length > 0}>
+            <BulkJobs
+              jobs={activeJobs}
+              onCancel={(jobID) => send({ kind: 'bulk_cancel', job_id: jobID })}
+            />
+          </Show>
+          <For each={failedJobs()}>
+            {(j) => <FailedJobRow job={j} onDismiss={() => dismissJob(j.job_id)} />}
+          </For>
         </div>
       </Show>
 
@@ -2770,6 +3098,62 @@ const PendingNewRow: Component<{
         }}
         style={{ ...inlineInputStyle, flex: 1 }}
       />
+    </div>
+  );
+};
+
+// FailedJobRow — a terminal bulk job that ended in failure, kept in fm's
+// strip with its error until the user dismisses it (the shared <BulkJobs>
+// renders the live queue; a failure that has to be READ is fm's concern).
+const FailedJobRow: Component<{ job: BulkJob; onDismiss: () => void }> = (props) => {
+  const label = () => {
+    const n = props.job.paths.length;
+    return `${props.job.op} ${n} item${n === 1 ? '' : 's'}${props.job.dest ? ` → ${props.job.dest}` : ''}`;
+  };
+  return (
+    <div
+      data-testid={`fm-failed-job-${props.job.job_id}`}
+      data-status="failed"
+      style={{
+        padding: '6px 8px',
+        border: `1px solid ${tokens.borderDanger}`,
+        'border-radius': tokens.radiusSm,
+        display: 'flex',
+        'flex-direction': 'column',
+        gap: '4px',
+        'font-size': '11px',
+      }}
+    >
+      <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>
+        <span style={{ color: tokens.fg, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', flex: 1 }}>
+          {label()}
+        </span>
+        <span style={{ font: tokens.type.monoSm, color: tokens.fgDanger, 'flex-shrink': 0 }}>failed</span>
+        <button
+          type="button"
+          data-testid={`fm-dismiss-job-${props.job.job_id}`}
+          title="Dismiss"
+          onClick={props.onDismiss}
+          style={{
+            background: 'transparent',
+            color: tokens.fg,
+            border: `1px solid ${tokens.borderMenu}`,
+            'border-radius': tokens.radiusSm,
+            padding: '0 4px',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            'align-items': 'center',
+            'flex-shrink': 0,
+          }}
+        >
+          <X size={11} />
+        </button>
+      </div>
+      <Show when={props.job.error}>
+        <div style={{ color: tokens.fgDanger, font: tokens.type.monoSm, 'word-break': 'break-all' }}>
+          {props.job.error}
+        </div>
+      </Show>
     </div>
   );
 };
