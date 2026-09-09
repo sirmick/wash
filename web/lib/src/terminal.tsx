@@ -7,7 +7,7 @@
 // picker now lives in the consumer's menubar, not this menu), and
 // the OSC window title (surfaced via onTitle).
 //
-// xterm and its addons (fit, search, web-links) are externalized to the shared
+// xterm and its addons (fit, search, web-links, unicode11) are externalized to the shared
 // vendor bundle (web/shell/build-vendor.mjs); consumers' vite configs
 // already list every name in `rollupOptions.external`.
 
@@ -16,6 +16,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import type { ISearchOptions } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { ensureScrollbarStyles } from './scrollbars';
 import type { ILink, ILinkProvider, ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
@@ -431,6 +432,17 @@ export interface TermLinks {
 // price.
 const PATH_TOKEN = /(?:~|\.{1,2})?\/[^\s'"`<>|()[\]{}]*[^\s'"`<>|()[\]{},.;:!?]/g;
 
+// TermCursorStyle is xterm's cursor shapes, named for a preferences UI.
+export type TermCursorStyle = 'block' | 'underline' | 'bar';
+
+// IS_MAC decides macOptionIsMeta. It is a property of the KEYBOARD the
+// browser is attached to, not a user preference: on a Mac, Option+key
+// produces a composed character (Option+B is ∫), so without this every
+// Meta binding in readline, emacs and vim is unreachable from a wash
+// terminal. Everywhere else the same flag would break AltGr.
+const IS_MAC = typeof navigator !== 'undefined'
+  && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
+
 export interface TerminalProps {
   // channelId opts the component into the raw-channel I/O path:
   // bytes from openRawChannel(channelId) get written into xterm,
@@ -509,6 +521,10 @@ export interface TerminalProps {
   // can use this to show a "terminal stalled — recovering…" affordance
   // instead of leaving the user staring at an unexplained black screen.
   onStalled?: () => void;
+  // cursorStyle / cursorBlink are the caller's cursor preference, applied
+  // live. Defaults: a blinking block, which is what xterm does anyway.
+  cursorStyle?: TermCursorStyle;
+  cursorBlink?: boolean;
   // links makes output clickable — http(s) URLs and existing file paths.
   // Read once at mount (the callbacks are read live, so a consumer can
   // close over changing state).
@@ -828,7 +844,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
       fontFamily: initialFamily,
       fontSize: effectiveSize(),
       theme: props.theme ?? termThemeFor(props.appearanceOverride ?? washAppearance()),
-      cursorBlink: true,
+      cursorBlink: props.cursorBlink ?? true,
+      cursorStyle: props.cursorStyle ?? 'block',
+      macOptionIsMeta: IS_MAC,
       // The router keeps up to 4 MiB of output for a channel nobody is
       // reading (a closed lid, a refreshed tab), and replays it on
       // reattach. xterm's default of 1000 lines would throw most of that
@@ -924,6 +942,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
     term.loadAddon(fit);
     search = new SearchAddon();
     term.loadAddon(search);
+    // Unicode 11 widths. Without it xterm measures emoji and much of CJK
+    // with Unicode 6 tables, so a starship / powerlevel prompt or any
+    // TUI that draws with them lands its columns one cell out and the
+    // whole line smears. Registering the provider is not enough — the
+    // active version has to be switched to it.
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = '11';
     // Links. Both halves are opt-in: nothing is registered unless the
     // consumer supplied the corresponding callback, so a terminal with no
     // `links` prop behaves exactly as before.
@@ -934,6 +959,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
       }));
     }
     if (props.links?.probePaths) term.registerLinkProvider(pathLinkProvider());
+    // Cursor preference, applied live so a menu change does not need a
+    // remount (which would drop the scrollback).
+    createEffect(() => {
+      if (!term) return;
+      term.options.cursorStyle = props.cursorStyle ?? 'block';
+      term.options.cursorBlink = props.cursorBlink ?? true;
+    });
     term.open(hostEl);
     // The left/right inset (so the first and last columns aren't jammed
     // against the window edge) goes on the .xterm ELEMENT, not on the host

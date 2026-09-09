@@ -157,6 +157,8 @@ await xtermAddon('@xterm/addon-fit', 'xterm-fit', ['FitAddon']);
 await xtermAddon('@xterm/addon-search', 'xterm-search', ['SearchAddon']);
 // Clickable http(s) URLs in terminal output.
 await xtermAddon('@xterm/addon-web-links', 'xterm-web-links', ['WebLinksAddon']);
+// Unicode 11 grapheme widths (emoji / CJK under modern prompts).
+await xtermAddon('@xterm/addon-unicode11', 'xterm-unicode11', ['Unicode11Addon']);
 
 // @wash/ui is *not* built here — its Solid JSX requires the
 // babel-preset-solid transform that vite-plugin-solid provides.

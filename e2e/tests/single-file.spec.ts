@@ -97,6 +97,7 @@ const ALLOWED_EXTERNALS = new Set([
   '@xterm/addon-fit',
   '@xterm/addon-search',
   '@xterm/addon-web-links',
+  '@xterm/addon-unicode11',
   '@wash/ui',
 ]);
 

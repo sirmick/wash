@@ -27,7 +27,7 @@ import {
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
   defineWashApp, tokens, WASH_SCROLL_CLASS,
 } from '@wash/ui';
-import type { PasteAnalysis, TermModes, TermSearchOptions, TerminalAPI } from '@wash/ui';
+import type { PasteAnalysis, TermCursorStyle, TermModes, TermSearchOptions, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
 import { SplitIntents } from './intents';
@@ -123,7 +123,7 @@ interface SessionRow {
 }
 
 // Menubar menus, in bar order.
-type MenuId = 'edit' | 'tab' | 'split' | 'theme' | 'font' | 'paste';
+type MenuId = 'edit' | 'tab' | 'split' | 'theme' | 'font' | 'paste' | 'cursor';
 
 // SmartPaste is the window-wide policy for the paste filter
 // (docs/AGENT_TERM.md §10):
@@ -149,6 +149,9 @@ interface PersistedState {
   // migrated to theme_id. No longer written.
   appearance?: 'dark' | 'light';
   smart_paste?: SmartPaste;
+  // Cursor shape / blink, window-wide like the font.
+  cursor_style?: TermCursorStyle;
+  cursor_blink?: boolean;
 }
 
 // STRIP_HEIGHT — every group carries its own tab strip, so this is paid
@@ -157,6 +160,14 @@ interface PersistedState {
 // three-way split doesn't eat a fifth of the window. (The old single bar
 // was 32 with a 4px gap above; there is no window titlebar to separate
 // from any more once strips sit inside the stage.)
+// CURSOR_STYLES — xterm's three shapes, in the order a preferences menu
+// wants them (the default first).
+const CURSOR_STYLES: { id: TermCursorStyle; label: string }[] = [
+  { id: 'block', label: 'Block' },
+  { id: 'underline', label: 'Underline' },
+  { id: 'bar', label: 'Bar' },
+];
+
 const STRIP_HEIGHT = 26;
 // Each split pane carries its own status bar. A single window-level bar made
 // the unfocused panes' ssh/root state invisible.
@@ -244,6 +255,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // apply across all tabs at once.
   const [fontId, setFontId] = createSignal(TERM_DEFAULT_FONT_ID);
   const [fontSize, setFontSize] = createSignal(TERM_DEFAULT_FONT_SIZE);
+  // Cursor shape / blink — window-wide, like the font, and applied live to
+  // every mounted <Terminal>.
+  const [cursorStyle, setCursorStyle] = createSignal<TermCursorStyle>('block');
+  const [cursorBlink, setCursorBlink] = createSignal(true);
   // Window-wide terminal palette: undefined follows the desktop pack
   // appearance (default); a TERM_THEMES id pins a named palette (Dark,
   // Solarized Dark, Dracula, …). Set via the Theme menu; persisted like
@@ -1105,6 +1120,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       font_size: fontSize(),
       theme_id: themeId(),
       smart_paste: smartPaste(),
+      cursor_style: cursorStyle(),
+      cursor_blink: cursorBlink(),
     };
     send({ kind: 'save_state', state });
   };
@@ -1126,6 +1143,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // saved before named themes keep their palette.
     if (s.theme_id) setThemeId(s.theme_id);
     else if (s.appearance) setThemeId(s.appearance);
+    if (s.cursor_style === 'block' || s.cursor_style === 'underline' || s.cursor_style === 'bar') {
+      setCursorStyle(s.cursor_style);
+    }
+    if (typeof s.cursor_blink === 'boolean') setCursorBlink(s.cursor_blink);
     if (s.smart_paste === 'ask' || s.smart_paste === 'always' || s.smart_paste === 'off') {
       setSmartPaste(s.smart_paste);
     }
@@ -1408,6 +1429,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <button
           data-wash-hit
           type="button"
+          data-testid="term-menu-cursor-btn"
+          style={menuBarBtnStyle(openMenu() === 'cursor')}
+          onClick={(ev) => openMenuFor('cursor', ev)}
+        >
+          Cursor
+        </button>
+        <button
+          data-wash-hit
+          type="button"
           data-testid="term-menu-font-btn"
           style={menuBarBtnStyle(openMenu() === 'font')}
           onClick={(ev) => openMenuFor('font', ev)}
@@ -1602,6 +1632,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           </For>
         </Menu>
       </Show>
+      <Show when={openMenu() === 'cursor'}>
+        <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-cursor" onDismiss={closeMenu}>
+          <For each={CURSOR_STYLES}>
+            {(c) => (
+              <MenuItem
+                label={c.label}
+                data-testid={`term-menu-cursor-${c.id}`}
+                trailing={cursorStyle() === c.id ? <Check size={12} /> : undefined}
+                onClick={run(() => { setCursorStyle(c.id); persist(); })}
+              />
+            )}
+          </For>
+          <MenuSeparator />
+          <MenuItem
+            label="Blink"
+            data-testid="term-menu-cursor-blink"
+            trailing={cursorBlink() ? <Check size={12} /> : undefined}
+            onClick={run(() => { setCursorBlink(!cursorBlink()); persist(); })}
+          />
+        </Menu>
+      </Show>
       <Show when={ctxMenu()}>
         {(menu) => (
           <Menu x={menu().x} y={menu().y} data-testid="term-tab-ctx" onDismiss={() => setCtxMenu(null)}>
@@ -1679,6 +1730,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   initialModes={tab.modes}
                   onModesChanged={(m) => onTabModes(tab, m)}
                   beforePaste={beforePaste}
+                  cursorStyle={cursorStyle()}
+                  cursorBlink={cursorBlink()}
                   links={{
                     openUrl: (uri) => window.open(uri, '_blank', 'noopener,noreferrer'),
                     probePaths: (tokens) => probePaths(tab.channelID, tokens),
