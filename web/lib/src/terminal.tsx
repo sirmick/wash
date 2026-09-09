@@ -7,12 +7,14 @@
 // picker now lives in the consumer's menubar, not this menu), and
 // the OSC window title (surfaced via onTitle).
 //
-// xterm and addon-fit are externalized to the shared vendor bundle
-// (web/shell/build-vendor.mjs); consumers' vite configs already
-// include both names in `rollupOptions.external`.
+// xterm and its addons (fit, search) are externalized to the shared
+// vendor bundle (web/shell/build-vendor.mjs); consumers' vite configs
+// already list every name in `rollupOptions.external`.
 
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import type { ISearchOptions } from '@xterm/addon-search';
 import { ensureScrollbarStyles } from './scrollbars';
 import type { ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
@@ -372,6 +374,28 @@ export interface TerminalAPI {
   // the right size up front instead of 80×24-then-resize, so the first
   // prompt is drawn at the width the pane will have. Null before mount.
   proposeGrid: (w: number, h: number) => { cols: number; rows: number } | null;
+  // Find in scrollback (@xterm/addon-search). findNext/findPrevious scroll
+  // the viewport to the match and decorate every hit; they return whether
+  // anything matched. clearSearch drops the decorations (closing the find
+  // bar). onSearchResults reports the live "n of m" whenever it changes;
+  // resultCount is -1 when the addon stopped counting (past its highlight
+  // limit). Returns an unsubscribe.
+  findNext: (query: string, opts?: TermSearchOptions) => boolean;
+  findPrevious: (query: string, opts?: TermSearchOptions) => boolean;
+  clearSearch: () => void;
+  onSearchResults: (cb: (r: { resultIndex: number; resultCount: number }) => void) => () => void;
+}
+
+// TermSearchOptions is the consumer-facing slice of the addon's options:
+// the three toggles a find bar exposes. Decoration colours are the
+// component's (they follow the theme), not the consumer's.
+export interface TermSearchOptions {
+  regex?: boolean;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  // incremental: the query grew by a character, so a match that still
+  // starts at the current selection stays put instead of jumping ahead.
+  incremental?: boolean;
 }
 
 export interface TerminalProps {
@@ -459,6 +483,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
   let term: XTerm | null = null;
   let fit: FitAddon | null = null;
+  let search: SearchAddon | null = null;
 
   // Right-click menu position (null = closed) + cached selection
   // state captured at open time so Copy can grey out with no
@@ -537,6 +562,27 @@ export const Terminal: Component<TerminalProps> = (props) => {
       rows: Math.max(1, Math.floor(availH / cell.height)),
     };
   };
+
+  // searchOptions merges the consumer's toggles with the decoration set.
+  // Decorations are what make a find bar usable in a terminal: without
+  // them only the active match (the selection) is visible, and the other
+  // hits on screen are invisible. Colours are fixed amber/orange — legible
+  // on every palette in TERM_THEMES, light or dark — with a border so a
+  // match on a same-coloured cell still reads.
+  const searchOptions = (o?: TermSearchOptions): ISearchOptions => ({
+    regex: !!o?.regex,
+    caseSensitive: !!o?.caseSensitive,
+    wholeWord: !!o?.wholeWord,
+    incremental: !!o?.incremental,
+    decorations: {
+      matchBackground: '#7a5c00',
+      matchBorder: '#c49a00',
+      matchOverviewRuler: '#c49a00',
+      activeMatchBackground: '#c46a00',
+      activeMatchBorder: '#ffb84d',
+      activeMatchColorOverviewRuler: '#ffb84d',
+    },
+  });
 
   // holdFits suppresses every fit while a restored session's replay
   // is still parsing — xterm.write is async, and a ResizeObserver
@@ -781,6 +827,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
     }
     fit = new FitAddon();
     term.loadAddon(fit);
+    search = new SearchAddon();
+    term.loadAddon(search);
     term.open(hostEl);
     // The left/right inset (so the first and last columns aren't jammed
     // against the window edge) goes on the .xterm ELEMENT, not on the host
@@ -935,6 +983,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
           clearScreen: () => term?.clear(),
           hasSelection: () => !!term?.hasSelection(),
           proposeGrid,
+          findNext: (q, o) => (q && search ? search.findNext(q, searchOptions(o)) : false),
+          findPrevious: (q, o) => (q && search ? search.findPrevious(q, searchOptions(o)) : false),
+          clearSearch: () => search?.clearDecorations(),
+          onSearchResults: (cb) => {
+            const d = search?.onDidChangeResults((r) => cb(r));
+            return () => d?.dispose();
+          },
         });
       };
       if (restored && drain.length) {
@@ -962,6 +1017,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       term?.dispose();
       term = null;
       fit = null;
+      search = null;
     });
   });
 

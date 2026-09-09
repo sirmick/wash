@@ -37,6 +37,7 @@ export default defineConfig({
         'solid-js/store',
         '@xterm/xterm',
         '@xterm/addon-fit',
+        '@xterm/addon-search',
       ],
     },
   },

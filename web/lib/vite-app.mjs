@@ -30,6 +30,7 @@ export function washAppConfig(opts = {}) {
         'solid-js/store',
         '@xterm/xterm',
         '@xterm/addon-fit',
+        '@xterm/addon-search',
         '@wash/ui',
       ],
     },

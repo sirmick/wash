@@ -95,6 +95,7 @@ const ALLOWED_EXTERNALS = new Set([
   'solid-js/store',
   '@xterm/xterm',
   '@xterm/addon-fit',
+  '@xterm/addon-search',
   '@wash/ui',
 ]);
 

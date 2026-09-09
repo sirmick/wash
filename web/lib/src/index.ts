@@ -38,7 +38,7 @@ export {
   themeById,
   parseOsc7,
 } from './terminal';
-export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme } from './terminal';
+export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme, TermSearchOptions } from './terminal';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';

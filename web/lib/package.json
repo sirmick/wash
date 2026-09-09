@@ -19,6 +19,7 @@
     "@noble/ciphers": "^2.2.0",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
+    "@xterm/addon-search": "0.15.0",
     "lucide-solid": "^1.16.0"
   },
   "devDependencies": {

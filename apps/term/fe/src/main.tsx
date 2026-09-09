@@ -19,15 +19,15 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Check, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
+import { Check, ChevronDown, ChevronUp, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
-  Button, ConfirmDialog,
+  Button, Checkbox, ConfirmDialog, Input,
   Menu, MenuItem, MenuSeparator, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
   defineWashApp, tokens, WASH_SCROLL_CLASS,
 } from '@wash/ui';
-import type { PasteAnalysis, TermModes, TerminalAPI } from '@wash/ui';
+import type { PasteAnalysis, TermModes, TermSearchOptions, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
 import { SplitIntents } from './intents';
@@ -260,6 +260,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     resolve: (text: string | null) => void;
   } | null>(null);
 
+  // Find in scrollback. The bar targets ONE tab (the one focused when it
+  // opened) and floats over that pane's top-right corner; its query and
+  // toggles are window-wide so reopening it elsewhere keeps the last
+  // search. results is the addon's live "n of m" (count -1: past the
+  // highlight limit, so it stopped counting).
+  const [findTab, setFindTab] = createSignal<number | null>(null);
+  const [findQuery, setFindQuery] = createSignal('');
+  const [findRegex, setFindRegex] = createSignal(false);
+  const [findCase, setFindCase] = createSignal(false);
+  const [findResults, setFindResults] = createSignal<{ index: number; count: number } | null>(null);
+  let findInputEl: HTMLInputElement | undefined;
+  let unsubFind: (() => void) | undefined;
+
   // A close the BE refused because work is in the foreground, awaiting the
   // user's answer. scope 'tab' carries the one tab; scope 'window' carries
   // every busy tab, so the dialog can name them.
@@ -348,6 +361,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const removeTab = (channelID: number) => {
+    if (findTab() === channelID) closeFind();
     apis.delete(channelID);
     sizes.delete(channelID);
     if (tagColors().has(channelID)) {
@@ -719,6 +733,89 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     persist();
   };
 
+  // ---- find in scrollback ----
+
+  const findOpts = (incremental = false): TermSearchOptions => ({
+    regex: findRegex(),
+    caseSensitive: findCase(),
+    incremental,
+  });
+
+  // openFind targets the focused tab (or re-targets an open bar to it —
+  // Ctrl+Shift+F in another pane moves the bar there). The previous
+  // target's highlights are dropped first, so at most one pane is decorated.
+  const openFind = () => {
+    const id = active();
+    if (!id || !apis.has(id)) return;
+    const prev = findTab();
+    if (prev !== null && prev !== id) apis.get(prev)?.clearSearch();
+    unsubFind?.();
+    unsubFind = apis.get(id)?.onSearchResults((r) => setFindResults({ index: r.resultIndex, count: r.resultCount }));
+    setFindTab(id);
+    setFindResults(null);
+    requestAnimationFrame(() => {
+      findInputEl?.focus();
+      findInputEl?.select();
+      if (findQuery()) apis.get(id)?.findNext(findQuery(), findOpts());
+    });
+  };
+
+  const closeFind = () => {
+    const id = findTab();
+    if (id === null) return;
+    apis.get(id)?.clearSearch();
+    unsubFind?.();
+    unsubFind = undefined;
+    setFindTab(null);
+    setFindResults(null);
+    apis.get(id)?.focus();
+  };
+
+  // findStep runs the search on the bar's tab. Empty query: clear, so the
+  // highlights follow what the box says rather than a stale term.
+  const findStep = (dir: 1 | -1, incremental = false) => {
+    const id = findTab();
+    if (id === null) return;
+    const api = apis.get(id);
+    if (!api) return;
+    const q = findQuery();
+    if (!q) { api.clearSearch(); setFindResults(null); return; }
+    if (dir > 0) api.findNext(q, findOpts(incremental));
+    else api.findPrevious(q, findOpts(incremental));
+  };
+
+  const onFindInput = (q: string) => {
+    setFindQuery(q);
+    findStep(1, true);
+  };
+  const toggleFindRegex = (v: boolean) => { setFindRegex(v); findStep(1); };
+  const toggleFindCase = (v: boolean) => { setFindCase(v); findStep(1); };
+
+  // Keys inside the bar: Enter next, Shift+Enter previous, Esc closes.
+  const onFindKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); findStep(ev.shiftKey ? -1 : 1); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); closeFind(); }
+  };
+
+  // findResultText is the bar's "n of m" — or nothing to say while there
+  // is no query, "no matches", or "many" past the addon's count limit.
+  const findResultText = (): string => {
+    if (!findQuery()) return '';
+    const r = findResults();
+    if (!r) return '';
+    if (r.count === 0) return 'no matches';
+    if (r.count < 0) return r.index >= 0 ? `${r.index + 1} of many` : 'many';
+    return r.index >= 0 ? `${r.index + 1} of ${r.count}` : `${r.count}`;
+  };
+
+  // A find bar whose tab closed goes with it; a tab that moves keeps it.
+  const findRect = (): Rect | undefined => {
+    const id = findTab();
+    if (id === null) return undefined;
+    const g = placement().groups.find((pg) => pg.group.tabs.includes(id));
+    return g && g.group.active === id ? g.content : undefined;
+  };
+
   // ---- tab title (live OSC title, ephemeral) ----
 
   const setTabTitle = (channelID: number, title: string) => {
@@ -1039,6 +1136,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) {
       const code = ev.code;
       if (code === 'KeyT') { ev.preventDefault(); openNewTab(); return false; }
+      if (code === 'KeyF') { ev.preventDefault(); openFind(); return false; }
       if (code === 'KeyW') { ev.preventDefault(); requestCloseTab(active()); return false; }
       if (code === 'PageDown') { ev.preventDefault(); cycleTabs(1); return false; }
       if (code === 'PageUp') { ev.preventDefault(); cycleTabs(-1); return false; }
@@ -1048,6 +1146,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (ev.ctrlKey && ev.shiftKey) {
       const k = ev.key.toLowerCase();
       if (k === 't') { openNewTab(); return false; }
+      if (k === 'f') { ev.preventDefault(); openFind(); return false; }
       // Closes the TAB; when it is the last one in its group the pane goes
       // with it and the tree hands the space back (docs/TERM_LAYOUT.md §5).
       if (k === 'w') { requestCloseTab(active()); return false; }
@@ -1242,6 +1341,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       props.host.removeEventListener('wash:state', onState);
       if (pendingFallback) clearTimeout(pendingFallback);
       if (modesTimer) clearTimeout(modesTimer);
+      unsubFind?.();
       apis.clear();
       sizes.clear();
     });
@@ -1304,6 +1404,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <MenuItem label="Copy" data-testid="term-menu-copy" onClick={run(() => activeApi()?.copySelection())} />
           <MenuItem label="Paste" data-testid="term-menu-paste" onClick={run(() => activeApi()?.paste())} />
           <MenuItem label="Select All" data-testid="term-menu-selectall" onClick={run(() => activeApi()?.selectAll())} />
+          <MenuSeparator />
+          <MenuItem
+            label="Find…"
+            data-testid="term-menu-find"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+F · Alt+F</span>}
+            onClick={() => { closeMenu(); openFind(); }}
+          />
           <MenuSeparator />
           <MenuItem label="Clear" data-testid="term-menu-clear" onClick={run(() => activeApi()?.clearScreen())} />
         </Menu>
@@ -1744,6 +1851,39 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             />
           )}
         </Show>
+        {/* Find bar: floats over the top-right of its tab's pane. Rendered
+            from the placement so it follows the pane through splits and
+            resizes, and disappears while its tab is not the visible one. */}
+        <Show when={findRect()}>
+          {(r) => (
+            <div
+              data-testid="term-find"
+              style={{
+                ...findBarStyle,
+                left: `${r().x + r().w - FIND_WIDTH - 14}px`,
+                top: `${r().y + 4}px`,
+                width: `${FIND_WIDTH}px`,
+              }}
+              onMouseDown={(ev) => ev.stopPropagation()}
+            >
+              <Input
+                ref={(el) => { findInputEl = el; }}
+                data-testid="term-find-input"
+                placeholder="Find"
+                value={findQuery()}
+                onInput={(ev) => onFindInput((ev.currentTarget as HTMLInputElement).value)}
+                onKeyDown={onFindKey}
+                style={{ flex: 1, 'min-width': 0, font: tokens.type.monoMd }}
+              />
+              <span data-testid="term-find-count" style={findCountStyle}>{findResultText()}</span>
+              <Checkbox data-testid="term-find-regex" checked={findRegex()} onChange={toggleFindRegex} label={<span title="Regular expression">.*</span>} />
+              <Checkbox data-testid="term-find-case" checked={findCase()} onChange={toggleFindCase} label={<span title="Match case">Aa</span>} />
+              <Button variant="icon" data-testid="term-find-prev" title="Previous (Shift+Enter)" style={ctlBtnStyle} onClick={() => findStep(-1)}><ChevronUp size={14} /></Button>
+              <Button variant="icon" data-testid="term-find-next" title="Next (Enter)" style={ctlBtnStyle} onClick={() => findStep(1)}><ChevronDown size={14} /></Button>
+              <Button variant="icon" data-testid="term-find-close" title="Close (Esc)" style={ctlBtnStyle} onClick={closeFind}><X size={14} /></Button>
+            </div>
+          )}
+        </Show>
       </div>
       <Show when={pendingPaste()}>
         {(p) => (
@@ -1878,6 +2018,33 @@ const ctlBtnStyle: JSX.CSSProperties = {
   opacity: 0.8,
   'flex-shrink': 0,
   padding: '0 3px',
+};
+
+// Find bar: a compact strip over the pane's top-right corner. Fixed width
+// so it never covers more than a corner of a wide pane; in a narrow pane
+// it simply hugs the right edge.
+const FIND_WIDTH = 360;
+const findBarStyle: JSX.CSSProperties = {
+  position: 'absolute',
+  'z-index': 4,
+  display: 'flex',
+  'align-items': 'center',
+  gap: '4px',
+  padding: '3px 4px',
+  background: tokens.bgMenu,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusMd}`,
+  'box-shadow': '0 2px 8px rgba(0,0,0,0.35)',
+  'box-sizing': 'border-box',
+  font: tokens.type.textMd,
+};
+const findCountStyle: JSX.CSSProperties = {
+  color: tokens.fgDim,
+  'font-size': '11px',
+  'white-space': 'nowrap',
+  'min-width': '52px',
+  'text-align': 'right',
 };
 
 // Shortcut hint in the Split menu's trailing slot.
