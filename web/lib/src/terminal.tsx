@@ -503,9 +503,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     })._core;
     const cell = core?._renderService?.dimensions?.css?.cell;
     if (!cell || !(cell.width > 0) || !(cell.height > 0)) return null;
-    const scrollbar = term.options.scrollback === 0
-      ? 0
-      : (term.options.overviewRuler?.width || core?.viewport?.scrollBarWidth || 0);
+    const scrollbar = term.options.scrollback === 0 ? 0 : (core?.viewport?.scrollBarWidth ?? 0);
     const cs = window.getComputedStyle(term.element);
     const padH = (parseInt(cs.paddingLeft) || 0) + (parseInt(cs.paddingRight) || 0);
     const padV = (parseInt(cs.paddingTop) || 0) + (parseInt(cs.paddingBottom) || 0);
