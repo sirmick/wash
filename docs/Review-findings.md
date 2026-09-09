@@ -35,6 +35,18 @@ and all of it is data loss.
 
 ## P1 — workflows that break mid-use
 
+**All fixed 2026-09-09**, four parallel tracks merged as `b80313a4` (edit +
+shell), `770e5248` (fm), `652c1e6a` (term) and `7557bd21` (agent), every
+item with a both-halves e2e. Along the way these P2 entries also landed:
+edit tab-switch scroll restore, the picker Ctrl+W guard, Show diff on the
+reload prompt, drop-to-open on the editor body, Reveal in Files at the
+folder, tabs following renames; term COLORTERM, Alt tab bindings, exit-code
+hold, smarter tab labels; fm Backspace-up, truncation notice, cross-device
+drag fallback, failed jobs kept on screen; agent composer file drop, Bash
+"always" rules scoped to the project, mid-turn prompts queued. The
+Chromium-reserved-shortcut suspicion stands unverified; the Alt bindings
+sidestep it either way.
+
 ### agent
 - **Transcript freezes after 60 s for any viewer that never called `agent_started`/`attach`.** agentd expires a watcher not re-affirmed within `watcherTTL`; `keepWatching` is started only on those two paths in the Agent app, and the shared `internal/agentclient` (used by wash-edit's agent tabs) subscribes once and never re-affirms. Open the Agent app from the start menu, click a running row: the status line keeps moving (roster sub is separate) while the transcript stops at the first event after 60 s. Edit agent tabs: same. e2e only observes within 20 s. *Verified.* `apps/agentd/be/transcript.go:44-45, 455-470`; `apps/ai/be/app.go:370-391, 557, 592, 676-692`; `internal/agentclient/agentclient.go:103, 112`. (Also: each `agent_started`/`attach` starts another `keepWatching` goroutine on the same conn — leak, harmless.)
 - **No adapter-exit watcher.** Nothing selects on `client.Done()` outside acpterm; a crashed adapter keeps its roster row and idle-hold, and the next prompt fails silently (below). Pending `RequestPermission` uses `context.Background()`, so the "turn cancelled" arm at `acp.go:540` is dead code and an ask outlives both the adapter and `session/cancel`. *Verified by grep + read.* `apps/agentd/be/acp.go:540`; `internal/acp/conn.go:307`.

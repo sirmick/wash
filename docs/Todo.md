@@ -240,6 +240,12 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Apps / UX
 
+- [ ] **Apps sweep follow-ups (docs/Review-findings.md, 2026-09-08).** P0 and
+  P1 shipped in 0.14.4; the P2 "missing everyday workflows" lists are the
+  open backlog for fm, edit, term, agent and the cross-app seams. The
+  terminal-intercept tier was deleted (docs/AGENT_APP.md §10), so `claude`
+  in a wash terminal is an ordinary command; agent features go through the
+  Agent app over ACP.
 - [ ] **edit: Save As over an open file drops that tab silently** —
   `pickerConfirm` converges on one tab per path by removing the duplicate
   (apps/edit/fe/src/main.tsx:655). If that tab held unsaved edits they go
@@ -259,35 +265,7 @@ bug list — all fully landed; see `git log` if you need their content.)
   ignores `Instancing` entirely today. M5's vocabulary pass is worth
   pulling forward regardless — it fixes three live defects: the rail
   counts `stale` and `done` rows as "working", a session that failed
-  renders green, and wash-term cannot express `stale` at all.
-- [ ] wash-term does not answer `wash.focus` (the desktop's "the human
-  asked for your thing K" verb), so agentd deliberately leaves
-  terminal-tier permission toasts unkeyed — clicking one opens the Agent
-  app rather than raising the terminal tab that asked. Teaching term the
-  verb (raise the window, select the channel's tab) closes the last gap in
-  the interrupt ladder. docs/AGENT_UX.md §5 N2, apps/agentd/be/focus.go.
-
-- [ ] **wash-term split panes** — docs/TERM_LAYOUT.md, designed 2026-08-02,
-  not started. A window becomes a tree of tab *groups*: each leaf has its own
-  24px tab strip and split/zoom controls, splits nest, and there is no
-  window-level tab bar (tabs live only in strips). Layout is computed rects
-  over flat, never-reparented terminal hosts — that is the load-bearing
-  choice, since reparenting a mounted xterm loses its buffer. FE-only: no wire
-  or router change, and the persisted blob is already opaque to the BE. M1 is
-  kernel + strips + menu + keys + persistence at fixed 50/50; drag, zoom and
-  cross-group tab drag are M2. Note `Ctrl+Shift+W` changes meaning to
-  close-pane.
-
-- [ ] **Agent-aware terminals: follow-ups** — docs/AGENT_TERM.md. **M1–M7
-  are all DONE** (M6 answer-from-the-desktop, M7 session resume), which closes **issue #19** (item 1 close-confirm shipped
-  earlier, item 2 by M3's policy engine, item 3 by M5's smart paste). What
-  is deliberately left: the Agents settings pane could become a real
-  define-settings-panel owned by agentd, with a hook-install toggle
-  replacing the CLI-only path (§9.3); the remote roster merge rides
-  REMOTE.md §6.2; hook adapters for Codex/Gemini/Aider (§11) now that the
-  shape is proven on Claude Code; and the wider §11 non-goals (prompt
-  library, `--resume` orchestration) remain non-goals until asked for.
-
+  renders green.
 - [ ] **fm/edit: surface access-denied + "relaunch as root"** — **issue #6**
   (full implementation prompt is a comment there). Part A: status-bar
   surfacing (edit has no error surface at all; fm misses `read_err`); Part
