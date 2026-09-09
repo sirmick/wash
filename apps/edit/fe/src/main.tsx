@@ -15,6 +15,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Tab, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import type { InsertedDraft } from '@wash/ui';
 import type { AgentAsk, AgentEvent, AgentStatus, TerminalAPI } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
 
@@ -1930,31 +1931,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return `${where}\n\n\`\`\`${fence}\n${body.replace(/\n*$/, '')}\n\`\`\`\n`;
   };
 
-  // insertAgentDraft finds the composer inside an agent tab's host and
-  // appends to whatever is already typed there. Returns false while the
-  // pane has not painted or the session has not started (the composer is
-  // disabled until it has), which is why the caller retries.
-  const insertAgentDraft = (tabID: string, text: string): boolean => {
-    const host = props.host.querySelector(`[data-testid="edit-term-host-${tabID}"]`);
-    const ta = host?.querySelector('textarea[data-testid="agent-composer"]') as HTMLTextAreaElement | null;
-    if (!ta || ta.disabled) return false;
-    const cur = ta.value;
-    const insert = cur.trim() ? `\n\n${text}` : text;
-    ta.focus();
-    ta.setSelectionRange(cur.length, cur.length);
-    // execCommand, not `ta.value = …`: the composer is a CONTROLLED
-    // input bound to the component's own draft signal, so a value written
-    // behind its back is on screen only until the next render, and the
-    // next roster push is one. execCommand produces the browser's own
-    // input event, which the component's onInput consumes like any
-    // keystroke. Deprecated, and still the only way to put text into a
-    // controlled input from outside it.
-    document.execCommand('insertText', false, insert);
-    // The answer is whether the text is actually THERE: a disabled or
-    // not-yet-wired composer takes the command and does nothing, and the
-    // caller must keep trying rather than report a send that never was.
-    return ta.value !== cur;
-  };
+  // Drafts handed to an agent tab's composer, keyed by tab id. The
+  // component takes them through its insertDraft prop and appends at the
+  // caret, queuing for free when the session has not started: its
+  // composer is a controlled input on the signal it writes, so text set
+  // before the session exists is simply there when the box goes live.
+  // This replaces poking the textarea with execCommand and retrying for
+  // half a minute to find out whether it had landed.
+  const [agentDrafts, setAgentDrafts] = createSignal<Record<string, InsertedDraft>>({});
+  let draftSeq = 0;
 
   // sendToAgent opens the pane (starting a session if there is none) and
   // lands the draft once the composer exists.
@@ -1979,23 +1964,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (!target) return;
     setTermOpen(true);
     setActiveTermID(target.id);
-    const id = target.id;
-    // A session that was just started has not rendered — or enabled —
-    // its composer yet, and starting one is a process spawn. Keep trying
-    // for half a minute rather than dropping the text on the floor.
-    let tries = 0;
-    const land = () => {
-      if (insertAgentDraft(id, text)) {
-        setStatusError(null);
-        return;
-      }
-      if (++tries > 300) {
-        setStatusError('the agent session did not start — nothing was sent');
-        return;
-      }
-      window.setTimeout(land, 100);
-    };
-    land();
+    // seq is what makes the same selection insert twice: the component
+    // acts on a value it has not seen before, not on a changed string.
+    draftSeq += 1;
+    setAgentDrafts({ ...agentDrafts(), [target.id]: { text, seq: draftSeq } });
+    setStatusError(null);
   };
 
   // Adapters agentd found, for the + menu. Empty until the roster push
@@ -3930,6 +3903,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                           file in the buffer above, which the standalone
                           Agent app cannot do. */}
                       <AgentSession
+                        insertDraft={() => agentDrafts()[t.id]}
                         events={() => agentEvents()[t.agentKey ?? ''] ?? []}
                         asks={() => agentAsksFor(t.agentKey ?? '')}
                         status={() => agentStatusFor(t.agentKey ?? '')}
