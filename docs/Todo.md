@@ -321,6 +321,9 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Won't-do / deliberate no-ops (recorded so they don't get re-flagged)
 
+- **fm trash** (decided 2026-09-08) — delete stays `os.Remove`/`RemoveAll`
+  behind the confirm dialog; no trash folder, no restore. Undo for
+  move/rename/paste is a separate question and still open.
 - Hand-rolled insertion sorts (`cmd/wash/main.go`, `runtime_stats.go`) —
   intentional, avoids importing `sort` for two lines.
 - `fm-replace.spec.ts` symlink test asserts `existsSync` only — by design.
