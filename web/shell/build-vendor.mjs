@@ -155,6 +155,8 @@ const xtermAddon = async (pkg, out, named) => {
 await xtermAddon('@xterm/addon-fit', 'xterm-fit', ['FitAddon']);
 // Find in scrollback (wash-term's find bar).
 await xtermAddon('@xterm/addon-search', 'xterm-search', ['SearchAddon']);
+// Clickable http(s) URLs in terminal output.
+await xtermAddon('@xterm/addon-web-links', 'xterm-web-links', ['WebLinksAddon']);
 
 // @wash/ui is *not* built here — its Solid JSX requires the
 // babel-preset-solid transform that vite-plugin-solid provides.

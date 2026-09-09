@@ -124,6 +124,38 @@ func initState() {
 	st.cwd = make(map[uint32]string)
 }
 
+// maxProbePaths caps one path_probe: a link provider asks per line, and a
+// line of terminal output that genuinely holds more than this many paths is
+// a haystack nobody is going to click in.
+const maxProbePaths = 64
+
+// resolveTermPath turns a token as it appeared in terminal output into an
+// absolute path: `~/x` against $HOME, `./x` and `../x` against the tab's
+// cwd, `/x` as itself. Empty when there is nothing sane to resolve against
+// (a relative token in a tab whose cwd is unknown), which reads as "not a
+// path" to both callers.
+func resolveTermPath(base, tok string) string {
+	if tok == "" {
+		return ""
+	}
+	switch {
+	case tok == "~" || strings.HasPrefix(tok, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		return filepath.Join(home, strings.TrimPrefix(tok[1:], "/"))
+	case filepath.IsAbs(tok):
+		return filepath.Clean(tok)
+	case strings.HasPrefix(tok, "./") || strings.HasPrefix(tok, "../"):
+		if base == "" {
+			return ""
+		}
+		return filepath.Join(base, tok)
+	}
+	return ""
+}
+
 // cwdOf is the directory a tab "is in": what its shell reported through
 // OSC 7 if it ever did, else what the kernel says the shell's cwd is.
 // Empty for a tab that is gone or unreadable — the caller inherits.
@@ -279,6 +311,11 @@ func init() {
 			Icon:            termIcon,
 			Accent:          "#6dc878",
 			Instancing:      sdk.InstancingMulti,
+			// CapOpen routes a clicked file path in terminal output
+			// through the router's open routing (edit / imageview by
+			// extension); CapSpawn is what lets a clicked DIRECTORY
+			// open in fm, which open routing has no extension for.
+			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
 			Window:          &sdk.WindowHints{DefaultWidth: 800, DefaultHeight: 480},
 			// "Root Terminal" launcher row. --login makes root's shell
 			// source profile/bashrc so PATH / PS1 / colour match a
@@ -440,6 +477,24 @@ type execTabReq struct {
 	Cwd  string   `json:"cwd,omitempty"`
 }
 
+// pathProbeReq asks which of Paths exist, resolved against the tab's cwd.
+// The FE sends the tokens exactly as they appear in the output; Ok comes
+// back holding the same strings, so the FE can key its cache on them.
+type pathProbeReq struct {
+	ChannelID uint64   `json:"channel_id"`
+	Paths     []string `json:"paths"`
+}
+
+type pathProbeReply struct {
+	Ok []string `json:"ok"`
+}
+
+// pathOpenReq is the click on one of those tokens.
+type pathOpenReq struct {
+	ChannelID uint64 `json:"channel_id"`
+	Path      string `json:"path"`
+}
+
 type closeTabReq struct {
 	ChannelID uint64 `json:"channel_id"`
 	// Force skips the busy check — set by the FE when the user has
@@ -495,6 +550,47 @@ func registerHandlers(b *sdk.Bus) {
 		// Deduped FE-side (one line per change, not per prompt).
 		log.Printf("wash-term tab cwd ch=%d cwd=%q", req.ChannelID, req.Cwd)
 		return nil
+	})
+	// path_probe / path_open: the FE's link provider found path-shaped
+	// tokens on a line and wants to know which are real (only real ones
+	// get underlined), then opens the one that was clicked. Resolution is
+	// the tab's cwd, so `./build.sh` in a shell that cd'd somewhere means
+	// what the user sees, not what wash-term's own process cwd is.
+	sdk.Handle(b, "path_probe", func(_ *sdk.Conn, _ string, req pathProbeReq) (pathProbeReply, error) {
+		base := cwdOf(uint32(req.ChannelID))
+		ok := make([]string, 0, len(req.Paths))
+		for i, tok := range req.Paths {
+			if i >= maxProbePaths {
+				break
+			}
+			if abs := resolveTermPath(base, tok); abs != "" {
+				if _, err := os.Lstat(abs); err == nil {
+					ok = append(ok, tok)
+				}
+			}
+		}
+		return pathProbeReply{Ok: ok}, nil
+	})
+	sdk.HandleVoid(b, "path_open", func(c *sdk.Conn, _ string, req pathOpenReq) error {
+		abs := resolveTermPath(cwdOf(uint32(req.ChannelID)), req.Path)
+		if abs == "" {
+			return nil
+		}
+		fi, err := os.Stat(abs)
+		if err != nil {
+			log.Printf("term: path_open %q: %v", req.Path, err)
+			c.Warn("Cannot open", req.Path+": "+err.Error())
+			return nil
+		}
+		// A directory has no extension for the router to route on, so
+		// term names the handler itself; anything else goes through open
+		// routing, which is where the edit/imageview association lives.
+		if fi.IsDir() {
+			log.Printf("term: path_open dir=%q -> com.wash.fm", abs)
+			return c.SpawnRequestOpen("com.wash.fm", abs)
+		}
+		log.Printf("term: path_open file=%q -> open routing", abs)
+		return c.OpenPath(abs)
 	})
 	// exec_tab opens a tab running a specific command — the session-resume
 	// path (docs/AGENT_TERM.md §13). Honoured ONLY from com.wash.agentd,

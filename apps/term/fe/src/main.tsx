@@ -362,6 +362,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const removeTab = (channelID: number) => {
     if (findTab() === channelID) closeFind();
+    pathCache.delete(channelID);
     apis.delete(channelID);
     sizes.delete(channelID);
     if (tagColors().has(channelID)) {
@@ -502,7 +503,48 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const onTabCwd = (channelID: number, cwd: string) => {
     if (tabCwds.get(channelID) === cwd) return;
     tabCwds.set(channelID, cwd);
+    // Relative tokens resolve against this, so every cached verdict for
+    // this tab is now about a different file.
+    pathCache.delete(channelID);
     send({ kind: 'tab_cwd', channel_id: channelID, cwd });
+  };
+
+  // ---- clickable paths ----
+  //
+  // <Terminal> finds path-shaped tokens on a line and asks whether they
+  // are real; only the BE can answer that (it is the side with a
+  // filesystem and with the tab's cwd), so the answer is a round trip —
+  // which is why it is cached per tab. xterm asks again for every line the
+  // pointer crosses, so an uncached provider would put a message on the
+  // wire for every mouse move.
+  const pathCache = new Map<number, Map<string, boolean>>();
+  const pendingProbes = new Map<string, (ok: string[]) => void>();
+  let probeSeq = 0;
+
+  const probePaths = async (channelID: number, tokens: string[]): Promise<string[]> => {
+    let cache = pathCache.get(channelID);
+    if (!cache) { cache = new Map(); pathCache.set(channelID, cache); }
+    const known: string[] = [];
+    const ask: string[] = [];
+    for (const t of tokens) {
+      const hit = cache.get(t);
+      if (hit === undefined) ask.push(t);
+      else if (hit) known.push(t);
+    }
+    if (!ask.length) return known;
+    const id = `p${++probeSeq}`;
+    const answered = await new Promise<string[]>((resolve) => {
+      // A BE that never answers (window tearing down) must not leave the
+      // provider's promise dangling — xterm holds its callback.
+      const timer = setTimeout(() => { pendingProbes.delete(id); resolve([]); }, 4000);
+      pendingProbes.set(id, (ok) => { clearTimeout(timer); resolve(ok); });
+      send({ kind: 'path_probe', id, channel_id: channelID, paths: ask });
+    });
+    const real = new Set(answered);
+    // Cache both verdicts: "not a path" is the common answer and the one
+    // worth not asking twice.
+    for (const t of ask) cache.set(t, real.has(t));
+    return [...known, ...answered];
   };
 
   // gridOfGroup is the grid a new tab in an existing group gets: that
@@ -941,6 +983,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         splitIntents.drop(reqOf(m));
         const api = apis.get(active());
         if (api) api.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
+        return;
+      }
+      case 'path_probe_ok': {
+        const done = pendingProbes.get(String(m.id));
+        if (done) { pendingProbes.delete(String(m.id)); done(((m.ok ?? []) as string[]).map(String)); }
+        return;
+      }
+      case 'path_probe_err': {
+        const done = pendingProbes.get(String(m.id));
+        if (done) { pendingProbes.delete(String(m.id)); done([]); }
         return;
       }
       case 'sessions':
@@ -1663,6 +1715,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   initialModes={tab.modes}
                   onModesChanged={(m) => onTabModes(tab, m)}
                   beforePaste={beforePaste}
+                  links={{
+                    openUrl: (uri) => window.open(uri, '_blank', 'noopener,noreferrer'),
+                    probePaths: (tokens) => probePaths(tab.channelID, tokens),
+                    openPath: (token) => send({ kind: 'path_open', channel_id: tab.channelID, path: token }),
+                  }}
                   menuExtras={(close) => {
                     // Shift+right-click inside a pane: the pane verbs, in
                     // the menu the terminal already owns. Plain

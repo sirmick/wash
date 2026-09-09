@@ -7,7 +7,7 @@
 // picker now lives in the consumer's menubar, not this menu), and
 // the OSC window title (surfaced via onTitle).
 //
-// xterm and its addons (fit, search) are externalized to the shared
+// xterm and its addons (fit, search, web-links) are externalized to the shared
 // vendor bundle (web/shell/build-vendor.mjs); consumers' vite configs
 // already list every name in `rollupOptions.external`.
 
@@ -15,8 +15,9 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import type { ISearchOptions } from '@xterm/addon-search';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { ensureScrollbarStyles } from './scrollbars';
-import type { ITheme } from '@xterm/xterm';
+import type { ILink, ILinkProvider, ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 
@@ -398,6 +399,38 @@ export interface TermSearchOptions {
   incremental?: boolean;
 }
 
+// TermLinks turns terminal output into something clickable. It is a pure
+// seam: this component finds the candidates and draws the underline, the
+// consumer decides what a path IS and what opening one means — a terminal
+// component has no business knowing about wash's open routing, and the
+// same component runs in edit's agent pane where "open" means something
+// else again.
+export interface TermLinks {
+  // openUrl activates @xterm/addon-web-links: http(s) URLs in output get
+  // underlined and clicking one calls this. Omit and no URL handling is
+  // installed at all (the addon is not even loaded).
+  openUrl?: (uri: string) => void;
+  // probePaths is asked, per visible line, which of the path-shaped tokens
+  // on it actually exist. It gets the raw tokens as they appear in the
+  // output (absolute, ./relative, or ~/…) and returns the subset that is
+  // real; the consumer resolves them against whatever it thinks the cwd is
+  // and is expected to cache, because this runs on every render of every
+  // line the pointer crosses. Omit and no path links are offered.
+  probePaths?: (tokens: string[]) => Promise<string[]>;
+  // openPath is the click, with the token exactly as probePaths saw it.
+  openPath?: (token: string) => void;
+}
+
+// PATH_TOKEN matches what could be a path in terminal output: absolute
+// (/etc/hosts), explicitly relative (./x, ../x) or home-relative (~/x).
+// A bare `foo/bar` is deliberately NOT a candidate — in a terminal most
+// such tokens are not paths (git branches, urls' tails, "and/or"), and a
+// wrong underline is worse than a missing one. The trailing character
+// class excludes what usually terminates a path in prose rather than
+// belonging to it; a real file whose name ends in one of those is the
+// price.
+const PATH_TOKEN = /(?:~|\.{1,2})?\/[^\s'"`<>|()[\]{}]*[^\s'"`<>|()[\]{},.;:!?]/g;
+
 export interface TerminalProps {
   // channelId opts the component into the raw-channel I/O path:
   // bytes from openRawChannel(channelId) get written into xterm,
@@ -476,6 +509,10 @@ export interface TerminalProps {
   // can use this to show a "terminal stalled — recovering…" affordance
   // instead of leaving the user staring at an unexplained black screen.
   onStalled?: () => void;
+  // links makes output clickable — http(s) URLs and existing file paths.
+  // Read once at mount (the callbacks are read live, so a consumer can
+  // close over changing state).
+  links?: TermLinks;
 }
 
 export const Terminal: Component<TerminalProps> = (props) => {
@@ -581,6 +618,64 @@ export const Terminal: Component<TerminalProps> = (props) => {
       activeMatchBackground: '#c46a00',
       activeMatchBorder: '#ffb84d',
       activeMatchColorOverviewRuler: '#ffb84d',
+    },
+  });
+
+  // ---- path links ----
+  //
+  // lineCells reads one buffer line as a string PLUS a per-character map
+  // back to its column, walking cells rather than using translateToString
+  // so a CJK or emoji cell earlier on the line doesn't shift every
+  // underline that follows it by a column.
+  const lineCells = (y: number): { text: string; cols: number[] } | null => {
+    const buf = term?.buffer.active;
+    const line = buf?.getLine(y - 1);
+    if (!buf || !line) return null;
+    const cell = buf.getNullCell();
+    let text = '';
+    const cols: number[] = [];
+    for (let x = 0; x < line.length; x++) {
+      line.getCell(x, cell);
+      if (cell.getWidth() === 0) continue; // right half of a wide cell
+      const chars = cell.getChars() || ' ';
+      for (let i = 0; i < chars.length; i++) cols.push(x);
+      text += chars;
+    }
+    return { text, cols };
+  };
+
+  // pathLinkProvider underlines the path-shaped tokens on a line that the
+  // consumer confirms exist. xterm asks per line, lazily, as the pointer
+  // moves — so the probe is only ever run for lines someone is pointing
+  // at, and the consumer caches the answers.
+  const pathLinkProvider = (): ILinkProvider => ({
+    provideLinks(y, callback) {
+      const cells = lineCells(y);
+      if (!cells || !cells.text) { callback(undefined); return; }
+      PATH_TOKEN.lastIndex = 0;
+      const found: { token: string; start: number; end: number }[] = [];
+      for (let m = PATH_TOKEN.exec(cells.text); m; m = PATH_TOKEN.exec(cells.text)) {
+        found.push({ token: m[0], start: m.index, end: m.index + m[0].length - 1 });
+      }
+      if (!found.length) { callback(undefined); return; }
+      const probe = props.links?.probePaths;
+      if (!probe) { callback(undefined); return; }
+      probe(found.map((f) => f.token)).then((real) => {
+        const ok = new Set(real);
+        const links: ILink[] = [];
+        for (const f of found) {
+          if (!ok.has(f.token)) continue;
+          const sx = cells.cols[f.start];
+          const ex = cells.cols[f.end];
+          if (sx === undefined || ex === undefined) continue;
+          links.push({
+            range: { start: { x: sx + 1, y }, end: { x: ex + 1, y } },
+            text: f.token,
+            activate: (ev, text) => { ev.preventDefault(); props.links?.openPath?.(text); },
+          });
+        }
+        callback(links.length ? links : undefined);
+      }).catch(() => callback(undefined));
     },
   });
 
@@ -829,6 +924,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
     term.loadAddon(fit);
     search = new SearchAddon();
     term.loadAddon(search);
+    // Links. Both halves are opt-in: nothing is registered unless the
+    // consumer supplied the corresponding callback, so a terminal with no
+    // `links` prop behaves exactly as before.
+    if (props.links?.openUrl) {
+      term.loadAddon(new WebLinksAddon((ev, uri) => {
+        ev.preventDefault();
+        props.links?.openUrl?.(uri);
+      }));
+    }
+    if (props.links?.probePaths) term.registerLinkProvider(pathLinkProvider());
     term.open(hostEl);
     // The left/right inset (so the first and last columns aren't jammed
     // against the window edge) goes on the .xterm ELEMENT, not on the host

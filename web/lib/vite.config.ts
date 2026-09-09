@@ -38,6 +38,7 @@ export default defineConfig({
         '@xterm/xterm',
         '@xterm/addon-fit',
         '@xterm/addon-search',
+        '@xterm/addon-web-links',
       ],
     },
   },

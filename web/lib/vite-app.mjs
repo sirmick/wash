@@ -31,6 +31,7 @@ export function washAppConfig(opts = {}) {
         '@xterm/xterm',
         '@xterm/addon-fit',
         '@xterm/addon-search',
+        '@xterm/addon-web-links',
         '@wash/ui',
       ],
     },
