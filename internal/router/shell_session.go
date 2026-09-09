@@ -644,7 +644,11 @@ func (s *ShellSession) handlePanelRead(m wire.ShellPanelRead) error {
 	}); err != nil {
 		return err
 	}
-	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "panel complete"))
+	// Bulk, with the data: a transaction's terminator must ride its own
+	// data's lane or it overtakes it. On a faster lane this Unbind
+	// reached the shell before the first byte and tore the transfer
+	// down, and every settings panel failed to mount.
+	return s.WriteCtrlClass(wire.NewShellChannelUnbind(id, "panel complete"), wire.ClassBulk)
 }
 
 // handleChannelCredit applies an FE-issued credit grant to the

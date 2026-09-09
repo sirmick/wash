@@ -86,11 +86,18 @@ export function pushPanelBytes(channelID: number, bytes: Uint8Array): boolean {
   return true;
 }
 
-/** finishPanel is called from the channel.unbind handler. Byte-count
- *  completion (maybeImportPanel) normally gets there first; this stays
- *  as the path for a stream that ends short — a router-side read error
- *  mid-transfer — so the caller is rejected instead of hanging on a
- *  promise that can never settle. No-op for non-panel channels. */
+/** finishPanel is called from the channel.unbind handler. Completion is
+ *  the byte count (maybeImportPanel), which normally gets there first;
+ *  this is the backstop for a stream that ends SHORT — a router-side
+ *  read error mid-transfer — so the caller is rejected rather than left
+ *  on a promise that can never settle.
+ *
+ *  It may only reject because the router sends this Unbind on the same
+ *  lane as the panel's data, so it cannot arrive before the bytes it
+ *  terminates. Tearing the transfer down on an Unbind that had overtaken
+ *  its own data is exactly how this broke: every settings panel failed
+ *  to mount, because the bytes turned up after the pending was gone.
+ *  No-op for non-panel channels. */
 export function finishPanel(channelID: number): void {
   const p = pendingByChannelID.get(channelID);
   if (!p) return;

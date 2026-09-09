@@ -57,7 +57,10 @@ test('chunks accumulate until the promised size is reached', async () => {
 
 // A stream that ends early must reject rather than leave the caller on a
 // promise that can never settle — the job finishPanel keeps now that it
-// is no longer the completion path.
+// is no longer the completion path. This is only safe because the router
+// sends the Unbind on the panel data's own lane, so it cannot arrive
+// before the bytes; when it rode a faster lane it arrived first and tore
+// down every panel load.
 test('an unbind before the bytes are in rejects the load', async () => {
   const { reqID, promise } = startLoad();
   handlePanelReadOK({ req_id: reqID, channel_id: 4003, size: MODULE.byteLength + 999 });

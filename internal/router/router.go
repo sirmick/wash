@@ -1701,8 +1701,17 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			// cannot preempt a frame it has already committed. The Bind
 			// above rides Interactive and so still lands first; live
 			// output that follows is Bulk too, so it stays behind this.
+			// CREDITLESS, like resyncChannel's snapshot: a recovery
+			// replay is not paced by the FE, and the credit gate keys on
+			// the CLASS, so moving this write to Bulk silently subjected
+			// it to a 64 KB window it had never needed. It then blocked
+			// in Reserve while holding shellMu, and the whole reattach
+			// stalled — no windows came back at all.
 			if err := writeChunked(replay, func(p []byte) error {
-				return s.WriteRawFrameClass(id, p, wire.ClassBulk)
+				if !s.tryWriteRawClass(id, p, wire.ClassBulk) {
+					return errReplayRefused
+				}
+				return nil
 			}); err != nil {
 				// The FE just got a reset (channel.resync) but the
 				// scrollback snapshot behind it was lost — without a

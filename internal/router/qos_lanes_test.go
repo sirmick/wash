@@ -98,3 +98,39 @@ func TestWriteChunkedSendsAnEmptyPayloadOnce(t *testing.T) {
 		t.Errorf("empty payload produced %d frames, want 1", n)
 	}
 }
+
+// A transaction's terminator must ride its own data's lane. On a faster
+// one it overtakes the bytes it terminates, and the receiver sees the
+// stream end before it began — which is how the panel transfer broke
+// when its data moved to Bulk and its Unbind stayed Interactive.
+func TestATransactionTerminatorSharesItsDataLane(t *testing.T) {
+	s := NewScheduler()
+	defer s.Close()
+
+	// Data first, then its terminator, both Bulk.
+	if !s.TrySubmit(laneFrame(wire.ClassBulk, 1024)) {
+		t.Fatal("data refused")
+	}
+	if !s.TrySubmit(laneFrame(wire.ClassBulk, 32)) {
+		t.Fatal("terminator refused")
+	}
+	// An unrelated interactive frame may jump both; that is the point of
+	// lanes. What must NOT happen is the terminator preceding the data.
+	if !s.TrySubmit(laneFrame(wire.ClassInteractive, 16)) {
+		t.Fatal("interactive refused")
+	}
+
+	var bulkOrder []int
+	for i := 0; i < 3; i++ {
+		f, err := s.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Class() == wire.ClassBulk {
+			bulkOrder = append(bulkOrder, len(f.Payload))
+		}
+	}
+	if len(bulkOrder) != 2 || bulkOrder[0] != 1024 || bulkOrder[1] != 32 {
+		t.Errorf("bulk order = %v, want [1024 32] — the terminator overtook its data", bulkOrder)
+	}
+}
