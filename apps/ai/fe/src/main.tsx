@@ -1060,6 +1060,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               onCancel={() => send({ kind: 'cancel' })}
               onSetMode={(mode) => send({ kind: 'set_mode', mode })}
               onSetConfig={(id, value) => send({ kind: 'set_config', id, value })}
+              onOpenTool={(e) => {
+                // A tool row names a file; clicking it opens that file in
+                // whatever app registered for the type (the router's own
+                // open routing, so this app does not have to know that
+                // .png goes to imageview and .go goes to edit). Standalone
+                // Agent had no onOpenTool at all, so every row was inert —
+                // only wash-edit's agent tab could act on one.
+                const path = e.path || (e.title ?? '').trim();
+                if (path) send({ kind: 'open_path', path });
+              }}
             />
           </Show>
         </div>

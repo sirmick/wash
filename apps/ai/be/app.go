@@ -8,6 +8,7 @@
 //	FE → ai   start    {agent, cwd, prompt?}   → ai → agentd  agent_start
 //	FE → ai   prompt   {text}                  → ai → agentd  agent_prompt
 //	FE → ai   answer   {id, decision, rule?}   → ai → agentd  agent_answer
+//	FE → ai   open_path {path}                 → router open routing
 //	          agentd → ai  transcript_snapshot / transcript_event / state
 //	          ai → FE      snapshot / event / status / adapters
 //
@@ -87,7 +88,7 @@ func init() {
 			Icon:            aiIcon,
 			Accent:          "violet",
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{},
+			Capabilities:    []string{sdk.CapOpen},
 			Window:          &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 720},
 		},
 		Assets:           sub,
@@ -544,6 +545,23 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"kind": "agent_cancel",
 			"key":  session.key,
 		})
+
+	case "open_path":
+		// A tool row was clicked. The path is the agent's own report of
+		// what it touched, so it is confined to this app's root before
+		// the router is asked for anything, and the router — not this
+		// app — decides which app handles the type (CapOpen). Without
+		// this the standalone Agent window had no way to act on a row at
+		// all; only wash-edit's agent tab did.
+		raw := str(m["path"])
+		abs, err := aiFS.Confine(raw)
+		if err != nil {
+			log.Printf("wash-ai: open %q: %v", raw, err)
+			return
+		}
+		if err := c.OpenPath(abs); err != nil {
+			log.Printf("wash-ai: open %s: %v", abs, err)
+		}
 
 	case "answer":
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{

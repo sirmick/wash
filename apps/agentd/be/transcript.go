@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -94,6 +95,12 @@ type Event struct {
 	ToolKind string `json:"tool_kind,omitempty"`
 	Title    string `json:"title,omitempty"`
 	Status   string `json:"status,omitempty"`
+	// Path is the file a tool call touched (its first ACP location, or
+	// the diff's), so a host can open it. Diff is the unified diff of what
+	// the call changed, rendered once here from the agent's before/after
+	// pair (diff.go). Both on EventTool only.
+	Path string `json:"path,omitempty"`
+	Diff string `json:"diff,omitempty"`
 	// Mime is set on EventImage; Text then holds the base64 bytes.
 	Mime string `json:"mime,omitempty"`
 	// Channel is set on EventTerminal: the raw channel id to render.
@@ -291,6 +298,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			imgs = append(imgs, t.push(Event{Kind: EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
 		}
 		id := u.ToolCallID
+		path, diff := toolPathAndDiff(u)
 		if at, ok := t.toolAt[id]; ok && id != "" {
 			// Update in place: a tool row moves pending → in_progress →
 			// completed, it does not become three rows.
@@ -307,6 +315,12 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			if txt := u.Content.String(); txt != "" {
 				ev.Text = txt
 			}
+			if path != "" {
+				ev.Path = path
+			}
+			if diff != "" {
+				ev.Diff = diff
+			}
 			return append(imgs, *ev)
 		}
 		e := t.push(Event{
@@ -316,6 +330,8 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			Title:    u.Title,
 			Status:   u.Status,
 			Text:     u.Content.String(),
+			Path:     path,
+			Diff:     diff,
 			AtMS:     now.UnixMilli(),
 		})
 		if id != "" {
@@ -324,6 +340,29 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 		return append(imgs, e)
 	}
 	return nil
+}
+
+// toolPathAndDiff lifts what a tool call says about files: the first
+// location it names (else the first diff's path), and its diff blocks
+// rendered as one unified diff. The pair is what makes a tool row
+// clickable and a change viewable.
+func toolPathAndDiff(u acp.SessionUpdate) (path, diff string) {
+	for _, l := range u.Locations {
+		if l.Path != "" {
+			path = l.Path
+			break
+		}
+	}
+	var sb strings.Builder
+	for _, d := range u.Content.Diffs() {
+		if path == "" {
+			path = d.Path
+		}
+		if text := unifiedDiff(d.Path, d.Old, d.New); text != "" {
+			sb.WriteString(text)
+		}
+	}
+	return path, sb.String()
 }
 
 // push appends and stamps a sequence number.

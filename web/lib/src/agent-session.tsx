@@ -6,16 +6,16 @@
 // launcher, no approval logic, no subscription. Everything arrives as an
 // accessor and leaves as a callback, exactly the contract <Terminal> has.
 //
-// The transcript is deliberately one line per tool call. Diffs open in
-// wash-edit, commands run in a wash-term tab, approvals live in agentd's
-// queue — this component's job is to be the thing that points at them,
-// not to reimplement any of them.
+// The transcript is one line per tool call, plus the diff that call made
+// when it made one: commands run in a wash-term tab and approvals live in
+// agentd's queue, but a change to a file is the one thing a person must
+// be able to read WITHOUT leaving the conversation to go and find it.
 
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { agentStateColor, agentStateLabel } from './agent-status';
-import { Markdown } from './markdown';
+import { HighlightedCode, Markdown } from './markdown';
 import { Terminal } from './terminal';
 import { WASH_SCROLL_CLASS } from './scrollbars';
 import {
@@ -41,6 +41,11 @@ export interface AgentEvent {
   title?: string;
   /** pending | in_progress | completed | failed */
   status?: string;
+  /** the file a tool call touched, when it named one: what a click opens */
+  path?: string;
+  /** a unified diff of what an edit tool changed, rendered by agentd from
+   *  the ACP `diff` content block's before/after pair */
+  diff?: string;
   /** set on kind==="image"; text then holds the base64 bytes */
   mime?: string;
   /** set on kind==="terminal": the raw channel its pty writes to */
@@ -185,13 +190,36 @@ const Dot: Component<{ color: string }> = (p) => (
   />
 );
 
-/** One tool call: kind, argument, state. Clickable when the host says so. */
+/** basename: a transcript row has no width for an absolute path, and the
+ *  directory is the session cwd nearly every time. The full path stays in
+ *  the title attribute. */
+function baseName(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i < 0 ? path : path.slice(i + 1);
+}
+
+/** One tool call: kind, argument, state — and, when the agent reported one,
+ *  the diff it made.
+ *
+ *  The diff is the point. An `edit` row that says only "Edit main.go" is a
+ *  claim; the unified diff underneath is the evidence, and reading it is
+ *  the whole reason to watch an agent rather than run one. agentd renders
+ *  it (apps/agentd/be/diff.go) so the wire carries hunks rather than two
+ *  whole copies of the file, and it arrives here as text to colour. */
 const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = (p) => {
   const clickable = () => !!p.onOpen;
+  // Expanded by default: a diff nobody opened is a diff nobody read, and
+  // the box is height-capped so even a big one costs a scroll, not a
+  // transcript.
+  const [open, setOpen] = createSignal(true);
   return (
+    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
     <div
+      data-testid="agent-tool-row"
+      data-path={p.e.path || undefined}
       role={clickable() ? 'button' : undefined}
       tabindex={clickable() ? 0 : undefined}
+      title={p.e.path || undefined}
       onClick={() => p.onOpen?.(p.e)}
       onKeyDown={(ev) => {
         if (clickable() && (ev.key === 'Enter' || ev.key === ' ')) {
@@ -238,7 +266,74 @@ const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = 
       >
         {p.e.title || p.e.text || p.e.tool_id || ''}
       </span>
+      {/* The file, named separately from the title: an adapter's title is
+          prose ("Edit file"), and the path is the part you click. */}
+      <Show when={p.e.path && baseName(p.e.path!) !== (p.e.title ?? '')}>
+        <span
+          data-testid="agent-tool-path"
+          style={{
+            flex: 'none',
+            font: tokens.type.monoSm,
+            color: clickable() ? tokens.accentBlue : tokens.fgDim,
+            'max-width': '24ch',
+            overflow: 'hidden',
+            'text-overflow': 'ellipsis',
+            'white-space': 'nowrap',
+          }}
+        >
+          {baseName(p.e.path!)}
+        </span>
+      </Show>
+      <Show when={p.e.diff}>
+        <button
+          type="button"
+          data-testid="agent-tool-diff-toggle"
+          title={open() ? 'Hide the diff' : 'Show the diff'}
+          onClick={(ev) => {
+            // The row itself opens the file; the caret only folds.
+            ev.stopPropagation();
+            setOpen(!open());
+          }}
+          style={{
+            flex: 'none',
+            background: 'transparent',
+            border: 'none',
+            color: tokens.fgMuted,
+            font: tokens.type.monoSm,
+            cursor: 'pointer',
+            padding: '0 2px',
+          }}
+        >
+          {open() ? '▾' : '▸'} diff
+        </button>
+      </Show>
       <Dot color={dotColor(p.e.status)} />
+    </div>
+
+    <Show when={p.e.diff && open()}>
+      <pre
+        data-testid="agent-tool-diff"
+        class={WASH_SCROLL_CLASS}
+        style={{
+          margin: 0,
+          background: tokens.bgInset,
+          border: `1px solid ${tokens.borderMenu}`,
+          'border-radius': tokens.radiusMd,
+          padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
+          font: tokens.type.monoSm,
+          color: tokens.fgMuted,
+          'max-height': 'min(320px, 45vh)',
+          overflow: 'auto',
+          'white-space': 'pre',
+          // The transcript is a flex column; without this a diff in a
+          // short pane is squeezed to nothing (the terminal row learned
+          // the same lesson).
+          'flex-shrink': 0,
+        }}
+      >
+        <HighlightedCode code={p.e.diff!} lang="diff" />
+      </pre>
+    </Show>
     </div>
   );
 };

@@ -252,6 +252,40 @@ type ContentBlock struct {
 	// than being one themselves. Accepting both shapes is why an image
 	// produced by a TOOL (a screenshot, a chart) is not silently lost.
 	Nested *ContentBlock `json:"content,omitempty"`
+	// Path / OldText / NewText are the `diff` ToolCallContent variant: the
+	// file the agent edited, what it held before (nil for a new file) and
+	// what it holds now. Verified against claude-agent-acp 0.64.2, which
+	// sends one per Edit/Write tool call. Dropped until 0.15 — the one
+	// thing an agent does that a person most wants to see, undecoded.
+	Path    string  `json:"path,omitempty"`
+	OldText *string `json:"oldText,omitempty"`
+	NewText *string `json:"newText,omitempty"`
+}
+
+// Diff is one file change the agent reported.
+type Diff struct {
+	Path string
+	// Old is the file before; New is nil when the file was deleted and Old
+	// is nil when it was created.
+	Old, New *string
+}
+
+// Diffs returns the diff blocks in this content, in order.
+func (c Content) Diffs() []Diff {
+	var out []Diff
+	for _, b := range c {
+		if b.Type == "diff" && (b.NewText != nil || b.OldText != nil) {
+			out = append(out, Diff{Path: b.Path, Old: b.OldText, New: b.NewText})
+		}
+	}
+	return out
+}
+
+// ToolLocation is a file a tool call touched, so a transcript row can
+// point at it.
+type ToolLocation struct {
+	Path string `json:"path"`
+	Line *int   `json:"line,omitempty"`
 }
 
 // Image builds an image block for a prompt.
@@ -402,6 +436,9 @@ type ToolCall struct {
 	Kind       string          `json:"kind,omitempty"`
 	Status     string          `json:"status,omitempty"`
 	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+	// Locations are the files the call touches, the agent's own word for
+	// where its work is. What makes a tool row clickable.
+	Locations []ToolLocation `json:"locations,omitempty"`
 }
 
 // SessionUpdate is decoded leniently: the discriminator plus the fields

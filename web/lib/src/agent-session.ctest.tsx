@@ -139,3 +139,46 @@ test('a drag the composer does not understand is left to the browser', async () 
   expect(ev.defaultPrevented).toBe(false);
   expect(composer.value).toBe('');
 });
+
+// docs/Review-findings.md P2 → agent: "diffs the agent made are not
+// viewable" — the tool row was a one-liner and the Agent app passed no
+// onOpenTool, so nothing about an edit could be seen or opened.
+test('a tool row shows the diff the call made, foldable, and opens its path', () => {
+  const events: AgentEvent[] = [{
+    seq: 1,
+    kind: 'tool',
+    tool_kind: 'edit',
+    title: 'Edit notes.md',
+    status: 'completed',
+    path: '/w/proj/notes.md',
+    diff: '--- a/w/proj/notes.md\n+++ b/w/proj/notes.md\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n',
+    at_ms: 0,
+  }];
+  const opened: string[] = [];
+
+  const { container } = render(() => (
+    <AgentSession events={() => events} onOpenTool={(e) => opened.push(e.path ?? '')} />
+  ));
+
+  const diff = container.querySelector('[data-testid="agent-tool-diff"]');
+  expect(diff?.textContent).toContain('-b');
+  expect(diff?.textContent).toContain('+c');
+  expect(container.querySelector('[data-testid="agent-tool-path"]')?.textContent).toBe('notes.md');
+
+  (container.querySelector('[data-testid="agent-tool-diff-toggle"]') as HTMLButtonElement).click();
+  expect(container.querySelector('[data-testid="agent-tool-diff"]')).toBeNull();
+
+  // The row opens the file; folding the diff must not have.
+  expect(opened).toEqual([]);
+  (container.querySelector('[data-testid="agent-tool-row"]') as HTMLElement).click();
+  expect(opened).toEqual(['/w/proj/notes.md']);
+});
+
+test('a tool row with no diff renders no diff box', () => {
+  const events: AgentEvent[] = [
+    { seq: 1, kind: 'tool', tool_kind: 'read', title: 'Read main.go', status: 'completed', at_ms: 0 },
+  ];
+  const { container } = render(() => <AgentSession events={() => events} />);
+  expect(container.querySelector('[data-testid="agent-tool-diff"]')).toBeNull();
+  expect(container.querySelector('[data-testid="agent-tool-diff-toggle"]')).toBeNull();
+});
