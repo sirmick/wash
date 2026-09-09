@@ -49,6 +49,13 @@ type Session struct {
 	closeOnce sync.Once
 	onClose   func(s *Session, reason string)
 
+	// hold (WithExitHold) is asked, once the pty has ended, whether the raw
+	// channel should outlive it. chHeld records the answer; ReleaseChannel
+	// closes the channel later. Guarded by chMu.
+	hold   func(s *Session, reason string) bool
+	chMu   sync.Mutex
+	chHeld bool
+
 	// cap is the optional output capture (WithCapture). Nil unless a
 	// caller asked for one: wash-term does not need it — the browser is
 	// its buffer — but a caller that must ANSWER for the output later
@@ -106,6 +113,54 @@ func WithCapture(max int) Option {
 		if max > 0 {
 			s.cap = &capture{max: max}
 		}
+	}
+}
+
+// WithExitHold keeps the raw channel open after the pty ends whenever
+// hold(s, reason) says so — for a tab that should stay on screen showing
+// how its process ended. The router drops a channel, replay buffer and
+// all, the moment the app closes it; holding it keeps the process's last
+// output reachable by an FE that attaches late, and lets the caller write
+// its own in-band epilogue with WriteChannel, ordered after everything the
+// process wrote. The caller owns the channel from then on and must
+// ReleaseChannel it. hold runs before onClose, so onClose can read
+// ChannelHeld.
+func WithExitHold(hold func(s *Session, reason string) bool) Option {
+	return func(s *Session) { s.hold = hold }
+}
+
+// ChannelHeld reports whether the raw channel outlived the pty
+// (WithExitHold) and has not been released yet.
+func (s *Session) ChannelHeld() bool {
+	s.chMu.Lock()
+	defer s.chMu.Unlock()
+	return s.chHeld
+}
+
+// WriteChannel writes bytes toward the FE on the session's channel — the
+// in-band epilogue of a held session. No-op on a session with no channel.
+func (s *Session) WriteChannel(p []byte) (int, error) {
+	if s.ch == nil {
+		return len(p), nil
+	}
+	return s.ch.Write(p)
+}
+
+// ReleaseChannel closes a held channel. Idempotent; a no-op on a session
+// that was not held.
+func (s *Session) ReleaseChannel() {
+	s.chMu.Lock()
+	held := s.chHeld
+	s.chHeld = false
+	s.chMu.Unlock()
+	if held {
+		s.closeChannel()
+	}
+}
+
+func (s *Session) closeChannel() {
+	if s.ch != nil {
+		_ = s.ch.Close()
 	}
 }
 
@@ -167,11 +222,6 @@ type ForegroundUser struct {
 	State  string // "user" | "root" | "ssh"
 	User   string // login name of the foreground program's euid
 	Target string // ssh destination host, when State == "ssh"
-	// Agent is the coding-agent slug ("claude", "codex", …) when the
-	// foreground program is one — tier T0 of docs/AGENT_TERM.md §2.
-	// Empty for everything else, which is most things: a shell, vi, a
-	// build. Independent of State (an agent can run as root).
-	Agent string
 	// Busy reports that something other than the login shell holds the
 	// foreground — a build, an editor, ssh, an agent. False means the
 	// shell is sitting at its prompt, so closing the tab loses nothing the
@@ -483,11 +533,19 @@ func (s *Session) CloseWithReason(reason string) {
 
 func (s *Session) closeWithReason(reason string) {
 	s.closeOnce.Do(func() {
-		if s.cmd.Process != nil {
+		if s.cmd != nil && s.cmd.Process != nil {
 			_ = s.cmd.Process.Kill()
 		}
-		_ = s.pty.Close()
-		_ = s.ch.Close()
+		if s.pty != nil {
+			_ = s.pty.Close()
+		}
+		if s.hold != nil && s.hold(s, reason) {
+			s.chMu.Lock()
+			s.chHeld = true
+			s.chMu.Unlock()
+		} else {
+			s.closeChannel()
+		}
 		if s.onClose != nil {
 			s.onClose(s, reason)
 		}
@@ -515,7 +573,9 @@ func userShell() string {
 
 // WithWashEnv returns env with two wash-specific tweaks applied:
 //
-//   - TERM=xterm-256color (always — the shell side renders via xterm.js)
+//   - TERM=xterm-256color and COLORTERM=truecolor (always — the shell
+//     side renders via xterm.js, which does 24-bit colour; bat, delta
+//     and neovim key on COLORTERM to use it)
 //   - PATH prefixed with $WASH_BIN_DIR when set, deduped — so the user
 //     can run sibling wash CLIs (wash-launch, wash-fm, …) without an
 //     absolute path. The router publishes WASH_BIN_DIR; if absent,
@@ -525,24 +585,16 @@ func userShell() string {
 // interactive shell to feel like a wash session.
 func WithWashEnv(env []string) []string {
 	binDir := lookupEnv(env, "WASH_BIN_DIR")
-	out := make([]string, 0, len(env)+1)
-	termSet := false
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "PATH=") && binDir != "" {
 			cur := kv[len("PATH="):]
 			out = append(out, "PATH="+prependPath(cur, binDir))
 			continue
 		}
-		if strings.HasPrefix(kv, "TERM=") {
-			out = append(out, "TERM=xterm-256color")
-			termSet = true
-			continue
-		}
 		out = append(out, kv)
 	}
-	if !termSet {
-		out = append(out, "TERM=xterm-256color")
-	}
+	out = PinTerm(out)
 	if binDir != "" && lookupEnv(out, "PATH") == "" {
 		out = append(out, "PATH="+binDir)
 	}
@@ -571,25 +623,24 @@ func mapDisplayEnv(env []string) []string {
 	return env
 }
 
-// PinTerm returns env with TERM forced to xterm-256color but PATH
-// untouched. wash-edit's embedded terminal uses this — it doesn't
-// run user shell scripts that need wash CLIs on PATH, so the extra
-// dance from WithWashEnv would be noise.
+// PinTerm returns env with TERM forced to xterm-256color and COLORTERM
+// to truecolor, PATH untouched. wash-edit's embedded terminal uses this
+// directly — it doesn't run user shell scripts that need wash CLIs on
+// PATH, so the extra dance from WithWashEnv would be noise — and
+// WithWashEnv uses it for the same two pins. Both describe the one
+// renderer every wash pty has behind it: xterm.js, 256-colour palette
+// and 24-bit RGB. An inherited value is replaced, not kept: it came from
+// whatever launched the router, not from the terminal in front of the
+// user.
 func PinTerm(env []string) []string {
-	out := make([]string, 0, len(env)+1)
-	termSet := false
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "TERM=") {
-			out = append(out, "TERM=xterm-256color")
-			termSet = true
+		if strings.HasPrefix(kv, "TERM=") || strings.HasPrefix(kv, "COLORTERM=") {
 			continue
 		}
 		out = append(out, kv)
 	}
-	if !termSet {
-		out = append(out, "TERM=xterm-256color")
-	}
-	return out
+	return append(out, "TERM=xterm-256color", "COLORTERM=truecolor")
 }
 
 func lookupEnv(env []string, key string) string {

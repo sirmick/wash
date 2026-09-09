@@ -17,13 +17,12 @@
 // handle from each <Terminal> via onReady so tab activation can
 // trigger focus/fit.
 
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Check, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
   Button, ConfirmDialog,
   Menu, MenuItem, MenuSeparator, Terminal,
-  agentStateColor, agentStateLabel,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
   defineWashApp, tokens, WASH_SCROLL_CLASS,
@@ -31,6 +30,9 @@ import {
 import type { PasteAnalysis, TermModes, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
+import { SplitIntents } from './intents';
+import type { SplitIntent } from './intents';
+import { fullTabLabel, shortShellName, tabLabelFor } from './tab-label';
 import {
   DEFAULT_GUTTER, ROOT,
   addTab as treeAddTab, canSplit, channels as treeChannels, closeTab as treeCloseTab,
@@ -96,32 +98,14 @@ interface TabStatus {
   target: string; // ssh destination host (for the "ssh" state)
 }
 
-// AgentStatus is the BE's per-tab `agent_status` push (docs/AGENT_TERM.md
-// §5): a coding agent detected in this tab, and what it's doing. Drives the
-// tab's state dot and the "· claude working 4m" clause in the status line.
-// Ephemeral — never persisted, re-seeded by the BE after a reattach.
-interface AgentStatus {
-  agent: string; // slug: "claude", "codex", …
-  // running: detected in the foreground but not reporting (tier T0, or an
-  // agent that has started but isn't in a turn). The other three come
-  // from the agent's own hooks.
-  // The shared vocabulary's states (docs/AGENT_MESSENGER.md M5). The
-  // terminal tier only ever PRODUCES the first four — the hook reports
-  // them — but the type no longer makes `stale` and `failed`
-  // inexpressible, which is what stopped this surface from being able to
-  // render a not-responding agent at all.
-  state: 'running' | 'working' | 'needs-input' | 'done' | 'failed' | 'stale';
-  // startedAt: local clock anchor for the elapsed counter, derived once
-  // from the BE's since_ms so the FE can tick without further messages.
-  startedAt: number;
-  sessionId: string;
-  reason: string; // qualifies needs-input: "permission" | "idle"
-}
-
-const AGENT_STATES = ['running', 'working', 'needs-input', 'done'] as const;
-
 // The on-the-wire/saved schema uses snake_case to match the rest of
 // wash's JSON conventions.
+// ExitInfo is how a held tab's process ended (`tab_exited`).
+interface ExitInfo {
+  code: number;
+  signal: string;
+}
+
 interface PersistedTabRow {
   channel_id: number;
   shell: string;
@@ -175,14 +159,10 @@ interface PersistedState {
 // from any more once strips sit inside the stage.)
 const STRIP_HEIGHT = 26;
 // Each split pane carries its own status bar. A single window-level bar made
-// the unfocused panes' ssh/root/agent state invisible.
+// the unfocused panes' ssh/root state invisible.
 const STATUS_HEIGHT = 20;
 // Divider thickness between sibling panes.
 const GUTTER = DEFAULT_GUTTER;
-
-// Tab labels cap here (chars) before ellipsis — a shell sets the OSC
-// title to "user@host: /long/cwd", which would otherwise stretch the tab.
-const TAB_LABEL_MAX = 12;
 
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
   // tabs is the channel INVENTORY — one entry per live pty, in no
@@ -254,10 +234,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // window-level surface (status bar, Edit menu, paste) talks about.
   const active = (): number => focusedGroup()?.group.active ?? 0;
 
-  // A pending split: the BE round-trip for a new tab is asynchronous, so a
-  // split records where the tab should land and applies it when tab_opened
-  // arrives. FIFO, so two fast Ctrl+Shift+D presses land in order.
-  let splitIntents: Array<{ path: string; dir: Dir }> = [];
+  // Pending splits: the BE round-trip for a new tab is asynchronous, so a
+  // split records where the tab should land, keyed by the request id its
+  // `new_tab` carried, and applies it when the `tab_opened` echoing that id
+  // arrives (intents.ts). Arrivals the FE never asked for take nothing.
+  const splitIntents = new SplitIntents();
   // Window-wide font choice, driven into every <Terminal>. The
   // right-click menu reports changes back here so they persist and
   // apply across all tabs at once.
@@ -300,15 +281,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [tabTitles, setTabTitles] = createSignal<Map<number, string>>(new Map());
   // Per-tab user badge/status from the BE poll (see TabStatus).
   const [tabStatus, setTabStatus] = createSignal<Map<number, TabStatus>>(new Map());
-  // Per-tab agent status (see AgentStatus). Same side-map discipline as
-  // tabStatus/tagColors — the term-host <For> is keyed by object identity,
-  // so anything that changes per tab lives OUTSIDE the TabMeta objects or
-  // the xterm remounts and scrollback is lost.
-  const [agentStatus, setAgentStatus] = createSignal<Map<number, AgentStatus>>(new Map());
-  // Coarse clock for the agent elapsed counter ("working 4m"). Ticks once
-  // a second and only while some tab has an agent, so an ordinary terminal
-  // window costs nothing.
-  const [now, setNow] = createSignal(Date.now());
+  // Tabs whose pty has ended but which the BE HELD open (`tab_exited`):
+  // the command failed, was killed, or finished before anyone could read
+  // it. The BE wrote the exit banner in-band; here the xterm just stays,
+  // keys stop going anywhere, and Enter (or the tab's ×) dismisses it.
+  // Side map, same discipline as the rest.
+  const [exitedTabs, setExitedTabs] = createSignal<Map<number, ExitInfo>>(new Map());
 
   // Per-tab color tag, keyed by channel id. Kept OUT of the TabMeta
   // objects on purpose: the term-host <For> below is keyed by object
@@ -344,15 +322,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- tab lifecycle ----
 
-  // addTab records the channel and places it in the tree: into the group a
-  // pending split named, else into the focused group. A tab that arrives
-  // for a split takes focus in its new pane, which is what "split right"
-  // means — you end up typing in the new one.
-  const addTab = (channelID: number, shellPath: string, extra?: Partial<TabMeta>) => {
+  // addTab records the channel and places it in the tree: into the group
+  // the split that requested it named (matched by request id), else into
+  // the focused group. A tab that arrives for a split takes focus in its
+  // new pane, which is what "split right" means — you end up typing in the
+  // new one.
+  const addTab = (channelID: number, shellPath: string, extra?: Partial<TabMeta>, req?: string) => {
     if (tabs().some((t) => t.channelID === channelID)) return;
     setTabs([...tabs(), { channelID, shell: shellPath, ...extra }]);
 
-    const intent = splitIntents.shift();
+    const intent = splitIntents.take(req);
     const next = intent && groupAt(tree(), intent.path)
       ? splitGroup(tree(), intent.path, intent.dir, channelID)
       : treeAddTab(tree(), focusPath(), channelID);
@@ -381,10 +360,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       next.delete(channelID);
       setTabStatus(next);
     }
-    if (agentStatus().has(channelID)) {
-      const next = new Map(agentStatus());
+    if (exitedTabs().has(channelID)) {
+      const next = new Map(exitedTabs());
       next.delete(channelID);
-      setAgentStatus(next);
+      setExitedTabs(next);
     }
     const remaining = tabs().filter((t) => t.channelID !== channelID);
     setTabs(remaining);
@@ -482,7 +461,45 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     send({ kind: 'resize', channel_id: channelID, cols, rows });
   };
 
-  const openNewTab = () => send({ kind: 'new_tab' });
+  // openNewTab asks the BE for a pty. Every request carries an id the BE
+  // echoes on tab_opened / tab_error, so a split's placement is bound to
+  // the tab it asked for and a failed spawn cannot leave a stray intent
+  // behind for the next plain New Tab to pick up. It also carries the grid
+  // the tab's pane will have, so the pty opens at that size and the first
+  // prompt is drawn at the right width instead of at 80×24 and reflowed a
+  // frame later.
+  const openNewTab = (intent?: SplitIntent) => {
+    const req = splitIntents.mint();
+    if (intent) splitIntents.set(req, intent);
+    const grid = intent ? gridAfterSplit(intent) : gridOfGroup(focusPath());
+    send({ kind: 'new_tab', req, ...(grid ?? {}) });
+  };
+
+  // gridOfGroup is the grid a new tab in an existing group gets: that
+  // group's content box, measured with the cell metrics of the terminal
+  // already mounted there. Undefined while nothing there has mounted yet
+  // (a restore in flight), in which case the BE's default stands.
+  const gridOfGroup = (path: string): { cols: number; rows: number } | undefined => {
+    const g = placedAt(path);
+    if (!g) return undefined;
+    return apis.get(g.group.active)?.proposeGrid(g.content.w, g.content.h) ?? undefined;
+  };
+
+  // gridAfterSplit runs the split through the pure kernel with a
+  // placeholder channel and reads the placeholder's content box back out
+  // of the resulting layout — the exact rect the new pane will be given,
+  // gutters and strips included, before it exists.
+  const PLACEHOLDER = -1;
+  const gridAfterSplit = (intent: SplitIntent): { cols: number; rows: number } | undefined => {
+    const src = placedAt(intent.path);
+    if (!src || !groupAt(tree(), intent.path)) return undefined;
+    const s = stage();
+    const next = splitGroup(tree(), intent.path, intent.dir, PLACEHOLDER);
+    const placed = layoutTree(next, { x: 0, y: 0, w: s.w, h: s.h }, { gutter: GUTTER, strip: STRIP_HEIGHT, status: STATUS_HEIGHT });
+    const target = placed.groups.find((g) => g.group.tabs.includes(PLACEHOLDER));
+    if (!target) return undefined;
+    return apis.get(src.group.active)?.proposeGrid(target.content.w, target.content.h) ?? undefined;
+  };
   const requestCloseTab = (channelID: number) => {
     if (channelID) send({ kind: 'close_tab', channel_id: channelID });
   };
@@ -503,8 +520,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const g = placedAt(path);
     if (!g || !canSplit(g.rect, dir, { gutter: GUTTER })) return;
     focusGroup(path);
-    splitIntents.push({ path: g.path, dir });
-    openNewTab();
+    openNewTab({ path: g.path, dir });
   };
   const splitFocused = (dir: Dir) => splitAt(focusedGroup()?.path ?? ROOT, dir);
 
@@ -700,15 +716,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   // fullLabel is the untruncated tab label (OSC title, else shell
-  // basename) — also used as the button's hover tooltip. tabLabel caps
-  // it to TAB_LABEL_MAX chars with an ellipsis so a long "user@host: cwd"
-  // title can't blow out the tab width.
-  const fullLabel = (tab: TabMeta): string =>
-    (tabTitles().get(tab.channelID) ?? '').trim() || shortShellName(tab.shell);
-  const tabLabel = (tab: TabMeta): string => {
-    const s = fullLabel(tab);
-    return s.length > TAB_LABEL_MAX ? s.slice(0, TAB_LABEL_MAX - 1) + '…' : s;
-  };
+  // basename) — the button's hover tooltip. tabLabel is what the strip
+  // shows: the user@host prefix stripped and a long path kept from its
+  // tail (tab-label.ts), so tabs read "…/apps/term" rather than every one
+  // of them saying "mick@ai: ~/…".
+  const fullLabel = (tab: TabMeta): string => fullTabLabel(tabTitles().get(tab.channelID), tab.shell);
+  const tabLabel = (tab: TabMeta): string => tabLabelFor(tabTitles().get(tab.channelID), tab.shell);
   // Same label by channel id, for callers that only carry the id (the
   // close-confirmation names each busy tab). A tab that has already gone
   // falls back to its id rather than rendering an empty bullet.
@@ -732,60 +745,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const statusFor = (channelID: number): TabStatus | undefined => tabStatus().get(channelID);
   const isRootChannel = (channelID: number): boolean => statusFor(channelID)?.state === 'root';
 
-  // ---- agent status (tab dot + status-line clause) ----
-
-  // agentDot is the small filled circle beside the user badge: blue while
-  // the agent works, amber when it wants the human, green when it's done,
-  // muted grey for "running but not reporting" (tier T0, no hooks). It is
-  // the whole of M1's visible surface, so it carries the state in a data
-  // attribute for e2e to assert on.
-  const agentDot = (a: AgentStatus | undefined, testid: string): JSX.Element => {
-    if (!a) return null;
-    return (
-      <span
-        data-testid={testid}
-        data-agent={a.agent}
-        data-agent-state={a.state}
-        title={agentTitle(a)}
-        style={{
-          width: '7px',
-          height: '7px',
-          'border-radius': '50%',
-          background: agentColor(a.state),
-          'flex-shrink': 0,
-          display: 'inline-block',
-        }}
-      />
-    );
-  };
-
-  // Both label functions say the state in the shared vocabulary's words
-  // (docs/AGENT_MESSENGER.md M5). They used to phrase it two ways of
-  // their own — "needs input (permission)" in the tooltip, "needs input"
-  // in the status line — while the roster said a third and the rail a
-  // fourth, for one condition.
-  const agentTitle = (a: AgentStatus): string =>
-    `${a.agent} ${agentStateLabel(a.state, a.reason)} · ${elapsed(a.startedAt)}`;
-
-  // agentText is the status-line clause appended after the shell sentence:
-  // "bash as mick on ai · claude working 4m". No reason here — the line is
-  // already long, and the tab's tooltip carries the detail.
-  const agentText = (a: AgentStatus | undefined): string => {
-    if (!a) return '';
-    return `· ${a.agent} ${agentStateLabel(a.state)} ${elapsed(a.startedAt)}`;
-  };
-
-  // elapsed renders a duration the way a glanceable status line wants it:
-  // seconds under a minute, then minutes, then hours. now() makes it live.
-  const elapsed = (startedAt: number): string => {
-    const secs = Math.max(0, Math.floor((now() - startedAt) / 1000));
-    if (secs < 60) return `${secs}s`;
-    if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-    return `${Math.floor(secs / 3600)}h`;
-  };
-
-  const agentFor = (channelID: number): AgentStatus | undefined => agentStatus().get(channelID);
-
   // statusText composes the pane-bar sentence for that pane's visible tab:
   //   ssh  → "ssh to ‘xyz’"
   //   root → "bash as root on ai"
@@ -803,7 +762,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const paneStatusBar = (path: string, channelID: number): JSX.Element => {
     const root = () => isRootChannel(channelID);
-    const agent = () => agentFor(channelID);
     const place = () => placedAt(path);
     return (
       <Show when={place()}>
@@ -826,25 +784,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             {statusBadge(statusFor(channelID), root() ? '#ffffff' : undefined)}
           </span>
           <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{statusText(channelID)}</span>
-          <Show when={agent()}>
-            {(a) => (
-              <span
-                data-testid="term-status-agent"
-                data-agent-state={a().state}
-                style={{
-                  display: 'inline-flex',
-                  'align-items': 'center',
-                  gap: '5px',
-                  'flex-shrink': 0,
-                  // The red root bar owns the whole line's colour; elsewhere
-                  // the clause carries its own state hue.
-                  color: root() ? '#ffffff' : agentColor(a().state),
-                }}
-              >
-                {agentText(a())}
-              </span>
-            )}
-          </Show>
         </div>
       </Show>
     );
@@ -852,10 +791,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- BE ----
 
+  // reqOf is the request id a reply echoes, or undefined for a push the FE
+  // never asked for (an exec_tab from agentd carries none).
+  const reqOf = (m: BEMessage): string | undefined => (m.req ? String(m.req) : undefined);
+
   const handleBE = (m: BEMessage) => {
     switch (m.kind) {
       case 'tab_opened':
-        addTab(Number(m.channel_id), String(m.shell ?? 'shell'));
+        addTab(Number(m.channel_id), String(m.shell ?? 'shell'), undefined, reqOf(m));
         return;
       case 'tab_closed':
         removeTab(Number(m.channel_id));
@@ -880,6 +823,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         return;
       }
       case 'tab_error': {
+        // The pty never opened, so the split that asked for it must not
+        // wait for a tab that will never come.
+        splitIntents.drop(reqOf(m));
         const api = apis.get(active());
         if (api) api.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
         return;
@@ -887,6 +833,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'sessions':
         reconcile((m.sessions ?? []) as SessionRow[]);
         return;
+      case 'tab_exited': {
+        // The pty is gone but the tab stays, showing how it ended (the BE
+        // wrote that into the channel, after the process's own output).
+        const id = Number(m.channel_id);
+        const next = new Map(exitedTabs());
+        next.set(id, { code: Number(m.code ?? 0), signal: String(m.signal ?? '') });
+        setExitedTabs(next);
+        return;
+      }
       case 'tab_status': {
         const id = Number(m.channel_id);
         const state = String(m.state);
@@ -898,29 +853,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           target: String(m.target ?? ''),
         });
         setTabStatus(next);
-        return;
-      }
-      case 'agent_status': {
-        const id = Number(m.channel_id);
-        const state = String(m.state ?? '');
-        const next = new Map(agentStatus());
-        if (!AGENT_STATES.includes(state as AgentStatus['state'])) {
-          // Empty state = "no agent in this tab any more" (the agent
-          // exited, or its SessionEnd hook fired).
-          next.delete(id);
-        } else {
-          next.set(id, {
-            agent: String(m.agent ?? 'agent'),
-            state: state as AgentStatus['state'],
-            // since_ms is how long the BE has held this state; anchor the
-            // local clock to it so the counter keeps running between
-            // messages (they only arrive on change).
-            startedAt: Date.now() - Math.max(0, Number(m.since_ms ?? 0)),
-            sessionId: String(m.session_id ?? ''),
-            reason: String(m.reason ?? ''),
-          });
-        }
-        setAgentStatus(next);
         return;
       }
     }
@@ -1076,8 +1008,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Ctrl+Shift+<letter> has no distinct control code, so none of these are
   // stolen from the shell (or from an agent running in it). Returning false
   // keeps the event out of the pty entirely.
+  //
+  // Ctrl+Shift+T, Ctrl+Shift+W and Ctrl+Tab are ALSO Chromium's own
+  // restore-tab / close-window / next-tab on Linux and Windows, and a page
+  // cannot intercept those in a normal browser tab (they work in e2e only
+  // because CDP-injected keys bypass the reservation). They stay bound —
+  // they do work in a PWA/kiosk window — but every one has an Alt
+  // alternate the browser leaves alone: Alt+T new tab, Alt+W close tab,
+  // Alt+PageUp/PageDown previous/next tab, Alt+1…9 jump to tab N. Matched
+  // on ev.code so a non-QWERTY layout gets the same physical keys, and
+  // preventDefault'd so Firefox's Alt-menubar does not swallow them.
   const onTermKey = (ev: KeyboardEvent): boolean => {
     if (ev.type !== 'keydown') return true;
+    if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) {
+      const code = ev.code;
+      if (code === 'KeyT') { ev.preventDefault(); openNewTab(); return false; }
+      if (code === 'KeyW') { ev.preventDefault(); requestCloseTab(active()); return false; }
+      if (code === 'PageDown') { ev.preventDefault(); cycleTabs(1); return false; }
+      if (code === 'PageUp') { ev.preventDefault(); cycleTabs(-1); return false; }
+      const digit = /^Digit([1-9])$/.exec(code);
+      if (digit) { ev.preventDefault(); jumpToTab(Number(digit[1])); return false; }
+    }
     if (ev.ctrlKey && ev.shiftKey) {
       const k = ev.key.toLowerCase();
       if (k === 't') { openNewTab(); return false; }
@@ -1098,6 +1049,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       cycleTabs(ev.shiftKey ? -1 : 1);
       return false;
     }
+    // A held tab has no pty behind it: Enter dismisses it, and nothing
+    // else is worth sending to a channel that is gone.
+    if (exitedTabs().has(active())) {
+      if (ev.key === 'Enter') requestCloseTab(active());
+      return false;
+    }
     return true;
   };
 
@@ -1109,6 +1066,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const i = ids.indexOf(active());
     if (i < 0) return;
     activate(ids[(i + dir + ids.length) % ids.length]);
+  };
+
+  // jumpToTab activates the Nth tab (1-based) of the focused group's
+  // strip; a number past the end does nothing, as in every browser.
+  const jumpToTab = (n: number) => {
+    const ids = focusedGroup()?.group.tabs ?? [];
+    const id = ids[n - 1];
+    if (id !== undefined) activate(id);
   };
 
   // ---- tab button (one per tab, inside its group's strip) ----
@@ -1196,7 +1161,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px', 'flex-shrink': 0 }}
           >
             {statusBadge(tabStatus().get(channelID))}
-            {agentDot(agentStatus().get(channelID), `term-tab-agent-${channelID}`)}
           </span>
           <span
             title={fullLabel(tab()!)}
@@ -1256,28 +1220,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const ro = new ResizeObserver(measure);
     if (stageEl) ro.observe(stageEl);
 
-    // Elapsed-time ticker for the agent clause. Runs only while a tab
-    // actually has an agent — createEffect re-evaluates when the agent map
-    // changes, so an ordinary terminal never holds an interval.
-    let tick: ReturnType<typeof setInterval> | undefined;
-    createEffect(() => {
-      const wanted = agentStatus().size > 0;
-      if (wanted && tick === undefined) {
-        setNow(Date.now());
-        tick = setInterval(() => setNow(Date.now()), 1000);
-      } else if (!wanted && tick !== undefined) {
-        clearInterval(tick);
-        tick = undefined;
-      }
-    });
-
     onCleanup(() => {
       ro.disconnect();
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
       if (pendingFallback) clearTimeout(pendingFallback);
       if (modesTimer) clearTimeout(modesTimer);
-      if (tick !== undefined) clearInterval(tick);
       apis.clear();
       sizes.clear();
     });
@@ -1346,8 +1294,35 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       </Show>
       <Show when={openMenu() === 'tab'}>
         <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-tab" onDismiss={closeMenu}>
-          <MenuItem label="New Tab" data-testid="term-menu-newtab" onClick={run(openNewTab)} />
-          <MenuItem label="Close Tab" data-testid="term-menu-closetab" onClick={run(() => requestCloseTab(active()))} />
+          {/* Each item shows both bindings: the Ctrl+Shift one the
+              browser may keep for itself, and the Alt one it never does. */}
+          <MenuItem
+            label="New Tab"
+            data-testid="term-menu-newtab"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+T · Alt+T</span>}
+            onClick={run(() => openNewTab())}
+          />
+          <MenuItem
+            label="Close Tab"
+            data-testid="term-menu-closetab"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+W · Alt+W</span>}
+            onClick={run(() => requestCloseTab(active()))}
+          />
+          <MenuSeparator />
+          <MenuItem
+            label="Next Tab"
+            data-testid="term-menu-next-tab"
+            trailing={<span style={shortcutStyle}>Ctrl+Tab · Alt+PgDn</span>}
+            disabled={(focusedGroup()?.group.tabs.length ?? 0) < 2}
+            onClick={run(() => cycleTabs(1))}
+          />
+          <MenuItem
+            label="Previous Tab"
+            data-testid="term-menu-prev-tab"
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+Tab · Alt+PgUp</span>}
+            disabled={(focusedGroup()?.group.tabs.length ?? 0) < 2}
+            onClick={run(() => cycleTabs(-1))}
+          />
           <MenuSeparator />
           <MenuItem
             label="No color"
@@ -1407,10 +1382,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             disabled={paneCount() < 2}
             onClick={run(() => focusDir('right'))}
           />
+          {/* The key closes the TAB; the pane goes with its last tab
+              (docs/TERM_LAYOUT.md §5). The label used to say "Close Pane"
+              beside a shortcut that did not do that. */}
           <MenuItem
-            label="Close Pane"
+            label="Close Tab (pane with its last)"
             data-testid="term-menu-close-pane"
-            trailing={<span style={shortcutStyle}>Ctrl+Shift+W</span>}
+            trailing={<span style={shortcutStyle}>Ctrl+Shift+W · Alt+W</span>}
             disabled={paneCount() < 2}
             onClick={run(() => requestCloseTab(active()))}
           />
@@ -1587,7 +1565,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                           onClick={() => { close(); toggleZoom(path()); }}
                         />
                         <MenuItem
-                          label="Close Pane"
+                          label="Close Tab (pane with its last)"
                           data-testid="term-ctx-close-pane"
                           disabled={paneCount() < 2}
                           onClick={() => { close(); requestCloseTab(tab.channelID); }}
@@ -1646,7 +1624,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   <Button
                     variant="icon"
                     data-testid="term-new-tab"
-                    title="New tab (Ctrl+Shift+T)"
+                    title="New tab (Ctrl+Shift+T · Alt+T)"
                     style={ctlBtnStyle}
                     onClick={() => openNewTabIn(path)}
                   >
@@ -1688,8 +1666,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           }}
         </For>
         {/* One status bar per pane. It follows the same group placement as
-            the tab strip, so split panes keep their own user/root/ssh and
-            agent state visible even when they are not focused. */}
+            the tab strip, so split panes keep their own user/root/ssh state
+            visible even when they are not focused. */}
         <For each={placedPaths()}>
           {(path) => {
             const group = () => placedAt(path)?.group;
@@ -1808,19 +1786,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 };
 
 // ---- helpers / styles ----
-
-// agentColor is the shared vocabulary (docs/AGENT_MESSENGER.md M5), not a
-// fourth copy of it. It used to be its own switch, and the copies drifted:
-// this one had no `stale` case, so an agent that had stopped responding
-// was painted the same muted grey as one quietly running.
-function agentColor(state: AgentStatus['state']): string {
-  return agentStateColor(state);
-}
-
-function shortShellName(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.slice(i + 1) : p;
-}
 
 // swatchStyle — the color dot shown beside each entry in the tag menu.
 // hollow renders the outlined "No color" chip.
