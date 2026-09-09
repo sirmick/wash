@@ -1583,7 +1583,6 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
   return (
     <Show when={props.state !== 'open' || lostInput() || superseded()}>
       <div
-        data-wash-hit
         data-testid="wash-connection-banner"
         data-state={props.state}
         style={{

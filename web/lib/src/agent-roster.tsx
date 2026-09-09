@@ -239,7 +239,6 @@ const AskRow: Component<{
   };
   return (
     <div
-      data-wash-hit
       // Identity goes in a data attribute, NOT the testid: the buttons
       // below are testid'd agents-ask-allow/-always/-deny, so an
       // id-suffixed container testid would make [data-testid^="agents-ask-"]

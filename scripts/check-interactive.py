@@ -101,26 +101,53 @@ def strip_comments(body: str) -> str:
     return ''.join(out)
 
 
+def _block_end(src: str, brace: int) -> int:
+    depth, j = 0, brace
+    while j < len(src):
+        if src[j] == '{':
+            depth += 1
+        elif src[j] == '}':
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return len(src)
+
+
+# A style constant or factory, and nothing else: the name must be followed by
+# an optional type annotation and then the opening brace of ITS OWN object or
+# body. A looser "the next { within N characters" rule matched `const top =`
+# and `const style =` and then scanned an unrelated block, so words as common
+# as `top` and `style` became "pointer styles" and every tag mentioning one
+# looked clickable -- which over-tagged 40 non-clickable elements, the desktop
+# wallpaper among them.
+STYLE_DEF = re.compile(
+    r'\bconst\s+([A-Za-z_$][\w$]*)\s*(?::\s*JSX\.CSSProperties\s*)?=\s*\{'
+    r'|\bfunction\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*:\s*JSX\.CSSProperties\s*\{'
+)
+
+
 def pointer_styles(src: str) -> set:
     """Names of style constants/factories whose body sets cursor:'pointer'."""
     names = set()
-    for m in re.finditer(r'(?:const|function)\s+([A-Za-z_$][\w$]*)', src):
-        name, start = m.group(1), m.end()
-        brace = src.find('{', start)
-        if brace < 0 or brace - start > 160:
-            continue
-        depth, j = 0, brace
-        while j < len(src):
-            if src[j] == '{':
-                depth += 1
-            elif src[j] == '}':
-                depth -= 1
-                if depth == 0:
-                    break
-            j += 1
-        if POINTER.search(src[brace:j]):
+    for m in STYLE_DEF.finditer(src):
+        name = m.group(1) or m.group(2)
+        brace = m.end() - 1
+        if POINTER.search(src[brace:_block_end(src, brace)]):
             names.add(name)
     return names
+
+
+def style_expr(body: str) -> str:
+    """The `style={...}` expression of a tag body, or ''.
+
+    A style name only counts inside it: the same identifier appearing in a
+    handler or a testid says nothing about how the tag is painted.
+    """
+    m = re.search(r'\bstyle=\{', body)
+    if not m:
+        return ''
+    return body[m.end() - 1:_block_end(body, m.end() - 1) + 1]
 
 
 def sources():
@@ -146,7 +173,7 @@ def main() -> int:
                 m.group(1) == 'button'
                 or 'onClick' in body
                 or POINTER.search(body)
-                or (style_re and style_re.search(body))
+                or (style_re and style_re.search(style_expr(body)))
             )
             if not clickable:
                 continue
