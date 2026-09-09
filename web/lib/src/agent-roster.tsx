@@ -30,6 +30,8 @@ export interface RosterRow {
   reason?: string;
   /** still running, no window pointing at it — clicking opens one */
   detached?: boolean;
+  /** prompts waiting for the current turn to end (sent in order after it) */
+  queued?: number;
   session_id?: string;
   /** the agent's own name for this session, when it has one */
   title?: string;

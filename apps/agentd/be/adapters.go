@@ -270,11 +270,16 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	return h, nil
 }
 
-// promptHosted runs one turn. Returns when the agent stops; the roster
-// follows along from SessionUpdate underneath.
-func promptHosted(h *hosted, text string) {
+// promptHosted runs one turn. Returns when the agent stops — with the
+// next queued prompt to run, or "" — and the roster follows along from
+// SessionUpdate underneath. Callers go through hosted.submitPrompt, which
+// owns the turn claim; calling this directly is only right when the turn
+// is already claimed (tests).
+func promptHosted(h *hosted, text string) (next string) {
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
+	} else {
+		appendPrompt(h.key, text, time.Now())
 	}
 	h.beginTurn()
 	res, err := h.client.Prompt(context.Background(), h.sessionID, acp.Text(text))
@@ -298,10 +303,11 @@ func promptHosted(h *hosted, text string) {
 			// retry.
 			h.note("The turn failed: " + turnError(err) + "\n\nThe session is still open — send again to retry.")
 		}
+		return ""
 	case res.StopReason == acp.StopCancelled:
-		h.endTurn("done", "cancelled")
+		return h.endTurn("done", "cancelled")
 	default:
-		h.endTurn("done", res.StopReason)
+		return h.endTurn("done", res.StopReason)
 	}
 }
 

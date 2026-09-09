@@ -80,6 +80,10 @@ export interface AgentStatus {
    *  yolo). Rendered as a standing badge, never as a quiet flag: an agent
    *  nobody is vetting must not look like one that is being watched. */
   yolo?: boolean;
+  /** prompts agentd is holding until the current turn ends. Messenger
+   *  semantics: the composer stays open mid-turn, what you send is queued
+   *  in order, and the status line says how many are waiting. */
+  queued?: number;
 }
 
 export interface AgentConfig {
@@ -607,13 +611,24 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           </div>
         </Show>
 
+        {/* The composer stays open mid-turn on purpose. A message typed
+            while the agent is replying is queued by agentd and sent when
+            the turn ends — the way a messenger behaves — rather than the
+            box greying out for the length of a reply. The placeholder
+            says so while it applies, and the status line counts what is
+            waiting. */}
         <textarea
           ref={input}
           data-testid="agent-composer"
           rows={2}
           value={draft()}
           disabled={!props.onSend}
-          placeholder={props.placeholder ?? 'Ask, or drop a file from wash-fm…'}
+          placeholder={
+            props.placeholder ??
+            (st().state === 'working'
+              ? 'Type the next message — it is sent when this turn ends'
+              : 'Ask, or drop a file from wash-fm…')
+          }
           onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
             // Enter sends; Shift+Enter is a newline. A composer that
@@ -674,6 +689,15 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           }
         >
           <Spinner size={9} color={tokens.accentBlue} />
+        </Show>
+        <Show when={(st().queued ?? 0) > 0}>
+          <span
+            data-testid="agent-queued"
+            title="Messages waiting for the current turn to end; they are sent in order"
+            style={{ color: tokens.accentBlue }}
+          >
+            {st().queued} queued
+          </span>
         </Show>
         <Show when={st().agent}>
           <span>{st().agent}</span>
@@ -752,9 +776,16 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             from either side, unlike a blanket allow wash keeps to
             itself. */}
         <Show when={(st().modes?.length ?? 0) > 0 && props.onSetMode && !(st().configs ?? []).some((c) => c.id === 'mode')}>
+          {/* The current mode is marked on the OPTION, not as `value` on the
+              select. A `value` set on the select is applied once, when its
+              own effect first runs, and whether that lands before or after
+              the <For> has inserted the options depends on what else in
+              this template happens to be reactive — the moment the
+              composer's placeholder started following the turn state, the
+              value landed first and the select sat on its first option.
+              `selected` per option is order-proof. */}
           <select
             data-testid="agent-mode"
-            value={st().mode ?? ''}
             title={st().modes?.find((m) => m.id === st().mode)?.description ?? 'Approval mode'}
             onChange={(e) => props.onSetMode?.(e.currentTarget.value)}
             style={{
@@ -769,7 +800,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           >
             <For each={st().modes}>
               {(m) => (
-                <option value={m.id} title={m.description}>
+                <option value={m.id} title={m.description} selected={m.id === st().mode}>
                   {m.name}
                 </option>
               )}

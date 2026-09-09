@@ -114,6 +114,13 @@ type hosted struct {
 	// tail is the adapter's last stderr bytes (see stderrTail).
 	tailMu sync.Mutex
 	tail   []byte
+	// exited is closed when watchExit has finished its cleanup, and idle
+	// receives one value each time the turn goroutine returns. Both nil in
+	// production (nothing waits); tests set them so they can wait for the
+	// goroutines rather than poll their side effects — and so nothing of a
+	// test's session outlives the test.
+	exited chan struct{}
+	idle   chan struct{}
 
 	// turnMu guards turnLive, and — crucially — is held ACROSS the
 	// state write that depends on it, so the two orderings below cannot
@@ -132,6 +139,42 @@ type hosted struct {
 	// no longer claim the agent is busy.
 	turnMu   sync.Mutex
 	turnLive bool
+	// pending are prompts typed while a turn was open, in order. They run
+	// one after another when the turn ends — messenger semantics — rather
+	// than as concurrent session/prompt calls, which the protocol does not
+	// allow and which flipped beginTurn/endTurn out of order. Guarded by
+	// turnMu; queued mirrors len(pending) for the roster row, readable
+	// without the lock (setState runs UNDER turnMu from begin/endTurn).
+	pending []string
+	queued  atomic.Int32
+}
+
+// submitPrompt is the one entry for a prompt on a live session. Inside a
+// turn it is queued and the row says so; otherwise it claims the turn
+// under the lock and runs. Claiming here — not in beginTurn — is what
+// stops two prompts arriving in the same instant from both seeing a
+// closed turn and both starting one.
+func (h *hosted) submitPrompt(text string) (queued bool) {
+	h.turnMu.Lock()
+	if h.turnLive {
+		h.pending = append(h.pending, text)
+		h.queued.Store(int32(len(h.pending)))
+		h.turnMu.Unlock()
+		log.Printf("agentd: acp prompt queued key=%s queued=%d", h.key, len(h.pending))
+		h.republish()
+		return true
+	}
+	h.turnLive = true
+	h.turnMu.Unlock()
+	go func() {
+		if h.idle != nil {
+			defer func() { h.idle <- struct{}{} }()
+		}
+		for next := text; next != ""; {
+			next = promptHosted(h, next)
+		}
+	}()
+	return false
 }
 
 // beginTurn opens a turn: narration counts as "working" from here.
@@ -145,11 +188,42 @@ func (h *hosted) beginTurn() {
 // endTurn closes a turn and records how it ended. Holding turnMu across
 // the write is what makes it final: a SessionUpdate racing this either
 // runs entirely before (and is overwritten here) or sees a closed turn.
-func (h *hosted) endTurn(state, reason string) {
+//
+// It returns the next queued prompt, if the turn ended in a way that
+// should run one: a turn that finished normally hands over to the next
+// message with the turn still claimed (so nothing can slip in between,
+// and the row does not flash done→working). A turn that failed or was
+// stopped drops the queue — the error would repeat, and Stop means stop
+// — and the transcript lists what was dropped so nothing typed is lost
+// from view.
+func (h *hosted) endTurn(state, reason string) (next string) {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
+	clean := state == "done" && reason != "cancelled"
+	if clean && len(h.pending) > 0 {
+		next, h.pending = h.pending[0], h.pending[1:]
+		h.queued.Store(int32(len(h.pending)))
+		h.setState("working", "")
+		return next
+	}
+	dropped := h.pending
+	h.pending = nil
+	h.queued.Store(0)
 	h.turnLive = false
 	h.setState(state, reason)
+	if len(dropped) > 0 {
+		why := "the error"
+		if reason == "cancelled" {
+			why = "Stop"
+		}
+		text := "Dropped " + itoa(uint64(len(dropped))) + " queued prompt(s) after " + why + ":"
+		for _, d := range dropped {
+			text += "\n> " + strings.ReplaceAll(d, "\n", "\n> ")
+		}
+		log.Printf("agentd: acp prompts dropped key=%s n=%d reason=%s", h.key, len(dropped), reason)
+		h.note(text)
+	}
+	return ""
 }
 
 // narrated reports that the agent said or did something. It only moves the
@@ -284,6 +358,9 @@ func (h *hosted) stderrText() string {
 // registry. The HISTORY entry and the transcript file are kept as they
 // are, so the row in History remains something to resume.
 func (h *hosted) watchExit() {
+	if h.exited != nil {
+		defer close(h.exited)
+	}
 	if h.client == nil {
 		return
 	}
@@ -323,8 +400,13 @@ func (h *hosted) watchExit() {
 	h.releaseOwned(ReasonAgentExited)
 	h.noteSession("exited", time.Now())
 	releaseTranscript(h.key)
-	mutateState(func(s *State) { s.Recent = publishHistory() })
-	saveHistory()
+	// The history write happens INSIDE the state lock: this goroutine is
+	// not the bus goroutine, and the history slice and its dirty flag are
+	// otherwise only touched from there or under Mutate.
+	mutateState(func(s *State) {
+		s.Recent = publishHistory()
+		saveHistory()
+	})
 }
 
 // releaseOwned cancels the session's questions, stops its adapter and
@@ -392,6 +474,7 @@ func (h *hosted) setState(state, reason string) {
 		r.Reason = reason
 		r.SessionID = h.sessionID
 		r.Detached = h.detached
+		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
 		r.Title = h.title
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
@@ -473,6 +556,7 @@ func (h *hosted) republish() {
 		}
 		before := r.Row
 		r.Detached = h.detached
+		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
 		r.Title = h.title
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
@@ -931,7 +1015,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// one process that owns sessions.
 		first := withDefaultPrompt(loadDefaultPrompt(), req.Prompt)
 		if first != "" {
-			go promptHosted(h, first)
+			h.submitPrompt(first)
 		}
 		if from.InstanceID == "" {
 			return nil
@@ -955,7 +1039,10 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			conn.Warn("That session has ended", "Its agent is no longer running. Reopen it from History to continue.")
 			return nil
 		}
-		go promptHosted(h, req.Text)
+		// Queued inside a turn, run otherwise — never a second concurrent
+		// session/prompt, which the protocol does not allow and which
+		// flipped beginTurn/endTurn out of order.
+		h.submitPrompt(req.Text)
 		return nil
 	})
 

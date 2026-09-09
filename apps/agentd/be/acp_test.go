@@ -634,7 +634,7 @@ func TestAdapterExitFailsTheRowAndCancelsAsks(t *testing.T) {
 	toClientR, toClientW := io.Pipe()
 	var stopped atomic.Bool
 	h := &hosted{key: "acp:exit", agent: "codex", sessionID: "sess-exit", cwd: t.TempDir(),
-		stop: func() { stopped.Store(true) }}
+		stop: func() { stopped.Store(true) }, exited: make(chan struct{})}
 	h.client = acp.NewClient(toClientR, toAgentW, h)
 	t.Cleanup(func() { h.client.Close(); toAgentW.Close(); toClientW.Close() })
 	// Drain what the client writes toward the "adapter" so nothing blocks
@@ -673,10 +673,12 @@ func TestAdapterExitFailsTheRowAndCancelsAsks(t *testing.T) {
 	}
 	toClientW.Close()
 
-	// Everything the watcher promises, polled: it runs on its own goroutine.
-	deadline = time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && (lookupHosted(h.key) != nil || !stopped.Load()) {
-		time.Sleep(5 * time.Millisecond)
+	// Everything the watcher promises, once it has finished — waited for,
+	// not polled, so nothing of it outlives this test.
+	select {
+	case <-h.exited:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the exit watcher never finished")
 	}
 	if lookupHosted(h.key) != nil {
 		t.Fatal("session still registered after its adapter exited")
@@ -801,5 +803,224 @@ func TestTurnErrorReadsAsAPersonWould(t *testing.T) {
 		if got := turnError(err); got != want {
 			t.Errorf("turnError(%v) = %q, want %q", err, got, want)
 		}
+	}
+}
+
+// scriptedAdapter is the far end of a real acp.Client over pipes: it hands
+// the test every session/prompt it receives and lets the test answer them
+// in its own time, which is what makes "mid-turn" a controllable moment.
+type scriptedAdapter struct {
+	prompts chan promptSeen
+	out     *io.PipeWriter
+}
+
+type promptSeen struct {
+	id   json.Number
+	text string
+}
+
+func newScriptedAdapter(t *testing.T, h *hosted) *scriptedAdapter {
+	t.Helper()
+	toAgentR, toAgentW := io.Pipe()
+	toClientR, toClientW := io.Pipe()
+	h.client = acp.NewClient(toClientR, toAgentW, h)
+	a := &scriptedAdapter{prompts: make(chan promptSeen, 8), out: toClientW}
+	t.Cleanup(func() { h.client.Close(); toAgentW.Close(); toClientW.Close() })
+	go func() {
+		sc := bufio.NewScanner(toAgentR)
+		sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
+		for sc.Scan() {
+			var m struct {
+				ID     json.Number `json:"id"`
+				Method string      `json:"method"`
+				Params struct {
+					Prompt []struct {
+						Text string `json:"text"`
+					} `json:"prompt"`
+				} `json:"params"`
+			}
+			if json.Unmarshal(sc.Bytes(), &m) != nil || m.Method != acp.MethodSessionPrompt {
+				continue
+			}
+			text := ""
+			for _, b := range m.Params.Prompt {
+				text += b.Text
+			}
+			a.prompts <- promptSeen{id: m.ID, text: text}
+		}
+	}()
+	return a
+}
+
+func (a *scriptedAdapter) next(t *testing.T) promptSeen {
+	t.Helper()
+	select {
+	case p := <-a.prompts:
+		return p
+	case <-time.After(2 * time.Second):
+		t.Fatal("the adapter never received a session/prompt")
+	}
+	return promptSeen{}
+}
+
+func (a *scriptedAdapter) none(t *testing.T, d time.Duration) {
+	t.Helper()
+	select {
+	case p := <-a.prompts:
+		t.Fatalf("a session/prompt %q reached the adapter while a turn was open — two concurrent turns", p.text)
+	case <-time.After(d):
+	}
+}
+
+func (a *scriptedAdapter) end(p promptSeen, stop string) {
+	_, _ = io.WriteString(a.out, `{"jsonrpc":"2.0","id":`+p.id.String()+`,"result":{"stopReason":"`+stop+`"}}`+"\n")
+}
+
+func waitRow(t *testing.T, key string, ok func(Row) bool) Row {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last Row
+	for time.Now().Before(deadline) {
+		var r Row
+		var have bool
+		mutateState(func(*State) {
+			if rr := rows[key]; rr != nil {
+				r, have = rr.Row, true
+			}
+		})
+		if have && ok(r) {
+			return r
+		}
+		last = r
+		time.Sleep(3 * time.Millisecond)
+	}
+	t.Fatalf("row never reached the wanted shape; last=%+v", last)
+	return last
+}
+
+// A prompt typed mid-turn is QUEUED — messenger semantics — and runs when
+// the turn ends. The composer never disabled, and agent_prompt spawned a
+// second promptHosted unconditionally: two concurrent session/prompt
+// calls the protocol does not allow, with beginTurn/endTurn flipping out
+// of order so the row's state was whichever finished last.
+func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
+	withStateDir(t)
+	reset()
+	withState(t, 1)
+	h := &hosted{key: "acp:q", agent: "codex", sessionID: "sess-q", cwd: t.TempDir(), idle: make(chan struct{}, 4)}
+	a := newScriptedAdapter(t, h)
+	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+	h.register()
+
+	if h.submitPrompt("one") {
+		t.Fatal("the first prompt on an idle session was queued rather than run")
+	}
+	p1 := a.next(t)
+	if p1.text != "one" {
+		t.Fatalf("first prompt = %q", p1.text)
+	}
+	waitRow(t, h.key, func(r Row) bool { return r.State == "working" })
+
+	// Mid-turn: queued, said so on the row, and NOT on the wire.
+	if !h.submitPrompt("two") {
+		t.Fatal("a prompt sent mid-turn was not queued")
+	}
+	if !h.submitPrompt("three") {
+		t.Fatal("a second mid-turn prompt was not queued")
+	}
+	waitRow(t, h.key, func(r Row) bool { return r.Queued == 2 && r.State == "working" })
+	a.none(t, 50*time.Millisecond)
+
+	// The turn ends: the queue drains in order, one turn at a time, with
+	// the row staying working throughout rather than flashing done.
+	a.end(p1, "end_turn")
+	p2 := a.next(t)
+	if p2.text != "two" {
+		t.Fatalf("second turn = %q, want the first queued prompt", p2.text)
+	}
+	waitRow(t, h.key, func(r Row) bool { return r.Queued == 1 && r.State == "working" })
+	a.none(t, 50*time.Millisecond)
+	a.end(p2, "end_turn")
+	p3 := a.next(t)
+	if p3.text != "three" {
+		t.Fatalf("third turn = %q", p3.text)
+	}
+	a.end(p3, "end_turn")
+	waitRow(t, h.key, func(r Row) bool { return r.State == "done" && r.Queued == 0 })
+	waitIdle(t, h)
+
+	// The transcript records each prompt when it was SENT, in order — not
+	// when it was typed, which would have split the reply it interrupted.
+	var users []string
+	for _, e := range snapshot(h.key) {
+		if e.Kind == EventUser {
+			users = append(users, e.Text)
+		}
+	}
+	if strings.Join(users, ",") != "one,two,three" {
+		t.Errorf("user lines = %v", users)
+	}
+}
+
+// Stop means stop: a cancelled turn drops what was queued behind it, and
+// the transcript lists the dropped text so nothing typed is lost from
+// view. Same for a failed turn — the error would only repeat.
+func TestStopDropsTheQueueAndSaysWhat(t *testing.T) {
+	withStateDir(t)
+	reset()
+	withState(t, 1)
+	h := &hosted{key: "acp:qc", agent: "codex", sessionID: "sess-qc", cwd: t.TempDir(), idle: make(chan struct{}, 4)}
+	a := newScriptedAdapter(t, h)
+	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+	h.register()
+
+	h.submitPrompt("first")
+	p1 := a.next(t)
+	h.submitPrompt("never sent")
+	waitRow(t, h.key, func(r Row) bool { return r.Queued == 1 })
+
+	a.end(p1, "cancelled")
+	waitRow(t, h.key, func(r Row) bool { return r.State == "done" && r.Reason == "cancelled" && r.Queued == 0 })
+	waitIdle(t, h)
+	a.none(t, 80*time.Millisecond)
+
+	waitForTranscriptWrites()
+	var note string
+	for _, e := range snapshot(h.key) {
+		if strings.HasPrefix(e.Text, "Dropped 1 queued prompt") {
+			note = e.Text
+		}
+	}
+	if note == "" {
+		t.Fatal("no note about the dropped prompt")
+	}
+	if !strings.Contains(note, "after Stop") || !strings.Contains(note, "> never sent") {
+		t.Errorf("note = %q", note)
+	}
+	// And the session is idle again: the next prompt runs at once.
+	if h.submitPrompt("again") {
+		t.Fatal("a prompt after the cancelled turn was queued — the turn claim leaked")
+	}
+	p := a.next(t)
+	if p.text != "again" {
+		t.Fatalf("prompt after cancel = %q", p.text)
+	}
+	// Finish the turn before the test's state stubs are torn down: a
+	// turn still open when the pipes close would fail on a goroutine the
+	// test no longer owns and write into the real (nil) state service.
+	a.end(p, "end_turn")
+	waitRow(t, h.key, func(r Row) bool { return r.State == "done" && r.Reason == "end_turn" })
+	waitIdle(t, h)
+}
+
+// waitIdle blocks until the session's turn goroutine has returned, so a
+// test's turn cannot still be writing state after the test's stubs are
+// gone.
+func waitIdle(t *testing.T, h *hosted) {
+	t.Helper()
+	select {
+	case <-h.idle:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the turn goroutine never returned")
 	}
 }
