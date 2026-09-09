@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, fireEvent } from '@solidjs/testing-library';
+import { createSignal } from 'solid-js';
 import { AgentSession, type AgentEvent } from './agent-session.tsx';
 
 beforeEach(() => {
@@ -418,4 +419,29 @@ test('a session confined to its cwd shows no root chips', () => {
     <AgentSession events={() => []} status={() => ({ dir: 'app' })} onSend={() => {}} />
   ));
   expect(container.querySelector('[data-testid="agent-root"]')).toBeNull();
+});
+
+// docs/Review-findings.md P2 → agent: "'send to agent' in either
+// direction". Text handed to this window by another app (agent_draft)
+// lands in the composer, at the caret, and waits.
+test('a draft from another app is inserted at the caret and not sent', async () => {
+  const sent: string[] = [];
+  const [drafted, setDrafted] = createSignal<{ text: string; seq: number } | undefined>();
+  const { container } = render(() => (
+    <AgentSession events={() => []} onSend={(t) => sent.push(t)} draftInsert={drafted} />
+  ));
+  const composer = composerOf(container);
+  fireEvent.input(composer, { target: { value: 'about this:' } });
+  composer.setSelectionRange(11, 11);
+
+  setDrafted({ text: 'func main() {}', seq: 1 });
+  await settle();
+  expect(composer.value).toBe('about this: func main() {}');
+  expect(sent).toEqual([]);
+
+  // The same text again inserts again: the seq is what says "this is a
+  // new send", because the text alone cannot.
+  setDrafted({ text: 'func main() {}', seq: 2 });
+  await settle();
+  expect(composer.value).toContain('func main() {} func main() {}');
 });

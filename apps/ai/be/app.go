@@ -9,8 +9,21 @@
 //	FE → ai   prompt   {text, blocks?}         → ai → agentd  agent_prompt
 //	FE → ai   answer   {id, decision, rule?}   → ai → agentd  agent_answer
 //	FE → ai   open_path {path}                 → router open routing
-//	          agentd → ai  transcript_snapshot / transcript_event / state
-//	          ai → FE      snapshot / event / status / adapters
+//	FE → ai   open_terminal {cwd}              → spawn com.wash.term --open <cwd>
+//
+// And ONE message this app accepts from an app that is not agentd:
+//
+//	any app → ai   {kind: "agent_draft", text}
+//
+// which inserts `text` into this window's composer. It is a DRAFT, never
+// a prompt: it lands at the caret and waits, because what a person does
+// with a selection someone sent them — frame it with a question, trim it,
+// think better of it — is the whole reason it goes to a composer rather
+// than to the agent. wash-edit's "send selection to agent" uses exactly
+// this shape; keep the kind stable, other apps will grow the same verb.
+//
+//	agentd → ai  transcript_snapshot / transcript_event / state
+//	ai → FE      snapshot / event / status / adapters
 //
 // The empty window is the launcher: an app with no session yet renders the
 // form. That is why there is no separate "new session" dialog anywhere.
@@ -59,6 +72,11 @@ const aiIcon = "bot"
 
 const agentdAppID = agentd.AppID
 
+// draftKind is the app message any app may send this one to put text in
+// its composer. Stable on purpose: wash-edit's "send selection to agent"
+// is written against this exact shape, and so will the next app's be.
+const draftKind = "agent_draft"
+
 // aiDebug traces the roster subscription, which is what drives the status
 // line and the working spinner. Off unless WASH_AGENT_DEBUG is set.
 var aiDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
@@ -88,7 +106,7 @@ func init() {
 			Icon:            aiIcon,
 			Accent:          "violet",
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{sdk.CapOpen},
+			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
 			Window:          &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 720},
 		},
 		Assets:           sub,
@@ -567,6 +585,22 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"key":  session.key,
 		})
 
+	case "open_terminal":
+		// A shell where the agent is working — the roster row's verb and
+		// the Session menu's, which are two views of one thing. The path
+		// is confined here (the FE named it; a window is not authority)
+		// and the router starts wash-term with it as `--open <dir>`.
+		dir := str(m["cwd"])
+		abs, err := aiFS.Confine(dir)
+		if err != nil {
+			log.Printf("wash-ai: open terminal %q: %v", dir, err)
+			return
+		}
+		log.Printf("wash-ai: open terminal cwd=%s", abs)
+		if err := c.SpawnRequestOpen("com.wash.term", abs); err != nil {
+			log.Printf("wash-ai: spawn term %s: %v", abs, err)
+		}
+
 	case "open_path":
 		// A tool row was clicked. The path is the agent's own report of
 		// what it touched, so it is confined to this app's root before
@@ -598,11 +632,25 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 // onAppMsgFrom handles messages from agentd. The sender is router-attested,
 // so a message claiming to be the roster service actually is one.
 func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
-	if from.AppID != agentdAppID {
-		return
-	}
 	m, _ := data.(map[string]any)
 	if m == nil {
+		return
+	}
+	// agent_draft is the one message this app takes from an app that is
+	// not agentd — anything with a selection worth handing to an agent
+	// (wash-edit today). Checked BEFORE the sender gate, which exists to
+	// stop another app impersonating the roster service, not to stop
+	// another app typing into a composer the person is looking at.
+	if str(m["kind"]) == draftKind {
+		text := str(m["text"])
+		if text == "" {
+			return
+		}
+		log.Printf("wash-ai: draft from=%s bytes=%d", from.AppID, len(text))
+		c.SendAppMsg(map[string]any{"kind": "draft", "text": text})
+		return
+	}
+	if from.AppID != agentdAppID {
 		return
 	}
 	switch str(m["kind"]) {

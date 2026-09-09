@@ -148,6 +148,11 @@ export interface AgentSessionProps {
   /** Take back one of the extra folders the session was allowed. Absent
    *  leaves the status bar's root chips read-only. */
   onRemoveRoot?: (path: string) => void;
+  /** Text to drop into the composer from OUTSIDE the session — wash-edit's
+   *  "send selection to agent" arrives at the host as an `agent_draft` app
+   *  message and lands here. `seq` is what makes sending the same
+   *  selection twice insert it twice; the text alone could not. */
+  draftInsert?: () => { text: string; seq: number } | undefined;
   /** Answer a pending question. `rule` is set when the user chose "always". */
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
   /** Click on a tool row — the host decides what that opens. */
@@ -621,6 +626,29 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     e.preventDefault();
     void attachImages(imgs);
   };
+
+  // Text handed to this composer by another app. Inserted at the caret,
+  // never sent: what someone does with a pasted-in selection — add a
+  // question above it, trim it, think better of it — is the whole reason
+  // it goes to the composer rather than straight to the agent.
+  let lastDraftSeq = -1;
+  createEffect(() => {
+    const d = props.draftInsert?.();
+    if (!d || d.seq === lastDraftSeq) return;
+    lastDraftSeq = d.seq;
+    if (!d.text) return;
+    const cur = draft();
+    const start = input?.selectionStart ?? cur.length;
+    const end = input?.selectionEnd ?? start;
+    const r = insertAt(cur, start, end, d.text);
+    setDraft(r.text);
+    setHistAt(-1);
+    setPinned(true);
+    queueMicrotask(() => {
+      input?.focus();
+      input?.setSelectionRange(r.caret, r.caret);
+    });
+  });
 
   const pickFiles = async () => {
     if (!props.onPickFiles) return;

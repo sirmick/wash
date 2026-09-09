@@ -447,3 +447,25 @@ test('verbs: Also allow a folder… hands the host the row and counts existing r
   openRowMenu(r2.getByTestId);
   expect(screen.getByTestId('agents-menu-add-root').textContent).not.toContain('(');
 });
+
+// "Open terminal here" (docs/Review-findings.md P2 → cross-app): where the
+// agent is working is exactly where a person wants a shell. The row hands
+// the host the row; the host spawns wash-term with the directory.
+test('verbs: Open terminal here needs a cwd, and hands the host the row', () => {
+  const opened: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', cwd: '/w/app' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onOpenTerminal={(r) => opened.push(r.cwd ?? '')} />
+  ));
+  openRowMenu(getByTestId);
+  fireEvent.click(screen.getByTestId('agents-menu-open-terminal'));
+  expect(opened).toEqual(['/w/app']);
+
+  cleanup();
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done', cwd: '' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onOpenTerminal={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-open-terminal').hasAttribute('disabled')).toBe(true);
+});

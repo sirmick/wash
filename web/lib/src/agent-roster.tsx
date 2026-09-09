@@ -131,6 +131,8 @@ export interface AgentRosterProps {
   onRename?: (row: RosterRow) => void;
   /** allow the session another folder; the host opens its file picker */
   onAddRoot?: (row: RosterRow) => void;
+  /** open a terminal in the session's working directory */
+  onOpenTerminal?: (row: RosterRow) => void;
 }
 
 // stateColor / stateLabel are thin adapters over the shared vocabulary in
@@ -216,6 +218,7 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
             onStop={props.onStop ? () => props.onStop?.(r) : undefined}
             onRename={props.onRename ? () => props.onRename?.(r) : undefined}
             onAddRoot={props.onAddRoot ? () => props.onAddRoot?.(r) : undefined}
+            onOpenTerminal={props.onOpenTerminal ? () => props.onOpenTerminal?.(r) : undefined}
           />
         )}
       </For>
@@ -354,6 +357,7 @@ const AgentRowView: Component<{
   onStop?: () => void;
   onRename?: () => void;
   onAddRoot?: () => void;
+  onOpenTerminal?: () => void;
 }> = (props) => {
   // The verbs live in a menu rather than a strip of buttons: the set
   // grows (resume and fork are still to come) and a sidebar row is 190px
@@ -384,7 +388,8 @@ const AgentRowView: Component<{
     closeMenu();
     fn?.();
   };
-  const hasVerbs = () => Boolean(props.onDetach || props.onCancel || props.onStop || props.onRename || props.onAddRoot);
+  const hasVerbs = () =>
+    Boolean(props.onDetach || props.onCancel || props.onStop || props.onRename || props.onAddRoot || props.onOpenTerminal);
   // Where it's working: "wash · main*" — repo, branch, and a star when the
   // tree is dirty. Absent for an agent outside a checkout.
   const place = (): string => {
@@ -577,6 +582,16 @@ const AgentRowView: Component<{
                 data-testid="agents-menu-add-root"
                 disabled={!props.onAddRoot}
                 onClick={run(props.onAddRoot)}
+              />
+              {/* Where the agent is working is exactly where a person
+                  wants a shell — to run the test it just changed, to see
+                  the diff it made. Needs a cwd: a row with none has
+                  nowhere to open. */}
+              <MenuItem
+                label="Open terminal here"
+                data-testid="agents-menu-open-terminal"
+                disabled={!props.onOpenTerminal || !props.row.cwd}
+                onClick={run(props.onOpenTerminal)}
               />
               <MenuSeparator />
               <MenuItem

@@ -106,6 +106,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // "Also allow a folder…" from a roster row. The picker is this
   // window's; the row it widens is whichever row opened it, which is not
   // necessarily the session in the detail pane.
+  // A draft handed to this window by another app (`agent_draft` — see
+  // apps/ai/be/app.go). The counter is what makes sending the same
+  // selection twice insert it twice.
+  const [draftIn, setDraftIn] = createSignal<{ text: string; seq: number } | undefined>();
+  let draftSeq = 0;
+
   const [rootFor, setRootFor] = createSignal<{ key: string; start: string } | null>(null);
   const openAddRoot = (key: string, start: string) => setRootFor({ key, start });
 
@@ -216,6 +222,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'restore_failed':
         setSessionKey('');
         setEvents([]);
+        break;
+      case 'draft':
+        // Another app sent a selection here (agent_draft). It lands in
+        // the composer, not on the wire: what someone does with it — add
+        // a question above it, trim it, think better of it — is the whole
+        // reason it goes to the composer at all.
+        draftSeq += 1;
+        setDraftIn({ text: String(m.text ?? ''), seq: draftSeq });
         break;
       case 'start_failed':
         setAutostart(null);
@@ -671,6 +685,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onClick={() => { close(); openRename({ key: sessionKey(), session_id: row()?.session_id, title: row()?.title }); }}
                 data-testid="ai-menu-rename"
               />
+              {/* Where the agent is working is exactly where a person
+                  wants a shell. Same verb the roster row offers, because
+                  the window showing a session and the row naming it are
+                  two views of one thing. */}
+              <MenuItem
+                label="Open terminal here"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_terminal', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-terminal"
+              />
               <MenuSeparator />
               <Show when={configs().length === 0}>
                 <MenuItem label="No settings offered" disabled onClick={() => {}} />
@@ -834,6 +858,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onStop={(r) => send({ kind: 'row_stop', key: r.key })}
           onRename={(r) => openRename({ key: r.key, session_id: r.session_id, title: r.title })}
           onAddRoot={(r) => openAddRoot(r.key, r.cwd ?? '')}
+          onOpenTerminal={(r) => send({ kind: 'open_terminal', cwd: r.cwd ?? '' })}
           onAnswer={(a, decision, remember) => send({
             kind: 'answer',
             id: a.id,
@@ -1105,6 +1130,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               status={status}
               onSend={(text, blocks) => send({ kind: 'prompt', text, blocks })}
               onRemoveRoot={(path) => send({ kind: 'row_remove_root', key: sessionKey(), path })}
+              draftInsert={draftIn}
               onPickFiles={() =>
                 new Promise<string[]>((resolve) => {
                   // A picker already open would strand the earlier waiter.
