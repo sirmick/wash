@@ -260,10 +260,31 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   // free the BE), so any disk changes that happened in the gap
   // are invisible to the watcher. A re-list closes that gap so
   // the user never sees a stale picker.
+  //
+  // The open transition also re-seeds the per-open props. start and
+  // defaultName used to be read once, when the component was created —
+  // but hosts keep one <FilePicker> mounted and toggle `open`, so a
+  // Save As suggested name, or a host that wants THIS open to land in a
+  // different folder (edit re-saving a file that vanished from disk),
+  // never reached the dialog. A start that has not changed since the
+  // last open is left alone so the picker still remembers where the
+  // user navigated.
   let prevOpen = false;
+  let lastStart = props.start || '';
   createEffect(() => {
     const open = props.open;
-    const c = cwd();
+    let c = cwd();
+    if (open && !prevOpen) {
+      setSaveName(props.defaultName ?? '');
+      setSelectedName('');
+      const start = props.start || '';
+      if (start && start !== lastStart) {
+        c = start;
+        setCwd(start);
+        setPathInput(start);
+      }
+      lastStart = start;
+    }
     const want = open ? c : '';
     if (want !== watchedPath) {
       if (watchedPath) sendUnwatch(watchedPath);

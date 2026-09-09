@@ -242,6 +242,12 @@ interface Tab {
   size?: number;
   // Line endings on disk. The buffer is always LF; see toDisk.
   eol?: Eol;
+  // The file vanished from disk under the tab (an external rename, rm,
+  // git checkout). The buffer is kept; the status bar says so and the
+  // next save goes through the picker instead of silently recreating
+  // the old path. Cleared when a read finds the file again or when the
+  // editor itself re-keys the tab.
+  missing?: boolean;
   // Last-seen vertical scroll for this tab; captured at tab-switch.
   // Restored on switch back so each tab keeps its scroll position
   // alongside its EditorState (which already holds cursor/undo).
@@ -330,7 +336,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     | null
     | { mode: 'open' }
     | { mode: 'directory' }
-    | { mode: 'save'; tabID: string; suggestedName: string }
+    | { mode: 'save'; tabID: string; suggestedName: string; start?: string }
   >(null);
   // reloadPrompt drives the "changed on disk" modal. Non-null while a
   // tab with unsaved edits has had its file modified externally; the
@@ -648,6 +654,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     if (!t.path) {
       setPicker({ mode: 'save', tabID: t.id, suggestedName: t.displayName });
+      return 'needs_path';
+    }
+    if (t.missing) {
+      // The path went away under us. Recreating it silently is how a
+      // stale tab resurrects a file someone just renamed or removed;
+      // the picker, seeded with the old name in the old folder, makes
+      // that an explicit choice (confirming the same path recreates it).
+      setPicker({ mode: 'save', tabID: t.id, suggestedName: baseName(t.path), start: parentPath(t.path) });
       return 'needs_path';
     }
     const content = tabContent(t);
@@ -1552,8 +1566,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (parentPath(src) === destDir) return;
     if (destDir === src || destDir.startsWith(src + '/')) return;
     const to = joinPath(destDir, baseName(src));
-    await sendWithReply({ kind: 'rename', from: src, to });
-    // fs.watch on the parents catches up automatically.
+    const reply = await sendWithReply({ kind: 'rename', from: src, to });
+    // fs.watch on the parents catches up automatically; open tabs
+    // under the moved path follow it.
+    if (reply.kind === 'rename_ok') retargetTabs(String(reply.from ?? src), String(reply.to ?? to));
   };
 
   // commitCopy always routes through wash-bulk. Copy has no
@@ -1599,7 +1615,62 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (draft === '' || draft === baseName(r.path)) return;
     if (draft.includes('/')) return;
     const to = joinPath(parentPath(r.path), draft);
-    await sendWithReply({ kind: 'rename', from: r.path, to });
+    const reply = await sendWithReply({ kind: 'rename', from: r.path, to });
+    if (reply.kind === 'rename_ok') retargetTabs(String(reply.from ?? r.path), String(reply.to ?? to));
+  };
+
+  // retargetTabs re-keys every open tab whose file the editor itself just
+  // renamed or moved (`from` → `to`; a moved directory carries the tabs
+  // under it). Before this the tab stayed on the old path: the watcher
+  // saw a delete, the buffer was kept, and the next Ctrl+S recreated the
+  // old file next to the renamed one. Buffer state, undo history, dirty
+  // flag and wysiwyg content all survive; only the identity changes. The
+  // tab id IS the path, so the active-tab effect re-seeds the view from
+  // the captured live state exactly as Save As does.
+  const retargetTabs = (from: string, to: string) => {
+    if (!from || !to || from === to) return;
+    const prefix = from + '/';
+    const under = (p: string) => p === from || p.startsWith(prefix);
+    if (!tabs().some((t) => !!t.path && under(t.path))) return;
+    captureActiveState();
+    const oldDirs = new Set<string>();
+    const newDirs = new Set<string>();
+    const moved: Array<[string, string]> = [];
+    let nextActive = activeID();
+    const updated = tabs().map((t) => {
+      if (!t.path || !under(t.path)) return t;
+      const newPath = t.path === from ? to : to + t.path.slice(from.length);
+      oldDirs.add(parentPath(t.path));
+      newDirs.add(parentPath(newPath));
+      moved.push([t.id, newPath]);
+      if (t.id === activeID()) nextActive = newPath;
+      // The TipTap host is keyed by tab id, so the rename remounts it;
+      // snapshot the live markdown for the re-seed and retire the old
+      // handle so it neither leaks nor keeps writing to a dead id.
+      let wysCache = t.wysCache;
+      const h = wysHandles.get(t.id);
+      if (h) {
+        if (t.mode === 'wysiwyg') wysCache = h.getMarkdown();
+        h.destroy();
+        wysHandles.delete(t.id);
+      }
+      return { ...t, id: newPath, path: newPath, displayName: baseName(newPath) || newPath, wysCache, missing: false };
+    });
+    setTabs(updated);
+    setDirtyIDs((s) => {
+      if (!moved.some(([o]) => s.has(o))) return s;
+      const out = new Set(s);
+      for (const [o, n] of moved) if (s.has(o)) { out.delete(o); out.add(n); }
+      return out;
+    });
+    const rp = reloadPrompt();
+    if (rp && moved.some(([o]) => o === rp.tabID)) setReloadPrompt(null);
+    if (nextActive !== activeID()) setActiveID(nextActive);
+    for (const d of newDirs) fileWatch.watch(d);
+    for (const d of oldDirs) {
+      if (!tabs().some((t) => t.path && parentPath(t.path) === d)) fileWatch.unwatch(d);
+    }
+    persist();
   };
 
   // revealInFm opens a Files window AT the thing the user is looking
@@ -1870,14 +1941,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // save fires would otherwise re-read and re-arm repeatedly.
     if (reloadPrompt()?.tabID === tab.id) return;
     const reply = await sendWithReply({ kind: 'read', path });
-    // File vanished or went unreadable (deleted, perms, became a dir):
-    // keep the buffer so the user can still save it back out.
-    if (reply.kind !== 'read_ok' || blockedOf(reply)) return;
-    const raw = String(reply.content ?? '');
-    const disk = toBuffer(raw);
-    // Re-find: the tab may have closed during the async read.
+    // Re-find: the tab may have closed (or been re-keyed by one of our
+    // own renames) during the async read.
     const cur = tabs().find((t) => t.id === tab.id);
     if (!cur || cur.path !== path) return;
+    // File vanished (an external rename, rm, checkout): keep the buffer
+    // but say so, and route the next save through the picker rather
+    // than recreating the path behind the user's back (saveTab).
+    if (reply.kind === 'read_err' && (reply as { code?: string }).code === 'not_found') {
+      if (!cur.missing) setTabs(tabs().map((x) => x.id === cur.id ? { ...x, missing: true } : x));
+      return;
+    }
+    // Unreadable for another reason (perms, became a dir): keep the
+    // buffer so the user can still save it back out.
+    if (reply.kind !== 'read_ok' || blockedOf(reply)) return;
+    if (cur.missing) setTabs(tabs().map((x) => x.id === cur.id ? { ...x, missing: false } : x));
+    const raw = String(reply.content ?? '');
+    const disk = toBuffer(raw);
     // Track the line endings on disk even when the text did not move:
     // the next save should match what is there now.
     const eol = detectEol(raw);
@@ -3037,6 +3117,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <Show when={activeTab()!.eol === 'crlf'}>
             <span data-testid="edit-status-eol" style={{ 'margin-left': '8px', color: tokens.fgDim }}>· CRLF</span>
           </Show>
+          <Show when={activeTab()!.missing}>
+            <span data-testid="edit-status-missing" style={{ 'margin-left': '8px', color: tokens.fgDanger }}>· deleted on disk — Ctrl+S saves as…</span>
+          </Show>
           <Show when={activeTab()!.blocked}>
             <span data-testid="edit-status-readonly" style={{ 'margin-left': '8px', color: tokens.fgDim }}>· read-only: {readOnlyText(activeTab()!)}</span>
           </Show>
@@ -3052,6 +3135,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         host={props.host}
         hostInstanceID={props.instance}
         defaultName={picker()?.mode === 'save' ? (picker() as { suggestedName: string }).suggestedName : undefined}
+        start={picker()?.mode === 'save' ? (picker() as { start?: string }).start : undefined}
         onConfirm={(p) => void pickerConfirm(p)}
         onCancel={() => setPicker(null)}
         data-testid="edit-picker"
