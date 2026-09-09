@@ -970,6 +970,7 @@ func (inst *AppInstance) handleOpenRequest(m wire.EvtOpenRequest) error {
 		inst.router.log("open: handler %s protocol mismatch", target.Manifest.ID)
 		return nil
 	}
+	inst.router.log("open.request: path=%q handler=%s from=%s", m.Path, target.Manifest.ID, inst.Manifest.ID)
 	go inst.router.spawnForOpen(target, m.Path)
 	return nil
 }
@@ -1117,6 +1118,7 @@ func (r *Router) spawnChild(target *Entry, requester *AppInstance, openPath stri
 	if werr := requester.WriteEvt(wire.NewEvtSpawnOk(target.Manifest.ID, inst.InstanceID)); werr != nil {
 		r.log("spawn %s: ok reply to instance=%s lost: %v (spawned instance=%s)", target.Manifest.ID, requester.InstanceID, werr, inst.InstanceID)
 	}
+	r.noteOpenRouted(openPath, target.Manifest.ID, "spawn.request")
 }
 
 // openArgs is the argv tail that carries a launch path to an app
@@ -1134,7 +1136,9 @@ func openArgs(path string) []string {
 func (r *Router) spawnForOpen(target *Entry, path string) {
 	if _, err := r.spawnAndRun(context.Background(), target, false, openArgs(path)...); err != nil {
 		r.log("open: spawn %s for %q: %v", target.Manifest.ID, path, err)
+		return
 	}
+	r.noteOpenRouted(path, target.Manifest.ID, "open.request")
 }
 
 // requestClose initiates the X-style close handshake (WIRE.md §10).
