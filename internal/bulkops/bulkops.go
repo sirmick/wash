@@ -45,6 +45,12 @@ const (
 	OpDelete Op = "delete"
 	OpMove   Op = "move"
 	OpCopy   Op = "copy"
+	// OpExtract unpacks Paths[0] into Dest. OpCompress writes Paths
+	// into Dest/Names[0], whose extension picks the container. Both are
+	// long walks that want the queue's progress and cancel — see
+	// archive.go.
+	OpExtract  Op = "extract"
+	OpCompress Op = "compress"
 )
 
 // Status is the lifecycle state of a single job.
@@ -316,6 +322,37 @@ func ValidateNamedPaths(op Op, paths []string, dest string, names []string) erro
 	if len(paths) == 0 {
 		return fmt.Errorf("nothing to %s", opWord(op))
 	}
+	// Archive ops have their own shape: extract takes one archive and a
+	// destination folder, compress a set of sources and ONE archive name.
+	// Neither is the per-source rename `names` otherwise means, and the
+	// src/dst geometry checks below are about moving a tree into itself.
+	switch op {
+	case OpExtract:
+		if len(paths) != 1 {
+			return fmt.Errorf("extract takes one archive, got %d", len(paths))
+		}
+		if !IsExtractable(paths[0]) {
+			return fmt.Errorf("%w: %s", ErrUnsupportedArchive, filepath.Base(paths[0]))
+		}
+		if dest == "" {
+			return errors.New("extract requires a destination")
+		}
+		return nil
+	case OpCompress:
+		if len(names) != 1 || names[0] == "" {
+			return errors.New("compress needs an archive name")
+		}
+		if names[0] != filepath.Base(names[0]) {
+			return fmt.Errorf("compress: %q is not a valid name", names[0])
+		}
+		if !IsExtractable(names[0]) {
+			return fmt.Errorf("%w: %s", ErrUnsupportedArchive, names[0])
+		}
+		if dest == "" {
+			return errors.New("compress requires a destination")
+		}
+		return nil
+	}
 	if len(names) != 0 && len(names) != len(paths) {
 		return fmt.Errorf("%s: %d names for %d paths", opWord(op), len(names), len(paths))
 	}
@@ -399,7 +436,7 @@ func resolveDir(p string) (string, bool) {
 // "delete"; unknown ops fall back to "process".
 func opWord(op Op) string {
 	switch op {
-	case OpCopy, OpMove, OpDelete:
+	case OpCopy, OpMove, OpDelete, OpExtract, OpCompress:
 		return string(op)
 	}
 	return "process"
@@ -485,6 +522,10 @@ func (m *Manager) runJob(job *Job) {
 		err = m.runMove(job)
 	case OpCopy:
 		err = m.runCopy(job)
+	case OpExtract:
+		err = m.runExtract(job)
+	case OpCompress:
+		err = m.runCompress(job)
 	default:
 		err = fmt.Errorf("unknown op %q", job.Op)
 	}
@@ -1109,4 +1150,64 @@ func removeAll(path string, onItem func()) error {
 // errors.Is unwraps.
 func isCrossDevice(err error) bool {
 	return errors.Is(err, syscall.EXDEV)
+}
+
+// runExtract unpacks Paths[0] into Dest (archive.go). Total comes from a
+// header pre-pass so the progress bar is honest; the walk polls the
+// job's cancel flag between entries, so a huge tarball stops promptly.
+//
+// A zip-slip refusal does not abort the run — the entries that were safe
+// are already on disk and removing them would be a worse surprise — but
+// it does fail the job, because "it extracted, except for the parts that
+// tried to escape" is something the user has to be told.
+func (m *Manager) runExtract(job *Job) error {
+	src := job.Paths[0]
+	if total, err := CountEntries(src); err == nil {
+		m.setTotal(job, total)
+	}
+	st, err := Extract(src, job.Dest, func() bool { return job.cancel.Load() }, func() { m.bumpDone(job, 1) })
+	log.Printf("bulkops: extract %s → %s files=%d dirs=%d symlinks=%d refused=%d skipped=%d",
+		src, job.Dest, st.Files, st.Dirs, st.Symlinks, st.Refused, st.Skipped)
+	if err != nil {
+		return err
+	}
+	if st.Refused > 0 {
+		return fmt.Errorf("%d archive entries were refused for pointing outside %s", st.Refused, job.Dest)
+	}
+	return nil
+}
+
+// runCompress writes Paths into Dest/Names[0]. The archive is built at a
+// temp name in the same directory and renamed on success, so a cancelled
+// or failed run never leaves a half-written .zip looking finished.
+func (m *Manager) runCompress(job *Job) error {
+	total, err := countItems(job.Paths)
+	if err != nil {
+		return err
+	}
+	m.setTotal(job, total)
+	out := filepath.Join(job.Dest, job.Names[0])
+	tmp, err := os.CreateTemp(job.Dest, ".wash-archive-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		tmp.Close()
+		os.Remove(tmpName) // no-op once the rename below has moved it
+	}()
+	if err := WriteArchive(tmp, job.Names[0], job.Paths, func() { m.bumpDone(job, 1) }); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if job.cancel.Load() {
+		return nil
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	log.Printf("bulkops: compress %d paths → %s", len(job.Paths), out)
+	return os.Rename(tmpName, out)
 }

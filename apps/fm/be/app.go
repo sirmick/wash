@@ -358,6 +358,10 @@ func registerHandlers(b *sdk.Bus) {
 	// openwith.go.
 	registerOpenWithHandlers(b)
 
+	// Archives: "Extract here" / "Compress", both as bulk jobs; see
+	// archive.go.
+	registerArchiveHandlers(b)
+
 	// Duplicate (Ctrl+D) — free "(copy)" names + a named bulk job; see
 	// duplicate.go.
 	registerDuplicateHandlers(b)

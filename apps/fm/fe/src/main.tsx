@@ -2177,6 +2177,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return sel.size >= 2 && sel.has(p) ? Array.from(sel) : [p];
   };
 
+  // Archives. The formats fm can unpack are the ones the standard
+  // library can read; .tar.xz is deliberately not among them (no stdlib
+  // xz codec), so the menu never offers what the BE would refuse.
+  const extractHere = (p: string) => {
+    closeMenu();
+    void sendWithReply({ kind: 'extract', path: p }).then((reply) => {
+      if (reply.kind !== 'extract_ok') {
+        setStatusOverride(`extract: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+        return;
+      }
+      setStatusInfo(`extracting → ${baseName(String(reply.dest ?? ''))}`);
+    });
+  };
+  const compressPaths = (paths: string[], format: 'zip' | 'tar.gz') => {
+    closeMenu();
+    if (paths.length === 0) return;
+    void sendWithReply({ kind: 'compress', paths, format }).then((reply) => {
+      if (reply.kind !== 'compress_ok') {
+        setStatusOverride(`compress: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+        return;
+      }
+      setStatusInfo(`compressing → ${String(reply.name ?? '')}`);
+    });
+  };
+
   // Duplicate (Ctrl+D) — a sibling copy under a free "(copy)" name. The
   // BE resolves the names (it can read the folder) and hands the copying
   // to wash-bulk, so duplicating a big folder gets the queue's progress
@@ -3367,6 +3392,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             closeMenu();
             duplicatePaths(menuActionPaths(m.path));
           }}
+          extractable={isExtractableName((menu() as { path: string }).path)}
+          onExtract={() => extractHere((menu() as { path: string }).path)}
+          onCompress={(format) => compressPaths(menuActionPaths((menu() as { path: string }).path), format)}
           onOpenTerminal={() => {
             const m = menu() as { entry: Entry; path: string };
             // A folder row → that folder; a file row → its parent (the BE
@@ -3946,6 +3974,11 @@ const ContextMenu: Component<{
   onOpenWith: () => void;
   onOpenTerminal: () => void;
   onDuplicate: () => void;
+  // Archives: Extract here shows only for a container fm can unpack;
+  // Compress always does (any selection can become one).
+  extractable: boolean;
+  onExtract: () => void;
+  onCompress: (format: 'zip' | 'tar.gz') => void;
   // Files-clipboard trio — Cut/Copy mirror the Ctrl+X/C shortcuts on
   // the clicked row (or the whole selection when it contains the row);
   // Paste mirrors Ctrl+V into the row's directory. canPaste greys
@@ -3975,6 +4008,11 @@ const ContextMenu: Component<{
       <MenuItem data-testid="fm-ctx-paste" label="Paste" disabled={!props.canPaste} onClick={props.onPaste} />
       <MenuSeparator />
       <MenuItem data-testid="fm-ctx-duplicate" label="Duplicate" onClick={props.onDuplicate} />
+      <Show when={props.extractable}>
+        <MenuItem data-testid="fm-ctx-extract" label="Extract here" onClick={props.onExtract} />
+      </Show>
+      <MenuItem data-testid="fm-ctx-compress" label="Compress" onClick={() => props.onCompress('zip')} />
+      <MenuItem data-testid="fm-ctx-compress-targz" label="Compress (.tar.gz)" onClick={() => props.onCompress('tar.gz')} />
       <MenuSeparator />
       <MenuItem data-testid="fm-ctx-copy-path" label="Copy path" onClick={props.onCopyPath} />
       <MenuItem data-testid="fm-ctx-download" label={props.downloadLabel} onClick={props.onDownload} />
@@ -4250,6 +4288,15 @@ const pathInputStyle: JSX.CSSProperties = {
   font: tokens.type.textMd,
   outline: 'none',
 };
+
+// isExtractableName mirrors bulkops.IsExtractable: the containers the
+// BE can unpack. .tar.xz is absent on purpose — the standard library has
+// no xz codec — so the menu never offers what the BE would refuse.
+const EXTRACTABLE = ['.zip', '.tar', '.tar.gz', '.tgz'];
+function isExtractableName(p: string): boolean {
+  const n = baseName(p).toLowerCase();
+  return EXTRACTABLE.some((ext) => n.endsWith(ext));
+}
 
 const filterBarStyle: JSX.CSSProperties = {
   display: 'flex',
