@@ -7,7 +7,7 @@
 // Ctrl+Shift+N, new folder, existed).
 
 import { test, expect } from '../fixtures/router';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 function seed(root: string): void {
@@ -54,17 +54,17 @@ test.describe('fm shortcuts and cut affordance', () => {
     // A sibling that is not on the clipboard is untouched.
     await expect(row(page, 'other.txt')).not.toHaveAttribute('data-dimmed', 'true');
 
-    // Paste into the target folder: the file moves and the cut resolves,
-    // so the row it lands as is not dimmed.
+    // Paste into the target folder. Once the move lands the cut has
+    // resolved, so NOTHING in the window is dimmed any more. (The row's
+    // own new home is asserted on disk: whether the tree has re-listed
+    // the destination yet is the watcher's business, not this spec's.)
+    const from = router.logCursor();
     await row(page, 'target').click();
     await fm.press('Control+v');
-    await expect(row(page, 'notes.txt')).toHaveAttribute(
-      'data-path',
-      join(router.fmRoot, 'target', 'notes.txt'),
-      { timeout: 15_000 },
-    );
-    await expect(row(page, 'notes.txt')).not.toHaveAttribute('data-dimmed', 'true');
-    await expect(row(page, 'other.txt')).not.toHaveAttribute('data-dimmed', 'true');
+    await router.waitForLog(/bulk-ops job=\S+ op=move status=done/, 15_000, from);
+    await expect(page.locator('wash-app-fm [data-dimmed="true"]')).toHaveCount(0);
+    expect(existsSync(join(router.fmRoot, 'target', 'notes.txt'))).toBe(true);
+    expect(existsSync(join(router.fmRoot, 'notes.txt'))).toBe(false);
   });
 
   test('a copy dims nothing, and Escape abandons a pending cut', async ({ page, router }) => {

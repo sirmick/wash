@@ -3114,7 +3114,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         ref={bodyEl!}
         style={{ ...bodyStyle, 'grid-template-columns': gridCols() }}
       >
-        <div style={{ display: 'grid', 'grid-template-rows': 'auto 1fr', 'min-height': 0, 'min-width': 0, overflow: 'hidden' }}>
+        {/* The tree column: the filter bar (when open) above the tree. A
+            COLUMN FLEX, not a two-row grid — an explicit second grid row
+            would leave the tree in the `auto` first row whenever the
+            filter is closed, collapsing it to its content height. */}
+        <div style={treeColumnStyle}>
         <Show when={filterOpen()}>
           <div data-testid="fm-filter" data-search-mode={searchMode() ? 'true' : undefined} style={filterBarStyle}>
             <Search size={12} style={{ opacity: 0.7, 'flex-shrink': 0 }} />
@@ -4343,9 +4347,21 @@ const treeStyle: JSX.CSSProperties = {
   // re-scrolling to keep some lower row stable, which would yank the folder
   // the user just toggled out of view.
   'overflow-anchor': 'none',
+  // Fill the tree column below the filter bar (treeColumnStyle) rather
+  // than sizing to the rows: the empty space below the last row is a
+  // real drop target ("move into this folder").
+  flex: 1,
   'min-height': 0,
   background: tokens.bgWindow,
   padding: '0 0 4px 0',
+};
+
+const treeColumnStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'flex-direction': 'column',
+  'min-height': 0,
+  'min-width': 0,
+  overflow: 'hidden',
 };
 
 const previewStyle: JSX.CSSProperties = {
