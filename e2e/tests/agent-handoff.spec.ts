@@ -89,7 +89,10 @@ test.describe('agent handoff', () => {
     // the path wash-edit will use, not a payload claiming to be one.
     const inst = await win.getAttribute('data-wash-instance');
     expect(inst).toBeTruthy();
+    // The sender is wash-test, which exists only in a TEST_APP=1 build —
+    // the layout the e2e suite runs against.
     const launched = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+    expect(launched.t).toBe('launched');
     const testInst = launched.instance_id as string;
     const cursor = router.logCursor();
     await router.controlRequest({
