@@ -386,6 +386,20 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	if openDir != "" {
 		log.Printf("wash-term: open dir=%s", openDir)
 	}
+	// PATH shims (apps/term/be/shims.go): xdg-open, so programs that
+	// already know how to open things reach `wash open`. Set in this
+	// process's own env because pty.WithWashEnv reads WASH_SHIM_DIR from
+	// the env each shell inherits.
+	if dir := installShims(); dir != "" {
+		_ = os.Setenv("WASH_SHIM_DIR", dir)
+	}
+	// WASH_TERM_INSTANCE is how `wash open` (and the xdg-open shim) finds
+	// its way back here: it addresses this window over the control socket
+	// and lets THIS process do the opening, which is the half that holds
+	// CapOpen and CapSpawn. Deliberately not called WASH_INSTANCE_ID —
+	// that name means "you ARE this instance" to the SDK's attach path,
+	// and a shell full of children must not claim to be the terminal.
+	_ = os.Setenv("WASH_TERM_INSTANCE", instanceID)
 	bus := sdk.NewBus(c)
 	registerHandlers(bus)
 	go openTabExec(c, windowID, 80, 24, nil, "", openDir)

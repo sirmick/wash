@@ -618,7 +618,7 @@ func userShell() string {
 	return "/bin/bash"
 }
 
-// WithWashEnv returns env with two wash-specific tweaks applied:
+// WithWashEnv returns env with three wash-specific tweaks applied:
 //
 //   - TERM=xterm-256color and COLORTERM=truecolor (always — the shell
 //     side renders via xterm.js, which does 24-bit colour; bat, delta
@@ -627,23 +627,42 @@ func userShell() string {
 //     can run sibling wash CLIs (wash-launch, wash-fm, …) without an
 //     absolute path. The router publishes WASH_BIN_DIR; if absent,
 //     PATH is left alone.
+//   - PATH prefixed with $WASH_SHIM_DIR, AHEAD of WASH_BIN_DIR and of
+//     everything else: that is where the host app puts shims that must
+//     shadow a system binary of the same name (`xdg-open`). A shim only
+//     works if it wins, so it goes first by construction rather than by
+//     the order the two happen to be inserted.
 //
 // Used by wash-term and any future PTY-hosting app that wants its
 // interactive shell to feel like a wash session.
 func WithWashEnv(env []string) []string {
 	binDir := lookupEnv(env, "WASH_BIN_DIR")
+	shimDir := lookupEnv(env, "WASH_SHIM_DIR")
 	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") && binDir != "" {
+		if strings.HasPrefix(kv, "PATH=") && (binDir != "" || shimDir != "") {
 			cur := kv[len("PATH="):]
-			out = append(out, "PATH="+prependPath(cur, binDir))
+			if binDir != "" {
+				cur = prependPath(cur, binDir)
+			}
+			if shimDir != "" {
+				cur = prependPath(cur, shimDir)
+			}
+			out = append(out, "PATH="+cur)
 			continue
 		}
 		out = append(out, kv)
 	}
 	out = PinTerm(out)
-	if binDir != "" && lookupEnv(out, "PATH") == "" {
-		out = append(out, "PATH="+binDir)
+	if lookupEnv(out, "PATH") == "" {
+		switch {
+		case shimDir != "" && binDir != "":
+			out = append(out, "PATH="+shimDir+string(os.PathListSeparator)+binDir)
+		case shimDir != "":
+			out = append(out, "PATH="+shimDir)
+		case binDir != "":
+			out = append(out, "PATH="+binDir)
+		}
 	}
 	out = mapDisplayEnv(out)
 	return out

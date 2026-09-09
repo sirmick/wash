@@ -71,6 +71,12 @@ func main() {
 		}
 	case "wash-fswatchd":
 		os.Exit(fswatchd.Run(os.Args[1:]))
+	case "xdg-open":
+		// The shim wash-term puts on a terminal's PATH is a SYMLINK to
+		// this binary named xdg-open, so `xdg-open foo.png` in a wash
+		// terminal is `wash open foo.png`. A shell wrapper would have to
+		// re-quote its arguments; a symlink cannot get that wrong.
+		os.Exit(launch.RunOpen(os.Args[1:]))
 	}
 
 	a := registry.Get(name)
@@ -147,6 +153,8 @@ func runSubcommand(args []string) {
 		os.Exit(routerrun.Run(rest))
 	case "launch":
 		os.Exit(launch.Run(rest))
+	case "open":
+		os.Exit(launch.RunOpen(rest))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -194,6 +202,8 @@ Subcommands:
   wash list-apps                  list registered apps
   wash router [flags...]          run the router host (see wash router --help)
   wash launch [flags...]          run the wash-launch CLI (see wash launch --help)
+  wash open <path|url>            open a path in the app that handles it
+                                  (a directory in wash-fm, a URL in $BROWSER)
   wash ai [--agent X] [dir]       open an agent session (default: first
                                   installed adapter, $HOME)
   wash <name> [args...]           shorthand for wash-<name> [args...]
