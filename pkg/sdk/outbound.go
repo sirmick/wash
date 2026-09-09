@@ -327,6 +327,16 @@ func (c *Conn) SpawnRequest(appID string) error {
 	return c.writeEvt(wire.NewEvtSpawnRequest(appID))
 }
 
+// SpawnRequestOpen is SpawnRequest with a launch path: the router starts
+// the target with `--open <path>` argv, which the target reads through
+// LaunchOpenPath. Same capability gate as SpawnRequest.
+func (c *Conn) SpawnRequestOpen(appID, path string) error {
+	if path == "" {
+		return c.SpawnRequest(appID)
+	}
+	return c.writeEvt(wire.NewEvtSpawnRequestOpen(appID, path))
+}
+
 // IdleInhibit tells the router not to self-exit for idleness while this
 // app is doing something that outlives the browser — or releases that
 // hold. Requires the "idle_inhibit" capability in the app's manifest.

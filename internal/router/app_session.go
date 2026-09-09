@@ -947,7 +947,7 @@ func (inst *AppInstance) handleSpawnRequest(m wire.EvtSpawnRequest) error {
 	}
 	// Spawn in a goroutine so we don't block this app's read loop on
 	// the child's handshake.
-	go inst.router.spawnChild(target, inst)
+	go inst.router.spawnChild(target, inst, m.Open)
 	return nil
 }
 
@@ -1095,8 +1095,18 @@ func (r *Router) takeTokenPending(token string) *tokenPending {
 // On success, sends EvtSpawnOk to the requester; on failure,
 // EvtSpawnErr. Backed by the shared launchOrRaise, so re-launching an
 // already-open single-window app raises it instead of duplicating it.
-func (r *Router) spawnChild(target *Entry, requester *AppInstance) {
-	inst, err := r.launchOrRaise(context.Background(), target)
+//
+// openPath, when set, is forwarded as `--open <path>` argv (the open
+// routing seam); argv is per-process, so such a spawn always starts a
+// fresh instance rather than raising an existing one.
+func (r *Router) spawnChild(target *Entry, requester *AppInstance, openPath string) {
+	var inst *AppInstance
+	var err error
+	if args := openArgs(openPath); args != nil {
+		inst, err = r.spawnAndRun(context.Background(), target, false, args...)
+	} else {
+		inst, err = r.launchOrRaise(context.Background(), target)
+	}
 	if err != nil {
 		r.log("spawn %s: %v", target.Manifest.ID, err)
 		if werr := requester.WriteEvt(wire.NewEvtSpawnErr(target.Manifest.ID, wire.ErrCodeInternal, err.Error())); werr != nil {
@@ -1109,11 +1119,20 @@ func (r *Router) spawnChild(target *Entry, requester *AppInstance) {
 	}
 }
 
+// openArgs is the argv tail that carries a launch path to an app
+// (Conn.LaunchOpenPath parses it); nil when there is no path.
+func openArgs(path string) []string {
+	if path == "" {
+		return nil
+	}
+	return []string{"--open", path}
+}
+
 // spawnForOpen launches an open-request target with `--open <path>`. Unlike
 // spawnChild it sends no spawn ok/err back to the requester — open is
 // fire-and-forget — so a failure is only logged.
 func (r *Router) spawnForOpen(target *Entry, path string) {
-	if _, err := r.spawnAndRun(context.Background(), target, false, "--open", path); err != nil {
+	if _, err := r.spawnAndRun(context.Background(), target, false, openArgs(path)...); err != nil {
 		r.log("open: spawn %s for %q: %v", target.Manifest.ID, path, err)
 	}
 }

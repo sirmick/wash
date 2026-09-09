@@ -1602,8 +1602,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     await sendWithReply({ kind: 'rename', from: r.path, to });
   };
 
-  const openInFm = () => {
-    send({ kind: 'spawn', app_id: 'com.wash.fm' });
+  // revealInFm opens a Files window AT the thing the user is looking
+  // at: the active tab's file (fm lists its folder), else the sidebar
+  // selection, else the project root. The BE forwards the path as the
+  // spawn request's `open`, which the router hands to fm as
+  // `--open <path>` — the same launch seam open routing uses for edit.
+  const revealInFm = () => {
+    const t = activeTab();
+    const target = (t?.path && !t.diff ? t.path : '') || selectedPath() || root();
+    send({ kind: 'spawn', app_id: 'com.wash.fm', ...(target ? { open: target } : {}) });
   };
 
   // ---- drop-to-open on the editor area ----
@@ -2707,9 +2714,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             }}>{root() || 'loading…'}</span>
             <Button
               variant="ghost"
-              data-testid="edit-open-in-fm"
-              title="Open in fm"
-              onClick={openInFm}
+              data-testid="edit-reveal-in-fm"
+              title="Reveal in Files"
+              onClick={revealInFm}
               style={{
                 color: tokens.fgMuted,
                 width: '22px',
