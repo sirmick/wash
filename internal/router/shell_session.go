@@ -164,9 +164,7 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 		<-sess.drainerDone
 		// The coalescer's retry timer outlives the scheduler otherwise,
 		// firing a flush at a closed queue for every dropped connection.
-		if sess.patches != nil {
-			sess.patches.stop()
-		}
+		sess.coalescer().stop()
 		// Bank this connection's counters into the session running totals
 		// so the desktop info panel + About survive the disconnect.
 		snap := sess.scheduler.StatsSnapshot()
@@ -1035,12 +1033,22 @@ func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
 // anything still waiting for the wire. Interactive class: geometry and
 // focus are what a human is waiting on.
 func (s *ShellSession) queuePatches(patches []wire.SessionPatch) {
+	s.coalescer().add(patches)
+}
+
+// coalescer is the one door to s.patches. Teardown used to read the field
+// bare while an app's tearDown on another goroutine was still creating it
+// through the Once — a data race the CI race gate caught on the 0.14.4 tag
+// run. Going through the Once on every path gives the read its
+// happens-before; a teardown that builds a coalescer only to stop it
+// costs a struct with a nil timer.
+func (s *ShellSession) coalescer() *patchCoalescer {
 	s.patchesOnce.Do(func() {
 		s.patches = newPatchCoalescer(func(batch []wire.SessionPatch) bool {
 			return s.tryWriteCtrlClass(wire.NewShellSessionPatch(batch...), wire.ClassInteractive)
 		})
 	})
-	s.patches.add(patches)
+	return s.patches
 }
 
 // tryWriteCtrlClass enqueues a control message non-blocking at an explicit

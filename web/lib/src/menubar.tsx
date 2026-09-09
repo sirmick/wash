@@ -68,6 +68,10 @@ export const MenuBar: Component<MenuBarProps> = (props) => {
           <>
             <button
               type="button"
+              // "strong" to match the MenuItem rows the bar opens — the
+              // strip and its menu are one control and should highlight
+              // with one weight.
+              data-wash-hit="strong"
               data-testid={`${props.testidPrefix ?? 'menubar'}-${m.id}`}
               onClick={(ev) => toggle(m.id, ev)}
               style={{

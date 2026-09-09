@@ -29,7 +29,7 @@ import {
 import { ModalLayer, registerModal, summonModal, hasModal, forgetModalsFor } from './modal';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import { RelayChannelSocket } from './relay-socket';
-import { tokens } from '@wash/ui';
+import { ensureHitStyles, tokens } from '@wash/ui';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
@@ -1628,6 +1628,7 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
         </span>
         <Show when={canRetry()}>
           <button
+            data-wash-hit
             data-testid="wash-connection-retry"
             onClick={() => conn.reconnectNow()}
             style={{
@@ -1645,6 +1646,7 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
         </Show>
         <Show when={superseded() && props.state === 'open'}>
           <button
+            data-wash-hit
             data-testid="wash-connection-use-here"
             onClick={() => location.reload()}
             style={{
@@ -1666,6 +1668,10 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
 };
 
 void conn.ready();
+// The interaction layer for the shell's OWN chrome (titlebars, resize
+// handles, crash-card controls). Apps get it via defineWashApp; the
+// shell never goes through that path, so it injects here.
+ensureHitStyles();
 render(App, document.getElementById('root')!);
 
 // Provide a tiny FE-side API for apps that want to send app_msg back

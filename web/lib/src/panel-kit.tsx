@@ -53,7 +53,7 @@ export const SmallBtn: Component<{
   'data-testid'?: string;
   children: JSX.Element;
 }> = (props) => (
-  <button type="button" data-testid={props['data-testid']} onClick={props.onClick} style={smallBtnStyle}>
+  <button type="button" data-wash-hit data-testid={props['data-testid']} onClick={props.onClick} style={smallBtnStyle}>
     {props.children}
   </button>
 );
@@ -124,7 +124,7 @@ export const Checkbox: Component<{
   disabled?: boolean;
   'data-testid'?: string;
 }> = (props) => (
-  <label style={{ ...checkboxLabelStyle, ...(props.disabled ? { opacity: 0.5, cursor: 'default' } : {}) }}>
+  <label data-wash-hit style={{ ...checkboxLabelStyle, ...(props.disabled ? { opacity: 0.5, cursor: 'default' } : {}) }}>
     <input
       type="checkbox"
       checked={props.checked}

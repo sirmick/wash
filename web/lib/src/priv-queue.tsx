@@ -143,6 +143,7 @@ export const PrivWidget: Component<PrivWidgetProps> = (props) => {
       </For>
       <Show when={hiddenCount() > 0}>
         <button
+          data-wash-hit
           type="button"
           data-testid="priv-more"
           onClick={() => setExpanded((v) => !v)}
@@ -188,6 +189,7 @@ const LockBar: Component<{ locked: () => boolean; onLock: () => void }> = (props
       </span>
       <Show when={!props.locked()}>
         <button
+          data-wash-hit
           type="button"
           data-testid="priv-lock"
           onClick={props.onLock}
@@ -229,6 +231,7 @@ const GrantChip: Component<{ appID: string; onRevoke: () => void }> = (props) =>
     >
       auto: {shortApp(props.appID)}
       <button
+        data-wash-hit
         type="button"
         data-testid={`priv-revoke-${props.appID}`}
         onClick={props.onRevoke}
@@ -331,6 +334,7 @@ const PrivRow: Component<{
       <Show when={isPending()}>
         <div style={{ display: 'flex', gap: '6px', 'margin-top': '4px', 'flex-wrap': 'wrap' }}>
           <button
+            data-wash-hit
             type="button"
             data-testid={`priv-approve-${props.req.req_id}`}
             onClick={props.onApprove}
@@ -349,6 +353,7 @@ const PrivRow: Component<{
           </button>
           <Show when={canGrantApp() && props.onApproveApp}>
             <button
+              data-wash-hit
               type="button"
               data-testid={`priv-approve-app-${props.req.req_id}`}
               onClick={props.onApproveApp}
@@ -367,6 +372,7 @@ const PrivRow: Component<{
             </button>
           </Show>
           <button
+            data-wash-hit
             type="button"
             data-testid={`priv-reject-${props.req.req_id}`}
             onClick={props.onReject}

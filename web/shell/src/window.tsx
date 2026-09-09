@@ -452,6 +452,7 @@ export function FloatingWindow(props: WindowProps) {
           </Show>
         </span>
         <button
+          data-wash-hit
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
@@ -464,6 +465,7 @@ export function FloatingWindow(props: WindowProps) {
           <Minus size={14} />
         </button>
         <button
+          data-wash-hit
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
@@ -480,6 +482,7 @@ export function FloatingWindow(props: WindowProps) {
           {props.win.state === 'maximized' ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
         </button>
         <button
+          data-wash-hit
           // Stop pointerdown from bubbling so the titlebar's drag
           // handler does not capture the pointer and swallow the click.
           onPointerDown={(e) => e.stopPropagation()}
@@ -588,6 +591,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           </div>
         </div>
         <button
+          data-wash-hit
           type="button"
           onClick={onCopy}
           data-testid="window-crashed-copy"

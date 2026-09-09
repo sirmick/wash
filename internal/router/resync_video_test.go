@@ -221,7 +221,7 @@ func TestResync_GenericKindNoForceFrame(t *testing.T) {
 // the scheduler cannot preempt once committed, which freezes every
 // higher lane for its duration. It must arrive as small frames whose
 // concatenation is still exactly the scrollback.
-func TestResyncReplayIsChunked(t *testing.T) {
+func TestResyncReplayIsOneFrame(t *testing.T) {
 	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
 
 	sess := &ShellSession{
@@ -242,9 +242,9 @@ func TestResyncReplayIsChunked(t *testing.T) {
 	}
 	r.registerChannel(b)
 
-	// Bigger than one chunk, and not a multiple of it, so a remainder
-	// frame is exercised. Newline-free: realignReplay trims to a line
-	// boundary and would make the comparison below about that instead.
+	// Many times the frame cap, so a chunking writer would be obvious.
+	// Newline-free: realignReplay trims to a line boundary and would make
+	// the comparison below about that instead.
 	scrollback := make([]byte, 5*maxChunkBytes+123)
 	for i := range scrollback {
 		scrollback[i] = byte('a' + i%26)
@@ -263,16 +263,19 @@ func TestResyncReplayIsChunked(t *testing.T) {
 			continue
 		}
 		frames++
-		if len(f.Payload) > maxChunkBytes {
-			t.Errorf("replay frame of %d bytes, over the %d cap", len(f.Payload), maxChunkBytes)
-		}
 		got = append(got, f.Payload...)
 	}
-	if frames < 2 {
-		t.Fatalf("replay arrived in %d frame(s) — not chunked", frames)
+	// ONE frame, however big. The FE feeds a replay into xterm's write
+	// queue, and xterm keeps the viewport following its output only while
+	// ydisp == ybase; split across frames, the follow breaks at a chunk
+	// boundary and the terminal stops showing output it has already parsed
+	// (measured: ydisp 1232, ybase 15183, after a 20k-line burst). The
+	// atomicity is the fix, so it is what this asserts — a chunking writer
+	// here regresses a terminal into looking hung.
+	if frames != 1 {
+		t.Fatalf("replay arrived in %d frames, want exactly 1 — a split replay detaches the FE viewport", frames)
 	}
 	if string(got) != string(scrollback) {
-		t.Errorf("reassembled replay is %d bytes, want %d — chunking lost or reordered data",
-			len(got), len(scrollback))
+		t.Errorf("replay is %d bytes, want %d", len(got), len(scrollback))
 	}
 }

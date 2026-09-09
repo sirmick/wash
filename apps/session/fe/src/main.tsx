@@ -2035,6 +2035,7 @@ const PagerCell: Component<{
   };
   return (
     <div
+      data-wash-hit
       data-testid={`pager-cell-${props.cell.vx}-${props.cell.vy}`}
       data-active={props.active ? 'true' : 'false'}
       style={cellStyle()}
@@ -2094,6 +2095,7 @@ const PagerWindow: Component<{
   };
   return (
     <div
+      data-wash-hit
       data-testid={`pager-window-${props.win.windowID}-${props.cell.vx}-${props.cell.vy}`}
       style={style()}
       onClick={onClick}
@@ -2112,6 +2114,7 @@ const IconButton: Component<{
   const [hover, setHover] = createSignal(false);
   return (
     <button
+      data-wash-hit
       type="button"
       title={props.title}
       data-testid={props.testid}
@@ -2153,6 +2156,7 @@ const WindowPill: Component<{
   };
   return (
     <button
+      data-wash-hit
       type="button"
       data-testid="taskbar-pill"
       data-attention={props.attention ? 'true' : undefined}
@@ -2415,6 +2419,9 @@ const Palette: Component<{
 }> = (props) => {
   return (
     <div
+      // Dismiss backdrop — a click on the scrim closes the palette, but the
+      // scrim is not a thing you point at.
+      data-wash-no-hit
       data-testid="palette"
       onClick={(ev) => {
         if (ev.currentTarget === ev.target) props.onClose();
@@ -2500,6 +2507,7 @@ const PaletteRow: Component<{
   });
   return (
     <button
+      data-wash-hit
       type="button"
       data-testid={`palette-item-${props.app.id}`}
       data-path={props.app.recent?.path}

@@ -68,7 +68,7 @@ export function WifiDialog(props: {
       <Show when={props.live && props.enabled === false}>
         <div class="wash-net-wifi-scan wash-net-wifi-off">
           <span class="wash-net-hint">Wi-Fi is turned off.</span>
-          <button data-testid="wifi-radio-on" class="wash-net-btn primary" disabled={props.busy} onClick={() => props.onToggleRadio?.(true)}>Turn on Wi-Fi</button>
+          <button data-wash-hit data-testid="wifi-radio-on" class="wash-net-btn primary" disabled={props.busy} onClick={() => props.onToggleRadio?.(true)}>Turn on Wi-Fi</button>
         </div>
       </Show>
 
@@ -76,14 +76,14 @@ export function WifiDialog(props: {
         <div class="wash-net-wifi-scan">
           <div class="wash-net-wifi-scanhead">
             <span class="wash-net-grouplabel">Available networks</span>
-            <button data-testid="wifi-scan" class="wash-net-btn ghost" disabled={!!props.scanning} onClick={() => props.onScan?.()}>
+            <button data-wash-hit data-testid="wifi-scan" class="wash-net-btn ghost" disabled={!!props.scanning} onClick={() => props.onScan?.()}>
               {props.scanning ? "Scanning…" : "Scan"}
             </button>
           </div>
           <div class="wash-net-aplist">
             <For each={props.aps ?? []} fallback={<div class="wash-net-hint">{props.scanning ? "Scanning…" : "No networks found yet."}</div>}>
               {(ap) => (
-                <button type="button" class="wash-net-ap" data-testid={`ap-${ap.ssid}`} data-inuse={ap.in_use ? "1" : "0"} onClick={() => pickAP(ap)}>
+                <button data-wash-hit type="button" class="wash-net-ap" data-testid={`ap-${ap.ssid}`} data-inuse={ap.in_use ? "1" : "0"} onClick={() => pickAP(ap)}>
                   <span class="wash-net-ap-ssid">{ap.ssid || "(hidden)"}</span>
                   <span class="wash-net-ap-meta">
                     <Show when={ap.security}>🔒 </Show>{signalBars(ap.signal)}<Show when={ap.in_use}> ✓</Show>
@@ -122,8 +122,8 @@ export function WifiDialog(props: {
       </Show>
 
       <div class="wash-net-wizard-actions">
-        <button class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
-        <button data-testid="wifi-connect" class="wash-net-btn primary" disabled={!canConnect()}
+        <button data-wash-hit class="wash-net-btn" onClick={props.onCancel}>Cancel</button>
+        <button data-wash-hit data-testid="wifi-connect" class="wash-net-btn primary" disabled={!canConnect()}
           onClick={() => props.onConnect(ssid(), security(), psk(), hidden())}>Connect</button>
       </div>
     </div>

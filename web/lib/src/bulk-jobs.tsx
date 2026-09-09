@@ -131,6 +131,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
           }
         >
           <button
+            data-wash-hit
             type="button"
             data-testid={`bulk-cancel-${props.job.job_id}`}
             onClick={props.onCancel}

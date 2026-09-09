@@ -417,6 +417,7 @@ const SortableTh: Component<{
   const active = () => props.current === props.k;
   return (
     <th
+      data-wash-hit
       style={{
         ...thStyle,
         'text-align': props.align,
