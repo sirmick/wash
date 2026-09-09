@@ -2041,6 +2041,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       invalidateAndList(targetDir);
     } else if (reply.kind === 'cancelled') {
       // user dismissed Replace prompt — silent no-op.
+    } else if (reply.kind === 'rename_err' && reply.code === 'cross_device') {
+      // rename(2) can't cross filesystems (a FUSE mount, /tmp on tmpfs, a
+      // second disk). The single-item path is the fast fm-direct rename;
+      // bulk's move already degrades to copy+delete on EXDEV, so hand the
+      // same move to the queue rather than teaching fm a second copier.
+      // Copies always go that way (commitBulkCopy); this is the move
+      // analogue for the one case a rename can't serve.
+      setStatusInfo(`move: ${baseName(src)} is on another filesystem — copying via the queue`);
+      dispatchBulkMove([src], targetDir);
     } else if (reply.kind === 'rename_err' && reply.code === 'not_empty_dir') {
       setStatusOverride(`move: ${String(reply.msg)}`);
     } else {
