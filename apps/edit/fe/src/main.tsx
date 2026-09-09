@@ -68,6 +68,7 @@ import {
   foldGutter,
   foldKeymap,
   indentOnInput,
+  indentUnit,
   syntaxHighlighting,
   StreamLanguage,
 } from '@codemirror/language';
@@ -127,6 +128,7 @@ import {
 } from 'lucide-solid';
 import { createWysiwyg, isMarkdownPath, type WysiwygHandle, type WysiwygSearchState } from './wysiwyg';
 import { pushRecent, dropRecent, rankFiles } from './quick-open';
+import { DEFAULT_INDENT, detectIndent, indentLabel, indentString, normalizeForSave, type Indent } from './indent';
 
 // Prefs is the desktop-wide preference file ($XDG_CONFIG_HOME/wash/
 // edit.json), owned by the edit BE (prefs.go). Every key is optional:
@@ -256,6 +258,10 @@ interface Tab {
   size?: number;
   // Line endings on disk. The buffer is always LF; see toDisk.
   eol?: Eol;
+  // Indentation, detected from the file's own content on open and
+  // falling back to the prefs default when there is nothing to detect
+  // from. Drives CM's indentUnit + tabSize and the status bar.
+  indent?: Indent;
   // The file vanished from disk under the tab (an external rename, rm,
   // git checkout). The buffer is kept; the status bar says so and the
   // next save goes through the picker instead of silently recreating
@@ -415,13 +421,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // openMenu is the open dropdown's id ('' = none). It's set when
   // the user clicks a menubar button; menubarOffsets stores each
   // button's x,y so the Menu component knows where to drop.
-  const [openMenu, setOpenMenu] = createSignal<'' | MenuID | 'recent'>('');
+  const [openMenu, setOpenMenu] = createSignal<'' | MenuID | 'recent' | 'indent' | 'eol'>('');
   const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
   // Per-active-tab language override. Null = derive from path.
   const [langOverride, setLangOverride] = createSignal<string | null>(null);
   // Word-wrap toggle. Recompiled into the langCompartment so we
   // don't need a second compartment for it.
   const [wordWrap, setWordWrap] = createSignal(false);
+  // Cursor position for the status bar, 1-based, kept by an update
+  // listener (and resynced on tab switch, which setState does not
+  // report as a selection change).
+  const [cursorPos, setCursorPos] = createSignal<{ line: number; col: number }>({ line: 1, col: 1 });
 
   // Sidebar drag/drop. dropTargetPath drives the visual highlight
   // on the hovered folder row ('' = no target = drop lands in
@@ -547,6 +557,55 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     void sendWithReply({ kind: 'recent_drop', path });
   };
 
+  // ---- indentation ----
+  //
+  // Indentation is per tab, detected from the file itself on open
+  // (indent.ts) so editing a Go file inserts tabs and a JSON file two
+  // spaces without anyone configuring anything. The prefs default is
+  // only the fallback for a file with nothing to detect from — a new
+  // buffer, or one with no indented line.
+
+  const indentCompartment = new Compartment();
+  const prefsIndent = (): Indent => ({
+    unit: prefs().indent_unit ?? DEFAULT_INDENT.unit,
+    width: prefs().indent_width ?? DEFAULT_INDENT.width,
+  });
+  const activeIndent = (): Indent => activeTab()?.indent ?? prefsIndent();
+  const indentExtensions = () => {
+    const ind = activeIndent();
+    return [indentUnit.of(indentString(ind)), EditorState.tabSize.of(ind.width)];
+  };
+  // detectedIndent is what a freshly-read buffer gets.
+  const detectedIndent = (text: string): Indent => detectIndent(text) ?? prefsIndent();
+  const setTabIndent = (ind: Indent) => {
+    const t = activeTab();
+    if (!t) return;
+    setTabs(tabs().map((x) => (x.id === t.id ? { ...x, indent: ind } : x)));
+  };
+  // setEol changes what the next save writes. The buffer is always LF,
+  // so nothing on screen changes — which is exactly why the tab is
+  // marked dirty: the difference is real but invisible until toDisk
+  // runs, and an unsaved EOL switch that looked clean would be lost.
+  const setEol = (e: Eol) => {
+    const t = activeTab();
+    if (!t || t.blocked || t.eol === e) return;
+    setTabs(tabs().map((x) => (x.id === t.id ? { ...x, eol: e } : x)));
+    markTabDirty(t.id, true);
+    persist();
+  };
+  // syncCursor reads the status bar's Ln/Col out of the live view.
+  // Called on tab switch: view.setState() does not report a selection
+  // change, so the update listener alone would show the old position.
+  const syncCursor = () => {
+    if (!editorView) {
+      setCursorPos({ line: 1, col: 1 });
+      return;
+    }
+    const head = editorView.state.selection.main.head;
+    const line = editorView.state.doc.lineAt(head);
+    setCursorPos({ line: line.number, col: head - line.from + 1 });
+  };
+
   // ---- quick open ----
 
   const openQuickOpen = () => {
@@ -638,6 +697,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       blocked,
       size: typeof reply.size === 'number' ? reply.size : undefined,
       eol: blocked ? undefined : detectEol(raw),
+      indent: blocked ? undefined : detectedIndent(toBuffer(raw)),
       mode: !blocked && isMarkdownPath(path) ? 'wysiwyg' : 'source',
     };
     setTabs([...tabs(), tab]);
@@ -773,6 +833,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return t.baseline;
   };
 
+  // applySaveCleanups runs the on-save preferences (trim trailing
+  // whitespace, ensure a final newline — both off by default) and
+  // returns what should be written. It rewrites the BUFFER as well as
+  // the bytes: a cleanup that only touched the file would leave the tab
+  // dirty the instant it was saved. The rewrite goes through a normal
+  // transaction so it is undoable, on the live view for the active tab
+  // and on the captured state for the others (Save All).
+  const applySaveCleanups = (t: Tab): string => {
+    const content = tabContent(t);
+    if (t.mode === 'wysiwyg' || t.blocked) return content;
+    const clean = normalizeForSave(content, {
+      trimTrailing: !!prefs().trim_trailing,
+      finalNewline: !!prefs().final_newline,
+    });
+    if (clean === content) return content;
+    const changes = { from: 0, to: content.length, insert: clean };
+    if (t.id === activeID() && editorView) {
+      editorView.dispatch({ changes });
+    } else if (t.state) {
+      const next = t.state.update({ changes }).state;
+      setTabs(tabs().map((x) => (x.id === t.id ? { ...x, state: next } : x)));
+    }
+    return clean;
+  };
+
   // saveTab writes one tab. 'needs_path' means the picker was opened
   // for an Untitled buffer and the write happens in pickerConfirm;
   // 'failed' means the status bar already says why. Callers that go on
@@ -794,7 +879,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setPicker({ mode: 'save', tabID: t.id, suggestedName: baseName(t.path), start: parentPath(t.path) });
       return 'needs_path';
     }
-    const content = tabContent(t);
+    const content = applySaveCleanups(t);
     const reply = await sendWithReply({ kind: 'write', path: t.path, content: toDisk(content, t.eol) });
     if (reply.kind !== 'write_ok') {
       // The BE also toasts; this is for the eyes already on the editor.
@@ -1518,6 +1603,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // viewport-space — no host-rect subtraction.
     const btnRect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setMenuAnchor({ x: btnRect.left, y: btnRect.bottom + 2 });
+    setOpenMenu(id);
+  };
+  // openStatusMenu drops a menu off a status-bar cell. The status bar
+  // is the last row of the window, so the anchor is the cell's TOP edge
+  // and Menu's viewport clamp lifts the body above it.
+  const openStatusMenu = (id: 'indent' | 'eol' | 'syntax', ev: MouseEvent) => {
+    if (openMenu() === id) {
+      setOpenMenu('');
+      return;
+    }
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenuAnchor({ x: r.left, y: r.top });
     setOpenMenu(id);
   };
   const closeMenu = () => setOpenMenu('');
@@ -2410,6 +2507,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const selectionListener = EditorView.updateListener.of((u) => {
     if (u.selectionSet && !u.docChanged) persist();
   });
+  // The status bar's Ln/Col. Separate from selectionListener because it
+  // also has to follow document changes (typing moves the caret without
+  // setting the selection).
+  const cursorListener = EditorView.updateListener.of((u) => {
+    if (!u.selectionSet && !u.docChanged) return;
+    const head = u.state.selection.main.head;
+    const line = u.state.doc.lineAt(head);
+    setCursorPos({ line: line.number, col: head - line.from + 1 });
+  });
 
   const baseExtensions = () => [
     // Display
@@ -2445,9 +2551,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // Syntax highlighting — dark/light swapped by pack appearance.
     highlightCompartment.of(highlightFor(washAppearance())),
     langCompartment.of([]),
+    indentCompartment.of(indentExtensions()),
     dirtyListener,
     searchListener,
     selectionListener,
+    cursorListener,
     EditorView.domEventHandlers({
       // Scroll fires fast while wheeling — persist() is debounced
       // 250ms so the wire stays quiet. We read scroll out of the
@@ -3012,6 +3120,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     } else {
       editorView.focus();
     }
+    syncCursor();
   });
 
   // Reactively reconfigure the language compartment whenever the
@@ -3022,6 +3131,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     wordWrap();
     if (!editorView) return;
     editorView.dispatch({ effects: langCompartment.reconfigure(langExtensions()) });
+  });
+
+  // Same for indentation: it changes when the tab changes (each file
+  // carries its own), when the indent picker is used, and when another
+  // window edits the prefs default under a tab that has no detection of
+  // its own to go on.
+  createEffect(() => {
+    const ind = activeIndent();
+    if (!editorView) return;
+    editorView.dispatch({
+      effects: indentCompartment.reconfigure([
+        indentUnit.of(indentString(ind)),
+        EditorState.tabSize.of(ind.width),
+      ]),
+    });
   });
 
   // ---- render ----
@@ -3145,6 +3269,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               onClick={run(() => { if (activeTab()?.mode !== 'source') toggleWysiwyg(); })}
               data-testid="edit-menu-source"
             />
+            <MenuSeparator />
+            {/* On-save cleanups. Desktop-wide (they live in prefs, not
+                in the window's state) and off by default: silently
+                rewriting somebody's file on save is only welcome when
+                they asked for it. */}
+            <MenuItem
+              label="Trim Trailing Whitespace on Save"
+              trailing={prefs().trim_trailing ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+              onClick={run(() => void setPref({ trim_trailing: !prefs().trim_trailing }))}
+              data-testid="edit-menu-trim-trailing"
+            />
+            <MenuItem
+              label="Ensure Final Newline on Save"
+              trailing={prefs().final_newline ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+              onClick={run(() => void setPref({ final_newline: !prefs().final_newline }))}
+              data-testid="edit-menu-final-newline"
+            />
           </Menu>
         </Show>
         <Show when={openMenu() === 'syntax'}>
@@ -3182,6 +3323,59 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               trailing={wordWrap() ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
               onClick={run(toggleWrap)}
               data-testid="edit-menu-wrap"
+            />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'indent'}>
+          {/* The indent picker, off the status bar. Choosing a width
+              retargets THIS tab; the default is a separate act, because
+              one Go file is not a reason to change every new buffer. */}
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-indent">
+            <MenuItem
+              label="Tab"
+              trailing={activeIndent().unit === 'tabs' ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+              onClick={run(() => setTabIndent({ unit: 'tabs', width: activeIndent().width }))}
+              data-testid="edit-menu-indent-tab"
+            />
+            <MenuSeparator />
+            <For each={[2, 3, 4, 8]}>
+              {(w) => (
+                <MenuItem
+                  label={`Spaces: ${w}`}
+                  trailing={activeIndent().unit === 'spaces' && activeIndent().width === w
+                    ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+                  onClick={run(() => setTabIndent({ unit: 'spaces', width: w }))}
+                  data-testid={`edit-menu-indent-spaces-${w}`}
+                />
+              )}
+            </For>
+            <MenuSeparator />
+            <MenuItem
+              label="Detect from Content"
+              disabled={!activeTab()}
+              onClick={run(() => { const t = activeTab(); if (t) setTabIndent(detectedIndent(tabContent(t))); })}
+              data-testid="edit-menu-indent-detect"
+            />
+            <MenuItem
+              label="Use as the Default"
+              onClick={run(() => void setPref({ indent_unit: activeIndent().unit, indent_width: activeIndent().width }))}
+              data-testid="edit-menu-indent-default"
+            />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'eol'}>
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-eol">
+            <MenuItem
+              label="LF"
+              trailing={activeTab()?.eol !== 'crlf' ? <span style={menuCheckStyle}><Check size={12} /></span> : <span style={langHintStyle}>Unix</span>}
+              onClick={run(() => setEol('lf'))}
+              data-testid="edit-menu-eol-lf"
+            />
+            <MenuItem
+              label="CRLF"
+              trailing={activeTab()?.eol === 'crlf' ? <span style={menuCheckStyle}><Check size={12} /></span> : <span style={langHintStyle}>Windows</span>}
+              onClick={run(() => setEol('crlf'))}
+              data-testid="edit-menu-eol-crlf"
             />
           </Menu>
         </Show>
@@ -3556,9 +3750,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <Show when={dirtyIDs().has(activeTab()!.id)}>
             <span style={{ 'margin-left': '8px', color: tokens.fgDim }}>· modified</span>
           </Show>
-          <Show when={activeTab()!.eol === 'crlf'}>
-            <span data-testid="edit-status-eol" style={{ 'margin-left': '8px', color: tokens.fgDim }}>· CRLF</span>
-          </Show>
           <Show when={activeTab()!.missing}>
             <span data-testid="edit-status-missing" style={{ 'margin-left': '8px', color: tokens.fgDanger }}>· deleted on disk — Ctrl+S saves as…</span>
           </Show>
@@ -3569,6 +3760,39 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <Show when={statusError()}>
           <span data-testid="edit-status-error" style={{ 'margin-left': '8px', color: tokens.fgDanger }}>· {statusError()}</span>
         </Show>
+        {/* The right-hand cells: everything about the buffer you would
+            otherwise have to go looking in a menu for, and each of them
+            the way to change it. */}
+        <div style={statusCellsStyle}>
+          <Show when={activeTab() && !activeTab()!.blocked && activeTab()!.mode === 'source'}>
+            <StatusCell
+              testid="edit-status-cursor"
+              title="Go to line (Ctrl+G)"
+              label={`Ln ${cursorPos().line}, Col ${cursorPos().col}`}
+              onClick={cmdGotoLine}
+            />
+            <StatusCell
+              testid="edit-status-indent"
+              title="Select indentation"
+              label={indentLabel(activeIndent())}
+              onClick={(ev) => openStatusMenu('indent', ev)}
+            />
+            <StatusCell
+              testid="edit-status-eol"
+              title="Select line ending"
+              label={activeTab()!.eol === 'crlf' ? 'CRLF' : 'LF'}
+              onClick={(ev) => openStatusMenu('eol', ev)}
+            />
+          </Show>
+          <Show when={activeTab()}>
+            <StatusCell
+              testid="edit-status-lang"
+              title="Select language"
+              label={LANGS_BY_KEY[currentLang()]?.label ?? 'Plain'}
+              onClick={(ev) => openStatusMenu('syntax', ev)}
+            />
+          </Show>
+        </div>
       </StatusBar>
 
       <Show when={qoOpen()}>
@@ -4085,6 +4309,45 @@ const QuickOpenRow: Component<{ label: string; selected: boolean; onHover: () =>
       <span style={{ color: tokens.fgDim, font: tokens.type.textSm, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{dir()}</span>
     </button>
   );
+};
+
+// StatusCell is one clickable cell on the right of the status bar:
+// the cursor position, the indentation, the line ending, the language.
+// Reads as the status text it replaces (no button chrome at rest) and
+// takes its hover/press from the interaction layer.
+const StatusCell: Component<{
+  label: string;
+  title: string;
+  testid: string;
+  onClick: (ev: MouseEvent) => void;
+}> = (props) => (
+  <button
+    type="button"
+    data-wash-hit
+    data-testid={props.testid}
+    title={props.title}
+    onClick={(ev) => props.onClick(ev)}
+    style={{
+      background: 'transparent',
+      border: 'none',
+      color: tokens.fg,
+      font: 'inherit',
+      padding: '0 6px',
+      height: '18px',
+      'border-radius': `${tokens.radiusSm}`,
+      'white-space': 'nowrap',
+    }}
+  >
+    {props.label}
+  </button>
+);
+
+const statusCellsStyle: JSX.CSSProperties = {
+  'margin-left': 'auto',
+  display: 'flex',
+  'align-items': 'center',
+  gap: '2px',
+  'flex-shrink': 0,
 };
 
 // EntryIcon picks the lucide glyph for a given entry type. Mirrors
