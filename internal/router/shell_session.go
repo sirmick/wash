@@ -773,6 +773,10 @@ func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
 	if inst == nil {
 		return nil
 	}
+	// One line per focus change (user-rate): the BE half of a window-
+	// switcher / focus e2e, and the trail for "which window had focus
+	// when X happened" in a log excerpt.
+	s.router.log("focus: win=%d app=%s instance=%s", m.WindowID, inst.AppID, inst.InstanceID)
 	return inst.WriteEvt(wire.NewEvtWindowFocus(m.WindowID))
 }
 

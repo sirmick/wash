@@ -2160,7 +2160,7 @@ const WindowPill: Component<{
       type="button"
       data-testid="taskbar-pill"
       data-attention={props.attention ? 'true' : undefined}
-      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, right-click to close`}
+      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, middle- or right-click to close`}
       onClick={visit}
       onDblClick={() => {
         // Snap the camera to the cell holding this window, then focus
@@ -2172,6 +2172,20 @@ const WindowPill: Component<{
         visit();
       }}
       onContextMenu={(ev) => {
+        ev.preventDefault();
+        window.wash.closeWindow(props.win.windowID, props.win.origin);
+      }}
+      // Middle-click closes, the way it does on every browser tab strip and
+      // every other taskbar. It goes through window.wash.closeWindow, so the
+      // app gets the same close handshake a titlebar × gives it — an unsaved
+      // editor still gets to object.
+      onMouseDown={(ev) => {
+        // Chromium starts autoscroll on middle mousedown; Firefox pastes the
+        // X selection. Neither is what a taskbar middle-click means.
+        if (ev.button === 1) ev.preventDefault();
+      }}
+      onAuxClick={(ev) => {
+        if (ev.button !== 1) return;
         ev.preventDefault();
         window.wash.closeWindow(props.win.windowID, props.win.origin);
       }}
