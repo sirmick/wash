@@ -2445,6 +2445,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       }
 
       if (!cmd) return;
+      // The file-level shortcuts act on the tab BEHIND a dialog, so they
+      // are off while the picker, a confirm prompt or the sidebar's
+      // inline rename owns the keyboard: Ctrl+W typed into the picker's
+      // path input used to close the tab under it. Ctrl+` and the rest
+      // are left alone — they do not touch the tab.
+      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null;
+      const fileKey = ev.key === 's' || ev.key === 'S' || ev.key === 'o' || ev.key === 'O'
+        || ev.key === 'n' || ev.key === 'N' || ev.key === 'w' || ev.key === 'W';
+      if (dialogUp && fileKey) return;
       // Ctrl+S: save active tab.
       if ((ev.key === 's' || ev.key === 'S') && !ev.shiftKey) {
         ev.preventDefault();
