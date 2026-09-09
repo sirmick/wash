@@ -1,3 +1,33 @@
+wash (0.14.4-1) unstable; urgency=low
+
+  * The apps sweep. A full read of the editor, file manager, terminal and
+    agent surfaces against the workflows a desktop user reaches for first
+    (docs/Review-findings.md). Seven ways to lose data are closed: a save in
+    the editor keeps a file's identity (symlink target, mode bits, owner,
+    hard links), a binary, oversized or non-UTF-8 file opens as a
+    placeholder that refuses to save instead of writing back garbage, CRLF
+    files stay CRLF, a failed save says so, and closing unsaved work asks.
+    In the file manager a paste into the folder an item is already in, or
+    into itself, is refused instead of deleting the source.
+  * Some thirty mid-use breakages fixed with them: agent transcripts no
+    longer freeze after a minute for a second viewer, ending a session ends
+    its terminals and questions, a crashed adapter becomes a fact on screen,
+    a prompt sent mid-turn is queued; fm's Reload refreshes the folder you
+    are looking at, the selection survives rename and delete, listings stay
+    mounted across refreshes, Backspace goes up; a terminal that fails fast
+    holds its tab with the exit code, new tabs open at their pane's size,
+    tab labels come from the path tail, COLORTERM is set, and Alt tab keys
+    sit beside the Ctrl+Shift ones the browser reserves; the editor opens
+    files dropped on it, follows renames, reveals a file in Files at its
+    folder, and the desktop no longer navigates away when an OS file lands
+    on the wallpaper.
+  * QoS lanes: interactive, bulk and background traffic no longer share
+    one FIFO, so a window drag stays smooth under a talking agent.
+  * The terminal-intercept agent tier's remains are gone; agent sessions
+    run through the Agent app over ACP.
+
+ -- sirmick <sirmick@gmail.com>  Tue, 09 Sep 2026 06:30:00 -0700
+
 wash (0.14.3-1) unstable; urgency=low
 
   * agent: a talking agent no longer floods the interactive traffic class.

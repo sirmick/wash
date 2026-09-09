@@ -1,7 +1,7 @@
 # Maintainer: sirmick <sirmick@gmail.com>
 pkgname=wash
-pkgver=0.14.3
-pkgrel=1
+pkgver=0.14.4
+pkgrel=0
 pkgdesc="Lightweight remote-admin desktop environment"
 url="https://github.com/sirmick/wash"
 arch="x86_64 aarch64 riscv64"

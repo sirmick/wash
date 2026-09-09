@@ -113,7 +113,14 @@ reconnects, snapshot is a copy), `apps/about/fe/src/app-traffic.test.ts`
 `e2e/tests/about-app-traffic.spec.ts` (a terminal's real pty bytes are
 attributed to the terminal, in the Bulk column).
 
-### QoS lanes — DONE, unreleased
+### Apps sweep P0 + P1 — DONE, shipped in 0.14.4
+
+The 2026-09-08 sweep of agent, term, edit and fm workflows
+(`Review-findings.md`, ledger in `Sweeps.md`): seven data-loss items and
+~30 mid-use breakages fixed across five branches, each with a both-halves
+e2e. The P2 missing-workflow lists are the open backlog (Todo.md).
+
+### QoS lanes — DONE, shipped in 0.14.4
 
 **Problem.** Window drag stuttered even after the drag-jank work (sndbuf
 clamp, geometry token, transcript deltas). The scheduler is sound; the

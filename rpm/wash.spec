@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.14.3
+Version:        0.14.4
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,14 @@ fi
 exit 0
 
 %changelog
+* Tue Sep 09 2026 sirmick <sirmick@gmail.com> - 0.14.4-1
+- The apps sweep: seven data-loss items closed (editor saves keep file
+  identity; binary/oversized/non-UTF-8 files refuse to save; CRLF kept;
+  failed saves surfaced; unsaved work asks before closing; fm refuses a
+  paste into itself) and some thirty mid-use breakages fixed across the
+  agent, terminal, editor and file manager. See docs/Review-findings.md.
+- QoS lanes: interactive, bulk and background traffic no longer share one
+  FIFO; window drags stay smooth under a talking agent.
 * Mon Sep 08 2026 sirmick <sirmick@gmail.com> - 0.14.3-1
 - agent: a talking agent no longer floods the interactive traffic class. Every
   chunk an agent narrated republished the whole roster - all rows, all pending
