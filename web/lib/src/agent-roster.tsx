@@ -122,6 +122,8 @@ export interface AgentRosterProps {
   onCancel?: (row: RosterRow) => void;
   /** end the session and its adapter process */
   onStop?: (row: RosterRow) => void;
+  /** give the session a name of your own; the host opens its dialog */
+  onRename?: (row: RosterRow) => void;
 }
 
 // stateColor / stateLabel are thin adapters over the shared vocabulary in
@@ -205,6 +207,7 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
             onDetach={props.onDetach ? () => props.onDetach?.(r) : undefined}
             onCancel={props.onCancel ? () => props.onCancel?.(r) : undefined}
             onStop={props.onStop ? () => props.onStop?.(r) : undefined}
+            onRename={props.onRename ? () => props.onRename?.(r) : undefined}
           />
         )}
       </For>
@@ -340,6 +343,7 @@ const AgentRowView: Component<{
   onDetach?: () => void;
   onCancel?: () => void;
   onStop?: () => void;
+  onRename?: () => void;
 }> = (props) => {
   // The verbs live in a menu rather than a strip of buttons: the set
   // grows (resume and fork are still to come) and a sidebar row is 190px
@@ -370,7 +374,7 @@ const AgentRowView: Component<{
     closeMenu();
     fn?.();
   };
-  const hasVerbs = () => Boolean(props.onDetach || props.onCancel || props.onStop);
+  const hasVerbs = () => Boolean(props.onDetach || props.onCancel || props.onStop || props.onRename);
   // Where it's working: "wash · main*" — repo, branch, and a star when the
   // tree is dirty. Absent for an agent outside a checkout.
   const place = (): string => {
@@ -534,6 +538,16 @@ const AgentRowView: Component<{
                 data-testid="agents-menu-detach"
                 disabled={!props.onDetach || props.detached === true}
                 onClick={run(props.onDetach)}
+              />
+              {/* The agent names the session once and first wins; this
+                  is how a person overrides it. Needs a session id — the
+                  name is stored against the agent's id, so a row that
+                  has none yet has nothing to name. */}
+              <MenuItem
+                label="Rename…"
+                data-testid="agents-menu-rename"
+                disabled={!props.onRename || !props.row.session_id}
+                onClick={run(props.onRename)}
               />
               <MenuSeparator />
               <MenuItem

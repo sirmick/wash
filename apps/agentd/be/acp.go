@@ -81,6 +81,10 @@ type hosted struct {
 	// nothing else consumes.
 	used, size int64
 	title      string
+	// userTitle is the person's name for the session (session_admin.go).
+	// It wins over title wherever the title is shown; title is kept so
+	// clearing it falls back to the agent's own.
+	userTitle string
 	// modes are the agent's own approval presets, and mode is the one in
 	// force. Changing it is ACP's answer to "stop asking me" — the AGENT's
 	// setting, visible to it and reversible from either side, rather than a
@@ -483,7 +487,7 @@ func (h *hosted) setState(state, reason string) {
 		r.Detached = h.detached
 		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
-		r.Title = h.title
+		r.Title = h.shownTitle()
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
@@ -565,7 +569,7 @@ func (h *hosted) republish() {
 		r.Detached = h.detached
 		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
-		r.Title = h.title
+		r.Title = h.shownTitle()
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
@@ -577,6 +581,19 @@ func (h *hosted) republish() {
 		s.Rows = publish(now)
 		return true
 	})
+}
+
+// shownTitle is the title every surface renders: the person's name for
+// the session when they gave one, else the agent's own. Reads under
+// hostedMu — setState and republish run inside mutateStateIf, which is a
+// different lock, so the read here is the one that guards the fields.
+func (h *hosted) shownTitle() string {
+	hostedMu.Lock()
+	defer hostedMu.Unlock()
+	if h.userTitle != "" {
+		return h.userTitle
+	}
+	return h.title
 }
 
 // sameRow reports whether two published rows say the same thing.
@@ -1351,7 +1368,7 @@ func configLabel(c acp.ConfigOption) string {
 // summary, so a session killed with the router still carries its model.
 func (h *hosted) noteSession(endReason string, now time.Time) {
 	hostedMu.Lock()
-	agent, sid, cwd, title := h.agent, h.sessionID, h.cwd, h.title
+	agent, sid, cwd, title, userTitle := h.agent, h.sessionID, h.cwd, h.title, h.userTitle
 	hostedMu.Unlock()
 	if sid == "" {
 		return
@@ -1359,6 +1376,10 @@ func (h *hosted) noteSession(endReason string, now time.Time) {
 	s := transcriptSummary{
 		Agent: agent, Model: h.modelName(), Cwd: cwd, Dir: dirLabel(cwd),
 		Title: title, AtMS: now.UnixMilli(),
+		// Restated on every summary so the final record — the one the
+		// index reads first — carries the name; a clear is its own record
+		// (renameSession) and must not be undone by a later blank.
+		UserTitle: userTitle, UserTitleSet: userTitle != "",
 	}
 	if endReason != "" {
 		s.EndReason = endReason

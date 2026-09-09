@@ -390,3 +390,29 @@ test('a detached row with no reattach handler is simply inert', () => {
   fireEvent.click(getByTestId('agents-row-d'));
   expect(activated).toBe(0);
 });
+
+// Rename (docs/Review-findings.md P2 → agent): the agent names a session
+// once and first wins; the menu is where a person overrides it. The row
+// hands the host the row and the host opens its own dialog — the roster
+// owns no state, so it owns no name box.
+test('verbs: Rename… hands the host the row; a row with no session id cannot be named', () => {
+  const renamed: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', session_id: 'sess-1' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onRename={(r) => renamed.push(r.key)} />
+  ));
+  openRowMenu(getByTestId);
+  const item = screen.getByTestId('agents-menu-rename');
+  expect(item.hasAttribute('disabled')).toBe(false);
+  fireEvent.click(item);
+  expect(renamed).toEqual(['a']);
+  expect(screen.queryByTestId('agents-row-actions')).toBeNull();
+
+  cleanup();
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done', session_id: '' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onRename={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-rename').hasAttribute('disabled')).toBe(true);
+});

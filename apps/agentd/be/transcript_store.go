@@ -585,6 +585,12 @@ type transcriptSummary struct {
 	// Title is the agent's own name for the work. "codex · wash" tells
 	// you nothing a week later; "Fix the reconnect banner race" does.
 	Title string `json:"title,omitempty"`
+	// UserTitle is the person's name for it (session_admin.go), and
+	// UserTitleSet says this record carries one — so an empty UserTitle
+	// with the flag set means "cleared", while without it the field is
+	// simply absent and must not erase an earlier record's.
+	UserTitle    string `json:"user_title,omitempty"`
+	UserTitleSet bool   `json:"user_title_set,omitempty"`
 	// Events is the folded event count, known only when we write this at
 	// the end. Zero means "not counted yet", not "empty".
 	Events int `json:"events,omitempty"`
@@ -622,7 +628,12 @@ type SessionMeta struct {
 	Model     string `json:"model,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
 	Dir       string `json:"dir,omitempty"`
-	Title     string `json:"title,omitempty"`
+	Title string `json:"title,omitempty"`
+	// UserTitle is the person's name for the session, when they gave one.
+	// Title above is then the SAME string — the effective title, so every
+	// reader shows the name without knowing where it came from — and this
+	// field says it was theirs.
+	UserTitle string `json:"user_title,omitempty"`
 	StartedMS int64  `json:"started_ms,omitempty"`
 	EndedMS   int64  `json:"ended_ms,omitempty"`
 	EndReason string `json:"end_reason,omitempty"`
@@ -738,6 +749,9 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		if s.Title != "" {
 			out.Title = s.Title
 		}
+		if s.UserTitleSet {
+			out.UserTitle = s.UserTitle
+		}
 		if s.Cwd != "" {
 			out.Cwd, out.Dir = s.Cwd, dirLabel(s.Cwd)
 		}
@@ -759,6 +773,10 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 	// session at the epoch.
 	if out.EndedMS == 0 && lastEventAt > 0 {
 		out.EndedMS = lastEventAt
+	}
+	// The person's name wins wherever the title is shown.
+	if out.UserTitle != "" {
+		out.Title = out.UserTitle
 	}
 	return out, true
 }

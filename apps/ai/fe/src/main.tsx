@@ -18,8 +18,8 @@ import { isStaleTranscript } from './transcript-guard.ts';
 import type { Component } from 'solid-js';
 import { Plus } from 'lucide-solid';
 import {
-  AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
-  Splitter,
+  AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
+  Overlay, Select, Splitter,
   applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
@@ -40,7 +40,8 @@ interface RecentSession {
   cwd?: string;
   /** short label for display ("wash"), not a path to start in */
   dir?: string;
-  /** the agent's own one-line name for what the session was about */
+  /** the agent's own one-line name for what the session was about — or
+   *  the person's, when they renamed it (agentd puts theirs here) */
   title?: string;
   last_seen: number;
   /** running right now — in the roster above, not something to resume */
@@ -146,6 +147,37 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
   onCleanup(() => { if (historyTimer) clearTimeout(historyTimer); });
 
+  // Rename / delete / prune (agentd/session_admin.go). Each is a small
+  // dialog over whichever list it was picked from — the roster, the
+  // History panel or the Session menu — sending one key-or-id addressed
+  // verb. The dialogs are here rather than in the lists because the
+  // lists are shared renderers that own no state.
+  const [renameFor, setRenameFor] = createSignal<{ key?: string; session_id?: string; title: string } | null>(null);
+  const [renameDraft, setRenameDraft] = createSignal('');
+  const openRename = (t: { key?: string; session_id?: string; title?: string }) => {
+    setRenameDraft(t.title ?? '');
+    setRenameFor({ key: t.key, session_id: t.session_id, title: t.title ?? '' });
+  };
+  const saveRename = () => {
+    const t = renameFor();
+    if (!t) return;
+    setRenameFor(null);
+    send({ kind: 'rename', key: t.key ?? '', session_id: t.session_id ?? '', title: renameDraft().trim() });
+  };
+  const [deleteFor, setDeleteFor] = createSignal<SessionMeta | null>(null);
+  const [pruning, setPruning] = createSignal(false);
+  // Horizons for "Delete all older than…". 0 is every finished session —
+  // the honest word for "clear history", offered here rather than as a
+  // separate verb so there is one place history is thrown away.
+  const pruneChoices: [string, string][] = [
+    [String(24 * 3600e3), 'a day'],
+    [String(7 * 24 * 3600e3), 'a week'],
+    [String(30 * 24 * 3600e3), 'a month'],
+    [String(90 * 24 * 3600e3), 'three months'],
+    ['0', 'any age — every finished session'],
+  ];
+  const [pruneAge, setPruneAge] = createSignal(pruneChoices[2][0]);
+
   // Why a transcript frame can now be for the wrong session: see
   // transcript-guard.ts.
   const staleTranscript = (m: Record<string, unknown>) => isStaleTranscript(m.key, sessionKey());
@@ -207,6 +239,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           setHistorySessions((m.sessions as SessionMeta[]) ?? []);
           setHistoryLoading(false);
         }
+        break;
+
+      case 'history_deleted':
+      case 'history_pruned':
+        // The store changed under the panel: re-ask with the current
+        // query rather than editing the list locally, so what is shown is
+        // what is on disk.
+        if (historyOpen()) askHistory(historyQuery());
         break;
 
       case 'default_prompt':
@@ -578,6 +618,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onClick={() => { close(); send({ kind: 'set_yolo', on: !status().yolo }); }}
                 data-testid="ai-menu-yolo"
               />
+              <MenuItem
+                label="Rename session…"
+                disabled={!sessionKey()}
+                onClick={() => { close(); openRename({ key: sessionKey(), session_id: row()?.session_id, title: row()?.title }); }}
+                data-testid="ai-menu-rename"
+              />
               <MenuSeparator />
               <Show when={configs().length === 0}>
                 <MenuItem label="No settings offered" disabled onClick={() => {}} />
@@ -739,6 +785,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onDetach={(r) => send({ kind: 'row_detach', key: r.key })}
           onCancel={(r) => send({ kind: 'row_cancel', key: r.key })}
           onStop={(r) => send({ kind: 'row_stop', key: r.key })}
+          onRename={(r) => openRename({ key: r.key, session_id: r.session_id, title: r.title })}
           onAnswer={(a, decision, remember) => send({
             kind: 'answer',
             id: a.id,
@@ -757,6 +804,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         loading={historyLoading}
         onQuery={onHistoryQuery}
         onClose={() => setHistoryOpen(false)}
+        onRename={(s) => openRename({ key: s.row_key, session_id: s.session_id, title: s.title })}
+        onDelete={(s) => setDeleteFor(s)}
+        onPrune={() => setPruning(true)}
         onResume={(s) => {
           setHistoryOpen(false);
           // Same predicate as the menu, same two verbs. The panel used to
@@ -825,6 +875,85 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </Show>
   );
 
+  // One name box for every list. Enter saves, Escape (the Overlay's
+  // dismiss) leaves the name as it was; an empty name clears yours and
+  // lets the agent's own show again.
+  const renameDialog = (
+    <Show when={renameFor()}>
+      <Overlay onDismiss={() => setRenameFor(null)} data-testid="ai-rename-dialog">
+        <div style={{ 'font-weight': 600, 'margin-bottom': `${tokens.spaceSm}px` }}>Rename session</div>
+        <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '46ch', 'margin-bottom': `${tokens.spaceMd}px` }}>
+          Shown wherever this session is listed. Leave it empty to go back to
+          the agent's own name.
+        </div>
+        <Input
+          data-testid="ai-rename-input"
+          value={renameDraft()}
+          ref={(el: HTMLInputElement) => queueMicrotask(() => { el.focus(); el.select(); })}
+          onInput={(e: InputEvent) => setRenameDraft((e.currentTarget as HTMLInputElement).value)}
+          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); saveRename(); } }}
+          style={{ width: '46ch', 'max-width': '80vw' }}
+        />
+        <div style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'justify-content': 'flex-end', 'margin-top': `${tokens.spaceLg}px` }}>
+          <Button data-testid="ai-rename-cancel" onClick={() => setRenameFor(null)}>Cancel</Button>
+          <Button variant="primary" data-testid="ai-rename-save" onClick={saveRename}>Save</Button>
+        </div>
+      </Overlay>
+    </Show>
+  );
+
+  const deleteDialog = (
+    <Show when={deleteFor()}>
+      {(s) => (
+        <ConfirmDialog
+          title="Delete this conversation?"
+          confirmLabel="Delete"
+          danger
+          data-testid="ai-delete-confirm"
+          confirmTestid="ai-delete-confirm-yes"
+          cancelTestid="ai-delete-confirm-no"
+          onCancel={() => setDeleteFor(null)}
+          onConfirm={() => {
+            const id = s().session_id;
+            setDeleteFor(null);
+            send({ kind: 'delete_session', session_id: id });
+          }}
+        >
+          <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '46ch' }}>
+            <b>{s().title || s().session_id}</b> — its transcript is removed from disk and it leaves
+            History. The agent's own record of the session is not touched.
+          </div>
+        </ConfirmDialog>
+      )}
+    </Show>
+  );
+
+  const pruneDialog = (
+    <Show when={pruning()}>
+      <ConfirmDialog
+        title="Delete older conversations?"
+        confirmLabel="Delete"
+        danger
+        data-testid="ai-prune-dialog"
+        confirmTestid="ai-prune-confirm"
+        cancelTestid="ai-prune-cancel"
+        onCancel={() => setPruning(false)}
+        onConfirm={() => {
+          setPruning(false);
+          send({ kind: 'prune_history', max_age_ms: Number(pruneAge()) });
+        }}
+      >
+        <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceMd}px`, 'max-width': '46ch' }}>
+          <div style={{ font: tokens.type.textMd, opacity: 0.75 }}>
+            Every finished session whose last activity is older than this is
+            deleted from disk. Running sessions are kept.
+          </div>
+          <Select value={pruneAge()} onChange={setPruneAge} options={pruneChoices} data-testid="ai-prune-age" />
+        </div>
+      </ConfirmDialog>
+    </Show>
+  );
+
   const closeDialog = (
     <Show when={confirmClose()}>
       <Overlay onDismiss={() => setConfirmClose(false)} data-testid="ai-close-confirm">
@@ -878,6 +1007,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     {closeDialog}
     {promptDialog}
     {historyPanel}
+    {renameDialog}
+    {deleteDialog}
+    {pruneDialog}
     <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
       {menubar}
       <div

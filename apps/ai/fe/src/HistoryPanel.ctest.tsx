@@ -8,7 +8,7 @@
 // e2e's job.
 
 import { test, expect, afterEach } from 'vitest';
-import { render, fireEvent, cleanup } from '@solidjs/testing-library';
+import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
 import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
 
 afterEach(cleanup);
@@ -261,4 +261,59 @@ test('a row with no snippet renders none — a metadata match quotes nothing bac
     />
   ));
   expect(queryByTestId('ai-history-snippet')).toBeNull();
+});
+
+// --- rename / delete / prune (docs/Review-findings.md P2 → agent) ---
+
+// The verbs are per row, in a menu behind the same ellipsis the roster
+// rows carry; the host does the confirming and the dialogs, so the panel
+// only reports which row and which verb.
+test('a row offers Rename and Delete, and Delete is disabled while it runs', () => {
+  const renamed: string[] = [];
+  const deleted: string[] = [];
+  const { getAllByTestId } = render(() => (
+    <HistoryPanel
+      sessions={() => [sess({ session_id: 's-gone' }), sess({ session_id: 's-live', live: true, row_key: 'acp:1' })]}
+      query={() => ''}
+      onQuery={noop}
+      onClose={noop}
+      onResume={noop}
+      onRename={(s) => renamed.push(s.session_id)}
+      onDelete={(s) => deleted.push(s.session_id)}
+    />
+  ));
+  const verbs = getAllByTestId('ai-history-verbs');
+  expect(verbs).toHaveLength(2);
+
+  fireEvent.click(verbs[0]);
+  fireEvent.click(screen.getByTestId('ai-history-menu-rename'));
+  expect(renamed).toEqual(['s-gone']);
+  expect(screen.queryByTestId('ai-history-actions')).toBeNull();
+
+  fireEvent.click(verbs[0]);
+  fireEvent.click(screen.getByTestId('ai-history-menu-delete'));
+  expect(deleted).toEqual(['s-gone']);
+
+  // The running one: Rename still works (a name is a name), Delete does not.
+  fireEvent.click(verbs[1]);
+  expect(screen.getByTestId('ai-history-menu-delete').hasAttribute('disabled')).toBe(true);
+  expect(screen.getByTestId('ai-history-menu-delete').textContent).toContain('still running');
+  fireEvent.click(screen.getByTestId('ai-history-menu-rename'));
+  expect(renamed).toEqual(['s-gone', 's-live']);
+});
+
+test('a panel whose host offers no verbs shows no ellipsis and no prune button', () => {
+  const { queryByTestId } = panel();
+  expect(queryByTestId('ai-history-verbs')).toBeNull();
+  expect(queryByTestId('ai-history-prune')).toBeNull();
+});
+
+test('prune lives beside the count it acts on', () => {
+  let pruned = 0;
+  const { getByTestId } = render(() => (
+    <HistoryPanel sessions={() => [sess()]} query={() => ''} onQuery={noop} onClose={noop} onResume={noop}
+      onPrune={() => { pruned++; }} />
+  ));
+  fireEvent.click(getByTestId('ai-history-prune'));
+  expect(pruned).toBe(1);
 });

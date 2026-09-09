@@ -488,6 +488,32 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		}
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, req)
 
+	// Session admin (agentd/session_admin.go): a person's name for a
+	// session, and deleting what ran. Key-or-id addressed like the row
+	// verbs, so they act on any session agentd holds, not only this
+	// window's; the replies to delete/prune come back below so the
+	// History panel can refresh.
+	case "rename":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_rename",
+			"key":        str(m["key"]),
+			"session_id": str(m["session_id"]),
+			"title":      str(m["title"]),
+		})
+
+	case "delete_session":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_delete",
+			"session_id": str(m["session_id"]),
+		})
+
+	case "prune_history":
+		age, _ := m["max_age_ms"].(float64)
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_prune",
+			"max_age_ms": int64(age),
+		})
+
 	case "set_yolo":
 		if session.key == "" {
 			return
@@ -608,6 +634,11 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 
 	case "default_prompt":
 		c.SendAppMsg(map[string]any{"kind": "default_prompt", "text": m["text"]})
+
+	case "history_deleted", "history_pruned":
+		// agentd's answer to a delete or prune this window asked for;
+		// forwarded whole so the panel can re-query.
+		c.SendAppMsg(m)
 
 	// The transcript hops to the FE on the Bulk class — this is the one
 	// hop that shares the browser's single socket with every other app's
