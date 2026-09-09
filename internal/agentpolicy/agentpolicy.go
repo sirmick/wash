@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -46,6 +47,12 @@ type Policy struct {
 	// consulted when Enabled. Defaults to true via AskDesktopOrDefault —
 	// asking is the point of turning the policy on.
 	AskDesktop *bool `json:"ask_desktop,omitempty"`
+	// Agents configures how each adapter is LAUNCHED, keyed by adapter id
+	// (see AgentConfig). Nothing here affects the approval table above.
+	Agents map[string]AgentConfig `json:"agents,omitempty"`
+	// MCPServers are offered to every session, on top of whatever an
+	// individual agent's entry adds.
+	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
 }
 
 // Rule is one line of the table.
@@ -249,4 +256,164 @@ func urlHost(raw string) string {
 		return ""
 	}
 	return path.Base(s)
+}
+
+// ---- adapter configuration -------------------------------------------
+//
+// The approval table above is what wash decides. This is how the adapter
+// is STARTED, which wash had no opinion about at all: the command was a
+// hardcoded name on PATH, the args were a hardcoded list, the environment
+// was whatever the router inherited, and `mcpServers` on session/new was
+// literally always `[]` — so an agent under wash could not reach a single
+// MCP server, however many the same agent reached from a terminal.
+//
+// It lives in the same file as the policy because it is the same file on
+// disk: one place a person configures agents, not two.
+
+// AgentConfig is one adapter's entry under `agents`, keyed by adapter id
+// ("claude", "codex", "gemini").
+type AgentConfig struct {
+	// Command replaces the binary wash would have looked up. A wrapper
+	// script, a version in ~/bin, a nix store path. Empty keeps the
+	// built-in name.
+	Command string `json:"command,omitempty"`
+	// Args are EXTRA arguments, appended after the ones the adapter needs
+	// to speak ACP at all — those are not a user's to remove, and an
+	// adapter launched without them is not an ACP adapter.
+	Args []string `json:"args,omitempty"`
+	// Env is added to the adapter's environment. The router's own
+	// environment is still inherited: this adds and overrides, it does not
+	// replace, so an adapter does not lose PATH by gaining an API key.
+	Env map[string]string `json:"env,omitempty"`
+	// MCPServers are offered to this adapter in addition to the top-level
+	// list.
+	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
+}
+
+// MCPServer is one MCP server, in wash's shape rather than ACP's — env as
+// a map, because a config file is written by a person.
+type MCPServer struct {
+	Name    string            `json:"name"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+// Launch is how one adapter is actually started, after the built-in
+// defaults and the user's file have been merged.
+type Launch struct {
+	Command string
+	Args    []string
+	// Env is KEY=VALUE, to be APPENDED to the inherited environment.
+	Env        []string
+	MCPServers []MCPServer
+}
+
+// AgentFor returns the configuration for one adapter id, or the zero
+// value. Nil-safe: an absent file configures nothing, which is the
+// behaviour every box had before this existed.
+func (p *Policy) AgentFor(id string) AgentConfig {
+	if p == nil {
+		return AgentConfig{}
+	}
+	return p.Agents[id]
+}
+
+// Merge folds this policy's configuration for `id` over the built-in
+// launch for that adapter.
+//
+// Precedence, stated once because every part of it is a decision:
+//
+//   - command: the user's wins outright when set.
+//   - args: built-in FIRST, then the user's. The built-in args are what
+//     make the process an ACP adapter (`--experimental-acp`); appending
+//     keeps them and still lets a later flag override an earlier one,
+//     which is how every CLI resolves a repeat.
+//   - env: added to what the process inherits, never replacing it.
+//     Sorted, so a launch is reproducible and a test can read it.
+//   - MCP servers: the top-level list, then this agent's. A per-agent
+//     entry with the same name REPLACES the global one — naming it again
+//     is how you say "not that one, this one" — and order is otherwise
+//     preserved.
+func (p *Policy) Merge(id string, base Launch) Launch {
+	cfg := p.AgentFor(id)
+	out := Launch{Command: base.Command, Args: append([]string(nil), base.Args...)}
+	if cfg.Command != "" {
+		out.Command = cfg.Command
+	}
+	out.Args = append(out.Args, cfg.Args...)
+	out.Env = envList(cfg.Env)
+	var global []MCPServer
+	if p != nil {
+		global = p.MCPServers
+	}
+	out.MCPServers = mergeMCP(global, cfg.MCPServers)
+	return out
+}
+
+// envList renders an env map as sorted KEY=VALUE. An entry with an empty
+// key is dropped: it cannot be set and would corrupt the block.
+func envList(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if k != "" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+m[k])
+	}
+	return out
+}
+
+// mergeMCP concatenates the global and per-agent lists, letting a
+// per-agent entry replace a global one of the same name IN PLACE, so the
+// order a person wrote is the order the agent sees. Entries missing a
+// name or a command are dropped: an MCP server wash cannot start is worse
+// than one that was never offered.
+func mergeMCP(global, own []MCPServer) []MCPServer {
+	out := make([]MCPServer, 0, len(global)+len(own))
+	for _, s := range global {
+		if s.Name != "" && s.Command != "" {
+			out = append(out, s)
+		}
+	}
+	for _, s := range own {
+		if s.Name == "" || s.Command == "" {
+			continue
+		}
+		replaced := false
+		for i := range out {
+			if out[i].Name == s.Name {
+				out[i], replaced = s, true
+				break
+			}
+		}
+		if !replaced {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// EnvPairs renders an env map as sorted {key, value} pairs — the shape a
+// caller needs when the destination is not KEY=VALUE (ACP's mcpServers
+// wants name/value objects). Same ordering and same empty-key rule as
+// envList, so one launch is one order everywhere.
+func EnvPairs(m map[string]string) [][2]string {
+	out := make([][2]string, 0, len(m))
+	for _, kv := range envList(m) {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			out = append(out, [2]string{k, v})
+		}
+	}
+	return out
 }

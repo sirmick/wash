@@ -151,6 +151,11 @@ type hosted struct {
 	// without the lock (setState runs UNDER turnMu from begin/endTurn).
 	pending []turn
 	queued  atomic.Int32
+	// mcp are the MCP servers this session was opened with (agents.json).
+	// Held so a RESUME offers the same set: session/load takes the list
+	// too, and a resumed session that silently lost its tools is worse
+	// than one that never had them.
+	mcp []acp.McpServer
 }
 
 // turn is one submitted prompt: what was typed, plus whatever was attached

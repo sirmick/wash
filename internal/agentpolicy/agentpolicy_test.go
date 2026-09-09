@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -276,5 +277,140 @@ func TestRuleScope(t *testing.T) {
 		if got := RuleScope(c.tool, c.cwd); got != c.want {
 			t.Errorf("RuleScope(%s, %s) = %q, want %q", c.tool, c.cwd, got, c.want)
 		}
+	}
+}
+
+// ---- adapter configuration -------------------------------------------
+
+func TestMergeLeavesTheBuiltInLaunchAloneWhenNothingIsConfigured(t *testing.T) {
+	var p Policy
+	base := Launch{Command: "/usr/bin/gemini", Args: []string{"--experimental-acp"}}
+	got := p.Merge("gemini", base)
+	if got.Command != base.Command {
+		t.Errorf("command = %q", got.Command)
+	}
+	if !reflect.DeepEqual(got.Args, base.Args) {
+		t.Errorf("args = %v", got.Args)
+	}
+	if got.Env != nil || got.MCPServers != nil {
+		t.Errorf("an empty policy added something: %+v", got)
+	}
+}
+
+func TestMergeOverridesCommandAndAppendsArgs(t *testing.T) {
+	p := Policy{Agents: map[string]AgentConfig{
+		"claude": {Command: "/opt/wrap-claude", Args: []string{"--verbose", "--model", "opus"}},
+	}}
+	got := p.Merge("claude", Launch{Command: "/usr/bin/claude-agent-acp", Args: []string{"--acp"}})
+	if got.Command != "/opt/wrap-claude" {
+		t.Errorf("command = %q", got.Command)
+	}
+	// The built-in args come FIRST: they are what makes the process an
+	// ACP adapter, and a user's flags are additions, not a replacement.
+	if want := []string{"--acp", "--verbose", "--model", "opus"}; !reflect.DeepEqual(got.Args, want) {
+		t.Errorf("args = %v, want %v", got.Args, want)
+	}
+	// The base must not have been mutated under the caller.
+	base := Launch{Command: "x", Args: []string{"--acp"}}
+	p.Merge("claude", base)
+	if len(base.Args) != 1 {
+		t.Errorf("Merge mutated the caller's args: %v", base.Args)
+	}
+}
+
+func TestMergeEnvIsSortedAndSkipsEmptyKeys(t *testing.T) {
+	p := Policy{Agents: map[string]AgentConfig{
+		"codex": {Env: map[string]string{"ZED": "1", "ANTHROPIC_API_KEY": "sk-x", "": "ignored"}},
+	}}
+	got := p.Merge("codex", Launch{Command: "codex-acp"})
+	if want := []string{"ANTHROPIC_API_KEY=sk-x", "ZED=1"}; !reflect.DeepEqual(got.Env, want) {
+		t.Errorf("env = %v, want %v", got.Env, want)
+	}
+}
+
+func TestMergeMCPServersGlobalThenAgentWithReplacementInPlace(t *testing.T) {
+	p := Policy{
+		MCPServers: []MCPServer{
+			{Name: "fs", Command: "mcp-fs"},
+			{Name: "web", Command: "mcp-web"},
+			{Name: "broken"}, // no command: not startable, not offered
+		},
+		Agents: map[string]AgentConfig{
+			"claude": {MCPServers: []MCPServer{
+				{Name: "web", Command: "mcp-web-2", Args: []string{"--fast"}},
+				{Name: "repo", Command: "mcp-repo"},
+			}},
+		},
+	}
+	got := p.Merge("claude", Launch{Command: "c"}).MCPServers
+	names := make([]string, len(got))
+	for i, s := range got {
+		names[i] = s.Name
+	}
+	// web is replaced WHERE IT WAS, so the order a person wrote survives.
+	if want := []string{"fs", "web", "repo"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("names = %v, want %v", names, want)
+	}
+	if got[1].Command != "mcp-web-2" || !reflect.DeepEqual(got[1].Args, []string{"--fast"}) {
+		t.Errorf("web not replaced by the agent's own: %+v", got[1])
+	}
+	// Another agent sees only the global list.
+	other := p.Merge("codex", Launch{Command: "c"}).MCPServers
+	if len(other) != 2 {
+		t.Errorf("codex got %d servers, want the 2 global ones", len(other))
+	}
+}
+
+func TestAdapterConfigRoundTripsThroughTheFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agents.json")
+	raw := `{
+	  "enabled": true,
+	  "rules": [{"match": "Read", "decision": "allow"}],
+	  "mcp_servers": [{"name": "fs", "command": "mcp-fs", "args": ["--root", "/w"]}],
+	  "agents": {
+	    "claude": {
+	      "command": "/opt/claude",
+	      "args": ["--debug"],
+	      "env": {"API_KEY": "x"},
+	      "mcp_servers": [{"name": "repo", "command": "mcp-repo", "env": {"B": "2", "A": "1"}}]
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := Load(path)
+	// The approval half still decodes: this is one file, not two.
+	if !p.Enabled || len(p.Rules) != 1 {
+		t.Fatalf("policy half lost: %+v", p)
+	}
+	run := p.Merge("claude", Launch{Command: "claude-agent-acp"})
+	if run.Command != "/opt/claude" || !reflect.DeepEqual(run.Args, []string{"--debug"}) {
+		t.Errorf("launch = %+v", run)
+	}
+	if !reflect.DeepEqual(run.Env, []string{"API_KEY=x"}) {
+		t.Errorf("env = %v", run.Env)
+	}
+	if len(run.MCPServers) != 2 {
+		t.Fatalf("mcp = %+v", run.MCPServers)
+	}
+	if got := EnvPairs(run.MCPServers[1].Env); !reflect.DeepEqual(got, [][2]string{{"A", "1"}, {"B", "2"}}) {
+		t.Errorf("EnvPairs = %v, want sorted pairs", got)
+	}
+}
+
+// A file with no `agents` key at all — every box before this landed —
+// configures nothing and cannot fail.
+func TestAbsentAdapterConfigIsInert(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agents.json")
+	if err := os.WriteFile(path, []byte(`{"enabled": true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := Load(path)
+	base := Launch{Command: "codex-acp", Args: []string{"--acp"}}
+	if got := p.Merge("codex", base); got.Command != base.Command || len(got.Env) != 0 || len(got.MCPServers) != 0 {
+		t.Errorf("merge = %+v", got)
 	}
 }

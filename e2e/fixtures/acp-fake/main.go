@@ -17,6 +17,7 @@
 //
 //	"ask"        → requests permission, then reports what was answered
 //	"echoblocks" → reports the content blocks the prompt carried
+//	"launchinfo" → reports its own argv and $WASH_FAKE_MARK
 //	"crash"  → says why on stderr and exits mid-turn (the adapter died)
 //	anything → a short markdown reply with a tool call
 package main
@@ -179,6 +180,17 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		// wash's side, and it is what the exit watcher exists for.
 		fmt.Fprintln(os.Stderr, "acp-fake: fatal: simulated crash (token expired)")
 		os.Exit(3)
+	}
+
+	if strings.Contains(text, "launchinfo") {
+		// Report how THIS process was started: the extra argv wash added
+		// and one marker variable. agents.json can override the command,
+		// append args and add environment; none of that is observable
+		// from the UI, so the adapter says what it actually got.
+		notify(out, chunk(fmt.Sprintf("LAUNCH<<args=%s mark=%s>>",
+			strings.Join(os.Args[1:], ","), os.Getenv("WASH_FAKE_MARK"))))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
 	}
 
 	if strings.Contains(text, "echoblocks") {
