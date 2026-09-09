@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { AgentAsk, AgentEvent, AgentStatus, TerminalAPI } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
 
@@ -126,6 +126,20 @@ import {
   Table as TableIcon,
 } from 'lucide-solid';
 import { createWysiwyg, isMarkdownPath, type WysiwygHandle, type WysiwygSearchState } from './wysiwyg';
+import { pushRecent, dropRecent, rankFiles } from './quick-open';
+
+// Prefs is the desktop-wide preference file ($XDG_CONFIG_HOME/wash/
+// edit.json), owned by the edit BE (prefs.go). Every key is optional:
+// a missing one means the built-in default. Per-window state (tabs,
+// cursor, split) is PersistedState, not this.
+interface Prefs {
+  font_size?: number;
+  indent_unit?: 'spaces' | 'tabs';
+  indent_width?: number;
+  trim_trailing?: boolean;
+  final_newline?: boolean;
+  recent?: string[];
+}
 
 interface Entry {
   name: string;
@@ -401,7 +415,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // openMenu is the open dropdown's id ('' = none). It's set when
   // the user clicks a menubar button; menubarOffsets stores each
   // button's x,y so the Menu component knows where to drop.
-  const [openMenu, setOpenMenu] = createSignal<'' | 'file' | 'edit' | 'view' | 'syntax' | 'terminal'>('');
+  const [openMenu, setOpenMenu] = createSignal<'' | MenuID | 'recent'>('');
   const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
   // Per-active-tab language override. Null = derive from path.
   const [langOverride, setLangOverride] = createSignal<string | null>(null);
@@ -433,6 +447,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // area (CM + wysiwyg layers) — Cut/Copy/Paste against the wash
   // clipboard. Distinct from ctxMenu, which owns the sidebar rows.
   const [textCtxMenu, setTextCtxMenu] = createSignal<{ x: number; y: number } | null>(null);
+
+  // Desktop-wide preferences, loaded once at boot from the edit BE and
+  // patched through setPref. recent() is the shared recent-files list.
+  const [prefs, setPrefs] = createSignal<Prefs>({});
+  const recent = (): string[] => prefs().recent ?? [];
+
+  // Quick open (Ctrl+P): the palette over the tree root. qoFiles is the
+  // BE's recursive listing, relative to root, null while it is loading.
+  const [qoOpen, setQoOpen] = createSignal(false);
+  const [qoQuery, setQoQuery] = createSignal('');
+  const [qoFiles, setQoFiles] = createSignal<string[] | null>(null);
+  const [qoTruncated, setQoTruncated] = createSignal(false);
+  const [qoSelected, setQoSelected] = createSignal(0);
+  // The in-flight find's id; cleared when its reply lands or the
+  // palette closes (which cancels it BE-side).
+  let qoFindID = '';
+  let qoSeq = 0;
 
   // untitledCounter — monotonically increasing index for naming
   // fresh Untitled-N buffers. Resets only on app remount.
@@ -486,6 +517,95 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
   };
 
+  // ---- preferences ----
+
+  const loadPrefs = async () => {
+    const reply = await sendWithReply({ kind: 'prefs' });
+    if (reply.kind === 'prefs_ok') setPrefs((reply.prefs ?? {}) as Prefs);
+  };
+  // setPref applies a patch locally at once (the UI must not wait on a
+  // disk write) and then adopts whatever the BE merged, so a change made
+  // from another window since boot is picked up too.
+  const setPref = async (patch: Partial<Prefs>) => {
+    setPrefs({ ...prefs(), ...patch });
+    const reply = await sendWithReply({ kind: 'prefs_set', patch });
+    if (reply.kind === 'prefs_set_ok') setPrefs((reply.prefs ?? {}) as Prefs);
+    else setStatusError(`preferences not saved: ${String(reply.msg ?? reply.kind)}`);
+  };
+  // noteRecent moves `path` to the front of the shared recent list. The
+  // BE keeps the list (its own verb, never a prefs patch, so two windows
+  // cannot overwrite each other's additions).
+  const noteRecent = (path: string) => {
+    if (!path) return;
+    setPrefs({ ...prefs(), recent: pushRecent(recent(), path) });
+    void sendWithReply({ kind: 'recent_add', path }).then((reply) => {
+      if (reply.kind === 'recent_add_ok') setPrefs({ ...prefs(), recent: (reply.recent as string[]) ?? [] });
+    });
+  };
+  const forgetRecent = (path: string) => {
+    setPrefs({ ...prefs(), recent: dropRecent(recent(), path) });
+    void sendWithReply({ kind: 'recent_drop', path });
+  };
+
+  // ---- quick open ----
+
+  const openQuickOpen = () => {
+    setQoQuery('');
+    setQoSelected(0);
+    setQoOpen(true);
+    // A fresh listing per open: the tree changes under a running
+    // editor, and 5k entries is a cheap walk next to a stale answer.
+    if (root()) {
+      qoSeq += 1;
+      qoFindID = `qo-${qoSeq}`;
+      setQoFiles(null);
+      setQoTruncated(false);
+      send({ kind: 'find', id: qoFindID, path: root(), limit: 5000 });
+    }
+  };
+  const closeQuickOpen = () => {
+    if (!qoOpen()) return;
+    setQoOpen(false);
+    if (qoFindID) {
+      send({ kind: 'find_cancel', id: qoFindID });
+      qoFindID = '';
+    }
+    editorView?.focus();
+  };
+  // qoResults is what the palette lists: the recent files while the
+  // query is empty, else the fuzzy ranking over the tree listing plus
+  // any recent file outside it. Rows carry the label shown (relative to
+  // root when under it) and the absolute path to open.
+  const qoRel = (p: string): string => {
+    const r = root();
+    return r && p.startsWith(r + '/') ? p.slice(r.length + 1) : p;
+  };
+  const qoResults = createMemo<{ abs: string; label: string }[]>(() => {
+    const q = qoQuery().trim();
+    const r = root();
+    const recentRows = recent().map((p) => ({ abs: p, label: qoRel(p) }));
+    if (!q) return recentRows.slice(0, 50);
+    const files = qoFiles() ?? [];
+    const seen = new Set(files);
+    const cands = [...files, ...recentRows.map((x) => x.label).filter((l) => !seen.has(l))];
+    return rankFiles(q, cands, 50).map((l) => ({ abs: l.startsWith('/') ? l : joinPath(r, l), label: l }));
+  });
+  const qoPick = (row: { abs: string } | undefined) => {
+    if (!row) return;
+    closeQuickOpen();
+    void openInTab(row.abs);
+  };
+  const onQuickOpenKey = (ev: KeyboardEvent) => {
+    // The palette owns the keyboard while it is up; nothing here may
+    // reach the tab shortcuts behind it.
+    ev.stopPropagation();
+    const n = qoResults().length;
+    if (ev.key === 'Escape') { ev.preventDefault(); closeQuickOpen(); return; }
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); if (n) setQoSelected((qoSelected() + 1) % n); return; }
+    if (ev.key === 'ArrowUp') { ev.preventDefault(); if (n) setQoSelected((qoSelected() - 1 + n) % n); return; }
+    if (ev.key === 'Enter') { ev.preventDefault(); qoPick(qoResults()[qoSelected()]); return; }
+  };
+
   // openInTab focuses an existing tab for `path`, or reads the
   // file and creates a fresh tab if there isn't one. Same tab
   // can't appear twice — opening twice converges on a single tab.
@@ -494,6 +614,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const existing = tabs().find((t) => t.path === path);
     if (existing) {
       setActiveID(existing.id);
+      noteRecent(path);
       return;
     }
     const reply = await sendWithReply({ kind: 'read', path });
@@ -501,8 +622,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // Permission denied, vanished, a directory: say so where the
       // user is looking instead of silently doing nothing.
       setStatusError(`cannot open ${baseName(path) || path}: ${String(reply.msg ?? reply.kind)}`);
+      if ((reply as { code?: string }).code === 'not_found') forgetRecent(path);
       return;
     }
+    noteRecent(path);
     const blocked = blockedOf(reply);
     const raw = blocked ? '' : String(reply.content ?? '');
     const tab: Tab = {
@@ -956,6 +1079,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // Watch the destination dir so the freshly-saved tab tracks
     // external edits just like an opened file.
     fileWatch.watch(parentPath(newPath));
+    noteRecent(newPath);
     // Both ids go: the source tab is now clean under its new id, and a
     // duplicate that was dropped above must not leave its marker behind
     // for a tab that no longer exists.
@@ -1356,7 +1480,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // anchor coordinates relative to the host element so the menu
   // hangs below the button regardless of where the window is.
 
-  const openMenuFor = (id: 'file' | 'edit' | 'view' | 'syntax' | 'terminal', ev: MouseEvent) => {
+  const openMenuFor = (id: MenuID, ev: MouseEvent) => {
     if (openMenu() === id) {
       setOpenMenu('');
       return;
@@ -1406,6 +1530,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     if (m.kind === 'cmd.set_root') {
       setTreeRoot(String(m.path ?? ''));
+      return;
+    }
+    // The quick-open listing. Only the find the palette is waiting on
+    // counts; a cancelled one's late reply is dropped here.
+    if (m.kind === 'find_ok' || m.kind === 'find_err') {
+      if (String(m.id ?? '') !== qoFindID) return;
+      qoFindID = '';
+      if (m.kind === 'find_ok') {
+        setQoFiles((m.files as string[]) ?? []);
+        setQoTruncated(!!m.truncated);
+      } else {
+        setQoFiles([]);
+        setStatusError(`quick open: ${String(m.msg ?? m.kind)}`);
+      }
       return;
     }
     if (m.kind === 'cmd.open_diff') {
@@ -2615,7 +2753,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // inline rename owns the keyboard: Ctrl+W typed into the picker's
       // path input used to close the tab under it. Ctrl+` and the rest
       // are left alone — they do not touch the tab.
-      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null || revertPrompt() !== null;
+      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null || revertPrompt() !== null || qoOpen();
       const fileKey = ev.key === 's' || ev.key === 'S' || ev.key === 'o' || ev.key === 'O'
         || ev.key === 'n' || ev.key === 'N' || ev.key === 'w' || ev.key === 'W';
       if (dialogUp && fileKey) return;
@@ -2686,6 +2824,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         toggleWysiwyg();
         return;
       }
+      // Ctrl+P: quick open (Chromium's Print otherwise).
+      if ((ev.key === 'p' || ev.key === 'P') && !ev.shiftKey && !ev.altKey) {
+        ev.preventDefault();
+        if (!dialogUp) openQuickOpen();
+        return;
+      }
     };
     props.host.addEventListener('keydown', onKey);
     if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
@@ -2695,6 +2839,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // Boot with a list of "/" — the BE's Confine downshifts to
     // the sandbox root automatically when one is configured.
     void loadDir('/');
+    void loadPrefs();
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
@@ -2839,6 +2984,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuItem label="New" trailing={<kbd style={kbdStyle}>Ctrl+N</kbd>} onClick={run(newUntitled)} data-testid="edit-menu-new" />
             <MenuItem label="Open…" trailing={<kbd style={kbdStyle}>Ctrl+O</kbd>} onClick={run(() => setPicker({ mode: 'open' }))} data-testid="edit-menu-open" />
             <MenuItem label="Open Folder…" onClick={run(() => setPicker({ mode: 'directory' }))} data-testid="edit-menu-open-folder" />
+            <MenuItem label="Quick Open…" trailing={<kbd style={kbdStyle}>Ctrl+P</kbd>} onClick={run(openQuickOpen)} data-testid="edit-menu-quick-open" />
+            <MenuItem label="Open Recent" trailing={<span style={langHintStyle}>▸</span>} disabled={recent().length === 0} onClick={() => setOpenMenu('recent')} data-testid="edit-menu-open-recent" />
             <MenuSeparator />
             <MenuItem label="Save" trailing={<kbd style={kbdStyle}>Ctrl+S</kbd>} disabled={!activeTab()} onClick={run(() => void saveActive())} data-testid="edit-menu-save" />
             <MenuItem label="Save As…" trailing={<kbd style={kbdStyle}>Ctrl+Shift+S</kbd>} disabled={!activeTab()} onClick={run(saveAsActive)} data-testid="edit-menu-save-as" />
@@ -2848,6 +2995,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuItem label="Close Tab" trailing={<kbd style={kbdStyle}>Ctrl+W</kbd>} disabled={!activeTab()} onClick={run(() => requestCloseTab(activeID()))} data-testid="edit-menu-close-tab" />
             <MenuItem label="Close Others" disabled={tabs().length < 2} onClick={run(closeOtherTabs)} data-testid="edit-menu-close-others" />
             <MenuItem label="Close All" disabled={tabs().length === 0} onClick={run(closeAllTabs)} data-testid="edit-menu-close-all" />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'recent'}>
+          {/* Open Recent: the shared list, newest first, in place of the
+              File menu (Menu has no submenus). */}
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-recent">
+            <For each={recent().slice(0, 12)}>
+              {(p) => (
+                <MenuItem
+                  label={baseName(p) || p}
+                  trailing={<span style={langHintStyle}>{qoRel(parentPath(p)) || '/'}</span>}
+                  onClick={run(() => void openInTab(p))}
+                  data-testid={`edit-menu-recent-${p}`}
+                />
+              )}
+            </For>
+            <MenuSeparator />
+            <MenuItem label="More…" trailing={<kbd style={kbdStyle}>Ctrl+P</kbd>} onClick={run(openQuickOpen)} data-testid="edit-menu-recent-more" />
           </Menu>
         </Show>
         <Show when={openMenu() === 'edit'}>
@@ -3355,6 +3520,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         </Show>
       </StatusBar>
 
+      <Show when={qoOpen()}>
+        <QuickOpen
+          query={qoQuery()}
+          onQuery={(v) => { setQoQuery(v); setQoSelected(0); }}
+          rows={qoResults()}
+          selected={qoSelected()}
+          onHover={setQoSelected}
+          onPick={(i) => qoPick(qoResults()[i])}
+          onKey={onQuickOpenKey}
+          onClose={closeQuickOpen}
+          loading={qoFiles() === null && qoQuery().trim() !== ''}
+          status={qoFiles() === null
+            ? (qoQuery().trim() ? 'listing files…' : 'recent files — type to search the tree')
+            : `${qoFiles()!.length}${qoTruncated() ? '+' : ''} files under ${qoRel(root()) || root()}`}
+        />
+      </Show>
+
       <FilePicker
         open={picker() !== null}
         mode={picker()?.mode ?? 'open'}
@@ -3762,6 +3944,94 @@ const WysFindBar: Component<{
         </button>
       </div>
     </div>
+  );
+};
+
+// QuickOpen is the Ctrl+P palette: one input, a ranked list under it.
+// Presentation only — the query, ranking and the open live in App, so
+// the keyboard contract (onKey) and the rows are the whole interface.
+const QuickOpen: Component<{
+  query: string;
+  onQuery: (v: string) => void;
+  rows: { abs: string; label: string }[];
+  selected: number;
+  onHover: (i: number) => void;
+  onPick: (i: number) => void;
+  onKey: (ev: KeyboardEvent) => void;
+  onClose: () => void;
+  loading: boolean;
+  status: string;
+}> = (props) => {
+  let input!: HTMLInputElement;
+  onMount(() => input.focus());
+  return (
+    <Overlay onDismiss={props.onClose} align="top" data-testid="edit-quick-open" innerStyle={{ padding: 0, 'min-width': '480px', 'max-width': '640px', width: '60%' }}>
+      <Input
+        ref={input}
+        data-testid="edit-qo-input"
+        placeholder="Open file by name…"
+        value={props.query}
+        onInput={(ev) => props.onQuery(ev.currentTarget.value)}
+        onKeyDown={props.onKey}
+        style={{ margin: '10px 12px 6px', padding: '4px 8px', height: '28px', 'box-sizing': 'border-box', font: tokens.type.monoMd }}
+      />
+      <div data-testid="edit-qo-list" style={{ 'max-height': '40vh', overflow: 'auto', padding: '0 0 6px' }}>
+        <For each={props.rows}>
+          {(row, i) => (
+            <QuickOpenRow
+              label={row.label}
+              selected={props.selected === i()}
+              onHover={() => props.onHover(i())}
+              onPick={() => props.onPick(i())}
+            />
+          )}
+        </For>
+        <Show when={props.rows.length === 0}>
+          <div data-testid="edit-qo-empty" style={{ padding: '6px 16px', color: tokens.fgDim, font: tokens.type.textMd }}>
+            {props.loading ? 'listing files…' : props.query ? 'no matches' : 'no recent files yet'}
+          </div>
+        </Show>
+      </div>
+      <div data-testid="edit-qo-status" style={{ padding: '4px 12px 6px', 'border-top': `1px solid ${tokens.borderMenu}`, color: tokens.fgDim, font: tokens.type.textSm }}>
+        {props.status}
+      </div>
+    </Overlay>
+  );
+};
+
+const QuickOpenRow: Component<{ label: string; selected: boolean; onHover: () => void; onPick: () => void }> = (props) => {
+  let el!: HTMLButtonElement;
+  createEffect(() => {
+    if (props.selected) el.scrollIntoView({ block: 'nearest' });
+  });
+  const dir = () => { const i = props.label.lastIndexOf('/'); return i < 0 ? '' : props.label.slice(0, i); };
+  const base = () => { const i = props.label.lastIndexOf('/'); return i < 0 ? props.label : props.label.slice(i + 1); };
+  return (
+    <button
+      type="button"
+      ref={el!}
+      data-testid={`edit-qo-item-${props.label}`}
+      data-selected={props.selected ? 'true' : undefined}
+      onMouseEnter={props.onHover}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={props.onPick}
+      style={{
+        display: 'flex',
+        'align-items': 'baseline',
+        gap: '8px',
+        width: '100%',
+        padding: '4px 16px',
+        background: props.selected ? tokens.bgRowSelected : 'transparent',
+        color: tokens.fg,
+        border: 'none',
+        'text-align': 'left',
+        cursor: 'pointer',
+        font: tokens.type.textMd,
+      }}
+    >
+      <span style={{ 'white-space': 'nowrap' }}>{base()}</span>
+      <span style={{ color: tokens.fgDim, font: tokens.type.textSm, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{dir()}</span>
+    </button>
   );
 };
 

@@ -15,6 +15,8 @@
 //	             { kind: "read",  path }
 //	             { kind: "write", path, content }
 //	             fs.* messages handled by sdk.EnableFilePicker
+//	             prefs / prefs_set / recent_add / recent_drop — prefs.go
+//	             find / find_cancel — find.go
 //
 //	BE → FE  : { kind: "list_ok", id?, path, entries, truncated }
 //	             { kind: "read_ok", id?, path, content, size, binary, truncated }
@@ -152,6 +154,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	initAgent(c)
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
+	registerPrefsHandlers(bus)
+	registerFindHandlers(bus)
 	registerAgentHandlers(bus)
 
 	if root == "" {
