@@ -284,6 +284,11 @@ func ErrCode(err error) string {
 		return "cross_device"
 	case errors.Is(err, ErrForbidden):
 		return "forbidden"
+	case errors.Is(err, syscall.ENOTDIR):
+		// Listing (or descending through) a path that is a file. fm keys
+		// on this to preview the file instead of treating the navigation
+		// as failed.
+		return "not_dir"
 	}
 	return "io"
 }

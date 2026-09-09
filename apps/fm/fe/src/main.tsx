@@ -94,6 +94,7 @@ import {
   Upload,
   Video,
   FolderUp,
+  X,
 } from 'lucide-solid';
 
 interface PersistedState {
@@ -313,6 +314,27 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const activeJobs = createMemo(() =>
     bulkJobs().filter((j) => j.status === 'queued' || j.status === 'running'),
   );
+  // A FAILED job stays in the strip until dismissed — the error text is
+  // the whole point, and it used to vanish with the row the instant the
+  // job failed. The service ages terminal rows out on its own schedule,
+  // so fm remembers every failed job it has seen (by job_id) and forgets
+  // it only on the × (dismissedJobs keeps a later bulk.state from
+  // re-adding it).
+  const [failedJobs, setFailedJobs] = createSignal<BulkJob[]>([]);
+  const dismissedJobs = new Set<string>();
+  const rememberFailed = (jobs: BulkJob[]) => {
+    const failed = jobs.filter((j) => j.status === 'failed' && !dismissedJobs.has(j.job_id));
+    if (failed.length === 0) return;
+    setFailedJobs((prev) => {
+      const byID = new Map(prev.map((j) => [j.job_id, j]));
+      for (const j of failed) byID.set(j.job_id, j);
+      return Array.from(byID.values());
+    });
+  };
+  const dismissJob = (jobID: string) => {
+    dismissedJobs.add(jobID);
+    setFailedJobs((prev) => prev.filter((j) => j.job_id !== jobID));
+  };
   // Default helper: setStatusOverride(string) is an error; nulls clear.
   // Most failure paths predate the kind distinction and stay one-arg.
   const setStatusOverride = (text: string | null) => {
@@ -376,6 +398,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // Refs / latched state (no reactivity needed)
   let pendingNav: string | null = null;
+  // navSnapshot is the state selectPath commits over, kept until the
+  // target's listing arrives: on list_err the navigation is rolled back
+  // to it (see onListErr), so a path-bar typo neither moves the cursor
+  // nor lands in the Back history. The typed text stays in the bar.
+  let navSnapshot: {
+    target: string;
+    path: string;
+    history: NavHistory;
+    selectedEntry: Entry | null;
+    selectedPath: string;
+    gridDir: string;
+  } | null = null;
   let completePartial = '';
   let completeTimer: number | null = null;
   // (no manual click-timer state — we lean on native dblclick.)
@@ -571,6 +605,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // routinely describe work no open window owns.
         const st = m.state as { jobs?: BulkJob[]; conflicts?: BulkConflict[] } | undefined;
         setBulkJobs(st?.jobs ?? []);
+        rememberFailed(st?.jobs ?? []);
         setBulkConflicts(st?.conflicts ?? []);
         return;
       }
@@ -697,6 +732,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const onListOk = (m: BEMessage) => {
     const p = String(m.path);
     const entries = m.entries as Entry[];
+    if (navSnapshot?.target === p) navSnapshot = null; // navigation landed
     setListings(p, entries);
     if (m.truncated) setTruncatedDirs(p, { shown: entries.length, total: Number(m.total) || 0 });
     else if (truncatedDirs[p]) setTruncatedDirs(produce((s) => { delete s[p]; }));
@@ -741,13 +777,37 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // well be the live tree (the sandbox root sits under a probed ancestor).
     if (listings[p]) dropSubtreeState(p);
     else collapseDir(p);
+    pendingNav = null;
+    const snap = navSnapshot;
+    if (snap && snap.target === p && path() === p) {
+      navSnapshot = null;
+      if (m.code === 'not_dir') {
+        // The typed path is a FILE whose parent we hadn't listed, so
+        // expandPath had no entry to tell it apart from a folder. The
+        // navigation is fine — show the file.
+        setGridDir('');
+        sendRead(p);
+        return;
+      }
+      // The navigation failed: put the cursor and the Back history
+      // back where they were. The path bar keeps the typed text so
+      // the user can fix it, and the status line says what went wrong.
+      batch(() => {
+        setPath(snap.path);
+        setNavHistory(snap.history);
+        setSelectedEntry(snap.selectedEntry);
+        setSelectedPath(snap.selectedPath);
+        setGridDir(snap.gridDir);
+      });
+      setStatusOverride(`error: ${String(m.msg)}`);
+      return;
+    }
     // outside_root is expected in sandbox mode when expandPath
     // probes ancestors above WASH_FM_ROOT. Don't pollute the
     // status bar with that — it's the BE doing its job.
     if (m.code !== 'outside_root') {
       setStatusOverride(`error: ${String(m.msg)}`);
     }
-    pendingNav = null;
   };
 
   // ---- navigation ----
@@ -798,6 +858,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // but the tree sticks on the old one). visibleRows lights up as
     // listings arrive.
     const entry = findEntry(p);  // may be null if par isn't listed
+    navSnapshot = {
+      target: p,
+      path: path(),
+      history: navHistory(),
+      selectedEntry: selectedEntry(),
+      selectedPath: selectedPath(),
+      gridDir: gridDir(),
+    };
     setPath(p);
     setSelectedEntry(entry);
     setSelectedPath(p);
@@ -898,18 +966,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const navigateTo = (p: string) => selectPath(p || '/', true);
   const goHome = () => navigateTo(home());
+  // Back/Forward move the history index first, so the rollback snapshot
+  // selectPath takes has to be the history as it stood BEFORE the move —
+  // a Back onto a since-deleted folder then leaves the index where it was.
   const goBack = () => {
     const move = back(navHistory());
     if (move) {
-      setNavHistory(at(navHistory(), move.idx));
+      const before = navHistory();
+      setNavHistory(at(before, move.idx));
       selectPath(move.path, false);
+      if (navSnapshot) navSnapshot.history = before;
     }
   };
   const goForward = () => {
     const move = forward(navHistory());
     if (move) {
-      setNavHistory(at(navHistory(), move.idx));
+      const before = navHistory();
+      setNavHistory(at(before, move.idx));
       selectPath(move.path, false);
+      if (navSnapshot) navSnapshot.history = before;
     }
   };
   const goUp = () => {
@@ -2687,8 +2762,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         </Show>
       </div>
 
-      {/* the host's bulk queue — only while something is in flight */}
-      <Show when={activeJobs().length > 0}>
+      {/* the host's bulk queue — while something is in flight, or a
+          failure is waiting to be read and dismissed */}
+      <Show when={activeJobs().length > 0 || failedJobs().length > 0}>
         <div
           data-testid="fm-jobs"
           style={{
@@ -2698,12 +2774,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             'max-height': '30%',
             overflow: 'auto',
             'flex-shrink': 0,
+            display: 'flex',
+            'flex-direction': 'column',
+            gap: '6px',
           }}
         >
-          <BulkJobs
-            jobs={activeJobs}
-            onCancel={(jobID) => send({ kind: 'bulk_cancel', job_id: jobID })}
-          />
+          <Show when={activeJobs().length > 0}>
+            <BulkJobs
+              jobs={activeJobs}
+              onCancel={(jobID) => send({ kind: 'bulk_cancel', job_id: jobID })}
+            />
+          </Show>
+          <For each={failedJobs()}>
+            {(j) => <FailedJobRow job={j} onDismiss={() => dismissJob(j.job_id)} />}
+          </For>
         </div>
       </Show>
 
@@ -3014,6 +3098,62 @@ const PendingNewRow: Component<{
         }}
         style={{ ...inlineInputStyle, flex: 1 }}
       />
+    </div>
+  );
+};
+
+// FailedJobRow — a terminal bulk job that ended in failure, kept in fm's
+// strip with its error until the user dismisses it (the shared <BulkJobs>
+// renders the live queue; a failure that has to be READ is fm's concern).
+const FailedJobRow: Component<{ job: BulkJob; onDismiss: () => void }> = (props) => {
+  const label = () => {
+    const n = props.job.paths.length;
+    return `${props.job.op} ${n} item${n === 1 ? '' : 's'}${props.job.dest ? ` → ${props.job.dest}` : ''}`;
+  };
+  return (
+    <div
+      data-testid={`fm-failed-job-${props.job.job_id}`}
+      data-status="failed"
+      style={{
+        padding: '6px 8px',
+        border: `1px solid ${tokens.borderDanger}`,
+        'border-radius': tokens.radiusSm,
+        display: 'flex',
+        'flex-direction': 'column',
+        gap: '4px',
+        'font-size': '11px',
+      }}
+    >
+      <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>
+        <span style={{ color: tokens.fg, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', flex: 1 }}>
+          {label()}
+        </span>
+        <span style={{ font: tokens.type.monoSm, color: tokens.fgDanger, 'flex-shrink': 0 }}>failed</span>
+        <button
+          type="button"
+          data-testid={`fm-dismiss-job-${props.job.job_id}`}
+          title="Dismiss"
+          onClick={props.onDismiss}
+          style={{
+            background: 'transparent',
+            color: tokens.fg,
+            border: `1px solid ${tokens.borderMenu}`,
+            'border-radius': tokens.radiusSm,
+            padding: '0 4px',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            'align-items': 'center',
+            'flex-shrink': 0,
+          }}
+        >
+          <X size={11} />
+        </button>
+      </div>
+      <Show when={props.job.error}>
+        <div style={{ color: tokens.fgDanger, font: tokens.type.monoSm, 'word-break': 'break-all' }}>
+          {props.job.error}
+        </div>
+      </Show>
     </div>
   );
 };
