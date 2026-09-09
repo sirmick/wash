@@ -18,6 +18,16 @@ import { agentStateColor, agentStateLabel } from './agent-status';
 import { Markdown } from './markdown';
 import { Terminal } from './terminal';
 import { WASH_SCROLL_CLASS } from './scrollbars';
+import {
+  acceptsDrop,
+  describeSkipped,
+  fencedAttachment,
+  insertAt,
+  isTextLike,
+  pathRefs,
+  readTextFile,
+  washPathsFrom,
+} from './agent-compose-drop';
 
 /** One line in a transcript, as agentd publishes it. */
 export interface AgentEvent {
@@ -383,6 +393,60 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
 
   const st = () => props.status?.() ?? {};
 
+  // Drops onto the composer (agent-compose-drop.ts): a wash drag becomes
+  // @path references at the caret; an OS text file is attached inline as
+  // a fenced block; anything else is named in a note under the box. The
+  // placeholder has promised this since the composer existed.
+  const [dropNote, setDropNote] = createSignal('');
+  const [dropping, setDropping] = createSignal(false);
+  const onDragOver = (e: DragEvent) => {
+    if (!acceptsDrop(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'copy';
+    setDropping(true);
+  };
+  const onDragLeave = () => setDropping(false);
+  const onDrop = async (e: DragEvent) => {
+    setDropping(false);
+    const dt = e.dataTransfer;
+    if (!acceptsDrop(dt)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let insert = '';
+    const skipped: string[] = [];
+    const paths = washPathsFrom(dt);
+    if (paths.length > 0) {
+      insert = pathRefs(paths);
+    } else {
+      const parts: string[] = [];
+      for (const f of Array.from(dt!.files ?? [])) {
+        if (!isTextLike(f)) {
+          skipped.push(f.name);
+          continue;
+        }
+        try {
+          parts.push(fencedAttachment(f.name, await readTextFile(f)));
+        } catch {
+          skipped.push(f.name);
+        }
+      }
+      insert = parts.join('\n\n');
+    }
+    setDropNote(describeSkipped(skipped));
+    if (!insert) return;
+    const cur = draft();
+    const start = input?.selectionStart ?? cur.length;
+    const end = input?.selectionEnd ?? start;
+    const r = insertAt(cur, start, end, insert);
+    setDraft(r.text);
+    // Land the caret after what was inserted, once Solid has written the
+    // new value into the textarea.
+    queueMicrotask(() => {
+      input?.focus();
+      input?.setSelectionRange(r.caret, r.caret);
+    });
+  };
+
   return (
     <div
       style={{
@@ -565,9 +629,13 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
       </div>
 
       <div
+        data-testid="agent-composer-drop"
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
         style={{
           flex: 'none',
-          'border-top': `1px solid ${tokens.borderMenu}`,
+          'border-top': `1px solid ${dropping() ? tokens.borderFocus : tokens.borderMenu}`,
           padding: `${tokens.spaceMd}px`,
         }}
       >
@@ -658,6 +726,11 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             'box-sizing': 'border-box',
           }}
         />
+        <Show when={dropNote()}>
+          <div data-testid="agent-drop-note" style={{ font: tokens.type.textSm, color: tokens.fgMuted, 'margin-top': `${tokens.spaceXs}px` }}>
+            {dropNote()}
+          </div>
+        </Show>
       </div>
 
       <div
