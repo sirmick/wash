@@ -616,3 +616,19 @@ is the second time this probe has been the thing that broke.
 **Not fixed here**: one occurrence, no local reproduction in six runs.
 Logged so a second sighting has something to sit next to — and if there
 is one, the fix is the probe's budget, not the test's intent.
+
+## 2026-09-08 — `fm-paste-self` "cut a file, paste into the same folder": FIXED, not a flake
+
+One red in the first full-suite run of the apps-sweep-p0 branch (523/524),
+in a spec written that day. Targeted runs (16/16, then `--repeat-each 3`)
+were green, so it only fired under load.
+
+**Mechanism**: fm's FE learned its own Ctrl+X only from the BE's
+`clipboard_files_state` echo, while the status line said "cut 1 to
+clipboard" locally and at once. The spec waited on the status line, so it
+proved nothing, and a Ctrl+V that beat the round trip read an empty
+mirror and pasted nothing. A real gap, not a timing budget: a fast
+Ctrl+X, Ctrl+V did the same for a user.
+
+**Fixed** in 45a4154c by mirroring the clipboard locally before the
+send (the echo carries the identical state). Full suite after: 524/524.
