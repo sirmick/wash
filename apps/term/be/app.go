@@ -95,6 +95,12 @@ type state struct {
 	// pushed per channel, so an idle tab stays off the wire (we only
 	// send when root/ssh/user actually flips). Cleared on tab close.
 	statusSent map[uint32]string
+	// held are tabs whose pty has ended but whose tab stays open showing
+	// how it ended (holdOnExit): a non-zero exit, a signal, or an exec'd
+	// command that finished within fastExitHold of starting. The window
+	// closes only once every session AND every held tab is gone, so a
+	// `wash-term --exec` whose command fails fast is read, not lost.
+	held map[uint32]*pty.Session
 }
 
 // initState allocates the per-window maps. Both entrypoints (Def for the
@@ -102,6 +108,87 @@ type state struct {
 func initState() {
 	st.sessions = make(map[uint32]*pty.Session)
 	st.statusSent = make(map[uint32]string)
+	st.held = make(map[uint32]*pty.Session)
+}
+
+// exitBanner is the in-band epilogue written into a held tab's channel
+// after everything the process wrote, so it lands in the router's replay
+// buffer too and an FE attaching late still sees output THEN verdict.
+func exitBanner(code int, signal string) string {
+	how := fmt.Sprintf("exited with code %d", code)
+	if signal != "" {
+		how = "killed by signal (" + signal + ")"
+	}
+	return "\r\n\x1b[1;33m[process " + how + " — press Enter to close]\x1b[0m\r\n"
+}
+
+// fastExitHold is how soon after spawn an exec'd command's clean exit still
+// counts as "you probably wanted to read that": usage text, a missing
+// argument, a `true` typo. An interactive shell is exempt — `exit` typed
+// into a fresh shell should close it, as it always has.
+const fastExitHold = 2 * time.Second
+
+// exitWait bounds how long onClose waits for the reaper after the pty
+// EOFs. The child has already exited (that is why the pty closed), so
+// cmd.Wait returns in microseconds; the bound only guards a pathological
+// case from wedging the pty goroutine.
+const exitWait = 2 * time.Second
+
+// shouldHold is the whole policy for keeping a finished tab on screen:
+// only a pty that ended on its own is a candidate (a user- or
+// window-initiated close is never held), and then a non-zero code, a
+// signal, or a fast exit of an exec'd command holds it. Pure, so the
+// policy is unit-tested without a pty.
+func shouldHold(reason string, code int, signal string, execd bool, elapsed time.Duration) bool {
+	if reason != "pty eof" {
+		return false
+	}
+	if code != 0 || signal != "" {
+		return true
+	}
+	return execd && elapsed < fastExitHold
+}
+
+// holdOnExit is the pty.WithExitHold decision: read how the session ended
+// and apply shouldHold. It waits (bounded) for the reaper so the status is
+// real, not the zero value of a child that is exited but not yet waited on.
+func holdOnExit(s *pty.Session, reason string, execd bool, spawned time.Time) bool {
+	if reason != "pty eof" {
+		return false
+	}
+	select {
+	case <-s.Done():
+	case <-time.After(exitWait):
+		return false
+	}
+	code, signal, exited := s.ExitStatus()
+	if !exited {
+		return false
+	}
+	return shouldHold(reason, code, signal, execd, time.Since(spawned))
+}
+
+// dismissHeld drops a held tab the user has read (Enter, or the tab's ×)
+// and takes the window down when it was the last thing in it.
+func dismissHeld(c *sdk.Conn, id uint32) {
+	st.mu.Lock()
+	s, was := st.held[id]
+	delete(st.held, id)
+	empty := len(st.sessions) == 0 && len(st.held) == 0
+	st.mu.Unlock()
+	if !was {
+		return
+	}
+	s.ReleaseChannel()
+	log.Printf("wash-term tab dismissed ch=%d", id)
+	_ = c.SendAppMsg(map[string]any{
+		"kind":       "tab_closed",
+		"channel_id": uint64(id),
+		"reason":     "dismissed",
+	})
+	if empty {
+		_ = c.ConfirmClose(c.WindowID(), true)
+	}
 }
 
 var st state
@@ -363,6 +450,14 @@ func registerHandlers(b *sdk.Bus) {
 	// drops/adopts tabs to match.
 	sdk.HandleVoid(b, "list_sessions", func(c *sdk.Conn, _ string, _ struct{}) error {
 		st.mu.Lock()
+		// A remounted FE has no held tabs (it rebuilds from the live set
+		// below), so anything held is gone with it — and if nothing is
+		// live either, the window has nothing left to show.
+		for _, s := range st.held {
+			s.ReleaseChannel()
+		}
+		st.held = make(map[uint32]*pty.Session)
+		empty := len(st.sessions) == 0
 		rows := make([]map[string]any, 0, len(st.sessions))
 		for id, s := range st.sessions {
 			cols, sessRows := s.Size()
@@ -383,7 +478,11 @@ func registerHandlers(b *sdk.Bus) {
 		// the current status for every live tab and re-seeds the badges.
 		st.statusSent = make(map[uint32]string)
 		st.mu.Unlock()
-		return c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
+		err := c.SendAppMsg(map[string]any{"kind": "sessions", "sessions": rows})
+		if empty {
+			_ = c.ConfirmClose(c.WindowID(), true)
+		}
+		return err
 	})
 	// close_window_confirmed: the user answered the window-close dialog
 	// with "close anyway". Kill every shell, then ask the router to take
@@ -401,6 +500,9 @@ func registerHandlers(b *sdk.Bus) {
 		sess := st.sessions[uint32(req.ChannelID)]
 		st.mu.Unlock()
 		if sess == nil {
+			// A held tab has no shell left to protect: closing it is
+			// just dismissing the exit notice.
+			dismissHeld(c, uint32(req.ChannelID))
 			return nil
 		}
 		// Every close asks. Closing kills the shell outright, and a shell
@@ -456,19 +558,47 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 	// and friends resolve without an absolute path, and the router's
 	// WASH_*-namespaced display hints mapped to the real DISPLAY /
 	// WAYLAND_DISPLAY a GUI client needs.
+	// execd: the tab runs a command rather than a shell (--exec, or an
+	// exec_tab override). Its fast clean exit is held for reading; a
+	// shell's is not. --login is still a shell.
+	execd := len(override) > 0 || len(execArgv) > 0
+	spawned := time.Now()
+	holdFn := func(s *pty.Session, reason string) bool { return holdOnExit(s, reason, execd, spawned) }
 	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, pty.WithWashEnv, func(s *pty.Session, reason string) {
 		// onClose runs from the pty goroutine when the session ends.
 		// Drop from the session map, tell the FE, dismiss the window
-		// if no tabs remain.
+		// if no tabs remain — unless the exit is one the user should
+		// read first, in which case the tab is HELD open with its exit
+		// status and the window waits for it to be dismissed.
 		st.mu.Lock()
 		_, found := st.sessions[s.ID()]
 		delete(st.sessions, s.ID())
 		delete(st.statusSent, s.ID())
-		empty := len(st.sessions) == 0
 		st.mu.Unlock()
 		if !found {
 			return
 		}
+		if s.ChannelHeld() {
+			// The channel outlived the pty (holdFn said so): keep the
+			// session as a held tab, write the verdict in-band after the
+			// process's own output, and tell the FE it is now a notice.
+			code, signal, _ := s.ExitStatus()
+			st.mu.Lock()
+			st.held[s.ID()] = s
+			st.mu.Unlock()
+			_, _ = s.WriteChannel([]byte(exitBanner(code, signal)))
+			log.Printf("wash-term tab held ch=%d code=%d signal=%q", s.ID(), code, signal)
+			_ = c.SendAppMsg(map[string]any{
+				"kind":       "tab_exited",
+				"channel_id": uint64(s.ID()),
+				"code":       code,
+				"signal":     signal,
+			})
+			return
+		}
+		st.mu.Lock()
+		empty := len(st.sessions) == 0 && len(st.held) == 0
+		st.mu.Unlock()
 		_ = c.SendAppMsg(map[string]any{
 			"kind":       "tab_closed",
 			"channel_id": uint64(s.ID()),
@@ -479,7 +609,7 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 			// the user doesn't sit looking at an empty terminal.
 			_ = c.ConfirmClose(c.WindowID(), true)
 		}
-	})
+	}, pty.WithExitHold(holdFn))
 	if err != nil {
 		log.Printf("wash-term open: %v", err)
 		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error(), "req": req})
@@ -508,6 +638,14 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 // answer "no" immediately and, if the user confirms, close ourselves with an
 // unsolicited confirm_close(allow=true) — see closeWindowConfirmed.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
+	st.mu.Lock()
+	nothingLive := len(st.sessions) == 0
+	st.mu.Unlock()
+	if nothingLive {
+		// Only held exit notices (or nothing at all): no shell would end,
+		// so there is nothing to confirm.
+		return true
+	}
 	if err := c.SendAppMsg(map[string]any{
 		"kind":  "close_blocked",
 		"scope": "window",
@@ -556,9 +694,17 @@ func killAllSessions() {
 	for _, s := range st.sessions {
 		sessions = append(sessions, s)
 	}
+	held := make([]*pty.Session, 0, len(st.held))
+	for _, s := range st.held {
+		held = append(held, s)
+	}
+	st.held = make(map[uint32]*pty.Session)
 	st.mu.Unlock()
 	for _, s := range sessions {
 		s.CloseWithReason("window closed")
+	}
+	for _, s := range held {
+		s.ReleaseChannel()
 	}
 }
 

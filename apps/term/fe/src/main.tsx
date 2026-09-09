@@ -99,6 +99,12 @@ interface TabStatus {
 
 // The on-the-wire/saved schema uses snake_case to match the rest of
 // wash's JSON conventions.
+// ExitInfo is how a held tab's process ended (`tab_exited`).
+interface ExitInfo {
+  code: number;
+  signal: string;
+}
+
 interface PersistedTabRow {
   channel_id: number;
   shell: string;
@@ -278,6 +284,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [tabTitles, setTabTitles] = createSignal<Map<number, string>>(new Map());
   // Per-tab user badge/status from the BE poll (see TabStatus).
   const [tabStatus, setTabStatus] = createSignal<Map<number, TabStatus>>(new Map());
+  // Tabs whose pty has ended but which the BE HELD open (`tab_exited`):
+  // the command failed, was killed, or finished before anyone could read
+  // it. The BE wrote the exit banner in-band; here the xterm just stays,
+  // keys stop going anywhere, and Enter (or the tab's ×) dismisses it.
+  // Side map, same discipline as the rest.
+  const [exitedTabs, setExitedTabs] = createSignal<Map<number, ExitInfo>>(new Map());
 
   // Per-tab color tag, keyed by channel id. Kept OUT of the TabMeta
   // objects on purpose: the term-host <For> below is keyed by object
@@ -350,6 +362,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       const next = new Map(tabStatus());
       next.delete(channelID);
       setTabStatus(next);
+    }
+    if (exitedTabs().has(channelID)) {
+      const next = new Map(exitedTabs());
+      next.delete(channelID);
+      setExitedTabs(next);
     }
     const remaining = tabs().filter((t) => t.channelID !== channelID);
     setTabs(remaining);
@@ -822,6 +839,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'sessions':
         reconcile((m.sessions ?? []) as SessionRow[]);
         return;
+      case 'tab_exited': {
+        // The pty is gone but the tab stays, showing how it ended (the BE
+        // wrote that into the channel, after the process's own output).
+        const id = Number(m.channel_id);
+        const next = new Map(exitedTabs());
+        next.set(id, { code: Number(m.code ?? 0), signal: String(m.signal ?? '') });
+        setExitedTabs(next);
+        return;
+      }
       case 'tab_status': {
         const id = Number(m.channel_id);
         const state = String(m.state);
@@ -1008,6 +1034,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (ev.ctrlKey && ev.key === 'Tab') {
       ev.preventDefault();
       cycleTabs(ev.shiftKey ? -1 : 1);
+      return false;
+    }
+    // A held tab has no pty behind it: Enter dismisses it, and nothing
+    // else is worth sending to a channel that is gone.
+    if (exitedTabs().has(active())) {
+      if (ev.key === 'Enter') requestCloseTab(active());
       return false;
     }
     return true;

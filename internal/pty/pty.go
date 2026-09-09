@@ -49,6 +49,13 @@ type Session struct {
 	closeOnce sync.Once
 	onClose   func(s *Session, reason string)
 
+	// hold (WithExitHold) is asked, once the pty has ended, whether the raw
+	// channel should outlive it. chHeld records the answer; ReleaseChannel
+	// closes the channel later. Guarded by chMu.
+	hold   func(s *Session, reason string) bool
+	chMu   sync.Mutex
+	chHeld bool
+
 	// cap is the optional output capture (WithCapture). Nil unless a
 	// caller asked for one: wash-term does not need it — the browser is
 	// its buffer — but a caller that must ANSWER for the output later
@@ -106,6 +113,54 @@ func WithCapture(max int) Option {
 		if max > 0 {
 			s.cap = &capture{max: max}
 		}
+	}
+}
+
+// WithExitHold keeps the raw channel open after the pty ends whenever
+// hold(s, reason) says so — for a tab that should stay on screen showing
+// how its process ended. The router drops a channel, replay buffer and
+// all, the moment the app closes it; holding it keeps the process's last
+// output reachable by an FE that attaches late, and lets the caller write
+// its own in-band epilogue with WriteChannel, ordered after everything the
+// process wrote. The caller owns the channel from then on and must
+// ReleaseChannel it. hold runs before onClose, so onClose can read
+// ChannelHeld.
+func WithExitHold(hold func(s *Session, reason string) bool) Option {
+	return func(s *Session) { s.hold = hold }
+}
+
+// ChannelHeld reports whether the raw channel outlived the pty
+// (WithExitHold) and has not been released yet.
+func (s *Session) ChannelHeld() bool {
+	s.chMu.Lock()
+	defer s.chMu.Unlock()
+	return s.chHeld
+}
+
+// WriteChannel writes bytes toward the FE on the session's channel — the
+// in-band epilogue of a held session. No-op on a session with no channel.
+func (s *Session) WriteChannel(p []byte) (int, error) {
+	if s.ch == nil {
+		return len(p), nil
+	}
+	return s.ch.Write(p)
+}
+
+// ReleaseChannel closes a held channel. Idempotent; a no-op on a session
+// that was not held.
+func (s *Session) ReleaseChannel() {
+	s.chMu.Lock()
+	held := s.chHeld
+	s.chHeld = false
+	s.chMu.Unlock()
+	if held {
+		s.closeChannel()
+	}
+}
+
+func (s *Session) closeChannel() {
+	if s.ch != nil {
+		_ = s.ch.Close()
 	}
 }
 
@@ -478,11 +533,19 @@ func (s *Session) CloseWithReason(reason string) {
 
 func (s *Session) closeWithReason(reason string) {
 	s.closeOnce.Do(func() {
-		if s.cmd.Process != nil {
+		if s.cmd != nil && s.cmd.Process != nil {
 			_ = s.cmd.Process.Kill()
 		}
-		_ = s.pty.Close()
-		_ = s.ch.Close()
+		if s.pty != nil {
+			_ = s.pty.Close()
+		}
+		if s.hold != nil && s.hold(s, reason) {
+			s.chMu.Lock()
+			s.chHeld = true
+			s.chMu.Unlock()
+		} else {
+			s.closeChannel()
+		}
 		if s.onClose != nil {
 			s.onClose(s, reason)
 		}
