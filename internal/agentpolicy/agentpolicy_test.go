@@ -82,7 +82,7 @@ func TestAppend(t *testing.T) {
 
 	// Appending to nothing creates an enabled policy holding one rule —
 	// clicking "always allow" is itself an act of turning the table on.
-	if err := Append(path, "Bash(git push*)", DecisionAllow); err != nil {
+	if err := Append(path, "Bash(git push*)", DecisionAllow, ""); err != nil {
 		t.Fatal(err)
 	}
 	p := Load(path)
@@ -91,7 +91,7 @@ func TestAppend(t *testing.T) {
 	}
 
 	// Idempotent: a second click on the same button doesn't grow the file.
-	if err := Append(path, "Bash(git push*)", DecisionAllow); err != nil {
+	if err := Append(path, "Bash(git push*)", DecisionAllow, ""); err != nil {
 		t.Fatal(err)
 	}
 	if p := Load(path); len(p.Rules) != 1 {
@@ -100,7 +100,7 @@ func TestAppend(t *testing.T) {
 
 	// Appends land at the END, so a hand-written deny higher up keeps
 	// beating a click made later.
-	if err := Append(path, "Read", DecisionAllow); err != nil {
+	if err := Append(path, "Read", DecisionAllow, ""); err != nil {
 		t.Fatal(err)
 	}
 	p = Load(path)
@@ -109,7 +109,7 @@ func TestAppend(t *testing.T) {
 	}
 
 	// Same match, different decision, is a different rule.
-	if err := Append(path, "Read", DecisionDeny); err != nil {
+	if err := Append(path, "Read", DecisionDeny, ""); err != nil {
 		t.Fatal(err)
 	}
 	if p := Load(path); len(p.Rules) != 3 {
@@ -117,7 +117,7 @@ func TestAppend(t *testing.T) {
 	}
 
 	// An empty rule is a no-op rather than a corrupt row.
-	if err := Append(path, "", DecisionAllow); err != nil {
+	if err := Append(path, "", DecisionAllow, ""); err != nil {
 		t.Fatal(err)
 	}
 	if p := Load(path); len(p.Rules) != 3 {
@@ -140,7 +140,7 @@ func TestAppendPreservesTheRestOfTheFile(t *testing.T) {
 	if err := Save(path, orig); err != nil {
 		t.Fatal(err)
 	}
-	if err := Append(path, "Read", DecisionAllow); err != nil {
+	if err := Append(path, "Read", DecisionAllow, ""); err != nil {
 		t.Fatal(err)
 	}
 	p := Load(path)
@@ -202,5 +202,79 @@ func TestSaveShape(t *testing.T) {
 		t.Fatal(err)
 	} else if perm := fi.Mode().Perm(); perm != 0o600 {
 		t.Errorf("mode = %v, want 0600", perm)
+	}
+}
+
+// "Allow always" for a shell command from project A must not also allow
+// it in project B. SuggestRule scoped only Write/Edit (in the pattern);
+// Append wrote Cwd:"" for everything else, so one click on
+// Bash(make deploy*) in a scratch tree bought the same command in every
+// checkout on the machine.
+func TestBashRuleIsScopedToItsProject(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agents.json")
+	projA, projB := "/home/u/scratch", "/home/u/production"
+
+	rule := SuggestRule("Bash", "make deploy --env=staging", projA)
+	if err := Append(path, rule, DecisionAllow, RuleScope("Bash", projA)); err != nil {
+		t.Fatal(err)
+	}
+	p := Load(path)
+	if len(p.Rules) != 1 || p.Rules[0].Cwd != projA {
+		t.Fatalf("rule written unscoped: %+v", p.Rules)
+	}
+
+	req := func(cwd string) Request {
+		return Request{ToolName: "Bash", ToolInput: map[string]any{"command": "make deploy --env=prod"}, Cwd: cwd}
+	}
+	if got := Evaluate(p, req(projA)); got.Decision != DecisionAllow {
+		t.Errorf("in project A: %+v, want allow", got)
+	}
+	if got := Evaluate(p, req(projA+"/sub/dir")); got.Decision != DecisionAllow {
+		t.Errorf("under project A: %+v, want allow", got)
+	}
+	if got := Evaluate(p, req(projB)); got.Decision != DecisionAsk {
+		t.Errorf("in project B: %+v, want ask — the rule leaked across projects", got)
+	}
+	if got := Evaluate(p, req("")); got.Decision != DecisionAsk {
+		t.Errorf("with no cwd: %+v, want ask", got)
+	}
+
+	// The same rule clicked in B is a second, B-scoped rule — not a
+	// duplicate, and not a widening of A's.
+	if err := Append(path, rule, DecisionAllow, RuleScope("Bash", projB)); err != nil {
+		t.Fatal(err)
+	}
+	p = Load(path)
+	if len(p.Rules) != 2 || p.Rules[1].Cwd != projB {
+		t.Fatalf("second project's rule: %+v", p.Rules)
+	}
+	// And a repeat in A is still a no-op.
+	if err := Append(path, rule, DecisionAllow, RuleScope("Bash", projA)); err != nil {
+		t.Fatal(err)
+	}
+	if p := Load(path); len(p.Rules) != 2 {
+		t.Errorf("duplicate scoped append grew the table to %d", len(p.Rules))
+	}
+}
+
+func TestRuleScope(t *testing.T) {
+	cases := []struct{ tool, cwd, want string }{
+		{"Bash", "/home/u/proj", "/home/u/proj"},
+		{"Bash", "/home/u/proj/", "/home/u/proj"},
+		{"BashOutput", "/x", "/x"},
+		{"Bash", "", ""},
+		// Read-only tools: the same risk everywhere; a scope would only
+		// make the rule brittle.
+		{"Read", "/home/u/proj", ""},
+		{"Grep", "/home/u/proj", ""},
+		// Writers carry the directory in the pattern already.
+		{"Edit", "/home/u/proj", ""},
+		{"WebFetch", "/home/u/proj", ""},
+	}
+	for _, c := range cases {
+		if got := RuleScope(c.tool, c.cwd); got != c.want {
+			t.Errorf("RuleScope(%s, %s) = %q, want %q", c.tool, c.cwd, got, c.want)
+		}
 	}
 }

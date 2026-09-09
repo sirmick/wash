@@ -49,6 +49,8 @@ export interface AgentAsk {
   tool: string;
   subject?: string;
   suggested_rule?: string;
+  /** the directory the rule is confined to, when it is (Bash: per project) */
+  rule_cwd?: string;
   age_ms: number;
 }
 
@@ -283,9 +285,13 @@ const AskRow: Component<{
       <button
         type="button"
         onClick={() => p.onAnswer?.(p.ask.id, 'allow', p.ask.suggested_rule)}
+        title={p.ask.rule_cwd ? `Only for ${p.ask.rule_cwd}` : undefined}
         style={askBtn(tokens.bgInfo, tokens.fgInfo)}
       >
         Always allow <span style={{ font: tokens.type.monoSm }}>{p.ask.suggested_rule}</span>
+        <Show when={p.ask.rule_cwd}>
+          <span style={{ font: tokens.type.monoSm, opacity: 0.7 }}>in {p.ask.rule_cwd}</span>
+        </Show>
       </button>
     </Show>
     <button

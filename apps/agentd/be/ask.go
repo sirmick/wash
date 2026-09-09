@@ -114,6 +114,10 @@ type Ask struct {
 	// SuggestedRule is what "Always allow" would write. Shown ON the
 	// button — what you clicked is what gets saved.
 	SuggestedRule string `json:"suggested_rule,omitempty"`
+	// RuleCwd is the directory that rule would be confined to, when it
+	// would be (agentpolicy.RuleScope): a Bash rule from one project must
+	// not buy the same command in every other checkout.
+	RuleCwd string `json:"rule_cwd,omitempty"`
 	// RowKey ties the question to its roster row (same "<instance>:<chan>"
 	// key for terminals; hosted sessions mint their own), so the sidebar
 	// can render it against the right agent.
@@ -266,10 +270,15 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 			if rule == "" {
 				rule = p.SuggestedRule
 			}
-			if err := agentpolicy.Append(agentpolicy.Path(), rule, decision); err != nil {
-				log.Printf("agentd: remember rule=%q: %v", rule, err)
+			// Scoped from the ASK's own cwd, decided here rather than
+			// trusted from the answer: the desktop rail and the Agent
+			// window both answer by id, and neither should be able to
+			// widen a rule past the project the question came from.
+			scope := agentpolicy.RuleScope(p.Tool, p.Cwd)
+			if err := agentpolicy.Append(agentpolicy.Path(), rule, decision, scope); err != nil {
+				log.Printf("agentd: remember rule=%q cwd=%q: %v", rule, scope, err)
 			} else {
-				log.Printf("agentd: remembered rule=%q decision=%s", rule, decision)
+				log.Printf("agentd: remembered rule=%q decision=%s cwd=%q", rule, decision, scope)
 			}
 		}
 		log.Printf("agentd: answer id=%s tool=%s decision=%s remember=%v", req.ID, p.Tool, decision, req.Remember)
@@ -309,6 +318,7 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 				Cwd:            spec.Cwd,
 				Dir:            dirLabel(spec.Cwd),
 				SuggestedRule:  agentpolicy.SuggestRule(spec.Tool, spec.Subject, spec.Cwd),
+				RuleCwd:        agentpolicy.RuleScope(spec.Tool, spec.Cwd),
 				RowKey:         spec.RowKey,
 				SourceApp:      spec.SourceApp,
 				SourceInstance: spec.SourceInstance,
