@@ -85,7 +85,10 @@ func init() {
 			Icon:            fmIcon,
 			Accent:          "#6090e0",
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{sdk.CapOpen},
+			// CapOpen: routing double-click/Enter to the registered app.
+			// CapSpawn: the "Open with…" chooser and "Open terminal here"
+			// name the target app themselves (openwith.go).
+			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
 			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},
 		Assets:             sub,
@@ -350,6 +353,10 @@ func registerHandlers(b *sdk.Bus) {
 	// Recursive name search under a folder (the filter box's "search
 	// subtree" mode); see search.go.
 	registerSearchHandlers(b)
+
+	// "Open with…" chooser (candidate apps + the explicit spawn); see
+	// openwith.go.
+	registerOpenWithHandlers(b)
 
 	// Image bytes / thumbnails over a raw channel, for the folder-grid
 	// preview. Confined to the same fs root as every other fm operation.

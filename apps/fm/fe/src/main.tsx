@@ -157,7 +157,14 @@ type SortKey = 'name' | 'mtime' | 'ctime' | 'size' | 'type';
 type MenuState =
   | { kind: 'sort'; left: number; top: number }
   | { kind: 'context'; left: number; top: number; entry: Entry; path: string }
+  // The "Open with…" chooser, opened from the context menu: the apps the
+  // BE ranked for this file (openwith.go) split into those registered for
+  // its extension and the other known openers.
+  | { kind: 'open-with'; left: number; top: number; path: string; registered: OpenWithApp[]; others: OpenWithApp[] }
   | null;
+
+// One candidate app in the "Open with…" chooser.
+type OpenWithApp = { app_id: string; name: string };
 
 const HOME_FALLBACK = '/';
 
@@ -2646,6 +2653,30 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     setMenu({ kind: 'context', left: ev.clientX, top: ev.clientY, entry, path: p });
   };
 
+  // "Open with…" — ask the BE which apps can take this file (the ones
+  // that declared its extension first) and swap the context menu for the
+  // chooser at the same spot. Per-app `Opens` never reach the FE (the
+  // session bag carries only their union), so the ranking is the BE's.
+  const openOpenWithMenu = async (p: string, left: number, top: number) => {
+    const reply = await sendWithReply({ kind: 'open_with_list', path: p });
+    if (reply.kind !== 'open_with_list_ok') {
+      setStatusOverride(`open with: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+      return;
+    }
+    setMenu({
+      kind: 'open-with',
+      left,
+      top,
+      path: String(reply.path ?? p),
+      registered: (reply.registered as OpenWithApp[] | undefined) ?? [],
+      others: (reply.others as OpenWithApp[] | undefined) ?? [],
+    });
+  };
+  const openWith = (appID: string, p: string) => {
+    closeMenu();
+    send({ kind: 'open_with', app_id: appID, path: p });
+  };
+
   // ---- lifecycle: events ----
 
   onMount(() => {
@@ -3229,6 +3260,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             else if (isDirLike(m.entry)) selectPath(m.path, true);
             else openFile(m.path);
           }}
+          onOpenWith={() => {
+            const m = menu() as { left: number; top: number; path: string };
+            void openOpenWithMenu(m.path, m.left, m.top);
+          }}
           onCut={() => {
             const m = menu() as { path: string };
             closeMenu();
@@ -3295,6 +3330,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               requestDelete(m.path);
             }
           }}
+        />
+      </Show>
+
+      <Show when={menu()?.kind === 'open-with'}>
+        <OpenWithMenu
+          left={(menu() as { left: number }).left}
+          top={(menu() as { top: number }).top}
+          registered={(menu() as { registered: OpenWithApp[] }).registered}
+          others={(menu() as { others: OpenWithApp[] }).others}
+          onDismiss={closeMenu}
+          onPick={(appID) => openWith(appID, (menu() as { path: string }).path)}
         />
       </Show>
 
@@ -3785,6 +3831,7 @@ const ContextMenu: Component<{
   entry: Entry;
   path: string;
   onOpen: () => void;
+  onOpenWith: () => void;
   // Files-clipboard trio — Cut/Copy mirror the Ctrl+X/C shortcuts on
   // the clicked row (or the whole selection when it contains the row);
   // Paste mirrors Ctrl+V into the row's directory. canPaste greys
@@ -3804,6 +3851,9 @@ const ContextMenu: Component<{
   return (
     <Menu data-testid="fm-context-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
       <MenuItem data-testid="fm-ctx-open" label="Open" onClick={props.onOpen} />
+      <Show when={!isDirLike(props.entry)}>
+        <MenuItem data-testid="fm-ctx-open-with" label="Open with…" onClick={props.onOpenWith} />
+      </Show>
       <MenuSeparator />
       <MenuItem data-testid="fm-ctx-cut" label="Cut" onClick={props.onCut} />
       <MenuItem data-testid="fm-ctx-copy" label="Copy" onClick={props.onFileCopy} />
@@ -3815,6 +3865,34 @@ const ContextMenu: Component<{
       <MenuSeparator />
       <MenuItem data-testid="fm-ctx-rename" label="Rename" onClick={props.onRename} />
       <MenuItem data-testid="fm-ctx-delete" label="Delete" onClick={props.onDelete} />
+    </Menu>
+  );
+};
+
+// OpenWithMenu — the "Open with…" chooser. The apps that registered this
+// file's extension come first, then the other known file-openers; picking
+// one spawns it with the file as its --open argv (Conn.SpawnRequestOpen).
+const OpenWithMenu: Component<{
+  left: number;
+  top: number;
+  registered: OpenWithApp[];
+  others: OpenWithApp[];
+  onPick: (appID: string) => void;
+  onDismiss: () => void;
+}> = (props) => {
+  const item = (a: OpenWithApp) => (
+    <MenuItem data-testid={`fm-open-with-${a.app_id}`} label={a.name} onClick={() => props.onPick(a.app_id)} />
+  );
+  return (
+    <Menu data-testid="fm-open-with-menu" x={props.left} y={props.top} onDismiss={props.onDismiss}>
+      <For each={props.registered}>{item}</For>
+      <Show when={props.registered.length > 0 && props.others.length > 0}>
+        <MenuSeparator />
+      </Show>
+      <For each={props.others}>{item}</For>
+      <Show when={props.registered.length === 0 && props.others.length === 0}>
+        <MenuItem data-testid="fm-open-with-none" label="(no apps)" disabled onClick={() => {}} />
+      </Show>
     </Menu>
   );
 };
