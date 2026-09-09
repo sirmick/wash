@@ -30,6 +30,8 @@ export interface RosterRow {
   reason?: string;
   /** still running, no window pointing at it — clicking opens one */
   detached?: boolean;
+  /** prompts waiting for the current turn to end (sent in order after it) */
+  queued?: number;
   session_id?: string;
   /** the agent's own name for this session, when it has one */
   title?: string;
@@ -70,6 +72,9 @@ export interface RosterAsk {
   dir?: string;
   /** what "Always allow" would write — shown ON the button */
   suggested_rule?: string;
+  /** the directory that rule is confined to, when it is (Bash rules are
+   *  per project; read-only tools are not) */
+  rule_cwd?: string;
   row_key: string;
   /** who asked — attribution only; the answer routes by `id` in agentd */
   source_app?: string;
@@ -279,7 +284,11 @@ const AskRow: Component<{
         <Show when={props.ask.suggested_rule}>
           <AskBtn
             testid="agents-ask-always"
-            title={`Writes the rule ${props.ask.suggested_rule} to your agent policy`}
+            title={
+              props.ask.rule_cwd
+                ? `Writes the rule ${props.ask.suggested_rule} to your agent policy — only for ${props.ask.rule_cwd}`
+                : `Writes the rule ${props.ask.suggested_rule} to your agent policy`
+            }
             onClick={() => props.onAnswer('allow', true)}
           >
             Always {props.ask.suggested_rule}

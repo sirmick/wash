@@ -119,6 +119,10 @@ type Row struct {
 	// Detached marks a session still running with no window pointing at
 	// it — the sidebar offers Reattach rather than focus.
 	Detached bool `json:"detached,omitempty"`
+	// Queued is how many prompts are waiting for the current turn to end
+	// (docs/AGENT_MESSENGER.md semantics: a message typed mid-reply is
+	// sent when the reply finishes, not dropped and not interleaved).
+	Queued int `json:"queued,omitempty"`
 	// Stale marks a row whose terminal stopped reporting: shown greyed,
 	// then dropped. See staleAfter / dropAfter.
 	Stale bool `json:"stale,omitempty"`

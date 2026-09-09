@@ -26,6 +26,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
@@ -34,6 +35,12 @@ import (
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
+
+// stderrTailBytes is how much of the adapter's stderr a session keeps for
+// the moment it dies: enough for the stack trace's last lines or the
+// "not logged in" it printed on the way out, small enough to sit on every
+// session for its lifetime.
+const stderrTailBytes = 2048
 
 // hostedAskTTL bounds how long the agent waits on a human. Slightly longer
 // than the queue's own ceiling so the queue's expiry is what fires, and the
@@ -101,6 +108,19 @@ type hosted struct {
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
+	// closing is set the moment retire starts, before the adapter is
+	// killed, so the exit watcher can tell "we ended it" from "it died".
+	closing atomic.Bool
+	// tail is the adapter's last stderr bytes (see stderrTail).
+	tailMu sync.Mutex
+	tail   []byte
+	// exited is closed when watchExit has finished its cleanup, and idle
+	// receives one value each time the turn goroutine returns. Both nil in
+	// production (nothing waits); tests set them so they can wait for the
+	// goroutines rather than poll their side effects — and so nothing of a
+	// test's session outlives the test.
+	exited chan struct{}
+	idle   chan struct{}
 
 	// turnMu guards turnLive, and — crucially — is held ACROSS the
 	// state write that depends on it, so the two orderings below cannot
@@ -119,6 +139,42 @@ type hosted struct {
 	// no longer claim the agent is busy.
 	turnMu   sync.Mutex
 	turnLive bool
+	// pending are prompts typed while a turn was open, in order. They run
+	// one after another when the turn ends — messenger semantics — rather
+	// than as concurrent session/prompt calls, which the protocol does not
+	// allow and which flipped beginTurn/endTurn out of order. Guarded by
+	// turnMu; queued mirrors len(pending) for the roster row, readable
+	// without the lock (setState runs UNDER turnMu from begin/endTurn).
+	pending []string
+	queued  atomic.Int32
+}
+
+// submitPrompt is the one entry for a prompt on a live session. Inside a
+// turn it is queued and the row says so; otherwise it claims the turn
+// under the lock and runs. Claiming here — not in beginTurn — is what
+// stops two prompts arriving in the same instant from both seeing a
+// closed turn and both starting one.
+func (h *hosted) submitPrompt(text string) (queued bool) {
+	h.turnMu.Lock()
+	if h.turnLive {
+		h.pending = append(h.pending, text)
+		h.queued.Store(int32(len(h.pending)))
+		h.turnMu.Unlock()
+		log.Printf("agentd: acp prompt queued key=%s queued=%d", h.key, len(h.pending))
+		h.republish()
+		return true
+	}
+	h.turnLive = true
+	h.turnMu.Unlock()
+	go func() {
+		if h.idle != nil {
+			defer func() { h.idle <- struct{}{} }()
+		}
+		for next := text; next != ""; {
+			next = promptHosted(h, next)
+		}
+	}()
+	return false
 }
 
 // beginTurn opens a turn: narration counts as "working" from here.
@@ -132,11 +188,42 @@ func (h *hosted) beginTurn() {
 // endTurn closes a turn and records how it ended. Holding turnMu across
 // the write is what makes it final: a SessionUpdate racing this either
 // runs entirely before (and is overwritten here) or sees a closed turn.
-func (h *hosted) endTurn(state, reason string) {
+//
+// It returns the next queued prompt, if the turn ended in a way that
+// should run one: a turn that finished normally hands over to the next
+// message with the turn still claimed (so nothing can slip in between,
+// and the row does not flash done→working). A turn that failed or was
+// stopped drops the queue — the error would repeat, and Stop means stop
+// — and the transcript lists what was dropped so nothing typed is lost
+// from view.
+func (h *hosted) endTurn(state, reason string) (next string) {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
+	clean := state == "done" && reason != "cancelled"
+	if clean && len(h.pending) > 0 {
+		next, h.pending = h.pending[0], h.pending[1:]
+		h.queued.Store(int32(len(h.pending)))
+		h.setState("working", "")
+		return next
+	}
+	dropped := h.pending
+	h.pending = nil
+	h.queued.Store(0)
 	h.turnLive = false
 	h.setState(state, reason)
+	if len(dropped) > 0 {
+		why := "the error"
+		if reason == "cancelled" {
+			why = "Stop"
+		}
+		text := "Dropped " + itoa(uint64(len(dropped))) + " queued prompt(s) after " + why + ":"
+		for _, d := range dropped {
+			text += "\n> " + strings.ReplaceAll(d, "\n", "\n> ")
+		}
+		log.Printf("agentd: acp prompts dropped key=%s n=%d reason=%s", h.key, len(dropped), reason)
+		h.note(text)
+	}
+	return ""
 }
 
 // narrated reports that the agent said or did something. It only moves the
@@ -193,6 +280,19 @@ func (h *hosted) register() {
 
 // retire ends a session: off the roster, out of the registry, adapter
 // stopped. Safe to call twice.
+//
+// "Ends" means everything the session owns, in this order:
+//
+//  1. its pending questions — answered cancelled toward the agent while
+//     it can still hear, and off every rail that was showing them;
+//  2. the adapter, as a process group, so an `npx` wrapper's node child
+//     does not outlive the adapter it wrapped;
+//  3. the terminals it created, which have no agent left to release them.
+//
+// Killing only the adapter (what this did before) left the rail asking a
+// question for a dead session, "Always allow" writing a rule for it, and
+// any `sleep 600` the agent had started still running with its channel
+// mounted in a transcript nobody could act on.
 func (h *hosted) retire() {
 	hostedMu.Lock()
 	_, live := hostedAll[h.key]
@@ -201,9 +301,8 @@ func (h *hosted) retire() {
 	if !live {
 		return
 	}
-	if h.stop != nil {
-		h.stop()
-	}
+	h.closing.Store(true)
+	h.releaseOwned(ReasonSessionEnded)
 	forgetTranscriptWatchers(h.key)
 	// Seal the history entry before the events are freed: the count comes
 	// from the in-memory transcript, which is about to go.
@@ -220,6 +319,133 @@ func (h *hosted) retire() {
 	})
 	saveHistory()
 	log.Printf("agentd: acp session ended key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
+}
+
+// stderrTail is an io.Writer that keeps the last stderrTailBytes of what
+// the adapter wrote to stderr.
+func (h *hosted) stderrTail() *tailWriter { return &tailWriter{h: h} }
+
+type tailWriter struct{ h *hosted }
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.h.tailMu.Lock()
+	w.h.tail = append(w.h.tail, p...)
+	if over := len(w.h.tail) - stderrTailBytes; over > 0 {
+		w.h.tail = append([]byte(nil), w.h.tail[over:]...)
+	}
+	w.h.tailMu.Unlock()
+	return len(p), nil
+}
+
+// stderrText is the kept tail, trimmed for a transcript note.
+func (h *hosted) stderrText() string {
+	h.tailMu.Lock()
+	defer h.tailMu.Unlock()
+	return strings.TrimSpace(string(h.tail))
+}
+
+// watchExit is the per-session goroutine that turns an adapter exit into
+// a fact the desktop can see. Nothing used to select on client.Done()
+// outside acpterm: a crashed adapter kept its roster row and its
+// idle-hold, its pending question outlived it, and the next prompt failed
+// with nothing on screen to say why.
+//
+// On exit — unless retire already claimed the session, in which case the
+// exit is ours — the row goes to failed/exited (it lingers on the roster
+// for the sweep's dropAfter, then goes), the transcript gets a note with
+// the reason and the adapter's last stderr lines, the pending asks are
+// cancelled and the terminals closed, and the session leaves the
+// registry. The HISTORY entry and the transcript file are kept as they
+// are, so the row in History remains something to resume.
+func (h *hosted) watchExit() {
+	if h.exited != nil {
+		defer close(h.exited)
+	}
+	if h.client == nil {
+		return
+	}
+	<-h.client.Done()
+	if h.closing.Load() {
+		return
+	}
+	hostedMu.Lock()
+	live := hostedAll[h.key] == h
+	if live {
+		delete(hostedAll, h.key)
+	}
+	hostedMu.Unlock()
+	if !live {
+		return
+	}
+	h.closing.Store(true)
+	err := h.client.Err()
+	tail := h.stderrText()
+	log.Printf("agentd: acp adapter exited key=%s agent=%s session=%s err=%v stderr=%q",
+		h.key, h.agent, h.sessionID, err, truncate([]byte(tail), 300))
+
+	// The row first, so the status line changes colour before the note
+	// lands; then the note, which is what explains the colour.
+	h.endTurn("failed", "exited")
+	text := "The agent exited unexpectedly"
+	if err != nil && err != acp.ErrClosed {
+		text += " (" + err.Error() + ")"
+	}
+	text += "."
+	if tail != "" {
+		text += "\n\nIts last output:\n```\n" + tail + "\n```"
+	}
+	text += "\n\nThis session can be reopened from History."
+	h.note(text)
+
+	h.releaseOwned(ReasonAgentExited)
+	h.noteSession("exited", time.Now())
+	releaseTranscript(h.key)
+	// The history write happens INSIDE the state lock: this goroutine is
+	// not the bus goroutine, and the history slice and its dirty flag are
+	// otherwise only touched from there or under Mutate.
+	mutateState(func(s *State) {
+		s.Recent = publishHistory()
+		saveHistory()
+	})
+}
+
+// releaseOwned cancels the session's questions, stops its adapter and
+// closes its terminals — the part of ending a session that is the same
+// whether a human ended it or the adapter died under it.
+func (h *hosted) releaseOwned(why string) {
+	if n := cancelAsksFor(h.key, why); n > 0 {
+		log.Printf("agentd: acp session %s key=%s asks_cancelled=%d", why, h.key, n)
+	}
+	if h.stop != nil {
+		h.stop()
+	}
+	if n := closeTerminalsFor(h.key, why); n > 0 {
+		log.Printf("agentd: acp session %s key=%s terminals_closed=%d", why, h.key, n)
+	}
+}
+
+// stopAllHosted is the shutdown sweep, registered with sdk.OnTerminate:
+// when agentd itself goes down — the router's SIGTERM, or its connection
+// closing under us — every adapter it launched and every terminal those
+// adapters opened go with it. Without this they orphan to PID 1: the
+// adapter keeps its stdio to a dead process and its node children keep
+// running, which is the child-process leak class the audit already cost
+// us once (docs/CORE_AUDIT.md).
+func stopAllHosted() {
+	hostedMu.Lock()
+	all := make([]*hosted, 0, len(hostedAll))
+	for _, h := range hostedAll {
+		all = append(all, h)
+	}
+	hostedMu.Unlock()
+	for _, h := range all {
+		h.closing.Store(true)
+		if h.stop != nil {
+			h.stop()
+		}
+		log.Printf("agentd: acp session stopped on shutdown key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
+	}
+	closeAllTerminals("agentd shutting down")
 }
 
 // setState upserts this session's roster row. Same four wire states the
@@ -248,6 +474,7 @@ func (h *hosted) setState(state, reason string) {
 		r.Reason = reason
 		r.SessionID = h.sessionID
 		r.Detached = h.detached
+		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
 		r.Title = h.title
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
@@ -329,6 +556,7 @@ func (h *hosted) republish() {
 		}
 		before := r.Row
 		r.Detached = h.detached
+		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
 		r.Title = h.title
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
@@ -538,9 +766,11 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 
 	select {
 	case <-ctx.Done():
-		// The turn was cancelled out from under the question. That is a
-		// real cancel, so it needs no explaining — the human did it.
-		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, preq.ToolName, "turn ended")
+		// The adapter went away under the question (ctx is the ACP
+		// conn's, cancelled when its read loop ends). The question must
+		// go with it — nothing else will delete it for up to 30 minutes.
+		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, preq.ToolName, ReasonAgentExited)
+		cancelAsksFor(h.key, ReasonAgentExited)
 		return acp.Cancelled(), nil
 	case v := <-answer:
 		switch v.decision {
@@ -581,6 +811,12 @@ func unansweredReason(why string) string {
 		return "too many questions already waiting on this agent"
 	case reasonAskOff:
 		return "asking is switched off in agents.json"
+	case ReasonSessionEnded:
+		return "the session was ended"
+	case ReasonTurnCancelled:
+		return "the turn was stopped"
+	case ReasonAgentExited:
+		return "the agent exited"
 	}
 	if why == "" {
 		return "no answer"
@@ -598,10 +834,10 @@ func unansweredReason(why string) string {
 // differently. appendEvent's own doc comment names that trap; these were
 // the callers still in it.
 func (h *hosted) note(text string) {
-	if h.conn == nil {
-		return
+	e := appendEvent(h.key, Event{Kind: EventMessage, Text: text}, time.Now())
+	if h.conn != nil {
+		pushEvent(h.conn, h.key, e)
 	}
-	pushEvent(h.conn, h.key, appendEvent(h.key, Event{Kind: EventMessage, Text: text}, time.Now()))
 }
 
 // narrateUnanswered puts a refusal nobody chose into the transcript.
@@ -779,7 +1015,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// one process that owns sessions.
 		first := withDefaultPrompt(loadDefaultPrompt(), req.Prompt)
 		if first != "" {
-			go promptHosted(h, first)
+			h.submitPrompt(first)
 		}
 		if from.InstanceID == "" {
 			return nil
@@ -793,13 +1029,20 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	})
 
 	// agent_prompt: another turn on a live session.
-	sdk.HandleFromVoid(bus, "agent_prompt", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_prompt", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
+			// A window still pointed at a session whose adapter exited (or
+			// that was ended elsewhere). Say so where the person is,
+			// rather than in a log they never see.
 			log.Printf("agentd: acp prompt for unknown session key=%s", req.Key)
+			conn.Warn("That session has ended", "Its agent is no longer running. Reopen it from History to continue.")
 			return nil
 		}
-		go promptHosted(h, req.Text)
+		// Queued inside a turn, run otherwise — never a second concurrent
+		// session/prompt, which the protocol does not allow and which
+		// flipped beginTurn/endTurn out of order.
+		h.submitPrompt(req.Text)
 		return nil
 	})
 
@@ -947,6 +1190,10 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			return nil
 		}
 		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
+		// A question the turn was blocked on goes with the turn: the
+		// agent hears cancelled on it and then ends the turn, and the
+		// rail stops asking about a turn that is over.
+		cancelAsksFor(h.key, ReasonTurnCancelled)
 		return h.client.Cancel(h.sessionID)
 	})
 

@@ -272,3 +272,50 @@ func TestOversizeImageIsDropped(t *testing.T) {
 		t.Error("the oversize image was kept after all")
 	}
 }
+
+// The other half of the keepalive: a watcher that idles past the TTL is
+// dropped, and a keepalive that then arrives brings it BACK — as a fresh
+// subscription that gets its snapshot, not as silence. This is the agentd
+// side of the transcript-freeze fix; internal/agentclient's ticker is the
+// host side, and the e2e proves them together.
+func TestReaffirmedWatcherOutlivesTheTTL(t *testing.T) {
+	resetTranscripts()
+	old := watcherTTL
+	watcherTTL = 30 * time.Millisecond
+	t.Cleanup(func() { watcherTTL = old })
+
+	now := time.Now()
+	if !affirmWatcher("acp:1", "win-1", now) {
+		t.Fatal("first subscribe was not fresh")
+	}
+	// A repeat inside the TTL is a keepalive: known, no snapshot.
+	if affirmWatcher("acp:1", "win-1", now.Add(10*time.Millisecond)) {
+		t.Fatal("a keepalive inside the TTL counted as a fresh subscription")
+	}
+
+	// Idle past the TTL without re-affirming: gone.
+	time.Sleep(2 * watcherTTL)
+	if got := transcriptWatchers("acp:1"); len(got) != 0 {
+		t.Fatalf("silent watcher survived the TTL: %v", got)
+	}
+
+	// The keepalive lands late (a busy host, a paused laptop): the window
+	// is still there, so it is a watcher again — and fresh, so the
+	// subscribe handler replays the history it may have missed.
+	if !affirmWatcher("acp:1", "win-1", time.Now()) {
+		t.Fatal("a re-affirmation after expiry was not treated as fresh — the window would get no snapshot back")
+	}
+	if got := transcriptWatchers("acp:1"); len(got) != 1 || got[0] != "win-1" {
+		t.Fatalf("watchers after re-affirmation = %v, want [win-1]", got)
+	}
+
+	// And a watcher that keeps affirming inside the TTL never drops out,
+	// however long it idles — which is what a ticker at TTL/4 buys.
+	for i := 0; i < 6; i++ {
+		time.Sleep(watcherTTL / 3)
+		affirmWatcher("acp:1", "win-1", time.Now())
+	}
+	if got := transcriptWatchers("acp:1"); len(got) != 1 {
+		t.Fatalf("a re-affirming watcher was dropped: %v", got)
+	}
+}

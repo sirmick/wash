@@ -99,7 +99,9 @@ func Load(path string) Policy {
 }
 
 // Append adds a rule to the policy file and saves it, creating the file if
-// needed. Used by the "always allow" button (§12).
+// needed. Used by the "always allow" button (§12). cwd, when non-empty,
+// scopes the rule to requests at or under that directory (Rule.Cwd);
+// RuleScope says which tools get one.
 //
 // Read-modify-write against the file rather than an in-memory copy: the
 // Agents settings pane is the other writer, and re-reading immediately
@@ -107,19 +109,19 @@ func Load(path string) Policy {
 // Appends (not prepends) so a hand-written deny higher up the table keeps
 // beating a click made later.
 //
-// A rule that is already present is a no-op, so double-clicking "always
-// allow" doesn't grow the file.
-func Append(path, match, decision string) error {
+// A rule that is already present — same match, decision AND scope — is a
+// no-op, so double-clicking "always allow" doesn't grow the file.
+func Append(path, match, decision, cwd string) error {
 	if match == "" {
 		return nil
 	}
 	p := Load(path)
 	for _, r := range p.Rules {
-		if r.Match == match && r.Decision == decision && r.Cwd == "" {
+		if r.Match == match && r.Decision == decision && r.Cwd == cwd {
 			return nil
 		}
 	}
-	p.Rules = append(p.Rules, Rule{Match: match, Decision: decision})
+	p.Rules = append(p.Rules, Rule{Match: match, Decision: decision, Cwd: cwd})
 	// Appending a rule implies the table is meant to be consulted.
 	p.Enabled = true
 	return Save(path, p)
@@ -196,6 +198,23 @@ func SuggestRule(tool, subject, cwd string) string {
 		return tool
 	}
 	return tool
+}
+
+// RuleScope is the directory an "always allow" rule for tool should be
+// confined to: the session's cwd for the shell tools, nothing for the
+// rest.
+//
+// A Bash rule is about a command, and a command means different things in
+// different trees — `make deploy*` allowed for a toy project must not
+// also be allowed in production's checkout. Write/Edit already carry the
+// cwd in their pattern (SuggestRule), and the read-only tools are the same
+// risk everywhere, so a scope would only make those rules brittle.
+func RuleScope(tool, cwd string) string {
+	switch tool {
+	case "Bash", "BashOutput", "KillShell":
+		return strings.TrimRight(cwd, "/")
+	}
+	return ""
 }
 
 // isSubcommand rejects second tokens that are really arguments — a path, a

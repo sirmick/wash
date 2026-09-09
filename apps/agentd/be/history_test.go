@@ -290,3 +290,65 @@ func TestRecentPublishCapIsSmallerThanTheStore(t *testing.T) {
 		t.Error("the published slice must be the smaller of the two, or raising the store bloats every push")
 	}
 }
+
+// A row whose adapter exited stays on the roster as failed/exited until
+// the sweep drops it, so the failure is visible — but nothing is behind
+// it, and History must offer to RESUME it rather than "go to" a window
+// on a dead session.
+func TestRosterIndexTreatsAnExitedRowAsNotLive(t *testing.T) {
+	idx := rosterIndex([]Row{
+		{Key: "acp:1", SessionID: "alive", State: "working"},
+		{Key: "acp:2", SessionID: "dead", State: "failed", Reason: "exited"},
+		{Key: "acp:3", SessionID: "errored", State: "failed", Reason: "error"},
+	})
+	if !idx["alive"].Live {
+		t.Error("a working row is live")
+	}
+	if idx["dead"].Live {
+		t.Error("an exited row was reported live — History would say 'go to it'")
+	}
+	if !idx["errored"].Live {
+		t.Error("a row that failed a turn but whose adapter is still up must stay live — its composer works")
+	}
+}
+
+// The History panel lists every transcript on disk; `history` holds the
+// last historyCap. A session past the cap was listed, clickable and
+// inert — resume looked only in the slice. The transcript's own header
+// carries what a resume needs, so it is the fallback.
+func TestResumeResolvesFromTheStoreWhenHistoryMisses(t *testing.T) {
+	withStateDir(t)
+	history = nil
+	t.Cleanup(func() { history = nil })
+
+	proj := t.TempDir()
+	bindTranscript("acp:old", "old-sess", "claude", proj, time.Unix(1_700_000_000, 0))
+	waitForTranscriptWrites()
+
+	got, ok := resolveResumeTarget("old-sess")
+	if !ok {
+		t.Fatal("a session with a transcript on disk but no history entry could not be resolved")
+	}
+	if got.Agent != "claude" || got.Cwd != proj || got.SessionID != "old-sess" {
+		t.Errorf("resolved %+v, want agent=claude cwd=%s", got, proj)
+	}
+	if got.LastSeen != 1_700_000_000 {
+		t.Errorf("LastSeen = %d, want the header's start time in seconds", got.LastSeen)
+	}
+
+	// Nothing anywhere: not resumable, and said so.
+	if _, ok := resolveResumeTarget("never-existed"); ok {
+		t.Error("an unknown id resolved")
+	}
+	if _, ok := resolveResumeTarget(""); ok {
+		t.Error("an empty id resolved")
+	}
+
+	// The in-memory entry wins when present — it may carry a cwd the
+	// session moved to after the header was written.
+	history = []Session{{SessionID: "old-sess", Agent: "codex", Cwd: "/elsewhere"}}
+	got, _ = resolveResumeTarget("old-sess")
+	if got.Agent != "codex" || got.Cwd != "/elsewhere" {
+		t.Errorf("history entry did not take precedence: %+v", got)
+	}
+}

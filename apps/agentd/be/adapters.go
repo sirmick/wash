@@ -18,6 +18,7 @@ package agentd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
@@ -153,6 +155,7 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	bindTranscript(h.key, h.sessionID, agentID, h.cwd, time.Now())
 	h.applyModes(res2.Modes)
 	h.register()
+	go h.watchExit()
 	// The settings block arrives with the session, not only on later
 	// updates — without this the controls were empty until the agent
 	// happened to change something itself.
@@ -184,6 +187,11 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = cwd
+	// Its own process group, so stop() can kill the whole tree. The common
+	// launch is `npx --yes <package>`, which is a node wrapper around the
+	// node adapter around the agent: killing the pid alone reaped the
+	// wrapper and orphaned the rest, still holding its half of the wire.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -200,10 +208,20 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		return nil, fmt.Errorf("start %s: %w", bin, err)
 	}
 
+	hostedMu.Lock()
+	hostedSeq++
+	key := "acp:" + itoa(hostedSeq)
+	hostedMu.Unlock()
+
+	h := &hosted{key: key, agent: a.ID, cwd: cwd, conn: svcConn}
+
 	// The adapter's own diagnostics. Without this, "needs authentication"
-	// is indistinguishable from "hung".
+	// is indistinguishable from "hung". The tail is also kept on the
+	// session, because when the adapter dies the last thing it said is
+	// the one line that explains why — and it belongs in the transcript,
+	// not only in a log the person watching the window never sees.
 	go func() {
-		b, _ := io.ReadAll(stderr)
+		b, _ := io.ReadAll(io.TeeReader(stderr, h.stderrTail()))
 		if len(b) > 0 {
 			log.Printf("agentd: adapter %s stderr: %s", a.ID, truncate(b, 2000))
 		}
@@ -214,18 +232,13 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		once.Do(func() {
 			_ = stdin.Close()
 			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+				killGroup(cmd.Process)
 			}
 			_ = cmd.Wait()
 		})
 	}
 
-	hostedMu.Lock()
-	hostedSeq++
-	key := "acp:" + itoa(hostedSeq)
-	hostedMu.Unlock()
-
-	h := &hosted{key: key, agent: a.ID, cwd: cwd, stop: stop, conn: svcConn}
+	h.stop = stop
 	h.client = acp.NewClient(stdout, stdin, h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
@@ -257,11 +270,16 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	return h, nil
 }
 
-// promptHosted runs one turn. Returns when the agent stops; the roster
-// follows along from SessionUpdate underneath.
-func promptHosted(h *hosted, text string) {
+// promptHosted runs one turn. Returns when the agent stops — with the
+// next queued prompt to run, or "" — and the roster follows along from
+// SessionUpdate underneath. Callers go through hosted.submitPrompt, which
+// owns the turn claim; calling this directly is only right when the turn
+// is already claimed (tests).
+func promptHosted(h *hosted, text string) (next string) {
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
+	} else {
+		appendPrompt(h.key, text, time.Now())
 	}
 	h.beginTurn()
 	res, err := h.client.Prompt(context.Background(), h.sessionID, acp.Text(text))
@@ -271,13 +289,57 @@ func promptHosted(h *hosted, text string) {
 		// "failed", not "done": a turn that died on an adapter error is
 		// not a turn that finished, and reporting it as done made every
 		// surface paint it GREEN — indistinguishable from success
-		// (docs/AGENT_MESSENGER.md M5).
-		h.endTurn("failed", "error")
+		// (docs/AGENT_MESSENGER.md M5). A turn that died because the
+		// adapter went away is "exited", which the exit watcher explains.
+		if h.closing.Load() {
+			h.endTurn("failed", "exited")
+		} else {
+			h.endTurn("failed", "error")
+			// The error itself goes in the transcript. A red dot alone
+			// said nothing about WHY — expired auth, a rate limit, a
+			// refused request all looked the same — and the person had
+			// to find the router log to learn which. The composer stays
+			// usable: the session is still up, so the next prompt is the
+			// retry.
+			h.note("The turn failed: " + turnError(err) + "\n\nThe session is still open — send again to retry.")
+		}
+		return ""
 	case res.StopReason == acp.StopCancelled:
-		h.endTurn("done", "cancelled")
+		return h.endTurn("done", "cancelled")
 	default:
-		h.endTurn("done", res.StopReason)
+		return h.endTurn("done", res.StopReason)
 	}
+}
+
+// killGroup ends a process started with Setpgid and everything it forked.
+// SIGKILL, not SIGTERM: an adapter is a stateless bridge (the agent's
+// own session state is the vendor's and already on disk), and this runs
+// on the bus handler's goroutine, so there is nothing to wait politely
+// for. The direct kill is the fallback for a process that somehow is not
+// its own group leader.
+func killGroup(p *os.Process) {
+	if err := syscall.Kill(-p.Pid, syscall.SIGKILL); err != nil {
+		_ = p.Kill()
+	}
+}
+
+// turnError is the adapter's error as a person should read it. An RPC
+// error's message is the adapter's own words ("authentication required",
+// "rate limit exceeded") and is kept verbatim; the client's framing
+// prefix is dropped, and a closed wire is named for what it means.
+func turnError(err error) string {
+	if errors.Is(err, acp.ErrClosed) {
+		return "the agent's adapter has gone away"
+	}
+	msg := err.Error()
+	msg = strings.TrimPrefix(msg, "acp: ")
+	if i := strings.Index(msg, "rpc "); i == 0 {
+		// "rpc -32000: <message>" → "<message>"
+		if j := strings.Index(msg, ": "); j > 0 {
+			msg = msg[j+2:]
+		}
+	}
+	return msg
 }
 
 // authNames renders the auth methods an adapter offers, for an error a
@@ -360,6 +422,7 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	// Register BEFORE loading: the replay arrives as notifications, and
 	// they need a roster row and a transcript to land in.
 	h.register()
+	go h.watchExit()
 	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, nil)
 	if err != nil {
 		h.retire()

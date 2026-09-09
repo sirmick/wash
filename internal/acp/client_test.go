@@ -440,3 +440,47 @@ func TestToolCallImagesAreUnwrapped(t *testing.T) {
 		t.Errorf("text = %q", got[0].Update.Content.String())
 	}
 }
+
+// A handler blocked on something outside the wire — a permission question
+// waiting on a human — is released when the peer ends: the context every
+// handler receives is the conn's, cancelled when its read loop finishes.
+// Without that, an adapter that exits mid-question leaves the handler
+// waiting out its own backstop for an agent that is gone, and the question
+// on screen with it.
+func TestHandlerContextEndsWithThePeer(t *testing.T) {
+	released := make(chan error, 1)
+	h := &ctxHandler{onPermission: func(ctx context.Context) {
+		<-ctx.Done()
+		released <- ctx.Err()
+	}}
+	c, agent := newPair(t, h)
+	// Before the peer ends, the context is live.
+	if err := c.conn.ctx.Err(); err != nil {
+		t.Fatalf("ctx already done before the peer ended: %v", err)
+	}
+	agent.send(`{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"t","kind":"execute"},"options":[]}}`)
+	// The adapter goes away with the question outstanding.
+	agent.out.Close()
+	select {
+	case err := <-released:
+		if err == nil {
+			t.Fatal("handler released with a live context")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler still blocked 2s after the peer ended")
+	}
+	select {
+	case <-c.Done():
+	default:
+		t.Fatal("Done not closed after the peer ended")
+	}
+}
+
+// ctxHandler blocks RequestPermission on the context it is given.
+type ctxHandler struct{ onPermission func(ctx context.Context) }
+
+func (h *ctxHandler) RequestPermission(ctx context.Context, _ RequestPermissionRequest) (RequestPermissionResponse, error) {
+	h.onPermission(ctx)
+	return Cancelled(), nil
+}
+func (h *ctxHandler) SessionUpdate(context.Context, SessionNotification) {}

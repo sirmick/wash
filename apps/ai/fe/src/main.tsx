@@ -335,6 +335,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       configs: r?.configs,
       commands: r?.commands,
       yolo: r?.yolo,
+      queued: r?.queued,
     };
   });
 

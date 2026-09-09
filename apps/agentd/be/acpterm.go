@@ -58,6 +58,10 @@ type terminal struct {
 	// terminal/output; the human has only the transcript.
 	evSeq uint64
 	key   string
+	// closeFn ends the pty. Indirected so the "session ended" sweep is
+	// testable without a live pty; production sets it to
+	// sess.CloseWithReason.
+	closeFn func(reason string)
 }
 
 var (
@@ -112,7 +116,7 @@ func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalReque
 		return acp.CreateTerminalResponse{}, err
 	}
 	id := strconv.FormatUint(uint64(sess.ID()), 10)
-	t := &terminal{id: id, sess: sess, chID: sess.ID()}
+	t := &terminal{id: id, sess: sess, chID: sess.ID(), key: h.key, closeFn: sess.CloseWithReason}
 	termMu.Lock()
 	termAll[id] = t
 	termMu.Unlock()
@@ -130,7 +134,7 @@ func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalReque
 			Status:  "running",
 		}, time.Now())
 		termMu.Lock()
-		t.evSeq, t.key = ev.Seq, h.key
+		t.evSeq = ev.Seq
 		early := termEarly[id]
 		delete(termEarly, id)
 		termMu.Unlock()
@@ -261,6 +265,49 @@ func (h *hosted) completeTerminalEvent(id string) {
 	})
 	if ok {
 		pushEvent(h.conn, t.key, ev)
+	}
+}
+
+// closeTerminalsFor ends every terminal a session owns and drops their
+// records. Called when the session ends — by retire, by the adapter
+// exiting, or by agentd itself going down — because a terminal's lifetime
+// is the AGENT's to end (§1.2 of the doc) only while there is an agent:
+// once there is not, a `sleep 600` it started would otherwise keep
+// running with nothing able to release it, its channel still mounted in
+// a transcript nobody can act on.
+//
+// Returns how many it closed, for the log line and the tests.
+func closeTerminalsFor(key, reason string) int {
+	termMu.Lock()
+	var mine []*terminal
+	for id, t := range termAll {
+		if t.key != key {
+			continue
+		}
+		mine = append(mine, t)
+		delete(termAll, id)
+		delete(termEarly, id)
+	}
+	termMu.Unlock()
+	for _, t := range mine {
+		log.Printf("agentd: terminal closed key=%s id=%s reason=%q", key, t.id, reason)
+		if t.closeFn != nil {
+			t.closeFn(reason)
+		}
+	}
+	return len(mine)
+}
+
+// closeAllTerminals is the shutdown sweep: every terminal of every session.
+func closeAllTerminals(reason string) {
+	termMu.Lock()
+	keys := map[string]bool{}
+	for _, t := range termAll {
+		keys[t.key] = true
+	}
+	termMu.Unlock()
+	for k := range keys {
+		closeTerminalsFor(k, reason)
 	}
 }
 

@@ -18,6 +18,16 @@ import { agentStateColor, agentStateLabel } from './agent-status';
 import { Markdown } from './markdown';
 import { Terminal } from './terminal';
 import { WASH_SCROLL_CLASS } from './scrollbars';
+import {
+  acceptsDrop,
+  describeSkipped,
+  fencedAttachment,
+  insertAt,
+  isTextLike,
+  pathRefs,
+  readTextFile,
+  washPathsFrom,
+} from './agent-compose-drop';
 
 /** One line in a transcript, as agentd publishes it. */
 export interface AgentEvent {
@@ -49,6 +59,8 @@ export interface AgentAsk {
   tool: string;
   subject?: string;
   suggested_rule?: string;
+  /** the directory the rule is confined to, when it is (Bash: per project) */
+  rule_cwd?: string;
   age_ms: number;
 }
 
@@ -80,6 +92,10 @@ export interface AgentStatus {
    *  yolo). Rendered as a standing badge, never as a quiet flag: an agent
    *  nobody is vetting must not look like one that is being watched. */
   yolo?: boolean;
+  /** prompts agentd is holding until the current turn ends. Messenger
+   *  semantics: the composer stays open mid-turn, what you send is queued
+   *  in order, and the status line says how many are waiting. */
+  queued?: number;
 }
 
 export interface AgentConfig {
@@ -279,9 +295,13 @@ const AskRow: Component<{
       <button
         type="button"
         onClick={() => p.onAnswer?.(p.ask.id, 'allow', p.ask.suggested_rule)}
+        title={p.ask.rule_cwd ? `Only for ${p.ask.rule_cwd}` : undefined}
         style={askBtn(tokens.bgInfo, tokens.fgInfo)}
       >
         Always allow <span style={{ font: tokens.type.monoSm }}>{p.ask.suggested_rule}</span>
+        <Show when={p.ask.rule_cwd}>
+          <span style={{ font: tokens.type.monoSm, opacity: 0.7 }}>in {p.ask.rule_cwd}</span>
+        </Show>
       </button>
     </Show>
     <button
@@ -372,6 +392,60 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
   };
 
   const st = () => props.status?.() ?? {};
+
+  // Drops onto the composer (agent-compose-drop.ts): a wash drag becomes
+  // @path references at the caret; an OS text file is attached inline as
+  // a fenced block; anything else is named in a note under the box. The
+  // placeholder has promised this since the composer existed.
+  const [dropNote, setDropNote] = createSignal('');
+  const [dropping, setDropping] = createSignal(false);
+  const onDragOver = (e: DragEvent) => {
+    if (!acceptsDrop(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'copy';
+    setDropping(true);
+  };
+  const onDragLeave = () => setDropping(false);
+  const onDrop = async (e: DragEvent) => {
+    setDropping(false);
+    const dt = e.dataTransfer;
+    if (!acceptsDrop(dt)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let insert = '';
+    const skipped: string[] = [];
+    const paths = washPathsFrom(dt);
+    if (paths.length > 0) {
+      insert = pathRefs(paths);
+    } else {
+      const parts: string[] = [];
+      for (const f of Array.from(dt!.files ?? [])) {
+        if (!isTextLike(f)) {
+          skipped.push(f.name);
+          continue;
+        }
+        try {
+          parts.push(fencedAttachment(f.name, await readTextFile(f)));
+        } catch {
+          skipped.push(f.name);
+        }
+      }
+      insert = parts.join('\n\n');
+    }
+    setDropNote(describeSkipped(skipped));
+    if (!insert) return;
+    const cur = draft();
+    const start = input?.selectionStart ?? cur.length;
+    const end = input?.selectionEnd ?? start;
+    const r = insertAt(cur, start, end, insert);
+    setDraft(r.text);
+    // Land the caret after what was inserted, once Solid has written the
+    // new value into the textarea.
+    queueMicrotask(() => {
+      input?.focus();
+      input?.setSelectionRange(r.caret, r.caret);
+    });
+  };
 
   return (
     <div
@@ -555,9 +629,13 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
       </div>
 
       <div
+        data-testid="agent-composer-drop"
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
         style={{
           flex: 'none',
-          'border-top': `1px solid ${tokens.borderMenu}`,
+          'border-top': `1px solid ${dropping() ? tokens.borderFocus : tokens.borderMenu}`,
           padding: `${tokens.spaceMd}px`,
         }}
       >
@@ -607,13 +685,24 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           </div>
         </Show>
 
+        {/* The composer stays open mid-turn on purpose. A message typed
+            while the agent is replying is queued by agentd and sent when
+            the turn ends — the way a messenger behaves — rather than the
+            box greying out for the length of a reply. The placeholder
+            says so while it applies, and the status line counts what is
+            waiting. */}
         <textarea
           ref={input}
           data-testid="agent-composer"
           rows={2}
           value={draft()}
           disabled={!props.onSend}
-          placeholder={props.placeholder ?? 'Ask, or drop a file from wash-fm…'}
+          placeholder={
+            props.placeholder ??
+            (st().state === 'working'
+              ? 'Type the next message — it is sent when this turn ends'
+              : 'Ask, or drop a file from wash-fm…')
+          }
           onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
             // Enter sends; Shift+Enter is a newline. A composer that
@@ -637,6 +726,11 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             'box-sizing': 'border-box',
           }}
         />
+        <Show when={dropNote()}>
+          <div data-testid="agent-drop-note" style={{ font: tokens.type.textSm, color: tokens.fgMuted, 'margin-top': `${tokens.spaceXs}px` }}>
+            {dropNote()}
+          </div>
+        </Show>
       </div>
 
       <div
@@ -674,6 +768,15 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           }
         >
           <Spinner size={9} color={tokens.accentBlue} />
+        </Show>
+        <Show when={(st().queued ?? 0) > 0}>
+          <span
+            data-testid="agent-queued"
+            title="Messages waiting for the current turn to end; they are sent in order"
+            style={{ color: tokens.accentBlue }}
+          >
+            {st().queued} queued
+          </span>
         </Show>
         <Show when={st().agent}>
           <span>{st().agent}</span>
@@ -752,9 +855,16 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             from either side, unlike a blanket allow wash keeps to
             itself. */}
         <Show when={(st().modes?.length ?? 0) > 0 && props.onSetMode && !(st().configs ?? []).some((c) => c.id === 'mode')}>
+          {/* The current mode is marked on the OPTION, not as `value` on the
+              select. A `value` set on the select is applied once, when its
+              own effect first runs, and whether that lands before or after
+              the <For> has inserted the options depends on what else in
+              this template happens to be reactive — the moment the
+              composer's placeholder started following the turn state, the
+              value landed first and the select sat on its first option.
+              `selected` per option is order-proof. */}
           <select
             data-testid="agent-mode"
-            value={st().mode ?? ''}
             title={st().modes?.find((m) => m.id === st().mode)?.description ?? 'Approval mode'}
             onChange={(e) => props.onSetMode?.(e.currentTarget.value)}
             style={{
@@ -769,7 +879,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           >
             <For each={st().modes}>
               {(m) => (
-                <option value={m.id} title={m.description}>
+                <option value={m.id} title={m.description} selected={m.id === st().mode}>
                   {m.name}
                 </option>
               )}
