@@ -747,6 +747,44 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const closeAllTabs = () => requestCloseTabs(tabs().map((t) => t.id), 'Close all tabs?');
   const closeOtherTabs = () => requestCloseTabs(tabs().filter((t) => t.id !== activeID()).map((t) => t.id), 'Close other tabs?');
 
+  // activateTab is the one switch path the keyboard and the strip share:
+  // snapshot the outgoing buffer, then move.
+  const activateTab = (id: string) => {
+    if (!id || id === activeID()) return;
+    captureActiveState();
+    setActiveID(id);
+  };
+  // cycleTabs moves `delta` tabs along the strip, wrapping at either end.
+  const cycleTabs = (delta: number) => {
+    const list = tabs();
+    if (list.length < 2) return;
+    const idx = list.findIndex((t) => t.id === activeID());
+    const next = ((idx < 0 ? 0 : idx) + delta + list.length) % list.length;
+    activateTab(list[next].id);
+  };
+  // jumpToTab picks the n-th tab (1-based); past the end does nothing.
+  const jumpToTab = (n: number) => {
+    const t = tabs()[n - 1];
+    if (t) activateTab(t.id);
+  };
+  // moveTab re-slots the dragged tab at the target's position: dragging
+  // leftwards lands before the target, rightwards after it — so a tab
+  // dropped on its neighbour swaps with it either way.
+  const moveTab = (dragID: string, targetID: string) => {
+    if (dragID === targetID) return;
+    const list = tabs();
+    const from = list.findIndex((t) => t.id === dragID);
+    const to = list.findIndex((t) => t.id === targetID);
+    if (from < 0 || to < 0) return;
+    const without = list.filter((t) => t.id !== dragID);
+    const at = without.findIndex((t) => t.id === targetID) + (from < to ? 1 : 0);
+    setTabs([...without.slice(0, at), list[from], ...without.slice(at)]);
+  };
+  // dragTabID is the tab being dragged along the strip; a strip drag has
+  // its own MIME so the sidebar's move-file drops and the pane's
+  // drop-to-open ignore it.
+  const [dragTabID, setDragTabID] = createSignal<string | null>(null);
+
   // revertActive reloads the active tab from disk, throwing the buffer
   // away. Asks first when there is something to lose.
   const revertActive = () => {
@@ -2553,6 +2591,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         }
       }
 
+      // Tab navigation. Ctrl+Tab / Ctrl+Shift+Tab are what people reach
+      // for, but Chromium reserves them in a normal browser tab, so the
+      // same Alt alternates the term app binds are here too: Alt+PageDown /
+      // Alt+PageUp cycle, Alt+1…9 jump. Matched on ev.code so a non-QWERTY
+      // layout gets the same physical keys.
+      if (ev.altKey && !cmd && !ev.shiftKey) {
+        const code = ev.code;
+        if (code === 'PageDown') { ev.preventDefault(); cycleTabs(1); return; }
+        if (code === 'PageUp') { ev.preventDefault(); cycleTabs(-1); return; }
+        const digit = /^Digit([1-9])$/.exec(code);
+        if (digit) { ev.preventDefault(); jumpToTab(Number(digit[1])); return; }
+      }
+      if (cmd && ev.key === 'Tab' && !ev.altKey) {
+        ev.preventDefault();
+        cycleTabs(ev.shiftKey ? -1 : 1);
+        return;
+      }
+
       if (!cmd) return;
       // The file-level shortcuts act on the tab BEHIND a dialog, so they
       // are off while the picker, a confirm prompt or the sidebar's
@@ -3004,7 +3060,34 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     data-testid={`edit-tab-${t.id}`}
                     data-active={isActive() ? 'true' : undefined}
                     data-dirty={isDirty() ? 'true' : undefined}
-                    onClick={() => { captureActiveState(); setActiveID(t.id); }}
+                    onClick={() => activateTab(t.id)}
+                    // Middle-click closes, through the same dirty guard as
+                    // the × and Ctrl+W. mousedown is cancelled so the
+                    // browser's autoscroll does not start on the way.
+                    onMouseDown={(ev) => { if (ev.button === 1) ev.preventDefault(); }}
+                    onAuxClick={(ev) => { if (ev.button === 1) { ev.preventDefault(); requestCloseTab(t.id); } }}
+                    draggable={true}
+                    onDragStart={(ev) => {
+                      if (!ev.dataTransfer) return;
+                      ev.dataTransfer.effectAllowed = 'move';
+                      ev.dataTransfer.setData(TAB_DRAG_MIME, t.id);
+                      setDragTabID(t.id);
+                    }}
+                    onDragEnd={() => setDragTabID(null)}
+                    onDragOver={(ev) => {
+                      if (!ev.dataTransfer?.types.includes(TAB_DRAG_MIME)) return;
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      ev.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(ev) => {
+                      const src = ev.dataTransfer?.getData(TAB_DRAG_MIME) || dragTabID();
+                      if (!src) return;
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      setDragTabID(null);
+                      moveTab(src, t.id);
+                    }}
                     style={tabStyle(isActive())}
                   >
                     <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
@@ -3764,6 +3847,10 @@ const LANGS: LangDef[] = [
 
 // Index for O(1) lookup by key in langForKey + the menu.
 const LANGS_BY_KEY: Record<string, LangDef> = Object.fromEntries(LANGS.map((l) => [l.key, l]));
+
+// TAB_DRAG_MIME marks a drag that reorders the strip. Distinct from the
+// fs-client DRAG_MIME on purpose: a tab is not a file to move or open.
+const TAB_DRAG_MIME = 'application/x-wash-edit-tab';
 
 type MenuID = 'file' | 'edit' | 'view' | 'syntax' | 'terminal';
 
