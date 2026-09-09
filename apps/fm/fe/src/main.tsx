@@ -40,7 +40,7 @@ import {
   type NavHistory, emptyHistory, initAt, pushPath, back, forward, at,
 } from './nav-history.ts';
 import {
-  type ClipboardState, parseClipboardState, planPaste,
+  type ClipboardState, parseClipboardState, planPaste, pasteStatus,
 } from './clipboard.ts';
 import { nextSelection } from './selection.ts';
 import {
@@ -1758,13 +1758,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // (mirrored from BE) and dispatches the matching bulk-ops job.
   // For "cut", we clear the clipboard after dispatching so a
   // second paste doesn't try to re-move already-moved paths.
+  // planPaste filters same-folder / into-self entries first (the
+  // same guards the DnD paths apply) and says what it dropped; that
+  // goes to the status line, and an empty plan dispatches nothing.
+  // bulk-ops re-checks server-side (bulkops.ValidatePaths) and toasts
+  // a rejection, so this is the polite layer, not the only one.
   const pasteFilesClipboard = () => {
     const plan = planPaste(filesClipboard(), dirOfSelection());
     if (!plan) return;
-    window.wash.sendAppMsgTo(
-      { app_id: 'com.wash.bulk' },
-      { kind: 'enqueue', op: plan.op, paths: plan.paths, dest: plan.dest },
-    );
+    const status = pasteStatus(plan);
+    if (status) (status.kind === 'error' ? setStatusOverride : setStatusInfo)(status.text);
+    if (plan.paths.length > 0) {
+      window.wash.sendAppMsgTo(
+        { app_id: 'com.wash.bulk' },
+        { kind: 'enqueue', op: plan.op, paths: plan.paths, dest: plan.dest },
+      );
+    }
     if (plan.clearAfter) {
       // Clear the clipboard so a second Ctrl+V doesn't try to
       // re-move paths that no longer exist at the source.

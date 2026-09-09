@@ -64,7 +64,7 @@ func TestDeleteRecursive(t *testing.T) {
 	m := New(WithOnUpdate(c.onUpdate))
 	defer m.Close()
 
-	id := m.Enqueue(OpDelete, []string{tree}, "")
+	id := mustEnqueue(t, m, OpDelete, []string{tree}, "")
 	st, msg := waitForStatus(t, c, id, 2*time.Second)
 	if st != StatusDone {
 		t.Fatalf("status=%s msg=%s, want done", st, msg)
@@ -87,7 +87,7 @@ func TestDeleteCounter(t *testing.T) {
 	m := New(WithOnUpdate(c.onUpdate))
 	defer m.Close()
 
-	id := m.Enqueue(OpDelete, []string{root}, "")
+	id := mustEnqueue(t, m, OpDelete, []string{root}, "")
 	waitForStatus(t, c, id, 2*time.Second)
 
 	// 4 entries (root, a.txt, b.txt, sub, c.txt) = actually 5; let's
@@ -117,7 +117,7 @@ func TestMoveSameFS(t *testing.T) {
 	m := New(WithOnUpdate(c.onUpdate))
 	defer m.Close()
 
-	id := m.Enqueue(OpMove, []string{filepath.Join(srcDir, "a.txt")}, dstDir)
+	id := mustEnqueue(t, m, OpMove, []string{filepath.Join(srcDir, "a.txt")}, dstDir)
 	st, msg := waitForStatus(t, c, id, 2*time.Second)
 	if st != StatusDone {
 		t.Fatalf("status=%s msg=%s, want done", st, msg)
@@ -144,7 +144,7 @@ func TestCopyRecursive(t *testing.T) {
 	m := New(WithOnUpdate(c.onUpdate))
 	defer m.Close()
 
-	id := m.Enqueue(OpCopy, []string{src}, dst)
+	id := mustEnqueue(t, m, OpCopy, []string{src}, dst)
 	st, msg := waitForStatus(t, c, id, 2*time.Second)
 	if st != StatusDone {
 		t.Fatalf("status=%s msg=%s, want done", st, msg)
@@ -177,7 +177,7 @@ func TestCopyDefaultSkipOnConflict(t *testing.T) {
 	m := New(WithOnUpdate(c.onUpdate))
 	defer m.Close()
 
-	id := m.Enqueue(OpCopy, []string{src}, dstDir)
+	id := mustEnqueue(t, m, OpCopy, []string{src}, dstDir)
 	st, _ := waitForStatus(t, c, id, 2*time.Second)
 	if st != StatusDone {
 		t.Fatalf("status=%s, want done (default skip)", st)
@@ -202,7 +202,7 @@ func TestCopyConflictReplace(t *testing.T) {
 	)
 	defer m.Close()
 
-	id := m.Enqueue(OpCopy, []string{src}, dstDir)
+	id := mustEnqueue(t, m, OpCopy, []string{src}, dstDir)
 	st, _ := waitForStatus(t, c, id, 2*time.Second)
 	if st != StatusDone {
 		t.Fatalf("status=%s, want done", st)
@@ -238,7 +238,7 @@ func TestCopyConflictReplaceAllSticky(t *testing.T) {
 	)
 	defer m.Close()
 
-	id := m.Enqueue(OpCopy, srcs, dstDir)
+	id := mustEnqueue(t, m, OpCopy, srcs, dstDir)
 	waitForStatus(t, c, id, 2*time.Second)
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("onConflict called %d times, want 1 (ReplaceAll should stick)", got)
@@ -282,7 +282,7 @@ func TestCopyConflictMergeDirs(t *testing.T) {
 	)
 	defer m.Close()
 
-	id := m.Enqueue(OpCopy, []string{srcA}, filepath.Dir(dstA))
+	id := mustEnqueue(t, m, OpCopy, []string{srcA}, filepath.Dir(dstA))
 	st, _ := waitForStatus(t, c, id, 2*time.Second)
 	if st != StatusDone {
 		t.Fatalf("status=%s, want done", st)
@@ -327,7 +327,7 @@ func TestCopyConflictMergeAllSticky(t *testing.T) {
 		}),
 	)
 	defer m.Close()
-	id := m.Enqueue(OpCopy, srcs, dstParent)
+	id := mustEnqueue(t, m, OpCopy, srcs, dstParent)
 	waitForStatus(t, c, id, 2*time.Second)
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("onConflict called %d times, want 1 (MergeAll sticks)", got)
@@ -357,7 +357,7 @@ func TestCopyConflictReplaceDirsDestructive(t *testing.T) {
 		WithOnConflict(func(_ ConflictInfo) ConflictAction { return ConflictReplace }),
 	)
 	defer m.Close()
-	id := m.Enqueue(OpCopy, []string{srcA}, filepath.Dir(dstA))
+	id := mustEnqueue(t, m, OpCopy, []string{srcA}, filepath.Dir(dstA))
 	waitForStatus(t, c, id, 2*time.Second)
 	if got := readAll(t, filepath.Join(dstA, "new.txt")); got != "new" {
 		t.Fatalf("new.txt: %q", got)
@@ -395,7 +395,7 @@ func TestMoveConflictMergeDirs(t *testing.T) {
 		}),
 	)
 	defer m.Close()
-	id := m.Enqueue(OpMove, []string{srcA}, filepath.Dir(dstA))
+	id := mustEnqueue(t, m, OpMove, []string{srcA}, filepath.Dir(dstA))
 	waitForStatus(t, c, id, 2*time.Second)
 
 	if got := readAll(t, filepath.Join(dstA, "x.txt")); got != "src-x" {
@@ -433,7 +433,7 @@ func TestCopyConflictCancel(t *testing.T) {
 	)
 	defer m.Close()
 
-	id := m.Enqueue(OpCopy, []string{src}, dstDir)
+	id := mustEnqueue(t, m, OpCopy, []string{src}, dstDir)
 	st, _ := waitForStatus(t, c, id, 2*time.Second)
 	if st != StatusCancelled {
 		t.Fatalf("status=%s, want cancelled", st)
@@ -463,7 +463,7 @@ func TestCancelBeforeStart(t *testing.T) {
 	m := New(WithOnUpdate(c.onUpdate))
 	defer m.Close()
 
-	id := m.Enqueue(OpDelete, []string{tree}, "")
+	id := mustEnqueue(t, m, OpDelete, []string{tree}, "")
 	m.Cancel(id)
 	st, _ := waitForStatus(t, c, id, 2*time.Second)
 	if st != StatusCancelled && st != StatusDone {
@@ -498,7 +498,7 @@ func TestFifoOrder(t *testing.T) {
 
 	var ids []string
 	for _, d := range dirs {
-		ids = append(ids, m.Enqueue(OpDelete, []string{d}, ""))
+		ids = append(ids, mustEnqueue(t, m, OpDelete, []string{d}, ""))
 	}
 	for _, id := range ids {
 		waitForStatus(t, c, id, 2*time.Second)
@@ -517,7 +517,7 @@ func TestJobsSnapshot(t *testing.T) {
 	m := New(WithOnUpdate(c.onUpdate))
 	defer m.Close()
 
-	id := m.Enqueue(OpDelete, []string{filepath.Join(root, "a")}, "")
+	id := mustEnqueue(t, m, OpDelete, []string{filepath.Join(root, "a")}, "")
 	waitForStatus(t, c, id, time.Second)
 	snap := m.Jobs()
 	if len(snap) != 1 || snap[0].ID != id || snap[0].Status != StatusDone {
@@ -536,6 +536,18 @@ func TestCloseIdempotent(t *testing.T) {
 }
 
 // ---- tiny helpers -----------------------------------------
+
+// mustEnqueue is Enqueue for the happy-path tests: a validation
+// rejection is a test failure, not something to assert on. The
+// rejection shapes have their own tests (validate_test.go).
+func mustEnqueue(t *testing.T, m *Manager, op Op, paths []string, dest string) string {
+	t.Helper()
+	id, err := m.Enqueue(op, paths, dest)
+	if err != nil {
+		t.Fatalf("enqueue %s %v -> %q: %v", op, paths, dest, err)
+	}
+	return id
+}
 
 func mustMkdir(t *testing.T, p string) {
 	t.Helper()

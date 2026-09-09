@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -207,9 +208,15 @@ func (m *Manager) Close() error {
 }
 
 // Enqueue adds a job to the queue and returns the assigned id.
-// Validation is minimal — we trust the caller; errors surface as
-// the job's Failed status.
-func (m *Manager) Enqueue(op Op, paths []string, dest string) string {
+// The path set is validated first (ValidatePaths); a rejected job
+// is never queued — the caller gets the error and NO id, and no
+// update is emitted. Anything the validator can't see up front
+// (permissions, disappearing sources) still surfaces as the job's
+// Failed status.
+func (m *Manager) Enqueue(op Op, paths []string, dest string) (string, error) {
+	if err := ValidatePaths(op, paths, dest); err != nil {
+		return "", err
+	}
 	id := "j-" + strconv.FormatUint(m.nextID.Add(1), 10)
 	job := &Job{
 		ID:     id,
@@ -229,7 +236,122 @@ func (m *Manager) Enqueue(op Op, paths []string, dest string) string {
 	case m.wakeup <- struct{}{}:
 	default:
 	}
-	return id
+	return id, nil
+}
+
+// ValidatePaths is the single guard every job passes through (Enqueue
+// calls it; it is exported so a caller can pre-flight a plan without
+// queueing). It rejects the shapes that would otherwise turn a copy or
+// move into data loss:
+//
+//   - dest == src, or dest inside src: copyTree would recurse into its
+//     own output until ENAMETOOLONG; a move would EINVAL at best.
+//   - parent(src) == dest (paste into the folder the item is already
+//     in): dst resolves to src itself, the collision prompt fires, and
+//     a Replace answer runs os.RemoveAll(dst) — which IS the source.
+//     For move the follow-up rename then fails ENOENT, after the
+//     delete. Rejected for copy AND move: neither has a sane outcome.
+//
+// The whole job is rejected on the first offending path rather than
+// skipping the offenders: a paste is one gesture over one selection,
+// and "3 of your 4 files moved, the 4th silently didn't" is exactly the
+// partial surprise a bulk queue exists to avoid. The FE already
+// filters no-op entries before dispatch (fm's planPaste / DnD guards),
+// so a rejection here means a wrong plan reached the service — better
+// to refuse it whole and say why than to run part of it.
+//
+// Symlinks: the checks run on the lexical (Cleaned) pair AND on a
+// resolved pair — dest via filepath.EvalSymlinks, and src as
+// (EvalSymlinks(parent) + basename), because the thing being copied
+// or moved is the directory entry src itself, not what it points at
+// (a symlink pasted next to its target is a legitimate job). This
+// catches "paste /alias/a into /real" where /alias -> /real (same
+// folder through an alias: dst is physically the source) and "copy
+// /real into /alias/real/sub". Resolution is best-effort: if either
+// side doesn't resolve (source vanished, dangling link) the lexical
+// checks are the verdict and the job's own Lstat reports the rest.
+//
+// Errors are user-facing: they name the offending path and are shown
+// verbatim in the bulk app's failure toast.
+func ValidatePaths(op Op, paths []string, dest string) error {
+	if len(paths) == 0 {
+		return fmt.Errorf("nothing to %s", opWord(op))
+	}
+	if op == OpDelete {
+		return nil
+	}
+	if dest == "" {
+		return fmt.Errorf("%s requires a destination", opWord(op))
+	}
+	destClean := filepath.Clean(dest)
+	destReal, destResolved := resolveDir(destClean)
+	for _, src := range paths {
+		srcClean := filepath.Clean(src)
+		if err := checkPair(op, srcClean, destClean); err != nil {
+			return err
+		}
+		// Resolved pair. Only worth comparing when at least one side
+		// actually changed under resolution — otherwise it is the
+		// lexical pair again.
+		srcReal := srcClean
+		if parentReal, ok := resolveDir(filepath.Dir(srcClean)); ok {
+			srcReal = filepath.Join(parentReal, filepath.Base(srcClean))
+		}
+		if !destResolved && srcReal == srcClean {
+			continue
+		}
+		if err := checkPair(op, srcReal, destReal); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkPair applies the three rejection shapes to one (src, dest)
+// pair. Messages quote the caller's spelling of src, not a resolved
+// path, so the user recognises what they clicked.
+func checkPair(op Op, src, dest string) error {
+	switch {
+	case dest == src:
+		return fmt.Errorf("cannot %s %s into itself", opWord(op), src)
+	case isWithin(dest, src):
+		return fmt.Errorf("cannot %s %s into its own subfolder %s", opWord(op), src, dest)
+	case filepath.Dir(src) == dest:
+		return fmt.Errorf("%s is already in %s", src, dest)
+	}
+	return nil
+}
+
+// isWithin reports whether p is strictly inside dir — a
+// separator-aware prefix test, so "/a/bc" is NOT within "/a/b".
+// Both must already be Cleaned.
+func isWithin(p, dir string) bool {
+	sep := string(filepath.Separator)
+	if !strings.HasSuffix(dir, sep) {
+		dir += sep
+	}
+	return strings.HasPrefix(p, dir) && p != dir
+}
+
+// resolveDir is filepath.EvalSymlinks with a best-effort contract:
+// returns (resolved, true) or (input, false) when the path can't be
+// resolved (missing, dangling, unreadable) or resolves to itself.
+func resolveDir(p string) (string, bool) {
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil || r == p {
+		return p, false
+	}
+	return r, true
+}
+
+// opWord is the verb for user-facing messages: "copy", "move",
+// "delete"; unknown ops fall back to "process".
+func opWord(op Op) string {
+	switch op {
+	case OpCopy, OpMove, OpDelete:
+		return string(op)
+	}
+	return "process"
 }
 
 // Cancel marks job id for cancellation. Returns true if found.

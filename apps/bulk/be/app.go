@@ -167,11 +167,23 @@ func registerHandlers(b *sdk.Bus) {
 	// has no From attestation, so we use plain Handle which doesn't
 	// require it). Returns the new job_id in the reply envelope so the
 	// caller can correlate.
+	//
+	// A rejected plan (bulkops.ValidatePaths: paste into the same
+	// folder, copy a folder into itself, ...) never becomes a job, so
+	// the terminal-state toast in jobUpdateHandler never fires for it —
+	// and the enqueue_err reply below goes to THIS app's FE, which a
+	// background surface doesn't have. The Fail toast is therefore the
+	// only channel that reaches the user; without it the rejection is a
+	// silently dropped Ctrl+V. Same title as a job that failed mid-way.
 	sdk.Handle(b, "enqueue", func(_ *sdk.Conn, _ string, req enqueueReq) (enqueueResp, error) {
-		if len(req.Paths) == 0 {
-			return enqueueResp{}, sdk.Errf(sdk.ErrBadRequest, "paths is empty")
+		op := bulkops.Op(req.Op)
+		id, err := mgr.Enqueue(op, req.Paths, req.Dest)
+		if err != nil {
+			log.Printf("bulk-ops enqueue rejected op=%s dest=%q: %v", op, req.Dest, err)
+			c.Fail(opVerb(op, false), err)
+			return enqueueResp{}, sdk.Errf(sdk.ErrBadRequest, "%s", err.Error())
 		}
-		return enqueueResp{JobID: mgr.Enqueue(bulkops.Op(req.Op), req.Paths, req.Dest)}, nil
+		return enqueueResp{JobID: id}, nil
 	})
 	// job_report: upsert an externally-driven job (fm uploads). The
 	// reporting app does the work + streams progress; we mirror it into
