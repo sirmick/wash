@@ -315,8 +315,8 @@ func init() {
 			// through the router's open routing (edit / imageview by
 			// extension); CapSpawn is what lets a clicked DIRECTORY
 			// open in fm, which open routing has no extension for.
-			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
-			Window:          &sdk.WindowHints{DefaultWidth: 800, DefaultHeight: 480},
+			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
+			Window:       &sdk.WindowHints{DefaultWidth: 800, DefaultHeight: 480},
 			// "Root Terminal" launcher row. --login makes root's shell
 			// source profile/bashrc so PATH / PS1 / colour match a
 			// fresh login rather than wash-priv's parent env.
@@ -484,6 +484,18 @@ type execTabReq struct {
 // prefsSetReq is a partial preferences update from the FE.
 type prefsSetReq struct {
 	Prefs termPrefs `json:"prefs"`
+}
+
+// setTitleReq is the FE's window title (the focused tab's label).
+type setTitleReq struct {
+	Title string `json:"title"`
+}
+
+// restartTabReq replaces one tab's shell in place.
+type restartTabReq struct {
+	ChannelID uint64 `json:"channel_id"`
+	Cols      uint64 `json:"cols"`
+	Rows      uint64 `json:"rows"`
 }
 
 // bellReq is a BEL from one tab's program.
@@ -729,6 +741,53 @@ func registerHandlers(b *sdk.Bus) {
 			})
 		}
 		sess.CloseWithReason("user requested")
+		return nil
+	})
+	// set_title: the FE's focused tab changed (or was renamed). The
+	// titlebar verb existed and had never been used, so every terminal
+	// window was called "Terminal" however many were open.
+	sdk.HandleVoid(b, "set_title", func(c *sdk.Conn, _ string, req setTitleReq) error {
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			title = "Terminal"
+		}
+		return c.SetTitle(title)
+	})
+	// restart_tab: kill this tab's shell and start a fresh one in the same
+	// directory. For a shell that has wedged, or one whose environment has
+	// changed under it. The new pty is a NEW channel — the FE removes the
+	// old tab on tab_closed and places the replacement in the group it
+	// focused before asking, which is the pane the old one was in.
+	sdk.HandleVoid(b, "restart_tab", func(c *sdk.Conn, _ string, req restartTabReq) error {
+		if req.ChannelID == 0 {
+			return nil
+		}
+		id := uint32(req.ChannelID)
+		dir := cwdOf(id)
+		st.mu.Lock()
+		sess := st.sessions[id]
+		st.mu.Unlock()
+		cols := req.Cols
+		rows := req.Rows
+		if cols == 0 {
+			cols = 80
+		}
+		if rows == 0 {
+			rows = 24
+		}
+		log.Printf("wash-term restart ch=%d cwd=%q", id, dir)
+		// Open the replacement BEFORE killing the old shell. The window
+		// closes itself once the last session and the last held tab are
+		// gone, so a restart that killed first would tear down the window
+		// it was restarting a tab in.
+		go func() {
+			openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), nil, "", dir)
+			if sess != nil {
+				sess.CloseWithReason("restart requested")
+			} else {
+				dismissHeld(c, id)
+			}
+		}()
 		return nil
 	})
 }

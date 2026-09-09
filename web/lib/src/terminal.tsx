@@ -366,6 +366,11 @@ export interface TerminalAPI {
   // system clipboards and returns whether there was anything to copy.
   copySelection: () => boolean;
   paste: () => void;
+  // pasteText types text into the pty as if it had been pasted (bracketed
+  // paste and all), bypassing the clipboard. For text the CONSUMER
+  // composed — dropped file paths, a snippet — where a smart-paste
+  // dialog about "structure" would be about the consumer's own quoting.
+  pasteText: (text: string) => void;
   selectAll: () => void;
   clearScreen: () => void;
   hasSelection: () => boolean;
@@ -1142,6 +1147,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
             return true;
           },
           paste: () => pasteWash(),
+          pasteText: (text: string) => { if (text) term?.paste(text); },
           selectAll: () => term?.selectAll(),
           clearScreen: () => term?.clear(),
           hasSelection: () => !!term?.hasSelection(),

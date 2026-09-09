@@ -17,7 +17,7 @@
 // handle from each <Terminal> via onReady so tab activation can
 // trigger focus/fit.
 
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Bell, Check, ChevronDown, ChevronUp, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
@@ -32,7 +32,8 @@ import { analyzePaste } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
 import { SplitIntents } from './intents';
 import type { SplitIntent } from './intents';
-import { fullTabLabel, shortShellName, tabLabelFor } from './tab-label';
+import { TAB_LABEL_MAX, fullTabLabel, shortShellName, tabLabelFor } from './tab-label';
+import { acceptsDrop, dropText, pathsFrom } from './drop-paths';
 import {
   DEFAULT_GUTTER, ROOT,
   addTab as treeAddTab, canSplit, channels as treeChannels, closeTab as treeCloseTab,
@@ -112,6 +113,10 @@ interface PersistedTabRow {
   modes?: TermModes;
   // color: tag color id (see TAG_COLORS), or absent for untagged.
   color?: string;
+  // name: a manual tab name. Beats the OSC title until it is cleared,
+  // which is the point of typing one — a shell that retitles on every
+  // prompt must not undo it.
+  name?: string;
 }
 
 // One row of the BE's `sessions` reply (list_sessions).
@@ -269,6 +274,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // that produced OUTPUT while not visible. Both are per-tab marks, both
   // cleared by looking at the tab, and neither is persisted — they are
   // about this sitting, not about the window's shape.
+  // Manual tab names, and the tab currently being renamed. A name beats
+  // the OSC title until cleared; clearing it (an empty box) hands the tab
+  // back to whatever the program is calling itself.
+  const [tabNames, setTabNames] = createSignal<Map<number, string>>(new Map());
+  const [renaming, setRenaming] = createSignal<number | null>(null);
+  const [renameDraft, setRenameDraft] = createSignal('');
+  let renameInputEl: HTMLInputElement | undefined;
   const [bells, setBells] = createSignal<Set<number>>(new Set());
   const [activity, setActivity] = createSignal<Set<number>>(new Set());
   // flashes: the tab whose pane is mid visual-bell, with a nonce so two
@@ -397,6 +409,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     pathCache.delete(channelID);
     clearMarks(channelID);
     if (flash()?.id === channelID) setFlash(null);
+    if (renaming() === channelID) setRenaming(null);
+    if (tabNames().has(channelID)) {
+      const next = new Map(tabNames());
+      next.delete(channelID);
+      setTabNames(next);
+    }
     apis.delete(channelID);
     sizes.delete(channelID);
     if (tagColors().has(channelID)) {
@@ -1032,8 +1050,75 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // shows: the user@host prefix stripped and a long path kept from its
   // tail (tab-label.ts), so tabs read "…/apps/term" rather than every one
   // of them saying "mick@ai: ~/…".
-  const fullLabel = (tab: TabMeta): string => fullTabLabel(tabTitles().get(tab.channelID), tab.shell);
-  const tabLabel = (tab: TabMeta): string => tabLabelFor(tabTitles().get(tab.channelID), tab.shell);
+  const fullLabel = (tab: TabMeta): string =>
+    tabNames().get(tab.channelID) ?? fullTabLabel(tabTitles().get(tab.channelID), tab.shell);
+  const tabLabel = (tab: TabMeta): string => {
+    const named = tabNames().get(tab.channelID);
+    // A manual name is shown as typed — it was chosen to fit, and the
+    // user@host stripping that a shell title needs would be meddling.
+    if (named !== undefined) return named.length <= TAB_LABEL_MAX ? named : named.slice(0, TAB_LABEL_MAX - 1) + '…';
+    return tabLabelFor(tabTitles().get(tab.channelID), tab.shell);
+  };
+
+  // ---- rename ----
+
+  const startRename = (channelID: number) => {
+    const tab = tabs().find((t) => t.channelID === channelID);
+    if (!tab) return;
+    setRenameDraft(tabNames().get(channelID) ?? fullLabel(tab));
+    setRenaming(channelID);
+    requestAnimationFrame(() => { renameInputEl?.focus(); renameInputEl?.select(); });
+  };
+
+  const commitRename = () => {
+    const id = renaming();
+    if (id === null) return;
+    const name = renameDraft().trim();
+    const next = new Map(tabNames());
+    // An empty box clears the name rather than setting one: that is how
+    // you hand the tab back to the program's own titles.
+    if (name) next.set(id, name);
+    else next.delete(id);
+    setTabNames(next);
+    setRenaming(null);
+    persist();
+    syncWindowTitle();
+    apis.get(id)?.focus();
+  };
+
+  const cancelRename = () => {
+    const id = renaming();
+    setRenaming(null);
+    if (id !== null) apis.get(id)?.focus();
+  };
+
+  // ---- window title ----
+  //
+  // The titlebar says what the focused tab says. window.set_title existed
+  // and was never used, so every terminal window was called "Terminal"
+  // however many were open.
+  const syncWindowTitle = () => {
+    const tab = tabs().find((t) => t.channelID === active());
+    const title = tab ? fullLabel(tab) : '';
+    if (title === lastTitleSent) return;
+    lastTitleSent = title;
+    send({ kind: 'set_title', title });
+  };
+  let lastTitleSent = '';
+
+  // ---- restart shell ----
+  //
+  // A hung shell, or one whose environment you have just changed, wants a
+  // fresh pty in the SAME place — same pane, same directory. The BE kills
+  // the old pty and opens a new one in the tab's cwd; focusing the group
+  // first is what puts the replacement where the old one was, since a new
+  // tab lands in the focused group.
+  const restartTab = (channelID: number) => {
+    const path = pathOfChannel(tree(), channelID);
+    if (path !== undefined) setFocusPath(path);
+    const grid = path !== undefined ? gridOfGroup(path) : undefined;
+    send({ kind: 'restart_tab', channel_id: channelID, ...(grid ?? {}) });
+  };
   // Same label by channel id, for callers that only carry the id (the
   // close-confirmation names each busy tab). A tab that has already gone
   // falls back to its id rather than rendering an empty bullet.
@@ -1261,6 +1346,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         shell: t.shell,
         modes: t.modes,
         color: tagColors().get(t.channelID),
+        name: tabNames().get(t.channelID),
       })),
       layout: toPersisted(tree()),
       // Appearance is NOT here any more — it is desktop-wide, in the BE's
@@ -1320,11 +1406,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     send({ kind: 'list_sessions' });
     if (!s.tabs?.length) return;
     const tags = new Map<number, string>();
+    const names = new Map<number, string>();
     for (const t of s.tabs) {
       addTab(Number(t.channel_id), t.shell, { pending: true, modes: t.modes });
       if (t.color) tags.set(Number(t.channel_id), t.color);
+      if (t.name) names.set(Number(t.channel_id), t.name);
     }
     if (tags.size) setTagColors(tags);
+    if (names.size) setTabNames(names);
     // Placement: a v2 blob restores its tree; a v1 blob (no layout, just an
     // ordered tab list and one active id) migrates to a single group, which
     // is the same window it was saved from. Either way the tree is then
@@ -1449,8 +1538,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const isDropBefore = () => dropTarget() === channelID && dragId() !== channelID;
     return (
       <Show when={tab()}>
+        <Show
+          when={renaming() !== channelID}
+          fallback={
+            <Input
+              ref={(el) => { renameInputEl = el; }}
+              data-testid={`term-tab-rename-${channelID}`}
+              value={renameDraft()}
+              onInput={(ev) => setRenameDraft((ev.currentTarget as HTMLInputElement).value)}
+              onKeyDown={(ev) => {
+                if (ev.key === 'Enter') { ev.preventDefault(); commitRename(); }
+                else if (ev.key === 'Escape') { ev.preventDefault(); cancelRename(); }
+              }}
+              onBlur={commitRename}
+              style={{ height: '22px', width: '150px', margin: '2px 4px 0 4px', font: tokens.type.monoMd }}
+            />
+          }
+        >
         <Tab
           draggable={true}
+          onDblClick={() => startRename(channelID)}
           data-testid={`term-tab-${channelID}`}
           title={fullLabel(tab()!)}
           active={isActive()}
@@ -1517,6 +1624,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         >
           {tabLabel(tab()!)}
         </Tab>
+        </Show>
       </Show>
     );
   };
@@ -1529,6 +1637,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       const s = (ev as CustomEvent).detail as PersistedState | null;
       if (s) restoreFrom(s);
     };
+    // The window titlebar follows the focused tab's label. An effect
+    // rather than a call at each site, because the label moves for four
+    // unrelated reasons (OSC title, rename, tab switch, tab close).
+    createEffect(() => {
+      const tab = tabs().find((t) => t.channelID === active());
+      void (tab ? fullLabel(tab) : '');
+      void tabNames();
+      void tabTitles();
+      syncWindowTitle();
+    });
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
 
@@ -1851,6 +1969,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         {(menu) => (
           <Menu x={menu().x} y={menu().y} data-testid="term-tab-ctx" onDismiss={() => setCtxMenu(null)}>
             <MenuItem
+              label="Rename…"
+              data-testid="term-tab-rename"
+              trailing={<span style={shortcutStyle}>Double-click</span>}
+              onClick={() => { const id = menu().id; setCtxMenu(null); startRename(id); }}
+            />
+            <MenuItem
+              label="Restart shell"
+              data-testid="term-tab-restart"
+              onClick={() => { const id = menu().id; setCtxMenu(null); restartTab(id); }}
+            />
+            <MenuSeparator />
+            <MenuItem
               label="No color"
               data-testid="term-tag-none"
               icon={<span style={swatchStyle('transparent', true)} />}
@@ -1909,6 +2039,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   height: `${place()?.h ?? 0}px`,
                 }}
                 ref={(el) => { hostEl = el; }}
+                // Dropping files onto a pane types their paths: the shell
+                // is mid-command-line and they are its next arguments
+                // (drop-paths.ts). Quoted, space-separated, NO Enter — the
+                // terminal must never run a command the user did not.
+                onDragOver={(ev) => {
+                  if (!acceptsDrop(ev.dataTransfer)) return;
+                  ev.preventDefault();
+                  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+                }}
+                onDrop={(ev) => {
+                  const paths = pathsFrom(ev.dataTransfer);
+                  if (!paths.length) return;
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  const api = apis.get(tab.channelID);
+                  if (!api) return;
+                  activate(tab.channelID);
+                  api.pasteText(dropText(paths));
+                }}
                 onMouseDown={() => {
                   const path = pathOfChannel(tree(), tab.channelID);
                   if (path !== undefined) focusGroup(path);
