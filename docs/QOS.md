@@ -384,3 +384,24 @@ anything. `assets.ts` and `panels.ts` both work this way.
 
 A flow that genuinely cannot announce its length must keep all of its
 frames in ONE lane — but it should be a low one.
+
+### 12.4 Moving traffic down a lane moves its dependencies too
+
+Two faults, one mistake, both caught by the browser suite and neither by
+unit tests. Recorded because the lane taxonomy invites exactly this.
+
+**A terminator must ride its data's lane.** Panel data moved to Bulk with
+its Unbind left on Interactive, so the Unbind overtook the bytes it
+terminates (§ docs/TEST_FLAKES.md already calls unbind-overtakes-payload
+expected behaviour) and the shell tore the transfer down before a byte
+arrived. Every settings panel stopped mounting. Byte-count completion
+removes the truncation hazard, not this one — the receiver must also not
+treat an early terminator as the end.
+
+**Credit keys on CLASS, not on the flow.** So moving the reattach replay
+to Bulk silently gave it a 64 KB window it had never had; it blocked in
+Reserve while holding shellMu and the whole reattach stalled. Recovery
+replays are creditless by nature — resyncChannel already knew this. Until
+credit is keyed on the binding instead, ANY write promoted into Bulk
+inherits a flow-control window, and that is a property to check before
+moving something down.
