@@ -2307,6 +2307,14 @@ const StartMenu: Component<{
   // render order so Arrow keys walk straight through the headers.
   const [query, setQuery] = createSignal('');
   const [selected, setSelected] = createSignal(0);
+  // The cursor is the Enter target from the moment the menu opens, so
+  // type-then-Enter needs no ceremony. PAINTING it on open is a different
+  // matter: the top row then wears a highlight before the pointer has been
+  // anywhere near it, which reads as "why is About wash already selected?".
+  // So the cursor only becomes visible once the keyboard is actually
+  // driving — a filter keystroke or an arrow. `data-selected` still marks
+  // the Enter target throughout, because that is what it means.
+  const [keyboardDriving, setKeyboardDriving] = createSignal(false);
   const pinnedApps = createMemo(() => appMatches(pinnedRows(items(), props.pinned), query()));
   const recentHits = createMemo(() => recentMatches(props.recent, query()));
   const appHits = createMemo(() => appMatches(items(), query()));
@@ -2324,6 +2332,11 @@ const StartMenu: Component<{
     query();
     setSelected(0);
   });
+  // Typing in the filter is keyboard driving, so the cursor shows from the
+  // first keystroke — which is also when it starts being useful.
+  createEffect(() => {
+    if (query() !== '') setKeyboardDriving(true);
+  });
   const selMark = (i: number) => (i === selected() ? 'true' : undefined);
   const onKey = (ev: KeyboardEvent) => {
     if (ev.key === 'Escape') {
@@ -2339,6 +2352,14 @@ const StartMenu: Component<{
     const next = stepSelection(ev.key, selected(), rows().length);
     if (next === null) return;
     ev.preventDefault();
+    if (!keyboardDriving()) {
+      // The first arrow REVEALS the cursor where it already sits — which is
+      // the row Enter would have launched all along. Stepping on this press
+      // instead would walk straight past the top row without it ever having
+      // been seen.
+      setKeyboardDriving(true);
+      return;
+    }
     setSelected(next);
   };
   return (
@@ -2432,7 +2453,7 @@ const StartMenu: Component<{
           {(app, i) => (
             <div
               data-selected={selMark(i())}
-              style={rowSelStyle(i() === selected())}
+              style={rowSelStyle(keyboardDriving() && i() === selected())}
               onContextMenu={(ev) => props.onAppContextMenu(ev, app.id)}
             >
               <MenuItem
@@ -2464,7 +2485,7 @@ const StartMenu: Component<{
           {(r, i) => (
             <div
               data-selected={selMark(recentBase() + i())}
-              style={rowSelStyle(recentBase() + i() === selected())}
+              style={rowSelStyle(keyboardDriving() && recentBase() + i() === selected())}
               onContextMenu={(ev) => props.onRecentContextMenu(ev, r.path)}
             >
               <MenuItem
@@ -2528,7 +2549,7 @@ const StartMenu: Component<{
             return (
               <div
                 data-selected={selMark(appBase() + i())}
-                style={rowSelStyle(appBase() + i() === selected())}
+                style={rowSelStyle(keyboardDriving() && appBase() + i() === selected())}
                 onContextMenu={(ev) => props.onAppContextMenu(ev, app.id)}
               >
               <MenuItem

@@ -132,6 +132,39 @@ test.describe('interaction layer', () => {
     expect(lum(onLight.tint)).toBeLessThan(128);    // darkens light chrome
   });
 
+  test('releasing a click cross-fades instead of flashing', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    const apps = 'button[title="Apps"]';
+    await page.locator(apps).hover();
+    await page.waitForTimeout(250);
+
+    // Press, then release while still hovering. The overlay has to travel
+    // from the press colour to the hover colour; if only the OPACITY is
+    // transitioned the colour snaps first, and the button flashes the hover
+    // white at close to press strength before settling. Measured before the
+    // fix: 16ms after mouseup, opacity was still 0.185 with the colour
+    // already at rgb(238,238,238).
+    await page.mouse.down();
+    await page.waitForTimeout(150);
+    await page.mouse.up();
+    await page.waitForTimeout(30);
+
+    const mid = await page.evaluate((sel) => {
+      const cs = getComputedStyle(document.querySelector(sel)!, '::after');
+      return { bg: cs.backgroundColor, opacity: Number(cs.opacity) };
+    }, apps);
+
+    const lum = (c: string) => {
+      const [r, g, b] = c.match(/\d+/g)!.slice(0, 3).map(Number);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    // Still on its way down, and the colour is still in transit — not yet
+    // arrived at the hover tint.
+    expect(mid.opacity).toBeGreaterThan(0.1);
+    expect(lum(mid.bg)).toBeLessThan(200);
+  });
+
   test('disabled controls stay inert', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();

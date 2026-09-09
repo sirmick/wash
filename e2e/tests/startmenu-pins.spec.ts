@@ -91,9 +91,16 @@ test.describe('start menu: pins, search, keyboard', () => {
 
     const rows = page.locator('[data-testid="start-menu"] [data-selected]');
     const first = await rows.first().textContent();
-    await page.keyboard.press('ArrowDown');
+    // The cursor is the Enter target from the moment the menu opens, but it
+    // is not PAINTED until the keyboard is driving — otherwise the top row
+    // looks hovered before the pointer has been near it. So the first arrow
+    // reveals it where it already sits rather than stepping past the top row.
     const nowSelected = page.locator('[data-testid="start-menu"] [data-selected="true"]');
+    await page.keyboard.press('ArrowDown');
     await expect(nowSelected).toHaveCount(1);
+    expect(await nowSelected.textContent()).toBe(first);
+    // From there, arrows move it.
+    await page.keyboard.press('ArrowDown');
     expect(await nowSelected.textContent()).not.toBe(first);
     // Up returns to the top.
     await page.keyboard.press('ArrowUp');

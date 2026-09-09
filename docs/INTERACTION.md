@@ -90,12 +90,41 @@ tint entirely; press there is nearly indistinguishable from hover; and it
 needs a per-pack polarity table. The tint is also cheaper and has no
 stacking-context side effects.
 
+## Timing
+
+The effect arrives quicker than it leaves — responsive going on, unhurried
+coming off. A transition declared on the base rule is what runs when a state
+stops *matching*, so the base carries the fade-out and the state rules
+override the fade-in:
+
+| | duration | var |
+|---|---|---|
+| press in | 40ms | `--wash-hit-press-in` |
+| hover in | 110ms | `--wash-hit-fade-in` |
+| anything out | 220ms | `--wash-hit-fade-out` |
+
+A press has to feel like it landed the instant the button went down;
+anything slower reads as lag rather than as a fade.
+
+**`background-color` must be in the transition list, not just `opacity`.**
+Press and hover are different colours, so if only the opacity interpolates
+the colour snaps at the state change while the opacity is still travelling
+— and releasing a click flashes the hover white at close to press strength.
+Measured before this was fixed: 16ms after mouseup the opacity was still
+0.185 while the colour had already jumped from black to `#eee`, a ~100ms
+white flash on every click. Interpolating both cross-fades press into hover
+(`57 → 188 → 238` over the same window). `e2e/tests/interaction.spec.ts`
+guards it.
+
+For the same reason the overlay declares `background-color` rather than the
+`background` shorthand: the longhand is what interpolates.
+
 ### Tuning
 
 Every magnitude is var-backed, so a pack can retune or disable the whole
 thing: `--wash-hit-hover`, `--wash-hit-press`, `--wash-hit-hover-opacity`
-(`-subtle` / `-strong`), `--wash-hit-press-opacity` (likewise), and
-`--wash-hit-press-well`.
+(`-subtle` / `-strong`), `--wash-hit-press-opacity` (likewise),
+`--wash-hit-press-well`, and the three durations above.
 
 ## Keyboard focus
 

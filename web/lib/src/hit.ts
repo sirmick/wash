@@ -85,21 +85,42 @@ const CSS = `
      corners the NT pack sets via --wash-radius-*. */
   border-radius: inherit;
   pointer-events: none;
-  background: var(--wash-hit-hover, currentColor);
+  /* background-COLOR, not the shorthand, because it is transitioned below
+     and the longhand is what interpolates. */
+  background-color: var(--wash-hit-hover, currentColor);
   opacity: 0;
-  transition: opacity 90ms ease-out, box-shadow 90ms ease-out;
+  /* The durations here are the FADE-OUT: a transition declared on the base
+     rule is what runs when a state stops matching. Hover-in and press-in
+     override it below, so the effect arrives quicker than it leaves —
+     responsive going on, unhurried coming off.
+
+     background-color has to be in this list. Without it the colour snaps
+     while the opacity is still fading, so releasing a click flashed the
+     hover white at ~19% for about 100ms before settling: measured 16ms
+     after mouseup, opacity was still 0.185 but the colour had already
+     jumped from black to the near-white foreground. Interpolating both
+     cross-fades press into hover instead. */
+  transition: opacity var(--wash-hit-fade-out, 220ms) ease-out,
+              background-color var(--wash-hit-fade-out, 220ms) ease-out,
+              box-shadow var(--wash-hit-fade-out, 220ms) ease-out;
 }
 /* Guarded: on touch, :hover latches after a tap and would leave the last
    thing touched looking permanently hovered. */
 @media (hover: hover) {
-  [${HIT_ATTR}]:hover::after { opacity: var(--wash-hit-hover-opacity, 0.10); }
+  [${HIT_ATTR}]:hover::after {
+    opacity: var(--wash-hit-hover-opacity, 0.10);
+    transition-duration: var(--wash-hit-fade-in, 110ms);
+  }
   [${HIT_ATTR}="subtle"]:hover::after { opacity: var(--wash-hit-hover-opacity-subtle, 0.06); }
   [${HIT_ATTR}="strong"]:hover::after { opacity: var(--wash-hit-hover-opacity-strong, 0.16); }
 }
 [${HIT_ATTR}]:active::after {
-  background: var(--wash-hit-press, #000);
+  background-color: var(--wash-hit-press, #000);
   opacity: var(--wash-hit-press-opacity, 0.22);
   box-shadow: var(--wash-hit-press-well, inset 0 1px 3px rgba(0,0,0,0.35));
+  /* A press must feel like it landed the instant the button went down;
+     anything slower reads as lag rather than as a fade. */
+  transition-duration: var(--wash-hit-press-in, 40ms);
 }
 [${HIT_ATTR}="subtle"]:active::after {
   opacity: var(--wash-hit-press-opacity-subtle, 0.14);
