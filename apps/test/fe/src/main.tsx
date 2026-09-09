@@ -438,7 +438,7 @@ function counterRow(label: string, testid: string): string {
 }
 
 function actionBtn(name: string, label: string): string {
-  return `<button type="button" data-testid="action-${name}" style="
+  return `<button data-wash-hit type="button" data-testid="action-${name}" style="
     background:${tokens.bgRowSelected};
     color:${tokens.fg};
     border:1px solid ${tokens.borderFocus};

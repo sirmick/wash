@@ -248,6 +248,7 @@ export const HistoryPanel: Component<{
           <For each={rows()}>
             {(s, i) => (
               <div
+                data-wash-hit="subtle"
                 data-testid="ai-history-row"
                 data-session-id={s.session_id}
                 data-action={historyAction(s)}
@@ -298,6 +299,7 @@ export const HistoryPanel: Component<{
                     <button
                       type="button"
                       data-testid="ai-history-verbs"
+                      data-wash-hit
                       title="Session actions"
                       aria-label="Session actions"
                       aria-haspopup="menu"

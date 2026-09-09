@@ -54,6 +54,7 @@ export const HostOpen: Component<HostOpenProps> = (props) => (
         const hue = () => (isLocal ? tokens.accentTeal : hostHue(d.origin));
         return (
           <button
+            data-wash-hit
             type="button"
             data-testid={`${props.testid}-${d.origin}`}
             data-origin={d.origin}

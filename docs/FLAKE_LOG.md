@@ -652,3 +652,38 @@ host is still digesting the previous VM tiers; the 40 s budget is the
 whole shell-over-the-wire boot. Not fixed here — one occurrence, green
 on re-run; if it recurs the fix is the budget or serialising the VM
 tiers, not the test's intent.
+
+## 2026-09-09 — `term-wedge-recovery` burst soak: NOT a flake, a shipped regression
+
+Failed the 0.14.4 tag run twice, and a rerun did not clear it. Treated as
+a flake for one cycle; it was not one.
+
+**A/B, same machine, same spec (unchanged between the two), two cores
+via `taskset -c 0,1`:**
+
+| tree | result |
+|---|---|
+| v0.14.3 | 6 of 6 passed, 12s total |
+| main (0.14.4) | 3 of 6 failed, 2.5 min |
+| 2b061bae (pre-sweep, post-QoS-lanes) | 3 of 6 failed |
+
+So the apps sweep was not the cause; the QoS lane work was, and the
+bisect landed on 54191d8f chunking the scrollback replay.
+
+**Mechanism** (measured, not inferred): the router delivered every byte
+within a second — the router log ends there — and the FE had the marker
+in its buffer (`inBuffer: true`). What was wrong was the viewport:
+`ydisp 1232` against `ybase 15183`, and on the next run `7568` against
+`19975`. xterm auto-scrolls only while ydisp == ybase, and a replay
+split across frames breaks the follow at a chunk boundary. The terminal
+had stopped showing output it had already parsed, which a user reads as
+a hang. `toContainText` reads rendered rows, so the spec caught it only
+when the marker landed off-screen — which is why it looked like a flake.
+
+**Fixed** in 78daf79f: both replay paths send one frame again; the soak
+asserts the viewport is following; the unit test that asserted chunking
+now asserts atomicity.
+
+**The lesson for this log**: a rerun that goes green is not evidence of
+a flake. The baseline A/B is, and it took one run of each to separate
+"my branch broke it" from "the release is broken".

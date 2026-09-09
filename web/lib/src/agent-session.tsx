@@ -217,6 +217,7 @@ const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = 
     <div
       data-testid="agent-tool-row"
       data-path={p.e.path || undefined}
+      data-wash-hit={clickable() ? '' : undefined}
       role={clickable() ? 'button' : undefined}
       tabindex={clickable() ? 0 : undefined}
       title={p.e.path || undefined}
@@ -288,6 +289,7 @@ const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = 
         <button
           type="button"
           data-testid="agent-tool-diff-toggle"
+          data-wash-hit
           title={open() ? 'Hide the diff' : 'Show the diff'}
           onClick={(ev) => {
             // The row itself opens the file; the caret only folds.
@@ -383,6 +385,7 @@ const AskRow: Component<{
       {p.ask.subject || p.ask.tool}
     </div>
     <button
+      data-wash-hit
       type="button"
       onClick={() => p.onAnswer?.(p.ask.id, 'allow')}
       style={askBtn(tokens.bgSuccess, tokens.fgSuccess)}
@@ -394,6 +397,7 @@ const AskRow: Component<{
     </button>
     <Show when={p.ask.suggested_rule}>
       <button
+        data-wash-hit
         type="button"
         onClick={() => p.onAnswer?.(p.ask.id, 'allow', p.ask.suggested_rule)}
         title={p.ask.rule_cwd ? `Only for ${p.ask.rule_cwd}` : undefined}
@@ -406,6 +410,7 @@ const AskRow: Component<{
       </button>
     </Show>
     <button
+      data-wash-hit
       type="button"
       onClick={() => p.onAnswer?.(p.ask.id, 'deny')}
       style={askBtn(tokens.bgDanger, tokens.fgDanger)}
@@ -798,6 +803,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             </Show>
             <Show when={stoppable()}>
               <button
+                data-wash-hit
                 type="button"
                 data-testid="agent-stop"
                 title="End this turn — and the question it is waiting on"
@@ -841,6 +847,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             <For each={slashMatches().slice(0, MAX_SLASH)}>
               {(cmd) => (
                 <button
+                  data-wash-hit
                   type="button"
                   title={cmd.description}
                   onClick={() => {

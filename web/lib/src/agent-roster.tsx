@@ -310,6 +310,7 @@ const AskBtn: Component<{
   children: JSX.Element;
 }> = (props) => (
   <button
+    data-wash-hit
     type="button"
     data-testid={props.testid}
     title={props.title}
@@ -402,6 +403,7 @@ const AgentRowView: Component<{
   });
   return (
     <div
+      data-wash-hit
       data-testid={`agents-row-${props.row.key}`}
       data-agent={props.row.agent}
       data-agent-state={props.row.state}
@@ -469,6 +471,7 @@ const AgentRowView: Component<{
             half of the same menu. */}
         <Show when={hasVerbs()}>
           <button
+            data-wash-hit
             type="button"
             // Named to collide with nothing: "agents-row-menu" made a
             // prefix query for rows (agents-row-<key>) match this button

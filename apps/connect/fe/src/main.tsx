@@ -949,11 +949,12 @@ const MoreMenu: Component<{
       More ▾
     </Button>
     <Show when={props.open}>
-      <div style={backdropStyle} onClick={props.onClose} data-testid="connect-launch-backdrop" />
+      <div data-wash-no-hit style={backdropStyle} onClick={props.onClose} data-testid="connect-launch-backdrop" />
       <div style={menuStyle} data-testid="connect-apps" role="menu">
         <For each={props.apps}>
           {(app) => (
             <button
+              data-wash-hit
               type="button"
               style={menuItemStyle}
               onClick={() => props.onPick(app.id)}

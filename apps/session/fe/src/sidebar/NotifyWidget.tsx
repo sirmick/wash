@@ -57,6 +57,7 @@ export const NotifyWidget: Component<NotifyWidgetProps> = (props) => {
       </For>
       <Show when={!empty()}>
         <button
+          data-wash-hit
           type="button"
           data-testid="notify-clear-all"
           onClick={props.onClearAll}
@@ -104,6 +105,7 @@ const NotifyRow: Component<{ entry: NotifyEntry; onMarkRead: () => void }> = (pr
   });
   return (
     <div
+      data-wash-hit
       data-testid={`notify-row-${props.entry.id}`}
       data-level={props.entry.level}
       data-read={props.entry.read ? 'true' : 'false'}

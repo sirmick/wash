@@ -188,6 +188,15 @@ check-icons:
 check-design:
 	@./scripts/check-design-tokens.sh
 
+# check-interactive: the interaction-layer drift guard. Everything clickable
+# wears web/lib/src/hit.ts (hover / press / keyboard-focus feedback, keyed on
+# data-wash-hit). This fails if a clickable element appears without it, so the
+# sweep that added it to 220 sites can't rot back to what it replaced — :hover
+# in three files and :active in none. Wired into unit-test beside check-design.
+.PHONY: check-interactive
+check-interactive:
+	@python3 ./scripts/check-interactive.py
+
 # check-versions: the version single-source guard. The root VERSION file is the
 # master — the Makefile stamps it into every binary via -ldflags, and packaging
 # (run_matrix.sh / make-source-tarball.sh) now defaults its package version to
@@ -1063,6 +1072,7 @@ unit-test: test-app fe-unit component
 	$(MAKE) -s check-imports
 	$(MAKE) -s check-versions
 	$(MAKE) -s check-design
+	$(MAKE) -s check-interactive
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 

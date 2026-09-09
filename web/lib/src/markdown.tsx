@@ -281,6 +281,7 @@ export const CodeBlock: Component<{ code: string; lang?: string }> = (p) => {
       <button
         type="button"
         data-testid="markdown-copy"
+        data-wash-hit
         title="Copy this block"
         onClick={copy}
         style={{
