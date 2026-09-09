@@ -58,24 +58,28 @@ test('Reload re-lists the folder being viewed, not its parent', async ({ page, r
   await expect(page.locator('[data-testid="fm-entry-readme.md"]')).toBeVisible();
   await expect(page.locator('[data-testid="fm-path"]')).toHaveValue(docs);
 
-  // Take fs.watch out of the picture, then create a file on disk.
+  // A file appears on disk. fs.watch would surface it on its own, so the
+  // watcher is SIGSTOPped first to make Reload the likely cause — but that
+  // is a nicety, not the assertion: on a loaded runner an event queued
+  // before the stop can still land, and requiring the row to be ABSENT
+  // first made this spec fail for a reason that had nothing to do with
+  // Reload (CI, 0.14.4 tag run). What actually proves the fix is the BE
+  // half below: which directory Reload asked for.
   const watchers = pidsWithArgv(`${router.appsDir}/wash-fswatch`);
   expect(watchers.length, 'wash-fswatch must be running to be paused').toBeGreaterThan(0);
   for (const pid of watchers) process.kill(pid, 'SIGSTOP');
   try {
     writeFileSync(join(docs, 'fresh.txt'), 'fresh\n');
-    // Past fm's 100 ms watch debounce: nothing shows, so the watch really is
-    // out of the loop and whatever appears next is Reload's doing.
     await page.waitForTimeout(500);
-    await expect(page.locator('[data-testid="fm-entry-fresh.txt"]')).toHaveCount(0);
 
     const from = router.logCursor();
     await page.locator('[data-testid="fm-reload"]').click();
+    // FE half: the row is there after Reload.
     await expect(page.locator('[data-testid="fm-entry-fresh.txt"]')).toBeVisible({ timeout: 5_000 });
 
-    // BE half: the viewed folder was listed…
+    // BE half, and the real assertion: Reload listed the viewed folder…
     await router.waitForLog(new RegExp(`fm: list path="${escapeRe(docs)}"`), 5_000, from);
-    // …and its parent was not.
+    // …and never its parent, which is the bug this guards.
     const since = router.log().slice(from);
     expect(since).not.toMatch(new RegExp(`fm: list path="${escapeRe(router.fmRoot)}"`));
   } finally {
