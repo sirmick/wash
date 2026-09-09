@@ -97,34 +97,47 @@ test.describe('term find', () => {
     await page.keyboard.press('Alt+F');
     const input = page.locator('[data-testid="term-find-input"]');
     await expect(input).toBeFocused();
-    // "19" matches 19 and 190..199 — eleven hits.
-    await input.fill('19');
     const count = page.locator('[data-testid="term-find-count"]');
-    await expect(count).toHaveText(/of 11$/);
-    await input.press('Enter');
-    await expect(count).toHaveText('2 of 11');
-    await page.locator('[data-testid="term-find-prev"]').click();
-    await expect(count).toHaveText('1 of 11');
+    // Counts are read back rather than hardcoded: how many times "19"
+    // occurs on screen depends on what the harness's prompt says, and a
+    // spec that guessed would be asserting the shell, not the find bar.
+    const total = async (): Promise<number> => {
+      const t = (await count.textContent()) ?? '';
+      const m = t.match(/of (\d+)$/);
+      return m ? Number(m[1]) : 0;
+    };
 
-    // Regex: 1[05]0 is 100 and 150 — two lines, and nothing without regex.
+    await input.fill('19');
+    // seq 1 200 alone puts 19 and 190..199 on screen, so there is always
+    // more than one hit to step through.
+    await expect.poll(total, { timeout: 10_000 }).toBeGreaterThan(1);
+    const n = await total();
+    await expect(count).toHaveText(`1 of ${n}`);
+    await input.press('Enter');
+    await expect(count).toHaveText(`2 of ${n}`);
+    await page.locator('[data-testid="term-find-prev"]').click();
+    await expect(count).toHaveText(`1 of ${n}`);
+
+    // Regex: 1[05]0 finds 100 and 150; as a literal it finds nothing,
+    // which is the toggle actually doing something.
     await page.locator('[data-testid="term-find-regex"]').check();
     await input.fill('1[05]0');
-    await expect(count).toHaveText(/of 2$/);
+    await expect.poll(total, { timeout: 10_000 }).toBeGreaterThan(1);
     await page.locator('[data-testid="term-find-regex"]').uncheck();
     await expect(count).toHaveText('no matches');
 
-    // Case: print a mixed-case pair. The typed command line carries both
-    // spellings too, so case-insensitive finds four and case-sensitive two.
+    // Case: print a mixed-case pair, then narrow to one spelling.
     await input.press('Escape');
     await host.click();
-    await page.keyboard.type("printf 'Mixed\\nmixed\\n'");
+    await page.keyboard.type("printf 'ZqMixed\\nZqmixed\\n'");
     await page.keyboard.press('Enter');
-    await expect.poll(() => bufferOf(host), { timeout: 5_000 }).toMatch(/^mixed$/m);
+    await expect.poll(() => bufferOf(host), { timeout: 5_000 }).toMatch(/^Zqmixed$/m);
     await page.keyboard.press('Alt+F');
-    await input.fill('mixed');
-    await expect(count).toHaveText(/of 4$/);
+    await input.fill('Zqmixed');
+    await expect.poll(total, { timeout: 10_000 }).toBeGreaterThan(1);
+    const insensitive = await total();
     await page.locator('[data-testid="term-find-case"]').check();
-    await expect(count).toHaveText(/of 2$/);
+    await expect.poll(total, { timeout: 10_000 }).toBeLessThan(insensitive);
     await page.locator('[data-testid="term-find-close"]').click();
     await expect(page.locator('[data-testid="term-find"]')).toHaveCount(0);
   });
