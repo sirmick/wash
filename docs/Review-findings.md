@@ -5,7 +5,7 @@ Scope: the four daily-driver apps (`com.wash.ai`/`com.wash.agentd`,
 them. Method: full read of each app's FE + BE, the as-built docs, and the
 e2e roster; every item below carries a file:line. **Verified** means the
 code path was traced end to end; **suspicion** means the mechanism is
-visible but the symptom was not reproduced. Nothing was fixed. Items
+visible but the symptom was not reproduced. Items
 already in `Todo.md` (edit Save-As tab drop, issue #6 access-denied, R3
 streamed downloads, WebKit anchoring) are not repeated.
 
@@ -17,6 +17,11 @@ and all of it is data loss.
 ---
 
 ## P0 — data loss or silent corruption (verified)
+
+**All seven fixed on the same day**, each with a both-halves e2e:
+#1/#2/#5/#6/#7 in `44c0cfeb` (edit; `edit-save-guards.spec.ts`,
+`edit-close-guard.spec.ts`), #3 in `fdcbcb29` (bulk + fm;
+`fm-paste-self.spec.ts`), #4 in `e2f2c05d` (fs; `mutate_test.go`).
 
 | # | App | Finding | Evidence |
 |---|-----|---------|----------|
