@@ -349,9 +349,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // pendingClose is the Save / Don't save / Cancel prompt for a dirty
   // tab (Ctrl+W, the ×) or for the whole window (the titlebar close,
   // relayed by the BE as close_blocked).
+  // 'tabs' is Close All / Close Others: one dialog listing every dirty
+  // tab among `ids`, one answer for the lot.
   const [pendingClose, setPendingClose] = createSignal<
-    { scope: 'window' } | { scope: 'tab'; tabID: string } | null
+    { scope: 'window' } | { scope: 'tab'; tabID: string } | { scope: 'tabs'; ids: string[]; title: string } | null
   >(null);
+  // revertPrompt asks before Revert throws away unsaved edits; a clean
+  // tab reverts without asking.
+  const [revertPrompt, setRevertPrompt] = createSignal<{ tabID: string; displayName: string } | null>(null);
   const [reloadPrompt, setReloadPrompt] = createSignal<
     | null
     | { tabID: string; displayName: string; diskContent: string }
@@ -692,6 +697,34 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (t) await saveTab(t);
   };
 
+  // saveAll writes every dirty tab in strip order. An Untitled buffer
+  // parks the loop on the picker (saveTab's 'needs_path'); the remaining
+  // ids wait in saveAllQueue and pickerConfirm resumes the loop once that
+  // buffer has a path, so several untitled buffers are asked for one at
+  // a time. Cancelling the picker abandons the rest — the user said no.
+  let saveAllQueue: string[] = [];
+  const saveAll = async (ids?: string[]) => {
+    const order = ids ?? dirtyTabs().map((t) => t.id);
+    saveAllQueue = [];
+    for (let i = 0; i < order.length; i++) {
+      const t = tabs().find((x) => x.id === order[i]);
+      if (!t || !dirtyIDs().has(t.id)) continue;
+      const r = await saveTab(t);
+      if (r === 'needs_path') {
+        saveAllQueue = order.slice(i + 1);
+        return;
+      }
+      // A failed write already sits in the status bar; the rest still
+      // get their chance rather than being held hostage by one file.
+    }
+  };
+  const resumeSaveAll = () => {
+    if (saveAllQueue.length === 0) return;
+    const rest = saveAllQueue;
+    saveAllQueue = [];
+    void saveAll(rest);
+  };
+
   // requestCloseTab is what every close gesture goes through: a clean
   // tab closes at once, a dirty one asks first.
   const requestCloseTab = (id: string) => {
@@ -699,23 +732,76 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     else closeTab(id);
   };
 
+  // requestCloseTabs is Close All / Close Others: the clean ones go at
+  // once when nothing is dirty; otherwise ONE dialog names every dirty
+  // tab in the set and one answer settles all of them.
+  const requestCloseTabs = (ids: string[], title: string) => {
+    if (ids.length === 0) return;
+    if (ids.some((id) => dirtyIDs().has(id))) setPendingClose({ scope: 'tabs', ids, title });
+    else closeTabs(ids);
+  };
+  const closeTabs = (ids: string[]) => {
+    captureActiveState();
+    for (const id of ids) closeTab(id);
+  };
+  const closeAllTabs = () => requestCloseTabs(tabs().map((t) => t.id), 'Close all tabs?');
+  const closeOtherTabs = () => requestCloseTabs(tabs().filter((t) => t.id !== activeID()).map((t) => t.id), 'Close other tabs?');
+
+  // revertActive reloads the active tab from disk, throwing the buffer
+  // away. Asks first when there is something to lose.
+  const revertActive = () => {
+    const t = activeTab();
+    if (!t || !t.path || t.blocked || t.diff) return;
+    if (dirtyIDs().has(t.id)) setRevertPrompt({ tabID: t.id, displayName: t.displayName });
+    else void doRevert(t.id);
+  };
+  const doRevert = async (tabID: string) => {
+    const t = tabs().find((x) => x.id === tabID);
+    if (!t || !t.path) return;
+    const reply = await sendWithReply({ kind: 'read', path: t.path });
+    if (reply.kind !== 'read_ok' || blockedOf(reply)) {
+      setStatusError(`cannot revert ${t.displayName}: ${String(reply.msg ?? reply.kind)}`);
+      return;
+    }
+    const raw = String(reply.content ?? '');
+    const eol = detectEol(raw);
+    setTabs(tabs().map((x) => x.id === tabID ? { ...x, eol, missing: false } : x));
+    applyReload(tabID, toBuffer(raw));
+    setStatusError(null);
+  };
+  const confirmRevert = () => {
+    const p = revertPrompt();
+    setRevertPrompt(null);
+    if (p) void doRevert(p.tabID);
+  };
+
   const dirtyTabs = () => tabs().filter((t) => dirtyIDs().has(t.id));
+  // The tabs a close prompt is about — what its list shows and what
+  // Save writes.
+  const pendingCloseTargets = (): Tab[] => {
+    const p = pendingClose();
+    if (!p) return [];
+    if (p.scope === 'window') return dirtyTabs();
+    if (p.scope === 'tab') return tabs().filter((t) => t.id === p.tabID);
+    return tabs().filter((t) => p.ids.includes(t.id) && dirtyIDs().has(t.id));
+  };
 
   // The close prompt's three answers. Window scope ends in
   // close_window_confirmed, which the BE turns into the router's
-  // confirm_close; tab scope ends in closeTab.
+  // confirm_close; tab scope ends in closeTab; tabs scope in closeTabs.
   const discardAndClose = () => {
     const p = pendingClose();
     setPendingClose(null);
     if (!p) return;
     if (p.scope === 'window') send({ kind: 'close_window_confirmed' });
-    else closeTab(p.tabID);
+    else if (p.scope === 'tab') closeTab(p.tabID);
+    else closeTabs(p.ids);
   };
   const saveAndClose = async () => {
     const p = pendingClose();
+    const targets = pendingCloseTargets();
     setPendingClose(null);
     if (!p) return;
-    const targets = p.scope === 'window' ? dirtyTabs() : tabs().filter((t) => t.id === p.tabID);
     for (const t of targets) {
       const r = await saveTab(t);
       if (r === 'needs_path') {
@@ -727,7 +813,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (r !== 'ok') return;
     }
     if (p.scope === 'window') send({ kind: 'close_window_confirmed' });
-    else closeTab(p.tabID);
+    else if (p.scope === 'tab') closeTab(p.tabID);
+    else closeTabs(p.ids);
   };
 
   // saveAsActive forces the picker open for the active tab, no
@@ -782,6 +869,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const reply = await sendWithReply({ kind: 'write', path: chosen, content: toDisk(content, src.eol) });
     if (reply.kind !== 'write_ok') {
       setStatusError(`save failed: ${String(reply.msg ?? reply.kind)}`);
+      saveAllQueue = [];
       return;
     }
     setStatusError(null);
@@ -844,6 +932,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (dropped) out.delete(dropped);
       return out;
     });
+    // A Save All parked on this buffer carries on with the next one.
+    resumeSaveAll();
   };
 
   // ---- state persistence ----
@@ -2469,10 +2559,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // inline rename owns the keyboard: Ctrl+W typed into the picker's
       // path input used to close the tab under it. Ctrl+` and the rest
       // are left alone — they do not touch the tab.
-      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null;
+      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null || revertPrompt() !== null;
       const fileKey = ev.key === 's' || ev.key === 'S' || ev.key === 'o' || ev.key === 'O'
         || ev.key === 'n' || ev.key === 'N' || ev.key === 'w' || ev.key === 'W';
       if (dialogUp && fileKey) return;
+      // Ctrl+Alt+S: save every dirty tab.
+      if ((ev.key === 's' || ev.key === 'S') && ev.altKey) {
+        ev.preventDefault();
+        void saveAll();
+        return;
+      }
       // Ctrl+S: save active tab.
       if ((ev.key === 's' || ev.key === 'S') && !ev.shiftKey) {
         ev.preventDefault();
@@ -2690,8 +2786,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuSeparator />
             <MenuItem label="Save" trailing={<kbd style={kbdStyle}>Ctrl+S</kbd>} disabled={!activeTab()} onClick={run(() => void saveActive())} data-testid="edit-menu-save" />
             <MenuItem label="Save As…" trailing={<kbd style={kbdStyle}>Ctrl+Shift+S</kbd>} disabled={!activeTab()} onClick={run(saveAsActive)} data-testid="edit-menu-save-as" />
+            <MenuItem label="Save All" trailing={<kbd style={kbdStyle}>Ctrl+Alt+S</kbd>} disabled={dirtyTabs().length === 0} onClick={run(() => void saveAll())} data-testid="edit-menu-save-all" />
+            <MenuItem label="Revert" disabled={!activeTab()?.path || !!activeTab()?.blocked || !!activeTab()?.diff} onClick={run(revertActive)} data-testid="edit-menu-revert" />
             <MenuSeparator />
             <MenuItem label="Close Tab" trailing={<kbd style={kbdStyle}>Ctrl+W</kbd>} disabled={!activeTab()} onClick={run(() => requestCloseTab(activeID()))} data-testid="edit-menu-close-tab" />
+            <MenuItem label="Close Others" disabled={tabs().length < 2} onClick={run(closeOtherTabs)} data-testid="edit-menu-close-others" />
+            <MenuItem label="Close All" disabled={tabs().length === 0} onClick={run(closeAllTabs)} data-testid="edit-menu-close-all" />
           </Menu>
         </Show>
         <Show when={openMenu() === 'edit'}>
@@ -3180,7 +3280,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         defaultName={picker()?.mode === 'save' ? (picker() as { suggestedName: string }).suggestedName : undefined}
         start={picker()?.mode === 'save' ? (picker() as { start?: string }).start : undefined}
         onConfirm={(p) => void pickerConfirm(p)}
-        onCancel={() => setPicker(null)}
+        onCancel={() => { setPicker(null); saveAllQueue = []; }}
         data-testid="edit-picker"
       />
 
@@ -3215,7 +3315,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       <Show when={pendingClose()}>
         {(p) => (
           <ConfirmDialog
-            title={p().scope === 'window' ? 'Close the editor?' : 'Close this tab?'}
+            title={p().scope === 'window' ? 'Close the editor?' : p().scope === 'tabs' ? (p() as { title: string }).title : 'Close this tab?'}
             confirmLabel="Save"
             altLabel="Don't save"
             altDanger
@@ -3231,13 +3331,34 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
               Unsaved changes in:
               <ul style={{ margin: '6px 0 0', padding: '0 0 0 18px', color: tokens.fg }}>
-                <For each={p().scope === 'window' ? dirtyTabs() : tabs().filter((t) => t.id === (p() as { tabID: string }).tabID)}>
+                <For each={pendingCloseTargets()}>
                   {(t) => <li data-testid="edit-close-dialog-item">{t.displayName}</li>}
                 </For>
               </ul>
             </div>
           </ConfirmDialog>
         )}
+      </Show>
+
+      {/* Revert with unsaved edits: the one place the editor throws work
+          away on purpose, so it asks. */}
+      <Show when={revertPrompt()}>
+        <ConfirmDialog
+          title="Revert to the saved version?"
+          confirmLabel="Revert"
+          cancelLabel="Cancel"
+          danger
+          onConfirm={confirmRevert}
+          onCancel={() => setRevertPrompt(null)}
+          data-testid="edit-revert-dialog"
+          confirmTestid="edit-revert-confirm"
+          cancelTestid="edit-revert-cancel"
+        >
+          <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
+            <strong style={{ color: tokens.fg }}>{revertPrompt()!.displayName}</strong>{' '}
+            has unsaved changes. Reverting reloads the file from disk and discards them.
+          </div>
+        </ConfirmDialog>
       </Show>
 
       {/* right-click context menu — fires on row right-click. */}
