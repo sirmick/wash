@@ -293,3 +293,42 @@ func (s *Scheduler) StatsSnapshot() wire.LinkStatsSnapshot {
 	}
 	return s.Stats.snapshot(depth)
 }
+
+// maxChunkBytes caps a single frame emitted by the router's chunked
+// writers. The scheduler is preemptive BETWEEN frames and not inside
+// one: the drain loop commits a whole frame to the socket before it
+// looks at the queues again. So the largest frame any lane emits is the
+// worst-case delay it can impose on every higher lane, and 256 KB — the
+// old bundle chunk — was exactly one clamped send buffer of it, which
+// is how a bundle download stuttered a drag no matter what the
+// scheduler wanted. 32 KB is small enough that the writer yields often
+// and large enough that per-frame overhead stays noise.
+const maxChunkBytes = 32 * 1024
+
+// writeChunked splits payload into maxChunkBytes frames and calls write
+// for each, stopping at the first error. A zero-length payload still
+// produces exactly one (empty) call: transactional flows send Bind →
+// data → Unbind, and swallowing the data phase for an empty asset would
+// make "nothing to send" indistinguishable from "channel closed early".
+func writeChunked(payload []byte, write func([]byte) error) error {
+	if len(payload) == 0 {
+		return write(nil)
+	}
+	for off := 0; off < len(payload); off += maxChunkBytes {
+		end := off + maxChunkBytes
+		if end > len(payload) {
+			end = len(payload)
+		}
+		if err := write(payload[off:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// telemetryClass is where link-health pushes ride. Background, not
+// Control: telemetry is the definition of best-effort, and describing
+// the link must never be able to delay using it. It rode Control — the
+// highest lane — once a second, which put a growing stats blob ahead of
+// every drag frame.
+const telemetryClass = wire.ClassBackground

@@ -1563,20 +1563,15 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 	// in the WS layer — and, sized well under the shell socket's send
 	// buffer (shell_sndbuf.go), so a control frame queued behind a bundle
 	// waits for one small frame, not a quarter-megabyte one.
-	const chunkSize = 32 * 1024
-	for off := 0; off < len(payload); off += chunkSize {
-		end := off + chunkSize
-		if end > len(payload) {
-			end = len(payload)
-		}
-		// Bulk class: a bundle gates the window the user just launched, so
-		// it should beat Background assets but yield to interactive input
-		// and control. Safe on Bulk because the shell completes on the
-		// Size in the bind, not on the Unbind (docs/QOS.md tc reclass).
-		if err := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBulk); err != nil {
-			r.log("bundle frame %s: %v", inst.InstanceID, err)
-			return
-		}
+	// Bulk class: a bundle gates the window the user just launched, so
+	// it should beat Background assets but yield to interactive input
+	// and control. Safe on Bulk because the shell completes on the
+	// Size in the bind, not on the Unbind (docs/QOS.md tc reclass).
+	if err := writeChunked(payload, func(p []byte) error {
+		return s.WriteRawFrameClass(id, p, wire.ClassBulk)
+	}); err != nil {
+		r.log("bundle frame %s: %v", inst.InstanceID, err)
+		return
 	}
 	s.statsLink().recordCompression(len(raw), len(payload))
 	if err := s.WriteCtrl(wire.NewShellChannelUnbind(id, "bundle complete")); err != nil {

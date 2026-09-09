@@ -263,7 +263,7 @@ func (s *ShellSession) emitLinkStats() {
 	if err != nil {
 		return
 	}
-	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(wire.ClassControl)
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(telemetryClass)
 	s.scheduler.SubmitTelemetry(f)
 }
 
@@ -577,15 +577,10 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 // scheduler closed mid-stream) just ends the stream — the channel is
 // transient and unregistered, so there's nothing to clean up.
 func (s *ShellSession) streamAssetChunks(id uint32, payload []byte, rawLen int) {
-	const chunkSize = 64 * 1024
-	for off := 0; off < len(payload); off += chunkSize {
-		end := off + chunkSize
-		if end > len(payload) {
-			end = len(payload)
-		}
-		if werr := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBackground); werr != nil {
-			return
-		}
+	if werr := writeChunked(payload, func(p []byte) error {
+		return s.WriteRawFrameClass(id, p, wire.ClassBackground)
+	}); werr != nil {
+		return
 	}
 	// Account raw vs on-the-wire bytes for the compression-ratio readout.
 	s.statsLink().recordCompression(rawLen, len(payload))
@@ -626,15 +621,10 @@ func (s *ShellSession) handlePanelRead(m wire.ShellPanelRead) error {
 	}
 	// Same Interactive class as bundle/asset delivery so the strict-
 	// priority scheduler can't let the Unbind overtake the data frames.
-	const chunkSize = 256 * 1024
-	for off := 0; off < len(bundle); off += chunkSize {
-		end := off + chunkSize
-		if end > len(bundle) {
-			end = len(bundle)
-		}
-		if err := s.WriteRawFrameClass(id, bundle[off:end], wire.ClassInteractive); err != nil {
-			return err
-		}
+	if err := writeChunked(bundle, func(p []byte) error {
+		return s.WriteRawFrameClass(id, p, wire.ClassInteractive)
+	}); err != nil {
+		return err
 	}
 	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "panel complete"))
 }
