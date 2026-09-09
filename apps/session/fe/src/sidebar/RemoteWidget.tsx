@@ -123,7 +123,7 @@ const HostEntry: Component<{
       </button>
 
       <Show when={open() && up()}>
-        <div style={backdropStyle} onClick={() => setOpen(false)} />
+        <div data-wash-no-hit style={backdropStyle} onClick={() => setOpen(false)} />
         <div style={menuStyle} data-testid={`remote-apps-${props.host.origin}`} role="menu">
           <Show
             when={props.appsFor(props.host.origin).length > 0}

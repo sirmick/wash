@@ -234,6 +234,9 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
 
   return (
     <div
+      // The scrolling viewport. Its click handler is for clearing the
+      // selection on empty space; the rows inside are the hit targets.
+      data-wash-no-hit
       ref={containerEl!}
       data-testid={props.listTestId}
       {...(props.containerAttrs ?? {})}

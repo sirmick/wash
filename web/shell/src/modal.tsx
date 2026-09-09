@@ -103,6 +103,9 @@ export const ModalLayer: Component = () => {
         const hue = () => (isLocal() ? tokens.accentTeal : hostColor(m.origin) ?? tokens.accentTeal);
         return (
           <div
+            // A full-viewport dismiss backdrop, not a control: it takes a
+            // click but must never light up under the pointer.
+            data-wash-no-hit
             data-testid="modal-layer"
             data-origin={m.origin}
             data-app={m.appID}

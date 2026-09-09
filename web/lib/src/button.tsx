@@ -1,6 +1,5 @@
 import { splitProps } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { HIT_ATTR } from './hit';
 import { tokens } from './tokens';
 
 // Variants:
@@ -33,9 +32,10 @@ export const Button: Component<ButtonProps> = (props) => {
   return (
     <button
       type={local.type ?? 'button'}
-      // Before {...rest} so a caller can still dial the intensity
-      // (data-wash-hit="subtle") on a specific button.
-      {...{ [HIT_ATTR]: '' }}
+      // Written literally, and before {...rest}: literally so the
+      // check-interactive guard can see it, and first so a caller can still
+      // dial the intensity down on a specific button.
+      data-wash-hit=""
       style={{
         ...baseStyle(local.variant ?? 'default', local.size ?? 'md'),
         ...((local.style as JSX.CSSProperties | undefined) ?? {}),

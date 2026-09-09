@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Tab, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { AgentAsk, AgentEvent, AgentStatus, TerminalAPI } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
 
@@ -2900,27 +2900,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 const isActive = () => activeID() === t.id;
                 const isDirty = () => dirtyIDs().has(t.id);
                 return (
-                  <div
-                    data-wash-hit
+                  <Tab
                     data-testid={`edit-tab-${t.id}`}
-                    data-active={isActive() ? 'true' : undefined}
                     data-dirty={isDirty() ? 'true' : undefined}
+                    active={isActive()}
                     onClick={() => { captureActiveState(); setActiveID(t.id); }}
-                    style={tabStyle(isActive())}
+                    onClose={() => requestCloseTab(t.id)}
+                    closeTestId={`edit-tab-close-${t.id}`}
+                    closeTitle="Close (Ctrl+W)"
+                    closeGlyph={<Show when={isDirty()} fallback="×">●</Show>}
                   >
-                    <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
-                      {t.displayName}
-                    </span>
-                    <span
-                      data-wash-hit
-                      data-testid={`edit-tab-close-${t.id}`}
-                      onClick={(ev) => { ev.stopPropagation(); requestCloseTab(t.id); }}
-                      style={tabCloseStyle}
-                      title="Close (Ctrl+W)"
-                    >
-                      <Show when={isDirty()} fallback="×">●</Show>
-                    </span>
-                  </div>
+                    {t.displayName}
+                  </Tab>
                 );
               }}
             </For>
@@ -3042,26 +3033,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               {(t) => {
                 const isActive = () => activeTermID() === t.id;
                 return (
-                  <div
-                    data-wash-hit
+                  <Tab
                     data-testid={`edit-term-tab-${t.id}`}
-                    data-active={isActive() ? 'true' : undefined}
+                    active={isActive()}
+                    mono
                     onClick={() => setActiveTermID(t.id)}
-                    style={tabStyle(isActive())}
+                    onClose={() => closeTerm(t.id)}
+                    closeTestId={`edit-term-tab-close-${t.id}`}
+                    closeTitle="Close terminal"
                   >
-                    <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis' }}>
-                      {t.title}
-                    </span>
-                    <span
-                      data-wash-hit
-                      data-testid={`edit-term-tab-close-${t.id}`}
-                      onClick={(ev) => { ev.stopPropagation(); closeTerm(t.id); }}
-                      style={tabCloseStyle}
-                      title="Close terminal"
-                    >
-                      ×
-                    </span>
-                  </div>
+                    {t.title}
+                  </Tab>
                 );
               }}
             </For>
@@ -3877,40 +3859,6 @@ const tabBarStyle: JSX.CSSProperties = {
   'border-bottom': `1px solid ${tokens.borderMenu}`,
   'min-height': '26px',
   'flex-shrink': 0,
-};
-
-function tabStyle(active: boolean): JSX.CSSProperties {
-  return {
-    display: 'flex',
-    'align-items': 'center',
-    gap: '6px',
-    padding: '0 8px',
-    height: '26px',
-    'border-right': `1px solid ${tokens.borderMenu}`,
-    // Rounded only on top so the tab visually sits on the bar's
-    // border-bottom — matches wash-term's tab styling.
-    'border-radius': '6px 6px 0 0',
-    background: active ? tokens.bgWindow : 'transparent',
-    color: active ? tokens.fg : tokens.fgMuted,
-    cursor: 'pointer',
-    font: tokens.type.textMd,
-    'user-select': 'none',
-    'max-width': '200px',
-    overflow: 'hidden',
-    'white-space': 'nowrap',
-    'flex-shrink': 0,
-  };
-}
-
-const tabCloseStyle: JSX.CSSProperties = {
-  width: '14px',
-  height: '14px',
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
-  'border-radius': '2px',
-  font: tokens.type.monoSm,
-  color: tokens.fgMuted,
 };
 
 const placeholderOverlayStyle: JSX.CSSProperties = {

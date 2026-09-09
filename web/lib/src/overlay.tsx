@@ -24,6 +24,9 @@ export interface OverlayProps {
 export const Overlay: ParentComponent<OverlayProps> = (props) => {
   return (
     <div
+      // Dismiss backdrop — clicking the scrim closes the overlay, but the
+      // scrim itself is not something you point AT.
+      data-wash-no-hit
       data-testid={props['data-testid']}
       onClick={(ev) => {
         if (ev.target === ev.currentTarget) props.onDismiss();

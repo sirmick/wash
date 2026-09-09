@@ -19,10 +19,10 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Check, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
+import { Check, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User } from 'lucide-solid';
 import {
   Button, ConfirmDialog,
-  Menu, MenuItem, MenuSeparator, Terminal,
+  Menu, MenuItem, MenuSeparator, Tab, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_THEMES, themeById,
   defineWashApp, tokens, WASH_SCROLL_CLASS,
@@ -1092,35 +1092,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const isDropBefore = () => dropTarget() === channelID && dragId() !== channelID;
     return (
       <Show when={tab()}>
-        <button
-          data-wash-hit
-          type="button"
+        <Tab
           draggable={true}
           data-testid={`term-tab-${channelID}`}
-          style={{
-            background: isActive() ? tokens.bgRowSelected : 'transparent',
-            color: tokens.fg,
-            border: 'none',
-            'border-top': isActive()
-              ? `2px solid ${tagHex() ?? tokens.accentBlue}`
-              : tagHex()
-                ? `2px solid ${tagHex()}`
-                : '2px solid transparent',
-            // Rounded only on top — the bottom meets the strip's
-            // border-bottom flush, matching browser-tab idiom.
-            'border-radius': `${tokens.radiusLg} ${tokens.radiusLg} 0 0`,
-            padding: '0 4px 0 8px',
-            cursor: 'pointer',
-            font: tokens.type.monoMd,
-            display: 'flex',
-            'align-items': 'center',
-            gap: '6px',
-            'max-width': '200px',
-            'flex-shrink': 0,
-            // Dim while dragged; left rule marks the drop slot.
-            opacity: isDragging() ? 0.4 : 1,
-            'box-shadow': isDropBefore() ? `inset 3px 0 0 ${tokens.accentBlue}` : undefined,
-          }}
+          title={fullLabel(tab()!)}
+          active={isActive()}
+          mono
+          accent={tagHex() ?? undefined}
+          dragging={isDragging()}
+          dropBefore={isDropBefore()}
+          leading={
+            <span data-testid={`term-tab-badge-${channelID}`} style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px' }}>
+              {statusBadge(tabStatus().get(channelID))}
+            </span>
+          }
+          onClose={() => requestCloseTab(channelID)}
+          closeTestId={`term-tab-close-${channelID}`}
+          closeTitle="Close tab"
           onClick={() => activate(channelID)}
           onContextMenu={(ev) => {
             ev.preventDefault();
@@ -1157,40 +1145,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             setDropTarget(null);
           }}
         >
-          <span
-            data-testid={`term-tab-badge-${channelID}`}
-            style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px', 'flex-shrink': 0 }}
-          >
-            {statusBadge(tabStatus().get(channelID))}
-          </span>
-          <span
-            title={fullLabel(tab()!)}
-            style={{
-              overflow: 'hidden',
-              'text-overflow': 'ellipsis',
-              'white-space': 'nowrap',
-            }}
-          >
-            {tabLabel(tab()!)}
-          </span>
-          <span
-            data-wash-hit
-            data-testid={`term-tab-close-${channelID}`}
-            style={{
-              opacity: 0.6,
-              cursor: 'pointer',
-              padding: '0 2px',
-              display: 'inline-flex',
-              'align-items': 'center',
-            }}
-            onClick={(ev) => {
-              ev.stopPropagation();
-              requestCloseTab(channelID);
-            }}
-          >
-            <X size={12} />
-          </span>
-        </button>
+          {tabLabel(tab()!)}
+        </Tab>
       </Show>
     );
   };
