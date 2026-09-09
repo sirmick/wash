@@ -15,9 +15,12 @@
 //	             { kind: "read",  path }
 //	             { kind: "write", path, content }
 //	             fs.* messages handled by sdk.EnableFilePicker
+//	             prefs / prefs_set / recent_add / recent_drop — prefs.go
+//	             find / find_cancel — find.go
 //
 //	BE → FE  : { kind: "list_ok", id?, path, entries, truncated }
-//	             { kind: "read_ok", id?, path, content, size, binary, truncated }
+//	             { kind: "read_ok", id?, path, content, size, binary, truncated,
+//	                                writable }
 //	             { kind: "write_ok", id?, path, bytes }
 //	             { kind: "<op>_err", id?, path?, code, msg }
 package edit
@@ -25,6 +28,7 @@ package edit
 import (
 	"context"
 	"embed"
+	"errors"
 	"github.com/sirmick/wash/internal/version"
 	"io"
 	"io/fs"
@@ -32,6 +36,8 @@ import (
 	"os"
 	"sync"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/pty"
@@ -152,6 +158,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	initAgent(c)
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
+	registerPrefsHandlers(bus)
+	registerFindHandlers(bus)
 	registerAgentHandlers(bus)
 
 	if root == "" {
@@ -237,8 +245,26 @@ func registerHandlers(b *sdk.Bus) {
 		return wfs.ListReply{Path: abs, Entries: entries, Truncated: truncated}, nil
 	})
 
-	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (wfs.ReadReply, error) {
-		return doRead(req.Path)
+	// The reply is a map, not wfs.ReadReply, for one extra key: whether
+	// the file can be written. internal/fs's wire types are shared with
+	// wash-fm, and an editor-only fact does not belong in them.
+	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (map[string]any, error) {
+		reply, err := doRead(req.Path)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]any{
+			"path":      reply.Path,
+			"content":   reply.Content,
+			"size":      reply.Size,
+			"binary":    reply.Binary,
+			"truncated": reply.Truncated,
+			"writable":  writable(reply.Path),
+		}
+		if reply.Blocked != "" {
+			out["blocked"] = reply.Blocked
+		}
+		return out, nil
 	})
 
 	sdk.Handle(b, "write", func(c *sdk.Conn, _ string, req wfs.WriteReq) (wfs.WriteReply, error) {
@@ -428,6 +454,27 @@ func doRead(path string) (wfs.ReadReply, error) {
 		reply.Content = string(buf)
 	}
 	return reply, nil
+}
+
+// writable answers whether THIS process could write the file: access(2)
+// with W_OK, so it accounts for the effective uid, the group, and a
+// read-only mount — not just the mode bits, which say nothing about who
+// is asking. Running as root it is true for everything, which is correct
+// (root really can write it) and is why the read-only e2e skips there.
+// A file that does not exist is reported writable: the editor's own
+// "deleted on disk" path owns that case, and saying "read-only" about a
+// file that is merely gone would be a lie.
+func writable(path string) bool {
+	if path == "" {
+		return true
+	}
+	if err := unix.Access(path, unix.W_OK); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+		return false
+	}
+	return true
 }
 
 // onCloseRequested answers the router's close handshake (WIRE.md §10).

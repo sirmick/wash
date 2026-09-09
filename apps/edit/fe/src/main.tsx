@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Splitter, StatusBar, Tab, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Tab, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { AgentAsk, AgentEvent, AgentStatus, TerminalAPI } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
 
@@ -54,7 +54,7 @@ import {
   rectangularSelection,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from '@codemirror/commands';
-import { getSearchQuery, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen, SearchQuery, setSearchQuery, search } from '@codemirror/search';
+import { getSearchQuery, gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen, SearchQuery, setSearchQuery, search } from '@codemirror/search';
 import { unifiedMergeView } from '@codemirror/merge';
 import {
   autocompletion,
@@ -68,6 +68,7 @@ import {
   foldGutter,
   foldKeymap,
   indentOnInput,
+  indentUnit,
   syntaxHighlighting,
   StreamLanguage,
 } from '@codemirror/language';
@@ -120,12 +121,28 @@ import {
   List,
   ListOrdered,
   ListTodo,
+  Lock,
   Minus,
   Quote,
   Strikethrough,
   Table as TableIcon,
 } from 'lucide-solid';
 import { createWysiwyg, isMarkdownPath, type WysiwygHandle, type WysiwygSearchState } from './wysiwyg';
+import { pushRecent, dropRecent, rankFiles } from './quick-open';
+import { DEFAULT_INDENT, detectIndent, indentLabel, indentString, normalizeForSave, type Indent } from './indent';
+
+// Prefs is the desktop-wide preference file ($XDG_CONFIG_HOME/wash/
+// edit.json), owned by the edit BE (prefs.go). Every key is optional:
+// a missing one means the built-in default. Per-window state (tabs,
+// cursor, split) is PersistedState, not this.
+interface Prefs {
+  font_size?: number;
+  indent_unit?: 'spaces' | 'tabs';
+  indent_width?: number;
+  trim_trailing?: boolean;
+  final_newline?: boolean;
+  recent?: string[];
+}
 
 interface Entry {
   name: string;
@@ -165,6 +182,12 @@ interface PersistedTab {
   // missing) keeps the existing CodeMirror-based behavior. Persisting
   // mode lets us honor a per-tab toggle across reloads.
   mode?: 'source' | 'wysiwyg';
+  // Per-tab view settings. Both used to be one window-wide signal that
+  // reset on every tab switch and every reload: turning wrap on for a
+  // log, or forcing a syntax on an extensionless file, lasted exactly
+  // as long as you stayed on that tab.
+  wrap?: boolean;
+  lang?: string;
 }
 
 interface PersistedState {
@@ -242,6 +265,20 @@ interface Tab {
   size?: number;
   // Line endings on disk. The buffer is always LF; see toDisk.
   eol?: Eol;
+  // Word wrap for this tab, and a manual syntax override ('' / absent =
+  // derive from the path). Per tab because they are properties of what
+  // you are looking at, not of the window.
+  wrap?: boolean;
+  lang?: string | null;
+  // The file's mode (or its mount) denies this process a write. Not a
+  // `blocked` reason: the buffer is a perfectly good editable buffer,
+  // it just cannot go back where it came from, so Ctrl+S routes to
+  // Save As instead of failing at the BE.
+  readOnlyFile?: boolean;
+  // Indentation, detected from the file's own content on open and
+  // falling back to the prefs default when there is nothing to detect
+  // from. Drives CM's indentUnit + tabSize and the status bar.
+  indent?: Indent;
   // The file vanished from disk under the tab (an external rename, rm,
   // git checkout). The buffer is kept; the status bar says so and the
   // next save goes through the picker instead of silently recreating
@@ -302,6 +339,15 @@ const readOnlyText = (t: Tab): string => {
   }
 };
 
+// Editor font size, in px: the token default, and the range the zoom
+// keys stay inside (below ~8 the gutter stops being legible, above ~40
+// a line of code no longer fits).
+const DEFAULT_FONT_PX = 13;
+const FONT_MIN_PX = 8;
+const FONT_MAX_PX = 40;
+const clampFont = (px: number): number =>
+  Math.max(FONT_MIN_PX, Math.min(FONT_MAX_PX, Math.round(Number.isFinite(px) ? px : DEFAULT_FONT_PX)));
+
 // Mirrors the BE's maxReadBytes; only used for wording.
 const MAX_EDIT_BYTES = 4 * 1024 * 1024;
 const formatSize = (n: number): string => {
@@ -349,9 +395,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // pendingClose is the Save / Don't save / Cancel prompt for a dirty
   // tab (Ctrl+W, the ×) or for the whole window (the titlebar close,
   // relayed by the BE as close_blocked).
+  // 'tabs' is Close All / Close Others: one dialog listing every dirty
+  // tab among `ids`, one answer for the lot.
   const [pendingClose, setPendingClose] = createSignal<
-    { scope: 'window' } | { scope: 'tab'; tabID: string } | null
+    { scope: 'window' } | { scope: 'tab'; tabID: string } | { scope: 'tabs'; ids: string[]; title: string } | null
   >(null);
+  // revertPrompt asks before Revert throws away unsaved edits; a clean
+  // tab reverts without asking.
+  const [revertPrompt, setRevertPrompt] = createSignal<{ tabID: string; displayName: string } | null>(null);
   const [reloadPrompt, setReloadPrompt] = createSignal<
     | null
     | { tabID: string; displayName: string; diskContent: string }
@@ -396,13 +447,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // openMenu is the open dropdown's id ('' = none). It's set when
   // the user clicks a menubar button; menubarOffsets stores each
   // button's x,y so the Menu component knows where to drop.
-  const [openMenu, setOpenMenu] = createSignal<'' | 'file' | 'edit' | 'view' | 'syntax' | 'terminal'>('');
+  const [openMenu, setOpenMenu] = createSignal<'' | MenuID | 'recent' | 'indent' | 'eol'>('');
   const [menuAnchor, setMenuAnchor] = createSignal<{ x: number; y: number }>({ x: 0, y: 0 });
   // Per-active-tab language override. Null = derive from path.
   const [langOverride, setLangOverride] = createSignal<string | null>(null);
   // Word-wrap toggle. Recompiled into the langCompartment so we
   // don't need a second compartment for it.
   const [wordWrap, setWordWrap] = createSignal(false);
+  // Cursor position for the status bar, 1-based, kept by an update
+  // listener (and resynced on tab switch, which setState does not
+  // report as a selection change).
+  const [cursorPos, setCursorPos] = createSignal<{ line: number; col: number }>({ line: 1, col: 1 });
 
   // Sidebar drag/drop. dropTargetPath drives the visual highlight
   // on the hovered folder row ('' = no target = drop lands in
@@ -428,6 +483,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // area (CM + wysiwyg layers) — Cut/Copy/Paste against the wash
   // clipboard. Distinct from ctxMenu, which owns the sidebar rows.
   const [textCtxMenu, setTextCtxMenu] = createSignal<{ x: number; y: number } | null>(null);
+
+  // Desktop-wide preferences, loaded once at boot from the edit BE and
+  // patched through setPref. recent() is the shared recent-files list.
+  const [prefs, setPrefs] = createSignal<Prefs>({});
+  const recent = (): string[] => prefs().recent ?? [];
+
+  // Quick open (Ctrl+P): the palette over the tree root. qoFiles is the
+  // BE's recursive listing, relative to root, null while it is loading.
+  const [qoOpen, setQoOpen] = createSignal(false);
+  const [qoQuery, setQoQuery] = createSignal('');
+  const [qoFiles, setQoFiles] = createSignal<string[] | null>(null);
+  const [qoTruncated, setQoTruncated] = createSignal(false);
+  const [qoSelected, setQoSelected] = createSignal(0);
+  // The in-flight find's id; cleared when its reply lands or the
+  // palette closes (which cancels it BE-side).
+  let qoFindID = '';
+  let qoSeq = 0;
 
   // untitledCounter — monotonically increasing index for naming
   // fresh Untitled-N buffers. Resets only on app remount.
@@ -481,6 +553,165 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
   };
 
+  // ---- preferences ----
+
+  const loadPrefs = async () => {
+    const reply = await sendWithReply({ kind: 'prefs' });
+    if (reply.kind === 'prefs_ok') setPrefs((reply.prefs ?? {}) as Prefs);
+  };
+  // setPref applies a patch locally at once (the UI must not wait on a
+  // disk write) and then adopts whatever the BE merged, so a change made
+  // from another window since boot is picked up too.
+  const setPref = async (patch: Partial<Prefs>) => {
+    setPrefs({ ...prefs(), ...patch });
+    const reply = await sendWithReply({ kind: 'prefs_set', patch });
+    if (reply.kind === 'prefs_set_ok') setPrefs((reply.prefs ?? {}) as Prefs);
+    else setStatusError(`preferences not saved: ${String(reply.msg ?? reply.kind)}`);
+  };
+  // noteRecent moves `path` to the front of the shared recent list. The
+  // BE keeps the list (its own verb, never a prefs patch, so two windows
+  // cannot overwrite each other's additions).
+  const noteRecent = (path: string) => {
+    if (!path) return;
+    setPrefs({ ...prefs(), recent: pushRecent(recent(), path) });
+    void sendWithReply({ kind: 'recent_add', path }).then((reply) => {
+      if (reply.kind === 'recent_add_ok') setPrefs({ ...prefs(), recent: (reply.recent as string[]) ?? [] });
+    });
+  };
+  const forgetRecent = (path: string) => {
+    setPrefs({ ...prefs(), recent: dropRecent(recent(), path) });
+    void sendWithReply({ kind: 'recent_drop', path });
+  };
+
+  // ---- indentation ----
+  //
+  // Indentation is per tab, detected from the file itself on open
+  // (indent.ts) so editing a Go file inserts tabs and a JSON file two
+  // spaces without anyone configuring anything. The prefs default is
+  // only the fallback for a file with nothing to detect from — a new
+  // buffer, or one with no indented line.
+
+  const indentCompartment = new Compartment();
+  const prefsIndent = (): Indent => ({
+    unit: prefs().indent_unit ?? DEFAULT_INDENT.unit,
+    width: prefs().indent_width ?? DEFAULT_INDENT.width,
+  });
+  const activeIndent = (): Indent => activeTab()?.indent ?? prefsIndent();
+  const indentExtensions = () => {
+    const ind = activeIndent();
+    return [indentUnit.of(indentString(ind)), EditorState.tabSize.of(ind.width)];
+  };
+  // detectedIndent is what a freshly-read buffer gets.
+  const detectedIndent = (text: string): Indent => detectIndent(text) ?? prefsIndent();
+  const setTabIndent = (ind: Indent) => {
+    const t = activeTab();
+    if (!t) return;
+    setTabs(tabs().map((x) => (x.id === t.id ? { ...x, indent: ind } : x)));
+  };
+  // setEol changes what the next save writes. The buffer is always LF,
+  // so nothing on screen changes — which is exactly why the tab is
+  // marked dirty: the difference is real but invisible until toDisk
+  // runs, and an unsaved EOL switch that looked clean would be lost.
+  const setEol = (e: Eol) => {
+    const t = activeTab();
+    if (!t || t.blocked || t.eol === e) return;
+    setTabs(tabs().map((x) => (x.id === t.id ? { ...x, eol: e } : x)));
+    markTabDirty(t.id, true);
+    persist();
+  };
+  // ---- font zoom ----
+  //
+  // One size for every editor window on the desktop (it lives in prefs,
+  // not in a window's state) — the alternative is discovering that the
+  // window you just opened is the one that did not get the change.
+
+  const fontSize = (): number => clampFont(prefs().font_size ?? DEFAULT_FONT_PX);
+  let fontSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  const setFontSize = (px: number) => {
+    const next = clampFont(px);
+    if (next === fontSize()) return;
+    // Applied locally at once; the file write is debounced because a
+    // wheel gesture arrives as a stream of notches and each one would
+    // otherwise be a read-merge-write.
+    setPrefs({ ...prefs(), font_size: next });
+    clearTimeout(fontSaveTimer);
+    fontSaveTimer = setTimeout(() => { void setPref({ font_size: next }); }, 400);
+  };
+  const zoomFont = (delta: number) => setFontSize(fontSize() + delta);
+  onCleanup(() => clearTimeout(fontSaveTimer));
+
+  // syncCursor reads the status bar's Ln/Col out of the live view.
+  // Called on tab switch: view.setState() does not report a selection
+  // change, so the update listener alone would show the old position.
+  const syncCursor = () => {
+    if (!editorView) {
+      setCursorPos({ line: 1, col: 1 });
+      return;
+    }
+    const head = editorView.state.selection.main.head;
+    const line = editorView.state.doc.lineAt(head);
+    setCursorPos({ line: line.number, col: head - line.from + 1 });
+  };
+
+  // ---- quick open ----
+
+  const openQuickOpen = () => {
+    setQoQuery('');
+    setQoSelected(0);
+    setQoOpen(true);
+    // A fresh listing per open: the tree changes under a running
+    // editor, and 5k entries is a cheap walk next to a stale answer.
+    if (root()) {
+      qoSeq += 1;
+      qoFindID = `qo-${qoSeq}`;
+      setQoFiles(null);
+      setQoTruncated(false);
+      send({ kind: 'find', id: qoFindID, path: root(), limit: 5000 });
+    }
+  };
+  const closeQuickOpen = () => {
+    if (!qoOpen()) return;
+    setQoOpen(false);
+    if (qoFindID) {
+      send({ kind: 'find_cancel', id: qoFindID });
+      qoFindID = '';
+    }
+    editorView?.focus();
+  };
+  // qoResults is what the palette lists: the recent files while the
+  // query is empty, else the fuzzy ranking over the tree listing plus
+  // any recent file outside it. Rows carry the label shown (relative to
+  // root when under it) and the absolute path to open.
+  const qoRel = (p: string): string => {
+    const r = root();
+    return r && p.startsWith(r + '/') ? p.slice(r.length + 1) : p;
+  };
+  const qoResults = createMemo<{ abs: string; label: string }[]>(() => {
+    const q = qoQuery().trim();
+    const r = root();
+    const recentRows = recent().map((p) => ({ abs: p, label: qoRel(p) }));
+    if (!q) return recentRows.slice(0, 50);
+    const files = qoFiles() ?? [];
+    const seen = new Set(files);
+    const cands = [...files, ...recentRows.map((x) => x.label).filter((l) => !seen.has(l))];
+    return rankFiles(q, cands, 50).map((l) => ({ abs: l.startsWith('/') ? l : joinPath(r, l), label: l }));
+  });
+  const qoPick = (row: { abs: string } | undefined) => {
+    if (!row) return;
+    closeQuickOpen();
+    void openInTab(row.abs);
+  };
+  const onQuickOpenKey = (ev: KeyboardEvent) => {
+    // The palette owns the keyboard while it is up; nothing here may
+    // reach the tab shortcuts behind it.
+    ev.stopPropagation();
+    const n = qoResults().length;
+    if (ev.key === 'Escape') { ev.preventDefault(); closeQuickOpen(); return; }
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); if (n) setQoSelected((qoSelected() + 1) % n); return; }
+    if (ev.key === 'ArrowUp') { ev.preventDefault(); if (n) setQoSelected((qoSelected() - 1 + n) % n); return; }
+    if (ev.key === 'Enter') { ev.preventDefault(); qoPick(qoResults()[qoSelected()]); return; }
+  };
+
   // openInTab focuses an existing tab for `path`, or reads the
   // file and creates a fresh tab if there isn't one. Same tab
   // can't appear twice — opening twice converges on a single tab.
@@ -489,6 +720,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const existing = tabs().find((t) => t.path === path);
     if (existing) {
       setActiveID(existing.id);
+      noteRecent(path);
       return;
     }
     const reply = await sendWithReply({ kind: 'read', path });
@@ -496,8 +728,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // Permission denied, vanished, a directory: say so where the
       // user is looking instead of silently doing nothing.
       setStatusError(`cannot open ${baseName(path) || path}: ${String(reply.msg ?? reply.kind)}`);
+      if ((reply as { code?: string }).code === 'not_found') forgetRecent(path);
       return;
     }
+    noteRecent(path);
     const blocked = blockedOf(reply);
     const raw = blocked ? '' : String(reply.content ?? '');
     const tab: Tab = {
@@ -510,6 +744,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       blocked,
       size: typeof reply.size === 'number' ? reply.size : undefined,
       eol: blocked ? undefined : detectEol(raw),
+      indent: blocked ? undefined : detectedIndent(toBuffer(raw)),
+      readOnlyFile: reply.writable === false,
       mode: !blocked && isMarkdownPath(path) ? 'wysiwyg' : 'source',
     };
     setTabs([...tabs(), tab]);
@@ -645,6 +881,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return t.baseline;
   };
 
+  // applySaveCleanups runs the on-save preferences (trim trailing
+  // whitespace, ensure a final newline — both off by default) and
+  // returns what should be written. It rewrites the BUFFER as well as
+  // the bytes: a cleanup that only touched the file would leave the tab
+  // dirty the instant it was saved. The rewrite goes through a normal
+  // transaction so it is undoable, on the live view for the active tab
+  // and on the captured state for the others (Save All).
+  const applySaveCleanups = (t: Tab): string => {
+    const content = tabContent(t);
+    if (t.mode === 'wysiwyg' || t.blocked) return content;
+    const clean = normalizeForSave(content, {
+      trimTrailing: !!prefs().trim_trailing,
+      finalNewline: !!prefs().final_newline,
+    });
+    if (clean === content) return content;
+    const changes = { from: 0, to: content.length, insert: clean };
+    if (t.id === activeID() && editorView) {
+      editorView.dispatch({ changes });
+    } else if (t.state) {
+      const next = t.state.update({ changes }).state;
+      setTabs(tabs().map((x) => (x.id === t.id ? { ...x, state: next } : x)));
+    }
+    return clean;
+  };
+
   // saveTab writes one tab. 'needs_path' means the picker was opened
   // for an Untitled buffer and the write happens in pickerConfirm;
   // 'failed' means the status bar already says why. Callers that go on
@@ -666,7 +927,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setPicker({ mode: 'save', tabID: t.id, suggestedName: baseName(t.path), start: parentPath(t.path) });
       return 'needs_path';
     }
-    const content = tabContent(t);
+    if (t.readOnlyFile) {
+      // The mode bits say this write would fail. Offering Save As is
+      // the only useful answer, and it is better made before the edit
+      // is thrown at the BE and bounced.
+      setStatusError(`${t.displayName} is a read-only file — Save As?`);
+      setPicker({ mode: 'save', tabID: t.id, suggestedName: baseName(t.path), start: parentPath(t.path) });
+      return 'needs_path';
+    }
+    const content = applySaveCleanups(t);
     const reply = await sendWithReply({ kind: 'write', path: t.path, content: toDisk(content, t.eol) });
     if (reply.kind !== 'write_ok') {
       // The BE also toasts; this is for the eyes already on the editor.
@@ -692,6 +961,34 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (t) await saveTab(t);
   };
 
+  // saveAll writes every dirty tab in strip order. An Untitled buffer
+  // parks the loop on the picker (saveTab's 'needs_path'); the remaining
+  // ids wait in saveAllQueue and pickerConfirm resumes the loop once that
+  // buffer has a path, so several untitled buffers are asked for one at
+  // a time. Cancelling the picker abandons the rest — the user said no.
+  let saveAllQueue: string[] = [];
+  const saveAll = async (ids?: string[]) => {
+    const order = ids ?? dirtyTabs().map((t) => t.id);
+    saveAllQueue = [];
+    for (let i = 0; i < order.length; i++) {
+      const t = tabs().find((x) => x.id === order[i]);
+      if (!t || !dirtyIDs().has(t.id)) continue;
+      const r = await saveTab(t);
+      if (r === 'needs_path') {
+        saveAllQueue = order.slice(i + 1);
+        return;
+      }
+      // A failed write already sits in the status bar; the rest still
+      // get their chance rather than being held hostage by one file.
+    }
+  };
+  const resumeSaveAll = () => {
+    if (saveAllQueue.length === 0) return;
+    const rest = saveAllQueue;
+    saveAllQueue = [];
+    void saveAll(rest);
+  };
+
   // requestCloseTab is what every close gesture goes through: a clean
   // tab closes at once, a dirty one asks first.
   const requestCloseTab = (id: string) => {
@@ -699,23 +996,114 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     else closeTab(id);
   };
 
+  // requestCloseTabs is Close All / Close Others: the clean ones go at
+  // once when nothing is dirty; otherwise ONE dialog names every dirty
+  // tab in the set and one answer settles all of them.
+  const requestCloseTabs = (ids: string[], title: string) => {
+    if (ids.length === 0) return;
+    if (ids.some((id) => dirtyIDs().has(id))) setPendingClose({ scope: 'tabs', ids, title });
+    else closeTabs(ids);
+  };
+  const closeTabs = (ids: string[]) => {
+    captureActiveState();
+    for (const id of ids) closeTab(id);
+  };
+  const closeAllTabs = () => requestCloseTabs(tabs().map((t) => t.id), 'Close all tabs?');
+  const closeOtherTabs = () => requestCloseTabs(tabs().filter((t) => t.id !== activeID()).map((t) => t.id), 'Close other tabs?');
+
+  // activateTab is the one switch path the keyboard and the strip share:
+  // snapshot the outgoing buffer, then move.
+  const activateTab = (id: string) => {
+    if (!id || id === activeID()) return;
+    captureActiveState();
+    setActiveID(id);
+  };
+  // cycleTabs moves `delta` tabs along the strip, wrapping at either end.
+  const cycleTabs = (delta: number) => {
+    const list = tabs();
+    if (list.length < 2) return;
+    const idx = list.findIndex((t) => t.id === activeID());
+    const next = ((idx < 0 ? 0 : idx) + delta + list.length) % list.length;
+    activateTab(list[next].id);
+  };
+  // jumpToTab picks the n-th tab (1-based); past the end does nothing.
+  const jumpToTab = (n: number) => {
+    const t = tabs()[n - 1];
+    if (t) activateTab(t.id);
+  };
+  // moveTab re-slots the dragged tab at the target's position: dragging
+  // leftwards lands before the target, rightwards after it — so a tab
+  // dropped on its neighbour swaps with it either way.
+  const moveTab = (dragID: string, targetID: string) => {
+    if (dragID === targetID) return;
+    const list = tabs();
+    const from = list.findIndex((t) => t.id === dragID);
+    const to = list.findIndex((t) => t.id === targetID);
+    if (from < 0 || to < 0) return;
+    const without = list.filter((t) => t.id !== dragID);
+    const at = without.findIndex((t) => t.id === targetID) + (from < to ? 1 : 0);
+    setTabs([...without.slice(0, at), list[from], ...without.slice(at)]);
+  };
+  // dragTabID is the tab being dragged along the strip; a strip drag has
+  // its own MIME so the sidebar's move-file drops and the pane's
+  // drop-to-open ignore it.
+  const [dragTabID, setDragTabID] = createSignal<string | null>(null);
+
+  // revertActive reloads the active tab from disk, throwing the buffer
+  // away. Asks first when there is something to lose.
+  const revertActive = () => {
+    const t = activeTab();
+    if (!t || !t.path || t.blocked || t.diff) return;
+    if (dirtyIDs().has(t.id)) setRevertPrompt({ tabID: t.id, displayName: t.displayName });
+    else void doRevert(t.id);
+  };
+  const doRevert = async (tabID: string) => {
+    const t = tabs().find((x) => x.id === tabID);
+    if (!t || !t.path) return;
+    const reply = await sendWithReply({ kind: 'read', path: t.path });
+    if (reply.kind !== 'read_ok' || blockedOf(reply)) {
+      setStatusError(`cannot revert ${t.displayName}: ${String(reply.msg ?? reply.kind)}`);
+      return;
+    }
+    const raw = String(reply.content ?? '');
+    const eol = detectEol(raw);
+    setTabs(tabs().map((x) => x.id === tabID ? { ...x, eol, missing: false } : x));
+    applyReload(tabID, toBuffer(raw));
+    setStatusError(null);
+  };
+  const confirmRevert = () => {
+    const p = revertPrompt();
+    setRevertPrompt(null);
+    if (p) void doRevert(p.tabID);
+  };
+
   const dirtyTabs = () => tabs().filter((t) => dirtyIDs().has(t.id));
+  // The tabs a close prompt is about — what its list shows and what
+  // Save writes.
+  const pendingCloseTargets = (): Tab[] => {
+    const p = pendingClose();
+    if (!p) return [];
+    if (p.scope === 'window') return dirtyTabs();
+    if (p.scope === 'tab') return tabs().filter((t) => t.id === p.tabID);
+    return tabs().filter((t) => p.ids.includes(t.id) && dirtyIDs().has(t.id));
+  };
 
   // The close prompt's three answers. Window scope ends in
   // close_window_confirmed, which the BE turns into the router's
-  // confirm_close; tab scope ends in closeTab.
+  // confirm_close; tab scope ends in closeTab; tabs scope in closeTabs.
   const discardAndClose = () => {
     const p = pendingClose();
     setPendingClose(null);
     if (!p) return;
     if (p.scope === 'window') send({ kind: 'close_window_confirmed' });
-    else closeTab(p.tabID);
+    else if (p.scope === 'tab') closeTab(p.tabID);
+    else closeTabs(p.ids);
   };
   const saveAndClose = async () => {
     const p = pendingClose();
+    const targets = pendingCloseTargets();
     setPendingClose(null);
     if (!p) return;
-    const targets = p.scope === 'window' ? dirtyTabs() : tabs().filter((t) => t.id === p.tabID);
     for (const t of targets) {
       const r = await saveTab(t);
       if (r === 'needs_path') {
@@ -727,7 +1115,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (r !== 'ok') return;
     }
     if (p.scope === 'window') send({ kind: 'close_window_confirmed' });
-    else closeTab(p.tabID);
+    else if (p.scope === 'tab') closeTab(p.tabID);
+    else closeTabs(p.ids);
   };
 
   // saveAsActive forces the picker open for the active tab, no
@@ -782,6 +1171,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const reply = await sendWithReply({ kind: 'write', path: chosen, content: toDisk(content, src.eol) });
     if (reply.kind !== 'write_ok') {
       setStatusError(`save failed: ${String(reply.msg ?? reply.kind)}`);
+      saveAllQueue = [];
       return;
     }
     setStatusError(null);
@@ -811,6 +1201,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           displayName: baseName(newPath) || newPath,
           baseline: content,
           state: liveState,
+          // The write to the new path just succeeded, so whatever the
+          // OLD path's mode said no longer applies.
+          readOnlyFile: false,
           // The remounted TipTap seeds from wysCache; leaving the
           // pre-save cache would show older text than we just wrote.
           wysCache: x.mode === 'wysiwyg' ? content : x.wysCache,
@@ -830,6 +1223,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // Watch the destination dir so the freshly-saved tab tracks
     // external edits just like an opened file.
     fileWatch.watch(parentPath(newPath));
+    noteRecent(newPath);
     // Both ids go: the source tab is now clean under its new id, and a
     // duplicate that was dropped above must not leave its marker behind
     // for a tab that no longer exists.
@@ -844,6 +1238,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (dropped) out.delete(dropped);
       return out;
     });
+    // A Save All parked on this buffer carries on with the next one.
+    resumeSaveAll();
   };
 
   // ---- state persistence ----
@@ -901,6 +1297,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           }
         }
         if (scrollTop && scrollTop > 0 && t.mode === 'source') pt.scroll = scrollTop;
+        // The live signals are the truth for the ACTIVE tab: toggleWrap
+        // / setLang write through to the tab too, but a reconfigure that
+        // has not been flushed yet would otherwise be missed.
+        const wrap = isActive ? wordWrap() : !!t.wrap;
+        const lang = isActive ? langOverride() : (t.lang ?? null);
+        if (wrap) pt.wrap = true;
+        if (lang) pt.lang = lang;
         tabList.push(pt);
       });
       const state: PersistedState = {
@@ -1001,6 +1404,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               ...(fresh ? { state: fresh } : {}),
               ...(pt.scroll ? { scrollTop: pt.scroll } : {}),
               ...(persistedMode ? { mode: persistedMode } : {}),
+              ...(pt.wrap ? { wrap: true } : {}),
+              ...(pt.lang ? { lang: pt.lang } : {}),
             } : x));
             if (restoreContent && pt.content !== tab.baseline) {
               setDirtyIDs((s) => {
@@ -1033,6 +1438,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             state: fresh,
             binary: false,
             scrollTop: pt.scroll,
+            wrap: pt.wrap || undefined,
+            lang: pt.lang || undefined,
             mode: pt.mode === 'wysiwyg' ? 'wysiwyg' : 'source',
             wysCache: pt.mode === 'wysiwyg' ? content : undefined,
           };
@@ -1106,6 +1513,35 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (!editorView) return;
     editorView.focus();
     openSearchPanel(editorView);
+  };
+  // cmdReplace is Ctrl+H: the same panel as Find, with the caret in
+  // the replace field. CM has no command for that — the panel is one
+  // widget with both rows — so the field is focused once it is up.
+  const cmdReplace = () => {
+    if (activeTab()?.mode === 'wysiwyg') {
+      setWysFindOpen(true);
+      return;
+    }
+    if (!editorView) return;
+    editorView.focus();
+    openSearchPanel(editorView);
+    queueMicrotask(() => {
+      const el = editorView?.dom.querySelector('.cm-panel.cm-search input[name="replace"]') as HTMLInputElement | null;
+      el?.focus();
+      el?.select();
+    });
+  };
+  // cmdGotoLine opens CM's line dialog. Only source tabs have line
+  // numbers to go to; in WYSIWYG the command says so rather than
+  // opening a dialog against the hidden source view.
+  const cmdGotoLine = () => {
+    if (!editorView || !activeTab()) return;
+    if (activeTab()!.mode === 'wysiwyg') {
+      setStatusError('go to line needs the source view (Ctrl+Shift+P)');
+      return;
+    }
+    editorView.focus();
+    gotoLine(editorView);
   };
   // closeWysFind tears the bar down, drops the highlights, and hands
   // focus back to the document — CM's closeSearchPanel contract.
@@ -1213,10 +1649,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const setLang = (k: string | null) => {
     setLangOverride(k);
+    const t = activeTab();
+    if (t) setTabs(tabs().map((x) => (x.id === t.id ? { ...x, lang: k } : x)));
+    persist();
     editorView?.focus();
   };
   const toggleWrap = () => {
-    setWordWrap(!wordWrap());
+    const next = !wordWrap();
+    setWordWrap(next);
+    const t = activeTab();
+    if (t) setTabs(tabs().map((x) => (x.id === t.id ? { ...x, wrap: next } : x)));
+    persist();
     editorView?.focus();
   };
 
@@ -1228,7 +1671,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // anchor coordinates relative to the host element so the menu
   // hangs below the button regardless of where the window is.
 
-  const openMenuFor = (id: 'file' | 'edit' | 'view' | 'syntax' | 'terminal', ev: MouseEvent) => {
+  const openMenuFor = (id: MenuID, ev: MouseEvent) => {
     if (openMenu() === id) {
       setOpenMenu('');
       return;
@@ -1237,6 +1680,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // viewport-space — no host-rect subtraction.
     const btnRect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setMenuAnchor({ x: btnRect.left, y: btnRect.bottom + 2 });
+    setOpenMenu(id);
+  };
+  // openStatusMenu drops a menu off a status-bar cell. The status bar
+  // is the last row of the window, so the anchor is the cell's TOP edge
+  // and Menu's viewport clamp lifts the body above it.
+  const openStatusMenu = (id: 'indent' | 'eol' | 'syntax', ev: MouseEvent) => {
+    if (openMenu() === id) {
+      setOpenMenu('');
+      return;
+    }
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenuAnchor({ x: r.left, y: r.top });
     setOpenMenu(id);
   };
   const closeMenu = () => setOpenMenu('');
@@ -1278,6 +1733,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     if (m.kind === 'cmd.set_root') {
       setTreeRoot(String(m.path ?? ''));
+      return;
+    }
+    // The quick-open listing. Only the find the palette is waiting on
+    // counts; a cancelled one's late reply is dropped here.
+    if (m.kind === 'find_ok' || m.kind === 'find_err') {
+      if (String(m.id ?? '') !== qoFindID) return;
+      qoFindID = '';
+      if (m.kind === 'find_ok') {
+        setQoFiles((m.files as string[]) ?? []);
+        setQoTruncated(!!m.truncated);
+      } else {
+        setQoFiles([]);
+        setStatusError(`quick open: ${String(m.msg ?? m.kind)}`);
+      }
       return;
     }
     if (m.kind === 'cmd.open_diff') {
@@ -1423,6 +1892,110 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }]);
     setActiveTermID(localID);
     send({ kind: 'agent.start', tab: localID, agent: agentID });
+  };
+
+  // ---- send to agent ----
+  //
+  // The selection (or the whole buffer) as a fenced block with the
+  // file's path, dropped into the agent tab's composer as a DRAFT: the
+  // point is to type "why is this wrong?" next to it, not to fire the
+  // code off on its own.
+  //
+  // SEAM: the Agent app is growing an `agent_draft` app-message
+  // ({kind:'agent_draft', text}) that it inserts into its composer.
+  // edit does not go through that path because it HOSTS AgentSession
+  // itself — there is no app on the other end of a message — and
+  // AgentSession takes no draft prop (web/lib/src/agent-session.tsx is
+  // the agent track's). Until it does, the draft is written into the
+  // composer's textarea the way a paste would be: set the value through
+  // the native setter and fire `input`, which is exactly what the
+  // component's own onInput consumes. When AgentSession grows a draft
+  // input, this becomes a one-line change.
+
+  // agentDraftFor builds the block: the path (with the line range when
+  // it is a selection) above a fence tagged with the tab's language.
+  const agentDraftFor = (t: Tab): string => {
+    const fence = currentLang() === 'plain' ? '' : currentLang();
+    let body = tabContent(t);
+    let where = t.path || t.displayName;
+    if (t.mode !== 'wysiwyg' && editorView && t.id === activeID()) {
+      const sel = editorView.state.selection.main;
+      if (!sel.empty) {
+        body = editorView.state.sliceDoc(sel.from, sel.to);
+        const from = editorView.state.doc.lineAt(sel.from).number;
+        const to = editorView.state.doc.lineAt(sel.to).number;
+        where += from === to ? `:${from}` : `:${from}-${to}`;
+      }
+    }
+    return `${where}\n\n\`\`\`${fence}\n${body.replace(/\n*$/, '')}\n\`\`\`\n`;
+  };
+
+  // insertAgentDraft finds the composer inside an agent tab's host and
+  // appends to whatever is already typed there. Returns false while the
+  // pane has not painted or the session has not started (the composer is
+  // disabled until it has), which is why the caller retries.
+  const insertAgentDraft = (tabID: string, text: string): boolean => {
+    const host = props.host.querySelector(`[data-testid="edit-term-host-${tabID}"]`);
+    const ta = host?.querySelector('textarea[data-testid="agent-composer"]') as HTMLTextAreaElement | null;
+    if (!ta || ta.disabled) return false;
+    const cur = ta.value;
+    const insert = cur.trim() ? `\n\n${text}` : text;
+    ta.focus();
+    ta.setSelectionRange(cur.length, cur.length);
+    // execCommand, not `ta.value = …`: the composer is a CONTROLLED
+    // input bound to the component's own draft signal, so a value written
+    // behind its back is on screen only until the next render, and the
+    // next roster push is one. execCommand produces the browser's own
+    // input event, which the component's onInput consumes like any
+    // keystroke. Deprecated, and still the only way to put text into a
+    // controlled input from outside it.
+    document.execCommand('insertText', false, insert);
+    // The answer is whether the text is actually THERE: a disabled or
+    // not-yet-wired composer takes the command and does nothing, and the
+    // caller must keep trying rather than report a send that never was.
+    return ta.value !== cur;
+  };
+
+  // sendToAgent opens the pane (starting a session if there is none) and
+  // lands the draft once the composer exists.
+  const sendToAgent = () => {
+    const t = activeTab();
+    if (!t || t.blocked) {
+      setStatusError('nothing to send — this tab has no buffer');
+      return;
+    }
+    const text = agentDraftFor(t);
+    let target = termTabs().find((x) => x.id === activeTermID() && x.kind === 'agent')
+      ?? termTabs().find((x) => x.kind === 'agent');
+    if (!target) {
+      const adapter = agentAdapters()[0];
+      if (!adapter) {
+        setStatusError('no agent installed to send this to');
+        return;
+      }
+      openAgentTab(adapter.id);
+      target = termTabs().find((x) => x.kind === 'agent');
+    }
+    if (!target) return;
+    setTermOpen(true);
+    setActiveTermID(target.id);
+    const id = target.id;
+    // A session that was just started has not rendered — or enabled —
+    // its composer yet, and starting one is a process spawn. Keep trying
+    // for half a minute rather than dropping the text on the floor.
+    let tries = 0;
+    const land = () => {
+      if (insertAgentDraft(id, text)) {
+        setStatusError(null);
+        return;
+      }
+      if (++tries > 300) {
+        setStatusError('the agent session did not start — nothing was sent');
+        return;
+      }
+      window.setTimeout(land, 100);
+    };
+    land();
   };
 
   // Adapters agentd found, for the + menu. Empty until the roster push
@@ -2115,6 +2688,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const selectionListener = EditorView.updateListener.of((u) => {
     if (u.selectionSet && !u.docChanged) persist();
   });
+  // The status bar's Ln/Col. Separate from selectionListener because it
+  // also has to follow document changes (typing moves the caret without
+  // setting the selection).
+  const cursorListener = EditorView.updateListener.of((u) => {
+    if (!u.selectionSet && !u.docChanged) return;
+    const head = u.state.selection.main.head;
+    const line = u.state.doc.lineAt(head);
+    setCursorPos({ line: line.number, col: head - line.from + 1 });
+  });
 
   const baseExtensions = () => [
     // Display
@@ -2150,9 +2732,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // Syntax highlighting — dark/light swapped by pack appearance.
     highlightCompartment.of(highlightFor(washAppearance())),
     langCompartment.of([]),
+    indentCompartment.of(indentExtensions()),
     dirtyListener,
     searchListener,
     selectionListener,
+    cursorListener,
     EditorView.domEventHandlers({
       // Scroll fires fast while wheeling — persist() is debounced
       // 250ms so the wire stays quiet. We read scroll out of the
@@ -2164,7 +2748,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       ...closeBracketsKeymap,
       ...defaultKeymap,
       ...historyKeymap,
-      ...searchKeymap,
+      // CM binds Mod-g to find-next; every other editor binds it to
+      // go-to-line, and F3 / Shift+F3 (still in searchKeymap) already
+      // cover find-next. CM's own Mod-Alt-g stays bound as well.
+      ...searchKeymap.filter((b) => b.key !== 'Mod-g'),
+      { key: 'Mod-g', run: gotoLine, scope: 'editor search-panel', preventDefault: true },
       ...foldKeymap,
       ...completionKeymap,
       indentWithTab,
@@ -2172,7 +2760,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
     EditorView.theme({
       '&': { height: '100%', background: tokens.bgCanvas, color: tokens.fg },
-      '.cm-scroller': { font: `${tokens.fontSizeBase} ${tokens.fontMono}` },
+      // Size through a custom property, not a literal: zooming sets the
+      // property on the mount element, where an inline style beats every
+      // stylesheet rule. A second CM theme would not — StyleModule
+      // PREPENDS new modules, so a compartment reconfigured later ends
+      // up EARLIER in the sheet and loses the tie to this shorthand.
+      '.cm-scroller': { font: `var(--wash-edit-font-size, ${tokens.fontSizeBase}) ${tokens.fontMono}` },
       '.cm-content': { padding: '8px 0', caretColor: tokens.fg },
       '.cm-cursor': { borderLeftColor: tokens.fg },
       '.cm-activeLine': { backgroundColor: `color-mix(in srgb, ${tokens.fg} 4%, transparent)` },
@@ -2463,16 +3056,40 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         }
       }
 
+      // Tab navigation. Ctrl+Tab / Ctrl+Shift+Tab are what people reach
+      // for, but Chromium reserves them in a normal browser tab, so the
+      // same Alt alternates the term app binds are here too: Alt+PageDown /
+      // Alt+PageUp cycle, Alt+1…9 jump. Matched on ev.code so a non-QWERTY
+      // layout gets the same physical keys.
+      if (ev.altKey && !cmd && !ev.shiftKey) {
+        const code = ev.code;
+        if (code === 'PageDown') { ev.preventDefault(); cycleTabs(1); return; }
+        if (code === 'PageUp') { ev.preventDefault(); cycleTabs(-1); return; }
+        const digit = /^Digit([1-9])$/.exec(code);
+        if (digit) { ev.preventDefault(); jumpToTab(Number(digit[1])); return; }
+      }
+      if (cmd && ev.key === 'Tab' && !ev.altKey) {
+        ev.preventDefault();
+        cycleTabs(ev.shiftKey ? -1 : 1);
+        return;
+      }
+
       if (!cmd) return;
       // The file-level shortcuts act on the tab BEHIND a dialog, so they
       // are off while the picker, a confirm prompt or the sidebar's
       // inline rename owns the keyboard: Ctrl+W typed into the picker's
       // path input used to close the tab under it. Ctrl+` and the rest
       // are left alone — they do not touch the tab.
-      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null;
+      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null || revertPrompt() !== null || qoOpen();
       const fileKey = ev.key === 's' || ev.key === 'S' || ev.key === 'o' || ev.key === 'O'
         || ev.key === 'n' || ev.key === 'N' || ev.key === 'w' || ev.key === 'W';
       if (dialogUp && fileKey) return;
+      // Ctrl+Alt+S: save every dirty tab.
+      if ((ev.key === 's' || ev.key === 'S') && ev.altKey) {
+        ev.preventDefault();
+        void saveAll();
+        return;
+      }
       // Ctrl+S: save active tab.
       if ((ev.key === 's' || ev.key === 'S') && !ev.shiftKey) {
         ev.preventDefault();
@@ -2516,15 +3133,30 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         openNewTerm();
         return;
       }
-      // Ctrl+F / Ctrl+H: find (and replace) in a WYSIWYG tab. Source
-      // tabs are CM's territory — its searchKeymap handles Mod-f when
-      // the editor is focused, so we deliberately fall through here.
-      if ((ev.key === 'f' || ev.key === 'F' || ev.key === 'h' || ev.key === 'H') && !ev.shiftKey) {
+      // Ctrl+F: find. In a WYSIWYG tab that is the TipTap bar. On a
+      // source tab CM's searchKeymap already owns Mod-f while the
+      // editor is focused, so this only has to cover the case where it
+      // is not — clicking the tree and pressing Ctrl+F used to do
+      // nothing at all.
+      if ((ev.key === 'f' || ev.key === 'F') && !ev.shiftKey && !ev.altKey) {
         if (activeTab()?.mode === 'wysiwyg') {
           ev.preventDefault();
           setWysFindOpen(true);
           return;
         }
+        if (!dialogUp && !isTypingInEditor() && activeTab()) {
+          ev.preventDefault();
+          cmdFind();
+        }
+        return;
+      }
+      // Ctrl+H: find and replace. Unlike Ctrl+F this is never CM's —
+      // Chromium claims it for History — so it is always intercepted
+      // here, including from inside the editor.
+      if ((ev.key === 'h' || ev.key === 'H') && !ev.shiftKey && !ev.altKey) {
+        ev.preventDefault();
+        if (!dialogUp && activeTab()) cmdReplace();
+        return;
       }
       // Ctrl+Shift+P: toggle the active tab between WYSIWYG and
       // source view. No-op for non-markdown tabs (toggleWysiwyg
@@ -2534,7 +3166,47 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         toggleWysiwyg();
         return;
       }
+      // Ctrl+Shift+Enter: send the selection (or the buffer) to the
+      // agent pane as a draft.
+      if (ev.key === 'Enter' && ev.shiftKey) {
+        ev.preventDefault();
+        sendToAgent();
+        return;
+      }
+      // Ctrl+= / Ctrl+- / Ctrl+0: font zoom. Chromium's own page zoom is
+      // not the same thing (it scales the whole desktop, chrome and all)
+      // and is not reachable from a keydown anyway.
+      if (ev.key === '=' || ev.key === '+') { ev.preventDefault(); zoomFont(1); return; }
+      if (ev.key === '-' || ev.key === '_') { ev.preventDefault(); zoomFont(-1); return; }
+      if (ev.key === '0') { ev.preventDefault(); setFontSize(DEFAULT_FONT_PX); return; }
+      // Ctrl+G: go to line. The editor's own keymap covers the focused
+      // editor; this is the same command reached from the sidebar or the
+      // tab strip, where CM never sees the key.
+      if ((ev.key === 'g' || ev.key === 'G') && !ev.shiftKey && !ev.altKey) {
+        ev.preventDefault();
+        if (!dialogUp && !isTypingInEditor()) cmdGotoLine();
+        return;
+      }
+      // Ctrl+P: quick open (Chromium's Print otherwise).
+      if ((ev.key === 'p' || ev.key === 'P') && !ev.shiftKey && !ev.altKey) {
+        ev.preventDefault();
+        if (!dialogUp) openQuickOpen();
+        return;
+      }
     };
+    // Ctrl+wheel zooms, the other half of the same gesture. Non-passive
+    // because the default is the browser's page zoom, which has to be
+    // suppressed; bound on the editor pane so wheeling over the sidebar
+    // or the terminal is left alone.
+    const onWheel = (ev: WheelEvent) => {
+      if (!ev.ctrlKey && !ev.metaKey) return;
+      ev.preventDefault();
+      if (ev.deltaY === 0) return;
+      zoomFont(ev.deltaY < 0 ? 1 : -1);
+    };
+    editPaneEl.addEventListener('wheel', onWheel, { passive: false });
+    onCleanup(() => editPaneEl.removeEventListener('wheel', onWheel));
+
     props.host.addEventListener('keydown', onKey);
     if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
     editPaneEl.addEventListener('dragover', onPaneDragOver, true);
@@ -2543,6 +3215,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // Boot with a list of "/" — the BE's Confine downshifts to
     // the sandbox root automatically when one is configured.
     void loadDir('/');
+    void loadPrefs();
     onCleanup(() => {
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
@@ -2618,13 +3291,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (seededID === null) return;
       seededID = null;
       setLangOverride(null);
+      setWordWrap(false);
       // No active tab — leave the view empty.
       editorView.setState(EditorState.create({ doc: '', extensions: baseExtensions() }));
       return;
     }
     if (seededID === id) return;
     seededID = id;
-    setLangOverride(null);
+    // Adopt this tab's own view settings rather than resetting them.
+    setLangOverride(t.lang ?? null);
+    setWordWrap(!!t.wrap);
     if (t.state) {
       editorView.setState(t.state);
     } else {
@@ -2659,6 +3335,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     } else {
       editorView.focus();
     }
+    syncCursor();
   });
 
   // Reactively reconfigure the language compartment whenever the
@@ -2669,6 +3346,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     wordWrap();
     if (!editorView) return;
     editorView.dispatch({ effects: langCompartment.reconfigure(langExtensions()) });
+  });
+
+  // Same for indentation: it changes when the tab changes (each file
+  // carries its own), when the indent picker is used, and when another
+  // window edits the prefs default under a tab that has no detection of
+  // its own to go on.
+  createEffect(() => {
+    const ind = activeIndent();
+    if (!editorView) return;
+    editorView.dispatch({
+      effects: indentCompartment.reconfigure([
+        indentUnit.of(indentString(ind)),
+        EditorState.tabSize.of(ind.width),
+      ]),
+    });
   });
 
   // ---- render ----
@@ -2687,11 +3379,35 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuItem label="New" trailing={<kbd style={kbdStyle}>Ctrl+N</kbd>} onClick={run(newUntitled)} data-testid="edit-menu-new" />
             <MenuItem label="Open…" trailing={<kbd style={kbdStyle}>Ctrl+O</kbd>} onClick={run(() => setPicker({ mode: 'open' }))} data-testid="edit-menu-open" />
             <MenuItem label="Open Folder…" onClick={run(() => setPicker({ mode: 'directory' }))} data-testid="edit-menu-open-folder" />
+            <MenuItem label="Quick Open…" trailing={<kbd style={kbdStyle}>Ctrl+P</kbd>} onClick={run(openQuickOpen)} data-testid="edit-menu-quick-open" />
+            <MenuItem label="Open Recent" trailing={<span style={langHintStyle}>▸</span>} disabled={recent().length === 0} onClick={() => setOpenMenu('recent')} data-testid="edit-menu-open-recent" />
             <MenuSeparator />
             <MenuItem label="Save" trailing={<kbd style={kbdStyle}>Ctrl+S</kbd>} disabled={!activeTab()} onClick={run(() => void saveActive())} data-testid="edit-menu-save" />
             <MenuItem label="Save As…" trailing={<kbd style={kbdStyle}>Ctrl+Shift+S</kbd>} disabled={!activeTab()} onClick={run(saveAsActive)} data-testid="edit-menu-save-as" />
+            <MenuItem label="Save All" trailing={<kbd style={kbdStyle}>Ctrl+Alt+S</kbd>} disabled={dirtyTabs().length === 0} onClick={run(() => void saveAll())} data-testid="edit-menu-save-all" />
+            <MenuItem label="Revert" disabled={!activeTab()?.path || !!activeTab()?.blocked || !!activeTab()?.diff} onClick={run(revertActive)} data-testid="edit-menu-revert" />
             <MenuSeparator />
             <MenuItem label="Close Tab" trailing={<kbd style={kbdStyle}>Ctrl+W</kbd>} disabled={!activeTab()} onClick={run(() => requestCloseTab(activeID()))} data-testid="edit-menu-close-tab" />
+            <MenuItem label="Close Others" disabled={tabs().length < 2} onClick={run(closeOtherTabs)} data-testid="edit-menu-close-others" />
+            <MenuItem label="Close All" disabled={tabs().length === 0} onClick={run(closeAllTabs)} data-testid="edit-menu-close-all" />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'recent'}>
+          {/* Open Recent: the shared list, newest first, in place of the
+              File menu (Menu has no submenus). */}
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-recent">
+            <For each={recent().slice(0, 12)}>
+              {(p) => (
+                <MenuItem
+                  label={baseName(p) || p}
+                  trailing={<span style={langHintStyle}>{qoRel(parentPath(p)) || '/'}</span>}
+                  onClick={run(() => void openInTab(p))}
+                  data-testid={`edit-menu-recent-${p}`}
+                />
+              )}
+            </For>
+            <MenuSeparator />
+            <MenuItem label="More…" trailing={<kbd style={kbdStyle}>Ctrl+P</kbd>} onClick={run(openQuickOpen)} data-testid="edit-menu-recent-more" />
           </Menu>
         </Show>
         <Show when={openMenu() === 'edit'}>
@@ -2704,7 +3420,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuItem label="Paste" trailing={<kbd style={kbdStyle}>Ctrl+V</kbd>} onClick={run(cmdPaste)} data-testid="edit-menu-paste" />
             <MenuSeparator />
             <MenuItem label="Find" trailing={<kbd style={kbdStyle}>Ctrl+F</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-find" />
-            <MenuItem label="Find & Replace" trailing={<kbd style={kbdStyle}>Ctrl+H</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-replace" />
+            <MenuItem label="Find & Replace" trailing={<kbd style={kbdStyle}>Ctrl+H</kbd>} onClick={run(cmdReplace)} data-testid="edit-menu-replace" />
+            <MenuSeparator />
+            <MenuItem label="Go to Line…" trailing={<kbd style={kbdStyle}>Ctrl+G</kbd>} disabled={!activeTab()} onClick={run(cmdGotoLine)} data-testid="edit-menu-goto-line" />
           </Menu>
         </Show>
         <Show when={openMenu() === 'terminal'}>
@@ -2743,6 +3461,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             </Show>
             <MenuSeparator />
             <MenuItem
+              label="Send to Agent"
+              trailing={<kbd style={kbdStyle}>Ctrl+Shift+Enter</kbd>}
+              disabled={!activeTab() || !!activeTab()!.blocked}
+              onClick={run(sendToAgent)}
+              data-testid="edit-menu-send-agent"
+            />
+            <MenuSeparator />
+            <MenuItem
               label={termOpen() ? 'Hide Panel' : 'Show Panel'}
               trailing={<kbd style={kbdStyle}>Ctrl+`</kbd>}
               onClick={run(toggleTermPanel)}
@@ -2765,6 +3491,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               disabled={!activeTab() || !isMarkdownPath(activeTab()!.path)}
               onClick={run(() => { if (activeTab()?.mode !== 'source') toggleWysiwyg(); })}
               data-testid="edit-menu-source"
+            />
+            <MenuSeparator />
+            {/* On-save cleanups. Desktop-wide (they live in prefs, not
+                in the window's state) and off by default: silently
+                rewriting somebody's file on save is only welcome when
+                they asked for it. */}
+            <MenuItem
+              label="Trim Trailing Whitespace on Save"
+              trailing={prefs().trim_trailing ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+              onClick={run(() => void setPref({ trim_trailing: !prefs().trim_trailing }))}
+              data-testid="edit-menu-trim-trailing"
+            />
+            <MenuItem
+              label="Ensure Final Newline on Save"
+              trailing={prefs().final_newline ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+              onClick={run(() => void setPref({ final_newline: !prefs().final_newline }))}
+              data-testid="edit-menu-final-newline"
             />
           </Menu>
         </Show>
@@ -2803,6 +3546,59 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               trailing={wordWrap() ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
               onClick={run(toggleWrap)}
               data-testid="edit-menu-wrap"
+            />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'indent'}>
+          {/* The indent picker, off the status bar. Choosing a width
+              retargets THIS tab; the default is a separate act, because
+              one Go file is not a reason to change every new buffer. */}
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-indent">
+            <MenuItem
+              label="Tab"
+              trailing={activeIndent().unit === 'tabs' ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+              onClick={run(() => setTabIndent({ unit: 'tabs', width: activeIndent().width }))}
+              data-testid="edit-menu-indent-tab"
+            />
+            <MenuSeparator />
+            <For each={[2, 3, 4, 8]}>
+              {(w) => (
+                <MenuItem
+                  label={`Spaces: ${w}`}
+                  trailing={activeIndent().unit === 'spaces' && activeIndent().width === w
+                    ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+                  onClick={run(() => setTabIndent({ unit: 'spaces', width: w }))}
+                  data-testid={`edit-menu-indent-spaces-${w}`}
+                />
+              )}
+            </For>
+            <MenuSeparator />
+            <MenuItem
+              label="Detect from Content"
+              disabled={!activeTab()}
+              onClick={run(() => { const t = activeTab(); if (t) setTabIndent(detectedIndent(tabContent(t))); })}
+              data-testid="edit-menu-indent-detect"
+            />
+            <MenuItem
+              label="Use as the Default"
+              onClick={run(() => void setPref({ indent_unit: activeIndent().unit, indent_width: activeIndent().width }))}
+              data-testid="edit-menu-indent-default"
+            />
+          </Menu>
+        </Show>
+        <Show when={openMenu() === 'eol'}>
+          <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-eol">
+            <MenuItem
+              label="LF"
+              trailing={activeTab()?.eol !== 'crlf' ? <span style={menuCheckStyle}><Check size={12} /></span> : <span style={langHintStyle}>Unix</span>}
+              onClick={run(() => setEol('lf'))}
+              data-testid="edit-menu-eol-lf"
+            />
+            <MenuItem
+              label="CRLF"
+              trailing={activeTab()?.eol === 'crlf' ? <span style={menuCheckStyle}><Check size={12} /></span> : <span style={langHintStyle}>Windows</span>}
+              onClick={run(() => setEol('crlf'))}
+              data-testid="edit-menu-eol-crlf"
             />
           </Menu>
         </Show>
@@ -2904,11 +3700,43 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                     data-testid={`edit-tab-${t.id}`}
                     data-dirty={isDirty() ? 'true' : undefined}
                     active={isActive()}
-                    onClick={() => { captureActiveState(); setActiveID(t.id); }}
+                    // The strip and the keyboard share one switch path.
+                    onClick={() => activateTab(t.id)}
                     onClose={() => requestCloseTab(t.id)}
                     closeTestId={`edit-tab-close-${t.id}`}
                     closeTitle="Close (Ctrl+W)"
                     closeGlyph={<Show when={isDirty()} fallback="×">●</Show>}
+                    // Middle-click closes, through the same dirty guard as
+                    // the × and Ctrl+W. mousedown is cancelled so the
+                    // browser's autoscroll does not start on the way.
+                    onMouseDown={(ev) => { if (ev.button === 1) ev.preventDefault(); }}
+                    onAuxClick={(ev) => { if (ev.button === 1) { ev.preventDefault(); requestCloseTab(t.id); } }}
+                    // Reorder by dragging along the strip. <Tab> spreads the
+                    // rest of its props onto its button, and carries the
+                    // `dragging` dim itself.
+                    draggable={true}
+                    dragging={dragTabID() === t.id}
+                    onDragStart={(ev) => {
+                      if (!ev.dataTransfer) return;
+                      ev.dataTransfer.effectAllowed = 'move';
+                      ev.dataTransfer.setData(TAB_DRAG_MIME, t.id);
+                      setDragTabID(t.id);
+                    }}
+                    onDragEnd={() => setDragTabID(null)}
+                    onDragOver={(ev) => {
+                      if (!ev.dataTransfer?.types.includes(TAB_DRAG_MIME)) return;
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      ev.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(ev) => {
+                      const src = ev.dataTransfer?.getData(TAB_DRAG_MIME) || dragTabID();
+                      if (!src) return;
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      setDragTabID(null);
+                      moveTab(src, t.id);
+                    }}
                   >
                     {t.displayName}
                   </Tab>
@@ -2955,6 +3783,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 position: 'absolute',
                 inset: 0,
                 display: activeTab()?.mode === 'wysiwyg' ? 'none' : 'block',
+                // What Ctrl+± / Ctrl+wheel move; see the .cm-scroller
+                // rule in baseExtensions.
+                '--wash-edit-font-size': `${fontSize()}px`,
               }}
             />
             <For each={wysiwygTabIDs()}>
@@ -3145,11 +3976,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <Show when={dirtyIDs().has(activeTab()!.id)}>
             <span style={{ 'margin-left': '8px', color: tokens.fgDim }}>· modified</span>
           </Show>
-          <Show when={activeTab()!.eol === 'crlf'}>
-            <span data-testid="edit-status-eol" style={{ 'margin-left': '8px', color: tokens.fgDim }}>· CRLF</span>
-          </Show>
           <Show when={activeTab()!.missing}>
             <span data-testid="edit-status-missing" style={{ 'margin-left': '8px', color: tokens.fgDanger }}>· deleted on disk — Ctrl+S saves as…</span>
+          </Show>
+          <Show when={activeTab()!.readOnlyFile && !activeTab()!.blocked}>
+            <span
+              data-testid="edit-status-lock"
+              title="Read-only file — Ctrl+S offers Save As"
+              style={{ 'margin-left': '8px', display: 'inline-flex', 'align-items': 'center', gap: '3px', color: tokens.fgDim }}
+            >
+              <Lock size={11} /> read-only
+            </span>
           </Show>
           <Show when={activeTab()!.blocked}>
             <span data-testid="edit-status-readonly" style={{ 'margin-left': '8px', color: tokens.fgDim }}>· read-only: {readOnlyText(activeTab()!)}</span>
@@ -3158,7 +3995,57 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <Show when={statusError()}>
           <span data-testid="edit-status-error" style={{ 'margin-left': '8px', color: tokens.fgDanger }}>· {statusError()}</span>
         </Show>
+        {/* The right-hand cells: everything about the buffer you would
+            otherwise have to go looking in a menu for, and each of them
+            the way to change it. */}
+        <div style={statusCellsStyle}>
+          <Show when={activeTab() && !activeTab()!.blocked && activeTab()!.mode === 'source'}>
+            <StatusCell
+              testid="edit-status-cursor"
+              title="Go to line (Ctrl+G)"
+              label={`Ln ${cursorPos().line}, Col ${cursorPos().col}`}
+              onClick={cmdGotoLine}
+            />
+            <StatusCell
+              testid="edit-status-indent"
+              title="Select indentation"
+              label={indentLabel(activeIndent())}
+              onClick={(ev) => openStatusMenu('indent', ev)}
+            />
+            <StatusCell
+              testid="edit-status-eol"
+              title="Select line ending"
+              label={activeTab()!.eol === 'crlf' ? 'CRLF' : 'LF'}
+              onClick={(ev) => openStatusMenu('eol', ev)}
+            />
+          </Show>
+          <Show when={activeTab()}>
+            <StatusCell
+              testid="edit-status-lang"
+              title="Select language"
+              label={LANGS_BY_KEY[currentLang()]?.label ?? 'Plain'}
+              onClick={(ev) => openStatusMenu('syntax', ev)}
+            />
+          </Show>
+        </div>
       </StatusBar>
+
+      <Show when={qoOpen()}>
+        <QuickOpen
+          query={qoQuery()}
+          onQuery={(v) => { setQoQuery(v); setQoSelected(0); }}
+          rows={qoResults()}
+          selected={qoSelected()}
+          onHover={setQoSelected}
+          onPick={(i) => qoPick(qoResults()[i])}
+          onKey={onQuickOpenKey}
+          onClose={closeQuickOpen}
+          loading={qoFiles() === null && qoQuery().trim() !== ''}
+          status={qoFiles() === null
+            ? (qoQuery().trim() ? 'listing files…' : 'recent files — type to search the tree')
+            : `${qoFiles()!.length}${qoTruncated() ? '+' : ''} files under ${qoRel(root()) || root()}`}
+        />
+      </Show>
 
       <FilePicker
         open={picker() !== null}
@@ -3168,7 +4055,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         defaultName={picker()?.mode === 'save' ? (picker() as { suggestedName: string }).suggestedName : undefined}
         start={picker()?.mode === 'save' ? (picker() as { start?: string }).start : undefined}
         onConfirm={(p) => void pickerConfirm(p)}
-        onCancel={() => setPicker(null)}
+        onCancel={() => { setPicker(null); saveAllQueue = []; }}
         data-testid="edit-picker"
       />
 
@@ -3203,7 +4090,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       <Show when={pendingClose()}>
         {(p) => (
           <ConfirmDialog
-            title={p().scope === 'window' ? 'Close the editor?' : 'Close this tab?'}
+            title={p().scope === 'window' ? 'Close the editor?' : p().scope === 'tabs' ? (p() as { title: string }).title : 'Close this tab?'}
             confirmLabel="Save"
             altLabel="Don't save"
             altDanger
@@ -3219,13 +4106,34 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
               Unsaved changes in:
               <ul style={{ margin: '6px 0 0', padding: '0 0 0 18px', color: tokens.fg }}>
-                <For each={p().scope === 'window' ? dirtyTabs() : tabs().filter((t) => t.id === (p() as { tabID: string }).tabID)}>
+                <For each={pendingCloseTargets()}>
                   {(t) => <li data-testid="edit-close-dialog-item">{t.displayName}</li>}
                 </For>
               </ul>
             </div>
           </ConfirmDialog>
         )}
+      </Show>
+
+      {/* Revert with unsaved edits: the one place the editor throws work
+          away on purpose, so it asks. */}
+      <Show when={revertPrompt()}>
+        <ConfirmDialog
+          title="Revert to the saved version?"
+          confirmLabel="Revert"
+          cancelLabel="Cancel"
+          danger
+          onConfirm={confirmRevert}
+          onCancel={() => setRevertPrompt(null)}
+          data-testid="edit-revert-dialog"
+          confirmTestid="edit-revert-confirm"
+          cancelTestid="edit-revert-cancel"
+        >
+          <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
+            <strong style={{ color: tokens.fg }}>{revertPrompt()!.displayName}</strong>{' '}
+            has unsaved changes. Reverting reloads the file from disk and discards them.
+          </div>
+        </ConfirmDialog>
       </Show>
 
       {/* right-click context menu — fires on row right-click. */}
@@ -3240,6 +4148,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <MenuItem label="Cut" onClick={() => { setTextCtxMenu(null); cmdCut(); }} data-testid="edit-text-ctx-cut" />
           <MenuItem label="Copy" onClick={() => { setTextCtxMenu(null); cmdCopy(); }} data-testid="edit-text-ctx-copy" />
           <MenuItem label="Paste" onClick={() => { setTextCtxMenu(null); cmdPaste(); }} data-testid="edit-text-ctx-paste" />
+          <MenuSeparator />
+          <MenuItem
+            label="Send to Agent"
+            trailing={<kbd style={kbdStyle}>Ctrl+Shift+Enter</kbd>}
+            onClick={() => { setTextCtxMenu(null); sendToAgent(); }}
+            data-testid="edit-text-ctx-send-agent"
+          />
         </Menu>
       </Show>
 
@@ -3549,6 +4464,134 @@ const WysFindBar: Component<{
   );
 };
 
+// QuickOpen is the Ctrl+P palette: one input, a ranked list under it.
+// Presentation only — the query, ranking and the open live in App, so
+// the keyboard contract (onKey) and the rows are the whole interface.
+const QuickOpen: Component<{
+  query: string;
+  onQuery: (v: string) => void;
+  rows: { abs: string; label: string }[];
+  selected: number;
+  onHover: (i: number) => void;
+  onPick: (i: number) => void;
+  onKey: (ev: KeyboardEvent) => void;
+  onClose: () => void;
+  loading: boolean;
+  status: string;
+}> = (props) => {
+  let input!: HTMLInputElement;
+  onMount(() => input.focus());
+  return (
+    <Overlay onDismiss={props.onClose} align="top" data-testid="edit-quick-open" innerStyle={{ padding: 0, 'min-width': '480px', 'max-width': '640px', width: '60%' }}>
+      <Input
+        ref={input}
+        data-testid="edit-qo-input"
+        placeholder="Open file by name…"
+        value={props.query}
+        onInput={(ev) => props.onQuery(ev.currentTarget.value)}
+        onKeyDown={props.onKey}
+        style={{ margin: '10px 12px 6px', padding: '4px 8px', height: '28px', 'box-sizing': 'border-box', font: tokens.type.monoMd }}
+      />
+      <div data-testid="edit-qo-list" style={{ 'max-height': '40vh', overflow: 'auto', padding: '0 0 6px' }}>
+        <For each={props.rows}>
+          {(row, i) => (
+            <QuickOpenRow
+              label={row.label}
+              selected={props.selected === i()}
+              onHover={() => props.onHover(i())}
+              onPick={() => props.onPick(i())}
+            />
+          )}
+        </For>
+        <Show when={props.rows.length === 0}>
+          <div data-testid="edit-qo-empty" style={{ padding: '6px 16px', color: tokens.fgDim, font: tokens.type.textMd }}>
+            {props.loading ? 'listing files…' : props.query ? 'no matches' : 'no recent files yet'}
+          </div>
+        </Show>
+      </div>
+      <div data-testid="edit-qo-status" style={{ padding: '4px 12px 6px', 'border-top': `1px solid ${tokens.borderMenu}`, color: tokens.fgDim, font: tokens.type.textSm }}>
+        {props.status}
+      </div>
+    </Overlay>
+  );
+};
+
+const QuickOpenRow: Component<{ label: string; selected: boolean; onHover: () => void; onPick: () => void }> = (props) => {
+  let el!: HTMLButtonElement;
+  createEffect(() => {
+    if (props.selected) el.scrollIntoView({ block: 'nearest' });
+  });
+  const dir = () => { const i = props.label.lastIndexOf('/'); return i < 0 ? '' : props.label.slice(0, i); };
+  const base = () => { const i = props.label.lastIndexOf('/'); return i < 0 ? props.label : props.label.slice(i + 1); };
+  return (
+    <button
+      type="button"
+      ref={el!}
+      data-wash-hit="subtle"
+      data-testid={`edit-qo-item-${props.label}`}
+      data-selected={props.selected ? 'true' : undefined}
+      onMouseEnter={props.onHover}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={props.onPick}
+      style={{
+        display: 'flex',
+        'align-items': 'baseline',
+        gap: '8px',
+        width: '100%',
+        padding: '4px 16px',
+        background: props.selected ? tokens.bgRowSelected : 'transparent',
+        color: tokens.fg,
+        border: 'none',
+        'text-align': 'left',
+        cursor: 'pointer',
+        font: tokens.type.textMd,
+      }}
+    >
+      <span style={{ 'white-space': 'nowrap' }}>{base()}</span>
+      <span style={{ color: tokens.fgDim, font: tokens.type.textSm, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{dir()}</span>
+    </button>
+  );
+};
+
+// StatusCell is one clickable cell on the right of the status bar:
+// the cursor position, the indentation, the line ending, the language.
+// Reads as the status text it replaces (no button chrome at rest) and
+// takes its hover/press from the interaction layer.
+const StatusCell: Component<{
+  label: string;
+  title: string;
+  testid: string;
+  onClick: (ev: MouseEvent) => void;
+}> = (props) => (
+  <button
+    type="button"
+    data-wash-hit
+    data-testid={props.testid}
+    title={props.title}
+    onClick={(ev) => props.onClick(ev)}
+    style={{
+      background: 'transparent',
+      border: 'none',
+      color: tokens.fg,
+      font: 'inherit',
+      padding: '0 6px',
+      height: '18px',
+      'border-radius': `${tokens.radiusSm}`,
+      'white-space': 'nowrap',
+    }}
+  >
+    {props.label}
+  </button>
+);
+
+const statusCellsStyle: JSX.CSSProperties = {
+  'margin-left': 'auto',
+  display: 'flex',
+  'align-items': 'center',
+  gap: '2px',
+  'flex-shrink': 0,
+};
+
 // EntryIcon picks the lucide glyph for a given entry type. Mirrors
 // the helper of the same name in wash-fm so the sidebar tree looks
 // identical to fm's: folder, file, symlink, or fallback file.
@@ -3631,6 +4674,10 @@ const LANGS: LangDef[] = [
 
 // Index for O(1) lookup by key in langForKey + the menu.
 const LANGS_BY_KEY: Record<string, LangDef> = Object.fromEntries(LANGS.map((l) => [l.key, l]));
+
+// TAB_DRAG_MIME marks a drag that reorders the strip. Distinct from the
+// fs-client DRAG_MIME on purpose: a tab is not a file to move or open.
+const TAB_DRAG_MIME = 'application/x-wash-edit-tab';
 
 type MenuID = 'file' | 'edit' | 'view' | 'syntax' | 'terminal';
 
