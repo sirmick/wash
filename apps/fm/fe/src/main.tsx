@@ -1751,6 +1751,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // bar reflects the cut/copy without us tracking it FE-locally.
   const putFilesOnClipboard = (op: 'copy' | 'cut', paths: string[]) => {
     if (paths.length === 0) return;
+    // Mirror locally first. The echo carries the same state, and a
+    // Ctrl+X immediately followed by Ctrl+V used to read the mirror
+    // before the round trip landed and paste nothing.
+    setFilesClipboard(parseClipboardState(op, paths));
     send({ kind: 'clipboard_files_set', op, paths });
   };
 
