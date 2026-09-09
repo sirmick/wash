@@ -73,7 +73,13 @@ const APPS: AppBundle[] = [
   // file-client, the ~360-extension lucide icon map (~20 new glyphs), the
   // uid-aware display-hint colours/badges, and the cross-origin DnD guard.
   // ~14 KB raw (only ~28 KB gzipped on the wire); headroom still brakes bloat.
-  { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 120_000 },
+  //
+  // Then the everyday workflows the 2026-09-08 sweep found missing: the
+  // filter bar and subtree search, the Open-with chooser, Open terminal
+  // here, Duplicate, archive extract and compress, and the keyboard row
+  // navigation kernel. ~13 KB raw for eight verbs a file manager is
+  // expected to have; 145 K keeps roughly the same brake on the next one.
+  { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 145_000 },
   // vscode is the install/launch state machine + IngressFrame; the
   // workbench is code-server (external), so this stays small. (The old
   // apps/vscode/fe bundle was removed — its FE folded into the workbench
