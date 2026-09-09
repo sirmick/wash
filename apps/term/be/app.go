@@ -477,6 +477,11 @@ type execTabReq struct {
 	Cwd  string   `json:"cwd,omitempty"`
 }
 
+// bellReq is a BEL from one tab's program.
+type bellReq struct {
+	ChannelID uint64 `json:"channel_id"`
+}
+
 // pathProbeReq asks which of Paths exist, resolved against the tab's cwd.
 // The FE sends the tokens exactly as they appear in the output; Ok comes
 // back holding the same strings, so the FE can key its cache on them.
@@ -550,6 +555,14 @@ func registerHandlers(b *sdk.Bus) {
 		// Deduped FE-side (one line per change, not per prompt).
 		log.Printf("wash-term tab cwd ch=%d cwd=%q", req.ChannelID, req.Cwd)
 		return nil
+	})
+	// bell: a program in this tab rang BEL. The window asks for the human;
+	// the router shows that only while the window is not focused, and
+	// clears it the moment it is (docs/AGENT_UX.md N6) — so this is
+	// unconditional here on purpose, rather than the FE guessing at focus.
+	sdk.HandleVoid(b, "bell", func(c *sdk.Conn, _ string, req bellReq) error {
+		log.Printf("wash-term bell ch=%d", req.ChannelID)
+		return c.Attention(true)
 	})
 	// path_probe / path_open: the FE's link provider found path-shaped
 	// tokens on a line and wants to know which are real (only real ones

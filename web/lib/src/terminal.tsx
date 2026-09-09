@@ -525,6 +525,14 @@ export interface TerminalProps {
   // live. Defaults: a blinking block, which is what xterm does anyway.
   cursorStyle?: TermCursorStyle;
   cursorBlink?: boolean;
+  // onBell fires on BEL (\a) from the program. The component draws
+  // nothing itself — what a bell should LOOK like is the consumer's
+  // (a pane flash, a tab badge, a window attention flag).
+  onBell?: () => void;
+  // onActivity fires when output arrives, coalesced to at most one call
+  // per ACTIVITY_MS. A per-byte callback would be a signal write per
+  // frame during a build.
+  onActivity?: () => void;
   // links makes output clickable — http(s) URLs and existing file paths.
   // Read once at mount (the callbacks are read live, so a consumer can
   // close over changing state).
@@ -570,8 +578,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // is the caller's responsibility — they hold the api.write
   // handle and decide when to feed bytes.
   let pending: Uint8Array[] | null = [];
+  // ACTIVITY_MS coalesces onActivity. Long enough that a noisy build is a
+  // handful of calls a second, short enough that a single line of output
+  // in a background tab lights its dot at once.
+  const ACTIVITY_MS = 250;
+  let lastActivityAt = 0;
   const writeOrBuffer = (bytes: Uint8Array) => {
     awaitingOutput = false;
+    if (props.onActivity) {
+      const now = Date.now();
+      if (now - lastActivityAt >= ACTIVITY_MS) {
+        lastActivityAt = now;
+        props.onActivity();
+      }
+    }
     if (pending) pending.push(bytes);
     else term?.write(bytes);
   };
@@ -947,6 +967,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // TUI that draws with them lands its columns one cell out and the
     // whole line smears. Registering the provider is not enough — the
     // active version has to be switched to it.
+    if (props.onBell) term.onBell(() => props.onBell?.());
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = '11';
     // Links. Both halves are opt-in: nothing is registered unless the

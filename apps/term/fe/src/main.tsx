@@ -19,7 +19,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Check, ChevronDown, ChevronUp, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
+import { Bell, Check, ChevronDown, ChevronUp, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
   Button, Checkbox, ConfirmDialog, Input,
   Menu, MenuItem, MenuSeparator, Tab, Terminal,
@@ -259,6 +259,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // every mounted <Terminal>.
   const [cursorStyle, setCursorStyle] = createSignal<TermCursorStyle>('block');
   const [cursorBlink, setCursorBlink] = createSignal(true);
+  // ---- bell + activity ----
+  //
+  // bells: tabs that rang since you last looked at them. activity: tabs
+  // that produced OUTPUT while not visible. Both are per-tab marks, both
+  // cleared by looking at the tab, and neither is persisted — they are
+  // about this sitting, not about the window's shape.
+  const [bells, setBells] = createSignal<Set<number>>(new Set());
+  const [activity, setActivity] = createSignal<Set<number>>(new Set());
+  // flashes: the tab whose pane is mid visual-bell, with a nonce so two
+  // bells in a row restart the flash rather than merging into one.
+  const [flash, setFlash] = createSignal<{ id: number; n: number } | null>(null);
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  let flashSeq = 0;
   // Window-wide terminal palette: undefined follows the desktop pack
   // appearance (default); a TERM_THEMES id pins a named palette (Dark,
   // Solarized Dark, Dracula, …). Set via the Theme menu; persisted like
@@ -378,6 +391,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const removeTab = (channelID: number) => {
     if (findTab() === channelID) closeFind();
     pathCache.delete(channelID);
+    clearMarks(channelID);
+    if (flash()?.id === channelID) setFlash(null);
     apis.delete(channelID);
     sizes.delete(channelID);
     if (tagColors().has(channelID)) {
@@ -467,7 +482,52 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // activate makes a channel the visible tab of its group AND focuses that
   // group — clicking a tab in an unfocused pane moves you there.
+  // visibleTab: this tab is the one its group is showing. An invisible
+  // tab is what "background" means here — a pane you can see is not
+  // something you need a dot to tell you about, even if another pane has
+  // the keyboard.
+  const visibleTab = (channelID: number): boolean =>
+    placement().groups.some((g) => g.group.active === channelID);
+
+  const clearMarks = (channelID: number) => {
+    if (bells().has(channelID)) {
+      const next = new Set(bells());
+      next.delete(channelID);
+      setBells(next);
+    }
+    if (activity().has(channelID)) {
+      const next = new Set(activity());
+      next.delete(channelID);
+      setActivity(next);
+    }
+  };
+
+  // onBell: the program rang. The pane flashes (a terminal bell you can
+  // see), the tab keeps a mark until you look at it, and the BE raises the
+  // window's attention flag — which the router shows only while the window
+  // is NOT focused and clears the moment it is, so an audible-bell-shaped
+  // annoyance can't follow you into the window you are already in.
+  const onBell = (channelID: number) => {
+    if (!visibleTab(channelID)) {
+      const next = new Set(bells());
+      next.add(channelID);
+      setBells(next);
+    }
+    setFlash({ id: channelID, n: ++flashSeq });
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => setFlash(null), 180);
+    send({ kind: 'bell', channel_id: channelID });
+  };
+
+  const onActivity = (channelID: number) => {
+    if (visibleTab(channelID) || activity().has(channelID)) return;
+    const next = new Set(activity());
+    next.add(channelID);
+    setActivity(next);
+  };
+
   const activate = (channelID: number) => {
+    clearMarks(channelID);
     const path = pathOfChannel(tree(), channelID);
     if (path === undefined) return;
     const already = active() === channelID && focusPath() === path;
@@ -863,6 +923,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (r.count === 0) return 'no matches';
     if (r.count < 0) return r.index >= 0 ? `${r.index + 1} of many` : 'many';
     return r.index >= 0 ? `${r.index + 1} of ${r.count}` : `${r.count}`;
+  };
+
+  // flashRect is the ringing tab's pane content box, or nothing when its
+  // tab is not the visible one (you cannot flash a pane you can't see).
+  const flashRect = (): Rect | undefined => {
+    const f = flash();
+    if (!f) return undefined;
+    const g = placement().groups.find((pg) => pg.group.tabs.includes(f.id));
+    return g && g.group.active === f.id ? g.content : undefined;
   };
 
   // A find bar whose tab closed goes with it; a tab that moves keeps it.
@@ -1292,6 +1361,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           leading={
             <span data-testid={`term-tab-badge-${channelID}`} style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px' }}>
               {statusBadge(tabStatus().get(channelID))}
+              <Show when={bells().has(channelID)}>
+                <Bell size={11} data-testid={`term-tab-bell-${channelID}`} color={tokens.accentAmber} />
+              </Show>
+              <Show when={!bells().has(channelID) && activity().has(channelID)}>
+                <span
+                  data-testid={`term-tab-activity-${channelID}`}
+                  title="Output while you were elsewhere"
+                  style={{
+                    width: '6px', height: '6px', 'border-radius': '50%',
+                    background: tokens.accentBlue, display: 'inline-block',
+                  }}
+                />
+              </Show>
             </span>
           }
           onClose={() => requestCloseTab(channelID)}
@@ -1732,6 +1814,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   beforePaste={beforePaste}
                   cursorStyle={cursorStyle()}
                   cursorBlink={cursorBlink()}
+                  onBell={() => onBell(tab.channelID)}
+                  onActivity={() => onActivity(tab.channelID)}
                   links={{
                     openUrl: (uri) => window.open(uri, '_blank', 'noopener,noreferrer'),
                     probePaths: (tokens) => probePaths(tab.channelID, tokens),
@@ -1921,6 +2005,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 background: tokens.accentBlue,
                 'z-index': 3,
                 'pointer-events': 'none',
+              }}
+            />
+          )}
+        </Show>
+        {/* Visual bell: a brief wash over the ringing tab's pane. Keyed on
+            the nonce so a second bell restarts the animation instead of
+            being swallowed by the one still running. */}
+        <Show when={flashRect()}>
+          {(r) => (
+            <div
+              data-testid="term-bell-flash"
+              style={{
+                position: 'absolute',
+                left: `${r().x}px`, top: `${r().y}px`,
+                width: `${r().w}px`, height: `${r().h}px`,
+                background: tokens.fg,
+                opacity: 0.18,
+                'pointer-events': 'none',
+                'z-index': 5,
               }}
             />
           )}
