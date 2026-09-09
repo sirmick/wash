@@ -52,11 +52,24 @@ import {
   viewportFor,
   windows,
   dropOrigin,
+  focused,
   type Win,
+  type WinState,
   nextGeomTok,
   markGeomPending,
 } from './wm';
 import { Desktop } from './desktop';
+import {
+  chordReleased,
+  cycle,
+  initialIndex,
+  isShowDesktopChord,
+  isSwitcherChord,
+  mruOrder,
+  showDesktopPlan,
+} from './switcher';
+import { SwitcherOverlay } from './switcher-ui';
+import { shouldSwallowDesktopKey } from './keyguard';
 import { FloatingWindow } from './window';
 import {
   CatalogApp,
@@ -1510,6 +1523,122 @@ window.addEventListener('keydown', (ev: KeyboardEvent) => {
   setViewport(vp.vx + dx, vp.vy + dy);
 });
 
+// ---- window switcher (Ctrl+Alt+Tab) and show desktop (Ctrl+Alt+D) ----
+//
+// The decisions live in switcher.ts (unit-tested); this is the wiring:
+// which store the windows come from, what "focus it" means, and when the
+// overlay goes away.
+//
+// MRU order is the wm's gz counter — bumped on every raise/focus/first
+// appearance — so the switcher reads the focus history the WM already
+// keeps rather than maintaining a second list that could drift from it.
+// The order is SNAPSHOT when the overlay opens: cycling must not re-sort
+// under the highlight, and committing bumps gz for the window you land on,
+// which is exactly what makes the next Ctrl+Alt+Tab go back where you came
+// from.
+const [switcher, setSwitcher] = createSignal<{ wins: Win[]; index: number } | null>(null);
+// The set Ctrl+Alt+D minimised, so the second press can put it back.
+let showDesktopMemory: Array<{ origin: Origin; windowID: number }> | null = null;
+
+// focusWin is "switch to this window": snap the camera to its viewport
+// cell first (focusing a window one cell over otherwise "works" with
+// nothing visible happening), then restore-or-focus.
+function focusWin(w: { origin: Origin; windowID: number; state: WinState; x: number; y: number; w: number; h: number }): void {
+  const cell = viewportFor(w);
+  setViewport(cell.vx, cell.vy);
+  if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+  else window.wash.focusWindow(w.windowID, w.origin);
+}
+
+function openOrAdvanceSwitcher(backwards: boolean): void {
+  const cur = switcher();
+  if (cur) {
+    setSwitcher({ wins: cur.wins, index: cycle(cur.index, cur.wins.length, backwards) });
+    return;
+  }
+  const wins = mruOrder(windows.filter((w) => !w.crashed));
+  if (wins.length === 0) return;
+  const start = backwards ? cycle(0, wins.length, true) : initialIndex(wins.length);
+  setSwitcher({ wins, index: start });
+}
+
+// commitSwitcher focuses the highlighted window and closes the overlay. A
+// window that closed while the chord was held is skipped rather than
+// resurrecting a dead id.
+function commitSwitcher(): void {
+  const cur = switcher();
+  setSwitcher(null);
+  if (!cur) return;
+  const want = cur.wins[cur.index];
+  if (!want) return;
+  const live = windows.find((w) => w.origin === want.origin && w.windowID === want.windowID);
+  if (!live) return;
+  shellLog('info', 'shell', `switcher: focus win=${live.windowID} title=${live.title}`);
+  focusWin(live);
+}
+
+function toggleShowDesktop(): void {
+  const plan = showDesktopPlan(windows, showDesktopMemory);
+  if (plan.action === 'minimize') {
+    showDesktopMemory = plan.targets;
+    shellLog('info', 'shell', `show desktop: minimising ${plan.targets.length} window(s)`);
+    for (const t of plan.targets) window.wash.minimizeWindow(t.windowID, t.origin);
+    return;
+  }
+  if (plan.action === 'restore') {
+    shellLog('info', 'shell', `show desktop: restoring ${plan.targets.length} window(s)`);
+    for (const t of plan.targets) window.wash.restoreWindow(t.windowID, t.origin);
+    showDesktopMemory = null;
+  }
+}
+
+// Capture phase, unlike the viewport pan above: these are WM chords, and a
+// focused app (xterm binds nearly everything) must not be able to eat the
+// gesture that switches away from it.
+window.addEventListener(
+  'keydown',
+  (ev: KeyboardEvent) => {
+    if (isSwitcherChord(ev)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openOrAdvanceSwitcher(ev.shiftKey);
+      return;
+    }
+    if (isShowDesktopChord(ev)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleShowDesktop();
+    }
+  },
+  true,
+);
+
+window.addEventListener(
+  'keyup',
+  (ev: KeyboardEvent) => {
+    if (switcher() && chordReleased(ev.key)) commitSwitcher();
+  },
+  true,
+);
+
+// Losing the browser window mid-chord means the keyup never arrives; commit
+// rather than leaving the overlay stuck over the desktop forever.
+window.addEventListener('blur', () => {
+  if (switcher()) commitSwitcher();
+});
+
+// Desktop-background browser-key guard (keyguard.ts): with no wash window
+// focused, Ctrl+W / Ctrl+N / Ctrl+T would reach the browser and close or
+// duplicate the tab the whole desktop lives in. Bubbling, not capture: an
+// app that wants these keys is welcome to them, and the guard only fires
+// when nothing has focus at all. F5 is deliberately left alone — reload is
+// how you recover a wedged shell — and there is no beforeunload.
+window.addEventListener('keydown', (ev: KeyboardEvent) => {
+  if (!shouldSwallowDesktopKey(ev, focused() != null)) return;
+  ev.preventDefault();
+  shellLog('info', 'shell', `swallowed browser chord ctrl+${ev.key.toLowerCase()} on the desktop background`);
+});
+
 // Viewport pan: the cam div translates the windows layer by
 // (-vx*W, -vy*H) screen pixels so the user "moves" across a
 // VIEWPORTS_PER_AXIS² grid without the router knowing. The Desktop
@@ -1539,6 +1668,7 @@ const App = () => (
     </div>
     {/* Above the camera, so the blur covers every window rather than
         riding along with the viewport transform. */}
+    <Show when={switcher()}>{(s) => <SwitcherOverlay wins={s().wins} index={s().index} />}</Show>
     <ModalLayer />
     <ConnectionBanner state={connState()} />
   </>
