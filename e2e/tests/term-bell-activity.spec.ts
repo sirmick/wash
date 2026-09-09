@@ -65,7 +65,7 @@ test.describe('term bell + activity', () => {
   });
 
   test('a background tab marks activity, and a bell there marks a bell; looking clears both', async ({ page, router }) => {
-    const host = await openTerminal(page, router.url);
+    await openTerminal(page, router.url);
     const first = (await tabIds(page))[0];
 
     // Second tab, which becomes the visible one.
@@ -101,7 +101,7 @@ test.describe('term bell + activity', () => {
   });
 
   test('BEL asks for the human: the window carries attention while unfocused', async ({ page, router }) => {
-    const host = await openTerminal(page, router.url);
+    await openTerminal(page, router.url);
 
     // Attention is only SHOWN while the window is not the one being looked
     // at, so give the desktop another window to focus first.
