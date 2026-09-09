@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentpolicy"
 	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/pkg/sdk"
 )
@@ -86,6 +87,23 @@ var adapters = []Adapter{
 // installed, else npx with the package. Returns ok=false when neither is
 // possible, with a note a human can act on.
 func (a Adapter) launch() (cmd string, args []string, note string, ok bool) {
+	return a.launchWith(agentpolicy.AgentConfig{})
+}
+
+// launchWith is launch with the user's agents.json entry applied. A
+// configured `command` replaces the built-in name outright and skips the
+// npx fallback: someone who named a binary meant that binary, and quietly
+// running a package from the registry instead would be the opposite of
+// what they asked for. It is still resolved through PATH, so a bare name
+// works as well as an absolute path.
+func (a Adapter) launchWith(cfg agentpolicy.AgentConfig) (cmd string, args []string, note string, ok bool) {
+	if cfg.Command != "" {
+		p, err := exec.LookPath(cfg.Command)
+		if err != nil {
+			return "", nil, cfg.Command + " (from agents.json) not found", false
+		}
+		return p, a.Args, "configured: " + cfg.Command, true
+	}
 	if p, err := exec.LookPath(a.Command); err == nil {
 		return p, a.Args, "", true
 	}
@@ -104,9 +122,10 @@ func (a Adapter) launch() (cmd string, args []string, note string, ok bool) {
 // Probe reports which adapters this box can actually launch. Cheap enough
 // to call whenever the launcher opens — it is a PATH lookup per row.
 func Probe() []Adapter {
+	pol := hostedPolicy()
 	out := make([]Adapter, 0, len(adapters))
 	for _, a := range adapters {
-		cmd, _, note, ok := a.launch()
+		cmd, _, note, ok := a.launchWith(pol.AgentFor(a.ID))
 		a.Available, a.Note = ok, note
 		if ok {
 			log.Printf("agentd: adapter %s -> %s %s", a.ID, cmd, note)
@@ -140,7 +159,7 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
 	defer cancel()
 
-	res2, err := h.client.NewSession(ctx, h.cwd, nil)
+	res2, err := h.client.NewSession(ctx, h.cwd, h.mcp)
 	if err != nil {
 		h.stop()
 		if len(h.authMethods) > 0 {
@@ -164,8 +183,8 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	// the LAST summary, so a session the router outlives still says what
 	// it was running rather than only cleanly-retired ones.
 	h.noteSession("", time.Now())
-	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d",
-		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes))
+	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d mcp=%d",
+		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes), len(h.mcp))
 	return h, nil
 }
 
@@ -181,12 +200,24 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		return nil, err
 	}
 
-	bin, args, _, ok := a.launch()
+	// agents.json (internal/agentpolicy): the command override, extra
+	// args, and the environment to add. Read at LAUNCH, not at boot, so
+	// editing the file takes effect on the next session rather than the
+	// next router restart.
+	pol := hostedPolicy()
+	bin, args, note, ok := a.launchWith(pol.AgentFor(agentID))
 	if !ok {
-		return nil, fmt.Errorf("agent %q is not installed here: %s", agentID, a.Note)
+		return nil, fmt.Errorf("agent %q is not installed here: %s", agentID, note)
 	}
-	cmd := exec.Command(bin, args...)
+	run := pol.Merge(agentID, agentpolicy.Launch{Command: bin, Args: args})
+	cmd := exec.Command(run.Command, run.Args...)
 	cmd.Dir = cwd
+	// Added to the inherited environment, not substituted for it: an
+	// adapter that gained an API key must not have lost PATH.
+	if len(run.Env) > 0 {
+		cmd.Env = append(os.Environ(), run.Env...)
+		log.Printf("agentd: adapter %s env+=%d args=%d", agentID, len(run.Env), len(run.Args))
+	}
 	// Its own process group, so stop() can kill the whole tree. The common
 	// launch is `npx --yes <package>`, which is a node wrapper around the
 	// node adapter around the agent: killing the pid alone reaped the
@@ -213,7 +244,7 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{key: key, agent: a.ID, cwd: cwd, conn: svcConn}
+	h := &hosted{key: key, agent: a.ID, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers)}
 
 	// The adapter's own diagnostics. Without this, "needs authentication"
 	// is indistinguishable from "hung". The tail is also kept on the
@@ -275,14 +306,23 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 // SessionUpdate underneath. Callers go through hosted.submitPrompt, which
 // owns the turn claim; calling this directly is only right when the turn
 // is already claimed (tests).
-func promptHosted(h *hosted, text string) (next string) {
+func promptHosted(h *hosted, t turn) (next turn) {
+	text := t.text
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
 	} else {
 		appendPrompt(h.key, text, time.Now())
 	}
 	h.beginTurn()
-	res, err := h.client.Prompt(context.Background(), h.sessionID, acp.Text(text))
+	// Text first, then the attachments: the sentence is what frames them,
+	// and an adapter reading the blocks in order should see the question
+	// before the screenshot it is about.
+	blocks := make([]acp.ContentBlock, 0, 1+len(t.blocks))
+	if text != "" {
+		blocks = append(blocks, acp.Text(text))
+	}
+	blocks = append(blocks, t.blocks...)
+	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
 	switch {
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
@@ -303,7 +343,7 @@ func promptHosted(h *hosted, text string) (next string) {
 			// retry.
 			h.note("The turn failed: " + turnError(err) + "\n\nThe session is still open — send again to retry.")
 		}
-		return ""
+		return turn{}
 	case res.StopReason == acp.StopCancelled:
 		return h.endTurn("done", "cancelled")
 	default:
@@ -423,7 +463,7 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	// they need a roster row and a transcript to land in.
 	h.register()
 	go h.watchExit()
-	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, nil)
+	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, h.mcp)
 	if err != nil {
 		h.retire()
 		return nil, fmt.Errorf("reopen %s: %w", sessionID, err)
@@ -446,4 +486,24 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 		h.key, agentID, sessionID, h.cwd, res.Modes.CurrentModeID, len(res.Modes.AvailableModes), len(res.ConfigOptions))
 	h.setState("done", "resumed")
 	return h, nil
+}
+
+// acpMCPServers converts wash's config shape (env as a map, because a
+// person writes it) to ACP's (env as a list of name/value pairs). Returns
+// nil for an empty list, which the client turns into the `[]` the spec
+// requires — the value wash sent unconditionally before there was
+// anything to put in it.
+func acpMCPServers(list []agentpolicy.MCPServer) []acp.McpServer {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]acp.McpServer, 0, len(list))
+	for _, s := range list {
+		m := acp.McpServer{Name: s.Name, Command: s.Command, Args: s.Args}
+		for _, kv := range agentpolicy.EnvPairs(s.Env) {
+			m.Env = append(m.Env, acp.EnvVar{Name: kv[0], Value: kv[1]})
+		}
+		out = append(out, m)
+	}
+	return out
 }

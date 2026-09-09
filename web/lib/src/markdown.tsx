@@ -15,10 +15,18 @@
 // ordered lists, paragraphs, and inline code / bold / italic / links.
 // Everything unrecognised renders as its own literal text, which is the
 // correct failure for a renderer whose input is untrusted.
+//
+// Fenced blocks are syntax-highlighted (syntax.ts, which returns text runs
+// with roles rather than markup — the no-innerHTML rule survives it) and
+// carry a copy button, because taking the command or the patch out of a
+// reply is the commonest thing anyone does with one.
 
-import { For, Show } from 'solid-js';
+import { For, Show, createSignal, onCleanup } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
+import { washCopyText } from './clipboard';
+import { highlightSpans, syntaxLang } from './syntax';
+import type { SyntaxRole } from './syntax';
 
 type Block =
   | { t: 'p'; lines: string[] }
@@ -208,6 +216,99 @@ export function parseInline(src: string): Span[] {
   return out;
 }
 
+// Role → colour for highlighted code. The accent tokens, not a bespoke
+// syntax palette: a fence in a transcript is a few lines of context, not
+// an editor, and re-skinning with the pack matters more here than
+// matching wash-edit's CodeMirror theme hue for hue.
+const ROLE_COLOR: Record<SyntaxRole, string> = {
+  keyword: tokens.accentMagenta,
+  string: tokens.accentGreen,
+  comment: tokens.fgDim,
+  number: tokens.accentOrange,
+  type: tokens.accentCyan,
+  function: tokens.accentBlue,
+  property: tokens.accentTeal,
+  operator: tokens.fgMuted,
+  meta: tokens.accentViolet,
+  add: tokens.accentGreen,
+  del: tokens.accentRed,
+  hunk: tokens.accentCyan,
+};
+
+/** Colours a run of code by its role. Exported because the transcript
+ *  renders agentd's unified diffs with the same span list. */
+export const HighlightedCode: Component<{ code: string; lang?: string }> = (p) => (
+  <For each={highlightSpans(p.code, syntaxLang(p.lang ?? ''))}>
+    {(s) => (
+      <Show when={s.role} fallback={<>{s.text}</>}>
+        <span style={{ color: ROLE_COLOR[s.role!] }}>{s.text}</span>
+      </Show>
+    )}
+  </For>
+);
+
+const preStyle: JSX.CSSProperties = {
+  margin: 0,
+  background: tokens.bgInset,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': tokens.radiusMd,
+  padding: `${tokens.spaceMd}px`,
+  font: tokens.type.monoSm,
+  color: tokens.fg,
+  'overflow-x': 'auto',
+};
+
+/** One fenced block: highlighted, with a copy button.
+ *
+ *  The button is the answer to the commonest thing anyone does with agent
+ *  output — take the command or the patch and use it. Selecting a <pre>
+ *  by hand picks up the surrounding prose as often as not, and "copy the
+ *  whole reply" (the menubar's verb) is the wrong grain for one block. */
+export const CodeBlock: Component<{ code: string; lang?: string }> = (p) => {
+  const [copied, setCopied] = createSignal(false);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(timer));
+  const copy = () => {
+    washCopyText(p.code);
+    setCopied(true);
+    clearTimeout(timer);
+    // Long enough to read, short enough that the button is ready again
+    // before anyone reaches for it a second time.
+    timer = setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        data-testid="markdown-copy"
+        data-wash-hit
+        title="Copy this block"
+        onClick={copy}
+        style={{
+          position: 'absolute',
+          top: `${tokens.spaceXs}px`,
+          right: `${tokens.spaceXs}px`,
+          font: tokens.type.monoSm,
+          padding: `1px ${tokens.spaceSm}px`,
+          'border-radius': tokens.radiusSm,
+          border: `1px solid ${tokens.borderMenu}`,
+          background: tokens.bgMenu,
+          color: copied() ? tokens.accentGreen : tokens.fgMuted,
+          cursor: 'pointer',
+          opacity: '0.85',
+        }}
+      >
+        {copied() ? 'Copied' : 'Copy'}
+      </button>
+      {/* Its own scroll container: a long command must not make the
+          whole transcript scroll sideways. */}
+      <pre style={preStyle}>
+        <HighlightedCode code={p.code} lang={p.lang} />
+      </pre>
+    </div>
+  );
+};
+
 const codeStyle: JSX.CSSProperties = {
   font: tokens.type.monoSm,
   background: tokens.bgInset,
@@ -274,22 +375,10 @@ export const Markdown: Component<MarkdownProps> = (props) => (
           </Show>
 
           <Show when={b.t === 'code'}>
-            {/* Its own scroll container: a long command must not make the
-                whole transcript scroll sideways. */}
-            <pre
-              style={{
-                margin: 0,
-                background: tokens.bgInset,
-                border: `1px solid ${tokens.borderMenu}`,
-                'border-radius': tokens.radiusMd,
-                padding: `${tokens.spaceMd}px`,
-                font: tokens.type.monoSm,
-                color: tokens.fg,
-                'overflow-x': 'auto',
-              }}
-            >
-              {(b as { lines: string[] }).lines.join('\n')}
-            </pre>
+            <CodeBlock
+              code={(b as { lines: string[] }).lines.join('\n')}
+              lang={(b as { lang: string }).lang}
+            />
           </Show>
 
           <Show when={b.t === 'quote'}>

@@ -60,6 +60,11 @@ export interface RosterRow {
   configs?: AgentConfig[];
   /** the agent's own slash commands */
   commands?: { name: string; description?: string }[];
+  /** folders this session may reach BEYOND its cwd (agentd roots.go).
+   *  Present so every surface showing a session can say how wide it is —
+   *  a session with three extra roots is a different thing from one
+   *  confined to its own folder. */
+  roots?: string[];
 }
 
 /** A permission question waiting for a human (docs/AGENT_TERM.md §12). */
@@ -122,6 +127,12 @@ export interface AgentRosterProps {
   onCancel?: (row: RosterRow) => void;
   /** end the session and its adapter process */
   onStop?: (row: RosterRow) => void;
+  /** give the session a name of your own; the host opens its dialog */
+  onRename?: (row: RosterRow) => void;
+  /** allow the session another folder; the host opens its file picker */
+  onAddRoot?: (row: RosterRow) => void;
+  /** open a terminal in the session's working directory */
+  onOpenTerminal?: (row: RosterRow) => void;
 }
 
 // stateColor / stateLabel are thin adapters over the shared vocabulary in
@@ -205,6 +216,9 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
             onDetach={props.onDetach ? () => props.onDetach?.(r) : undefined}
             onCancel={props.onCancel ? () => props.onCancel?.(r) : undefined}
             onStop={props.onStop ? () => props.onStop?.(r) : undefined}
+            onRename={props.onRename ? () => props.onRename?.(r) : undefined}
+            onAddRoot={props.onAddRoot ? () => props.onAddRoot?.(r) : undefined}
+            onOpenTerminal={props.onOpenTerminal ? () => props.onOpenTerminal?.(r) : undefined}
           />
         )}
       </For>
@@ -341,6 +355,9 @@ const AgentRowView: Component<{
   onDetach?: () => void;
   onCancel?: () => void;
   onStop?: () => void;
+  onRename?: () => void;
+  onAddRoot?: () => void;
+  onOpenTerminal?: () => void;
 }> = (props) => {
   // The verbs live in a menu rather than a strip of buttons: the set
   // grows (resume and fork are still to come) and a sidebar row is 190px
@@ -371,7 +388,8 @@ const AgentRowView: Component<{
     closeMenu();
     fn?.();
   };
-  const hasVerbs = () => Boolean(props.onDetach || props.onCancel || props.onStop);
+  const hasVerbs = () =>
+    Boolean(props.onDetach || props.onCancel || props.onStop || props.onRename || props.onAddRoot || props.onOpenTerminal);
   // Where it's working: "wash · main*" — repo, branch, and a star when the
   // tree is dirty. Absent for an agent outside a checkout.
   const place = (): string => {
@@ -537,6 +555,43 @@ const AgentRowView: Component<{
                 data-testid="agents-menu-detach"
                 disabled={!props.onDetach || props.detached === true}
                 onClick={run(props.onDetach)}
+              />
+              {/* The agent names the session once and first wins; this
+                  is how a person overrides it. Needs a session id — the
+                  name is stored against the agent's id, so a row that
+                  has none yet has nothing to name. */}
+              <MenuItem
+                label="Rename…"
+                data-testid="agents-menu-rename"
+                disabled={!props.onRename || !props.row.session_id}
+                onClick={run(props.onRename)}
+              />
+              {/* The session cwd is the scope the person consented to; it
+                  is the wrong LIMIT. A monorepo sibling, a generated
+                  schema in another tree — the alternative was starting the
+                  agent at a parent and granting far more than the two
+                  folders it needed. The label counts what is already
+                  allowed, because the whole hazard of widening is
+                  forgetting you did. */}
+              <MenuItem
+                label={
+                  (props.row.roots?.length ?? 0) > 0
+                    ? `Also allow a folder… (${props.row.roots!.length})`
+                    : 'Also allow a folder…'
+                }
+                data-testid="agents-menu-add-root"
+                disabled={!props.onAddRoot}
+                onClick={run(props.onAddRoot)}
+              />
+              {/* Where the agent is working is exactly where a person
+                  wants a shell — to run the test it just changed, to see
+                  the diff it made. Needs a cwd: a row with none has
+                  nowhere to open. */}
+              <MenuItem
+                label="Open terminal here"
+                data-testid="agents-menu-open-terminal"
+                disabled={!props.onOpenTerminal || !props.row.cwd}
+                onClick={run(props.onOpenTerminal)}
               />
               <MenuSeparator />
               <MenuItem

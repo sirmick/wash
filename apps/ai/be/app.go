@@ -6,10 +6,24 @@
 // composer. Everything it does is a message to com.wash.agentd:
 //
 //	FE → ai   start    {agent, cwd, prompt?}   → ai → agentd  agent_start
-//	FE → ai   prompt   {text}                  → ai → agentd  agent_prompt
+//	FE → ai   prompt   {text, blocks?}         → ai → agentd  agent_prompt
 //	FE → ai   answer   {id, decision, rule?}   → ai → agentd  agent_answer
-//	          agentd → ai  transcript_snapshot / transcript_event / state
-//	          ai → FE      snapshot / event / status / adapters
+//	FE → ai   open_path {path}                 → router open routing
+//	FE → ai   open_terminal {cwd}              → spawn com.wash.term --open <cwd>
+//
+// And ONE message this app accepts from an app that is not agentd:
+//
+//	any app → ai   {kind: "agent_draft", text}
+//
+// which inserts `text` into this window's composer. It is a DRAFT, never
+// a prompt: it lands at the caret and waits, because what a person does
+// with a selection someone sent them — frame it with a question, trim it,
+// think better of it — is the whole reason it goes to a composer rather
+// than to the agent. wash-edit's "send selection to agent" uses exactly
+// this shape; keep the kind stable, other apps will grow the same verb.
+//
+//	agentd → ai  transcript_snapshot / transcript_event / state
+//	ai → FE      snapshot / event / status / adapters
 //
 // The empty window is the launcher: an app with no session yet renders the
 // form. That is why there is no separate "new session" dialog anywhere.
@@ -58,6 +72,11 @@ const aiIcon = "bot"
 
 const agentdAppID = agentd.AppID
 
+// draftKind is the app message any app may send this one to put text in
+// its composer. Stable on purpose: wash-edit's "send selection to agent"
+// is written against this exact shape, and so will the next app's be.
+const draftKind = "agent_draft"
+
 // aiDebug traces the roster subscription, which is what drives the status
 // line and the working spinner. Off unless WASH_AGENT_DEBUG is set.
 var aiDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
@@ -87,8 +106,13 @@ func init() {
 			Icon:            aiIcon,
 			Accent:          "violet",
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{},
-			Window:          &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 720},
+			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
+			// 600, not 720: the composer grew a row (Attach…) and the
+			// status bar grew root chips, and a window as tall as a
+			// 720-line screen left both under the 40px taskbar. Sized so
+			// the whole window, status bar included, fits above it on the
+			// smallest screen this desktop targets.
+			Window: &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 600},
 		},
 		Assets:           sub,
 		OnReady:          onReady,
@@ -334,6 +358,21 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 	// Acting on the session this window happens to be showing needs no
 	// special case: agentd tells every transcript watcher when a session
 	// detaches, and onAppMsgFrom already exits on that for our own key.
+	case "row_add_root", "row_remove_root":
+		// Widen (or narrow) which folders a session may reach. Row-
+		// addressed like the verbs below: the row that opened the picker
+		// is not necessarily the session this window is showing.
+		if str(m["key"]) == "" || str(m["path"]) == "" {
+			log.Printf("wash-ai: %s ignored key=%q path=%q", str(m["kind"]), str(m["key"]), str(m["path"]))
+			return
+		}
+		log.Printf("wash-ai: %s key=%s path=%s", str(m["kind"]), str(m["key"]), str(m["path"]))
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_" + strings.TrimPrefix(str(m["kind"]), "row_"),
+			"key":  str(m["key"]),
+			"path": str(m["path"]),
+		})
+
 	case "row_detach", "row_cancel", "row_stop", "row_reattach":
 		rowKey := str(m["key"])
 		if rowKey == "" {
@@ -420,11 +459,19 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		if session.key == "" {
 			return
 		}
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+		// blocks are attachments the composer collected — a pasted image,
+		// a picked file. Passed through as-is: agentd validates them (mime,
+		// size, and the path against the session's own confinement), and
+		// it is the only party that knows what the session's roots are.
+		msg := map[string]any{
 			"kind": "agent_prompt",
 			"key":  session.key,
 			"text": str(m["text"]),
-		})
+		}
+		if blocks, ok := m["blocks"].([]any); ok && len(blocks) > 0 {
+			msg["blocks"] = blocks
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, msg)
 	case "detach":
 		// Leave the session running. agentd keeps its roster row, which
 		// is where the user gets back to it.
@@ -488,6 +535,32 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		}
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, req)
 
+	// Session admin (agentd/session_admin.go): a person's name for a
+	// session, and deleting what ran. Key-or-id addressed like the row
+	// verbs, so they act on any session agentd holds, not only this
+	// window's; the replies to delete/prune come back below so the
+	// History panel can refresh.
+	case "rename":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_rename",
+			"key":        str(m["key"]),
+			"session_id": str(m["session_id"]),
+			"title":      str(m["title"]),
+		})
+
+	case "delete_session":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_delete",
+			"session_id": str(m["session_id"]),
+		})
+
+	case "prune_history":
+		age, _ := m["max_age_ms"].(float64)
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_prune",
+			"max_age_ms": int64(age),
+		})
+
 	case "set_yolo":
 		if session.key == "" {
 			return
@@ -519,6 +592,39 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"key":  session.key,
 		})
 
+	case "open_terminal":
+		// A shell where the agent is working — the roster row's verb and
+		// the Session menu's, which are two views of one thing. The path
+		// is confined here (the FE named it; a window is not authority)
+		// and the router starts wash-term with it as `--open <dir>`.
+		dir := str(m["cwd"])
+		abs, err := aiFS.Confine(dir)
+		if err != nil {
+			log.Printf("wash-ai: open terminal %q: %v", dir, err)
+			return
+		}
+		log.Printf("wash-ai: open terminal cwd=%s", abs)
+		if err := c.SpawnRequestOpen("com.wash.term", abs); err != nil {
+			log.Printf("wash-ai: spawn term %s: %v", abs, err)
+		}
+
+	case "open_path":
+		// A tool row was clicked. The path is the agent's own report of
+		// what it touched, so it is confined to this app's root before
+		// the router is asked for anything, and the router — not this
+		// app — decides which app handles the type (CapOpen). Without
+		// this the standalone Agent window had no way to act on a row at
+		// all; only wash-edit's agent tab did.
+		raw := str(m["path"])
+		abs, err := aiFS.Confine(raw)
+		if err != nil {
+			log.Printf("wash-ai: open %q: %v", raw, err)
+			return
+		}
+		if err := c.OpenPath(abs); err != nil {
+			log.Printf("wash-ai: open %s: %v", abs, err)
+		}
+
 	case "answer":
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":     "agent_answer",
@@ -533,11 +639,25 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 // onAppMsgFrom handles messages from agentd. The sender is router-attested,
 // so a message claiming to be the roster service actually is one.
 func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
-	if from.AppID != agentdAppID {
-		return
-	}
 	m, _ := data.(map[string]any)
 	if m == nil {
+		return
+	}
+	// agent_draft is the one message this app takes from an app that is
+	// not agentd — anything with a selection worth handing to an agent
+	// (wash-edit today). Checked BEFORE the sender gate, which exists to
+	// stop another app impersonating the roster service, not to stop
+	// another app typing into a composer the person is looking at.
+	if str(m["kind"]) == draftKind {
+		text := str(m["text"])
+		if text == "" {
+			return
+		}
+		log.Printf("wash-ai: draft from=%s bytes=%d", from.AppID, len(text))
+		c.SendAppMsg(map[string]any{"kind": "draft", "text": text})
+		return
+	}
+	if from.AppID != agentdAppID {
 		return
 	}
 	switch str(m["kind"]) {
@@ -608,6 +728,11 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 
 	case "default_prompt":
 		c.SendAppMsg(map[string]any{"kind": "default_prompt", "text": m["text"]})
+
+	case "history_deleted", "history_pruned":
+		// agentd's answer to a delete or prune this window asked for;
+		// forwarded whole so the panel can re-query.
+		c.SendAppMsg(m)
 
 	// The transcript hops to the FE on the Bulk class — this is the one
 	// hop that shares the browser's single socket with every other app's

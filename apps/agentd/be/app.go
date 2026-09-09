@@ -123,6 +123,12 @@ type Row struct {
 	// (docs/AGENT_MESSENGER.md semantics: a message typed mid-reply is
 	// sent when the reply finishes, not dropped and not interleaved).
 	Queued int `json:"queued,omitempty"`
+	// Roots are folders this session may reach BEYOND its cwd (roots.go).
+	// On the row because every surface that shows a session must be able
+	// to say how wide it is: a session with three extra roots is a
+	// different thing from one confined to its own folder, and only the
+	// person who widened it would otherwise know.
+	Roots []string `json:"roots,omitempty"`
 	// Stale marks a row whose terminal stopped reporting: shown greyed,
 	// then dropped. See staleAfter / dropAfter.
 	Stale bool `json:"stale,omitempty"`

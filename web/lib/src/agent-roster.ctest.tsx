@@ -390,3 +390,82 @@ test('a detached row with no reattach handler is simply inert', () => {
   fireEvent.click(getByTestId('agents-row-d'));
   expect(activated).toBe(0);
 });
+
+// Rename (docs/Review-findings.md P2 → agent): the agent names a session
+// once and first wins; the menu is where a person overrides it. The row
+// hands the host the row and the host opens its own dialog — the roster
+// owns no state, so it owns no name box.
+test('verbs: Rename… hands the host the row; a row with no session id cannot be named', () => {
+  const renamed: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', session_id: 'sess-1' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onRename={(r) => renamed.push(r.key)} />
+  ));
+  openRowMenu(getByTestId);
+  const item = screen.getByTestId('agents-menu-rename');
+  expect(item.hasAttribute('disabled')).toBe(false);
+  fireEvent.click(item);
+  expect(renamed).toEqual(['a']);
+  expect(screen.queryByTestId('agents-row-actions')).toBeNull();
+
+  cleanup();
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done', session_id: '' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onRename={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-rename').hasAttribute('disabled')).toBe(true);
+});
+
+// "Also allow a folder…" (docs/Review-findings.md P2 → agent): the cwd is
+// the default scope, not the limit. The row hands the host the row and the
+// host opens its own picker; the label counts what is already allowed,
+// because the hazard of widening a session is forgetting that you did.
+test('verbs: Also allow a folder… hands the host the row and counts existing roots', () => {
+  const widened: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster
+      rows={() => [row({ key: 'a', state: 'done', cwd: '/w/app', roots: ['/w/lib', '/w/gen'] })]}
+      startedAt={at}
+      now={() => 0}
+      onActivate={noop}
+      onAddRoot={(r) => widened.push(r.key)}
+    />
+  ));
+  openRowMenu(getByTestId);
+  const item = screen.getByTestId('agents-menu-add-root');
+  expect(item.textContent).toContain('(2)');
+  fireEvent.click(item);
+  expect(widened).toEqual(['a']);
+
+  cleanup();
+  // A session still confined to its cwd says so by saying nothing.
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onAddRoot={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-add-root').textContent).not.toContain('(');
+});
+
+// "Open terminal here" (docs/Review-findings.md P2 → cross-app): where the
+// agent is working is exactly where a person wants a shell. The row hands
+// the host the row; the host spawns wash-term with the directory.
+test('verbs: Open terminal here needs a cwd, and hands the host the row', () => {
+  const opened: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', cwd: '/w/app' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onOpenTerminal={(r) => opened.push(r.cwd ?? '')} />
+  ));
+  openRowMenu(getByTestId);
+  fireEvent.click(screen.getByTestId('agents-menu-open-terminal'));
+  expect(opened).toEqual(['/w/app']);
+
+  cleanup();
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done', cwd: '' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onOpenTerminal={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-open-terminal').hasAttribute('disabled')).toBe(true);
+});

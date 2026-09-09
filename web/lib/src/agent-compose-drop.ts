@@ -162,3 +162,53 @@ export function describeSkipped(names: readonly string[]): string {
   const list = names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
   return `Not attached (only text files under ${cap} are): ${list}`;
 }
+
+// ---- images ----------------------------------------------------------
+//
+// A pasted screenshot is the other half of the same job: an OS image has
+// no path the page can name either, so it travels by value, as an ACP
+// image content block. Both adapters advertise promptCapabilities.image,
+// so this is a capability wash simply had not offered.
+
+/** MAX_IMAGE_BYTES bounds one pasted or dropped image. Mirrors agentd's
+ *  maxAttachImageBytes (apps/agentd/be/attach.go), which is the authority
+ *  — this copy exists so the refusal can be shown before the bytes are
+ *  read and base64'd, rather than after a round trip. */
+export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+/** imageFilesFrom picks the image files out of a paste or a drop.
+ *  DataTransferItems rather than .files, because a clipboard image in
+ *  Chrome arrives as an item with a synthetic name and no entry in
+ *  .files on some paths. */
+export function imageFilesFrom(dt: DropData | null | undefined): File[] {
+  if (!dt) return [];
+  const out: File[] = [];
+  for (const f of Array.from(dt.files ?? [])) {
+    if ((f.type || '').toLowerCase().startsWith('image/')) out.push(f);
+  }
+  return out;
+}
+
+/** imageTooBig is the note for an image the composer will not send. Said
+ *  before the read, so a 40 MB paste never becomes 53 MB of base64 in
+ *  this process on its way to being refused. */
+export function imageTooBig(f: FileLike): string {
+  const kb = Math.round(f.size / 1024);
+  const cap = Math.round(MAX_IMAGE_BYTES / 1024);
+  return `${f.name || 'That image'} is ${kb} KB, over the ${cap} KB image limit. It was not attached.`;
+}
+
+/** readImageData reads a File as the base64 an ACP image block carries —
+ *  the data: URL's payload, without the `data:mime;base64,` header. */
+export function readImageData(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = typeof r.result === 'string' ? r.result : '';
+      const comma = s.indexOf(',');
+      resolve(comma < 0 ? '' : s.slice(comma + 1));
+    };
+    r.onerror = () => reject(r.error ?? new Error('read failed'));
+    r.readAsDataURL(file);
+  });
+}

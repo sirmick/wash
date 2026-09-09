@@ -18,8 +18,8 @@ import { isStaleTranscript } from './transcript-guard.ts';
 import type { Component } from 'solid-js';
 import { Plus } from 'lucide-solid';
 import {
-  AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
-  Splitter,
+  AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
+  Overlay, Select, Splitter,
   applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
@@ -40,7 +40,8 @@ interface RecentSession {
   cwd?: string;
   /** short label for display ("wash"), not a path to start in */
   dir?: string;
-  /** the agent's own one-line name for what the session was about */
+  /** the agent's own one-line name for what the session was about — or
+   *  the person's, when they renamed it (agentd puts theirs here) */
   title?: string;
   last_seen: number;
   /** running right now — in the roster above, not something to resume */
@@ -99,6 +100,29 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // — so the user chooses what happens to it.
   const [confirmClose, setConfirmClose] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
+  // The composer's Attach button. <AgentSession> asks for paths and waits
+  // on a promise; the picker is this window's, because the picker needs a
+  // BE with a file client and the shared component has neither.
+  // "Also allow a folder…" from a roster row. The picker is this
+  // window's; the row it widens is whichever row opened it, which is not
+  // necessarily the session in the detail pane.
+  // A draft handed to this window by another app (`agent_draft` — see
+  // apps/ai/be/app.go). The counter is what makes sending the same
+  // selection twice insert it twice.
+  const [draftIn, setDraftIn] = createSignal<{ text: string; seq: number } | undefined>();
+  let draftSeq = 0;
+
+  const [rootFor, setRootFor] = createSignal<{ key: string; start: string } | null>(null);
+  const openAddRoot = (key: string, start: string) => setRootFor({ key, start });
+
+  const [attaching, setAttaching] = createSignal(false);
+  let attachResolve: ((paths: string[]) => void) | null = null;
+  const finishAttach = (paths: string[]) => {
+    setAttaching(false);
+    const r = attachResolve;
+    attachResolve = null;
+    r?.(paths);
+  };
   // The default prompt (agentd owns the file; this is the editor for it).
   // `draft` is the textarea's contents while the dialog is open — a
   // browser reload loses an unsaved edit, which is the same deal every
@@ -146,6 +170,37 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
   onCleanup(() => { if (historyTimer) clearTimeout(historyTimer); });
 
+  // Rename / delete / prune (agentd/session_admin.go). Each is a small
+  // dialog over whichever list it was picked from — the roster, the
+  // History panel or the Session menu — sending one key-or-id addressed
+  // verb. The dialogs are here rather than in the lists because the
+  // lists are shared renderers that own no state.
+  const [renameFor, setRenameFor] = createSignal<{ key?: string; session_id?: string; title: string } | null>(null);
+  const [renameDraft, setRenameDraft] = createSignal('');
+  const openRename = (t: { key?: string; session_id?: string; title?: string }) => {
+    setRenameDraft(t.title ?? '');
+    setRenameFor({ key: t.key, session_id: t.session_id, title: t.title ?? '' });
+  };
+  const saveRename = () => {
+    const t = renameFor();
+    if (!t) return;
+    setRenameFor(null);
+    send({ kind: 'rename', key: t.key ?? '', session_id: t.session_id ?? '', title: renameDraft().trim() });
+  };
+  const [deleteFor, setDeleteFor] = createSignal<SessionMeta | null>(null);
+  const [pruning, setPruning] = createSignal(false);
+  // Horizons for "Delete all older than…". 0 is every finished session —
+  // the honest word for "clear history", offered here rather than as a
+  // separate verb so there is one place history is thrown away.
+  const pruneChoices: [string, string][] = [
+    [String(24 * 3600e3), 'a day'],
+    [String(7 * 24 * 3600e3), 'a week'],
+    [String(30 * 24 * 3600e3), 'a month'],
+    [String(90 * 24 * 3600e3), 'three months'],
+    ['0', 'any age — every finished session'],
+  ];
+  const [pruneAge, setPruneAge] = createSignal(pruneChoices[2][0]);
+
   // Why a transcript frame can now be for the wrong session: see
   // transcript-guard.ts.
   const staleTranscript = (m: Record<string, unknown>) => isStaleTranscript(m.key, sessionKey());
@@ -167,6 +222,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'restore_failed':
         setSessionKey('');
         setEvents([]);
+        break;
+      case 'draft':
+        // Another app sent a selection here (agent_draft). It lands in
+        // the composer, not on the wire: what someone does with it — add
+        // a question above it, trim it, think better of it — is the whole
+        // reason it goes to the composer at all.
+        draftSeq += 1;
+        setDraftIn({ text: String(m.text ?? ''), seq: draftSeq });
         break;
       case 'start_failed':
         setAutostart(null);
@@ -207,6 +270,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           setHistorySessions((m.sessions as SessionMeta[]) ?? []);
           setHistoryLoading(false);
         }
+        break;
+
+      case 'history_deleted':
+      case 'history_pruned':
+        // The store changed under the panel: re-ask with the current
+        // query rather than editing the list locally, so what is shown is
+        // what is on disk.
+        if (historyOpen()) askHistory(historyQuery());
         break;
 
       case 'default_prompt':
@@ -336,6 +407,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       commands: r?.commands,
       yolo: r?.yolo,
       queued: r?.queued,
+      roots: r?.roots,
     };
   });
 
@@ -578,6 +650,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onClick={() => { close(); send({ kind: 'set_yolo', on: !status().yolo }); }}
                 data-testid="ai-menu-yolo"
               />
+              <MenuItem
+                label="Rename session…"
+                disabled={!sessionKey()}
+                onClick={() => { close(); openRename({ key: sessionKey(), session_id: row()?.session_id, title: row()?.title }); }}
+                data-testid="ai-menu-rename"
+              />
+              {/* Where the agent is working is exactly where a person
+                  wants a shell. Same verb the roster row offers, because
+                  the window showing a session and the row naming it are
+                  two views of one thing. */}
+              <MenuItem
+                label="Open terminal here"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_terminal', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-terminal"
+              />
               <MenuSeparator />
               <Show when={configs().length === 0}>
                 <MenuItem label="No settings offered" disabled onClick={() => {}} />
@@ -739,6 +827,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onDetach={(r) => send({ kind: 'row_detach', key: r.key })}
           onCancel={(r) => send({ kind: 'row_cancel', key: r.key })}
           onStop={(r) => send({ kind: 'row_stop', key: r.key })}
+          onRename={(r) => openRename({ key: r.key, session_id: r.session_id, title: r.title })}
+          onAddRoot={(r) => openAddRoot(r.key, r.cwd ?? '')}
+          onOpenTerminal={(r) => send({ kind: 'open_terminal', cwd: r.cwd ?? '' })}
           onAnswer={(a, decision, remember) => send({
             kind: 'answer',
             id: a.id,
@@ -757,6 +848,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         loading={historyLoading}
         onQuery={onHistoryQuery}
         onClose={() => setHistoryOpen(false)}
+        onRename={(s) => openRename({ key: s.row_key, session_id: s.session_id, title: s.title })}
+        onDelete={(s) => setDeleteFor(s)}
+        onPrune={() => setPruning(true)}
         onResume={(s) => {
           setHistoryOpen(false);
           // Same predicate as the menu, same two verbs. The panel used to
@@ -825,6 +919,126 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </Show>
   );
 
+  // One name box for every list. Enter saves, Escape (the Overlay's
+  // dismiss) leaves the name as it was; an empty name clears yours and
+  // lets the agent's own show again.
+  const renameDialog = (
+    <Show when={renameFor()}>
+      <Overlay onDismiss={() => setRenameFor(null)} data-testid="ai-rename-dialog">
+        <div style={{ 'font-weight': 600, 'margin-bottom': `${tokens.spaceSm}px` }}>Rename session</div>
+        <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '46ch', 'margin-bottom': `${tokens.spaceMd}px` }}>
+          Shown wherever this session is listed. Leave it empty to go back to
+          the agent's own name.
+        </div>
+        <Input
+          data-testid="ai-rename-input"
+          value={renameDraft()}
+          ref={(el: HTMLInputElement) => queueMicrotask(() => { el.focus(); el.select(); })}
+          onInput={(e: InputEvent) => setRenameDraft((e.currentTarget as HTMLInputElement).value)}
+          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); saveRename(); } }}
+          style={{ width: '46ch', 'max-width': '80vw' }}
+        />
+        <div style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'justify-content': 'flex-end', 'margin-top': `${tokens.spaceLg}px` }}>
+          <Button data-testid="ai-rename-cancel" onClick={() => setRenameFor(null)}>Cancel</Button>
+          <Button variant="primary" data-testid="ai-rename-save" onClick={saveRename}>Save</Button>
+        </div>
+      </Overlay>
+    </Show>
+  );
+
+  const deleteDialog = (
+    <Show when={deleteFor()}>
+      {(s) => (
+        <ConfirmDialog
+          title="Delete this conversation?"
+          confirmLabel="Delete"
+          danger
+          data-testid="ai-delete-confirm"
+          confirmTestid="ai-delete-confirm-yes"
+          cancelTestid="ai-delete-confirm-no"
+          onCancel={() => setDeleteFor(null)}
+          onConfirm={() => {
+            const id = s().session_id;
+            setDeleteFor(null);
+            send({ kind: 'delete_session', session_id: id });
+          }}
+        >
+          <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '46ch' }}>
+            <b>{s().title || s().session_id}</b> — its transcript is removed from disk and it leaves
+            History. The agent's own record of the session is not touched.
+          </div>
+        </ConfirmDialog>
+      )}
+    </Show>
+  );
+
+  const pruneDialog = (
+    <Show when={pruning()}>
+      <ConfirmDialog
+        title="Delete older conversations?"
+        confirmLabel="Delete"
+        danger
+        data-testid="ai-prune-dialog"
+        confirmTestid="ai-prune-confirm"
+        cancelTestid="ai-prune-cancel"
+        onCancel={() => setPruning(false)}
+        onConfirm={() => {
+          setPruning(false);
+          send({ kind: 'prune_history', max_age_ms: Number(pruneAge()) });
+        }}
+      >
+        <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceMd}px`, 'max-width': '46ch' }}>
+          <div style={{ font: tokens.type.textMd, opacity: 0.75 }}>
+            Every finished session whose last activity is older than this is
+            deleted from disk. Running sessions are kept.
+          </div>
+          <Select value={pruneAge()} onChange={setPruneAge} options={pruneChoices} data-testid="ai-prune-age" />
+        </div>
+      </ConfirmDialog>
+    </Show>
+  );
+
+  // Both pickers live at the window's root rather than inside the
+  // launcher fragment: the launcher renders only while there is NO
+  // session, and both of these are reached from a running one.
+  const attachPicker = (
+    <FilePicker
+      open={attaching()}
+      mode="open"
+      host={props.host}
+      hostInstanceID={props.instance}
+      start={row()?.cwd || cwd()}
+      onConfirm={(p) => finishAttach([p])}
+      onCancel={() => finishAttach([])}
+      data-testid="ai-attach-picker"
+    />
+  );
+
+  const rootPicker = (
+    <Show when={rootFor()}>
+      {(r) => (
+        <FilePicker
+          open
+          mode="directory"
+          host={props.host}
+          hostInstanceID={props.instance}
+          start={r().start}
+          onConfirm={(p) => {
+            // Read the key BEFORE clearing: `r()` is <Show>'s accessor,
+            // and it stops reporting the row the moment the condition
+            // goes false — so reading it after the clear sent an empty
+            // key and the widening silently did nothing.
+            const key = r().key;
+            setRootFor(null);
+            send({ kind: 'row_add_root', key, path: p });
+          }}
+          onCancel={() => setRootFor(null)}
+          data-testid="ai-root-picker"
+        />
+      )}
+    </Show>
+  );
+
   const closeDialog = (
     <Show when={confirmClose()}>
       <Overlay onDismiss={() => setConfirmClose(false)} data-testid="ai-close-confirm">
@@ -878,6 +1092,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     {closeDialog}
     {promptDialog}
     {historyPanel}
+    {renameDialog}
+    {deleteDialog}
+    {pruneDialog}
+    {attachPicker}
+    {rootPicker}
     <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
       {menubar}
       <div
@@ -923,11 +1142,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               events={events}
               asks={asks}
               status={status}
-              onSend={(text) => send({ kind: 'prompt', text })}
+              onSend={(text, blocks) => send({ kind: 'prompt', text, blocks })}
+              onRemoveRoot={(path) => send({ kind: 'row_remove_root', key: sessionKey(), path })}
+              insertDraft={draftIn}
+              onPickFiles={() =>
+                new Promise<string[]>((resolve) => {
+                  // A picker already open would strand the earlier waiter.
+                  finishAttach([]);
+                  attachResolve = resolve;
+                  setAttaching(true);
+                })
+              }
               onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
               onCancel={() => send({ kind: 'cancel' })}
               onSetMode={(mode) => send({ kind: 'set_mode', mode })}
               onSetConfig={(id, value) => send({ kind: 'set_config', id, value })}
+              onOpenTool={(e) => {
+                // A tool row names a file; clicking it opens that file in
+                // whatever app registered for the type (the router's own
+                // open routing, so this app does not have to know that
+                // .png goes to imageview and .go goes to edit). Standalone
+                // Agent had no onOpenTool at all, so every row was inert —
+                // only wash-edit's agent tab could act on one.
+                const path = e.path || (e.title ?? '').trim();
+                if (path) send({ kind: 'open_path', path });
+              }}
             />
           </Show>
         </div>

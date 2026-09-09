@@ -61,6 +61,10 @@ type Session struct {
 	// the work is. "codex · mick" tells you nothing a week later; "Fix
 	// the reconnect banner race" does.
 	Title string `json:"title,omitempty"`
+	// UserTitle is the name a PERSON gave the session (session_admin.go).
+	// When set it is what publishHistory puts in Title; the agent's own
+	// title stays here underneath so clearing the user's falls back to it.
+	UserTitle string `json:"user_title,omitempty"`
 	// LastSeen is unix seconds — an absolute the FE renders as "2h ago",
 	// and the only field a keepalive touches.
 	LastSeen int64 `json:"last_seen"`
@@ -189,6 +193,9 @@ func publishHistory() []Session {
 	for _, s := range history {
 		st := idx[s.SessionID]
 		s.Live, s.Detached, s.RowKey = st.Live, st.Detached, st.RowKey
+		if s.UserTitle != "" {
+			s.Title = s.UserTitle
+		}
 		out = append(out, s)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].LastSeen > out[j].LastSeen })
@@ -297,6 +304,7 @@ func resolveResumeTarget(sessionID string) (Session, bool) {
 		Cwd:       m.Cwd,
 		Dir:       m.Dir,
 		Title:     m.Title,
+		UserTitle: m.UserTitle,
 		LastSeen:  sessionRecency(m) / 1000,
 	}, true
 }

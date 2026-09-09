@@ -15,7 +15,9 @@
 //
 // Behaviour is driven by the prompt text, which keeps the e2e readable:
 //
-//	"ask"    → requests permission, then reports what was answered
+//	"ask"        → requests permission, then reports what was answered
+//	"echoblocks" → reports the content blocks the prompt carried
+//	"launchinfo" → reports its own argv and $WASH_FAKE_MARK
 //	"crash"  → says why on stderr and exits mid-turn (the adapter died)
 //	anything → a short markdown reply with a tool call
 package main
@@ -178,6 +180,27 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		// wash's side, and it is what the exit watcher exists for.
 		fmt.Fprintln(os.Stderr, "acp-fake: fatal: simulated crash (token expired)")
 		os.Exit(3)
+	}
+
+	if strings.Contains(text, "launchinfo") {
+		// Report how THIS process was started: the extra argv wash added
+		// and one marker variable. agents.json can override the command,
+		// append args and add environment; none of that is observable
+		// from the UI, so the adapter says what it actually got.
+		notify(out, chunk(fmt.Sprintf("LAUNCH<<args=%s mark=%s>>",
+			strings.Join(os.Args[1:], ","), os.Getenv("WASH_FAKE_MARK"))))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.Contains(text, "echoblocks") {
+		// Report the SHAPE of the prompt that arrived — one entry per
+		// content block, type first. A composer that says it attached
+		// something proves nothing; this is how a spec sees that the
+		// image or the resource_link actually reached the wire.
+		notify(out, chunk("BLOCKS<<"+blockSummary(m)+">>"))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
 	}
 
 	if strings.Contains(text, "ask") {
@@ -443,6 +466,36 @@ func configState(configID, value string) map[string]any {
 // the prompt — a path — must use promptTextRaw instead: lowercasing a path
 // silently asks for a different file, which the fs sandbox then refuses,
 // and the refusal looks like a bug in the sandbox rather than in here.
+// blockSummary describes each prompt content block: its type, and enough
+// of its payload to identify it without reproducing it. Payload LENGTHS
+// rather than payloads, so a 200 KB screenshot does not land in a log.
+func blockSummary(m map[string]any) string {
+	params, _ := m["params"].(map[string]any)
+	blocks, _ := params["prompt"].([]any)
+	parts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		t, _ := bm["type"].(string)
+		switch t {
+		case "image":
+			data, _ := bm["data"].(string)
+			mime, _ := bm["mimeType"].(string)
+			parts = append(parts, fmt.Sprintf("image:%s:%d", mime, len(data)))
+		case "resource_link":
+			uri, _ := bm["uri"].(string)
+			name, _ := bm["name"].(string)
+			parts = append(parts, fmt.Sprintf("resource_link:%s:%s", uri, name))
+		default:
+			txt, _ := bm["text"].(string)
+			parts = append(parts, fmt.Sprintf("%s:%d", t, len(txt)))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func promptText(m map[string]any) string {
 	return strings.ToLower(promptTextRaw(m))
 }

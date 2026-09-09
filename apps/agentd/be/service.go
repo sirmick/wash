@@ -176,6 +176,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	registerFocusHandler(bus, c)
 	registerAskHandlers(bus, c)
 	registerACPHandlers(bus, c)
+	registerSessionAdminHandlers(bus)
 	registerTranscriptHandlers(bus)
 	// Child-spawning services group-kill on SIGTERM AND on connection
 	// close; the SDK fires this hook on both.

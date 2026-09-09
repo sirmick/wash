@@ -81,6 +81,10 @@ type hosted struct {
 	// nothing else consumes.
 	used, size int64
 	title      string
+	// userTitle is the person's name for the session (session_admin.go).
+	// It wins over title wherever the title is shown; title is kept so
+	// clearing it falls back to the agent's own.
+	userTitle string
 	// modes are the agent's own approval presets, and mode is the one in
 	// force. Changing it is ACP's answer to "stop asking me" — the AGENT's
 	// setting, visible to it and reversible from either side, rather than a
@@ -145,19 +149,41 @@ type hosted struct {
 	// allow and which flipped beginTurn/endTurn out of order. Guarded by
 	// turnMu; queued mirrors len(pending) for the roster row, readable
 	// without the lock (setState runs UNDER turnMu from begin/endTurn).
-	pending []string
+	pending []turn
 	queued  atomic.Int32
+	// extraRoots are folders allowed beyond cwd (roots.go). Guarded by
+	// hostedMu like everything else a roster push reads.
+	extraRoots []string
+	// mcp are the MCP servers this session was opened with (agents.json).
+	// Held so a RESUME offers the same set: session/load takes the list
+	// too, and a resumed session that silently lost its tools is worse
+	// than one that never had them.
+	mcp []acp.McpServer
 }
+
+// turn is one submitted prompt: what was typed, plus whatever was attached
+// to it. Attachments ride WITH the text rather than as a prompt of their
+// own — a screenshot with "what is wrong here?" is one message, and
+// splitting it into two turns would make the agent answer the first
+// without the second.
+type turn struct {
+	text   string
+	blocks []acp.ContentBlock
+}
+
+// empty reports a turn with nothing in it, which is what the queue drain
+// stops on.
+func (t turn) empty() bool { return t.text == "" && len(t.blocks) == 0 }
 
 // submitPrompt is the one entry for a prompt on a live session. Inside a
 // turn it is queued and the row says so; otherwise it claims the turn
 // under the lock and runs. Claiming here — not in beginTurn — is what
 // stops two prompts arriving in the same instant from both seeing a
 // closed turn and both starting one.
-func (h *hosted) submitPrompt(text string) (queued bool) {
+func (h *hosted) submitPrompt(t turn) (queued bool) {
 	h.turnMu.Lock()
 	if h.turnLive {
-		h.pending = append(h.pending, text)
+		h.pending = append(h.pending, t)
 		h.queued.Store(int32(len(h.pending)))
 		h.turnMu.Unlock()
 		log.Printf("agentd: acp prompt queued key=%s queued=%d", h.key, len(h.pending))
@@ -170,7 +196,7 @@ func (h *hosted) submitPrompt(text string) (queued bool) {
 		if h.idle != nil {
 			defer func() { h.idle <- struct{}{} }()
 		}
-		for next := text; next != ""; {
+		for next := t; !next.empty(); {
 			next = promptHosted(h, next)
 		}
 	}()
@@ -196,7 +222,7 @@ func (h *hosted) beginTurn() {
 // stopped drops the queue — the error would repeat, and Stop means stop
 // — and the transcript lists what was dropped so nothing typed is lost
 // from view.
-func (h *hosted) endTurn(state, reason string) (next string) {
+func (h *hosted) endTurn(state, reason string) (next turn) {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
 	clean := state == "done" && reason != "cancelled"
@@ -218,12 +244,12 @@ func (h *hosted) endTurn(state, reason string) (next string) {
 		}
 		text := "Dropped " + itoa(uint64(len(dropped))) + " queued prompt(s) after " + why + ":"
 		for _, d := range dropped {
-			text += "\n> " + strings.ReplaceAll(d, "\n", "\n> ")
+			text += "\n> " + strings.ReplaceAll(d.text, "\n", "\n> ")
 		}
 		log.Printf("agentd: acp prompts dropped key=%s n=%d reason=%s", h.key, len(dropped), reason)
 		h.note(text)
 	}
-	return ""
+	return turn{}
 }
 
 // narrated reports that the agent said or did something. It only moves the
@@ -483,11 +509,17 @@ func (h *hosted) setState(state, reason string) {
 		r.Detached = h.detached
 		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
-		r.Title = h.title
+		r.Title = h.shownTitle()
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
+		// Copied, not aliased: a snapshot outlives this callback, and a
+		// later append to h.extraRoots would otherwise rewrite a
+		// published row from under its readers (the shallow-snapshot
+		// footgun the race gate caught once already).
+		r.Roots = append([]string(nil), h.extraRoots...)
+
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
@@ -565,11 +597,17 @@ func (h *hosted) republish() {
 		r.Detached = h.detached
 		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
-		r.Title = h.title
+		r.Title = h.shownTitle()
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
+		// Copied, not aliased, for the reason setState gives above.
+		// Republished HERE as well as there: allowing a folder changes no
+		// state, so setState never runs for it, and a row that only
+		// learned its roots on the next state change is a widening the
+		// person cannot see they made.
+		r.Roots = append([]string(nil), h.extraRoots...)
 		r.lastSeen = now
 		if sameRow(before, r.Row) {
 			return false
@@ -577,6 +615,19 @@ func (h *hosted) republish() {
 		s.Rows = publish(now)
 		return true
 	})
+}
+
+// shownTitle is the title every surface renders: the person's name for
+// the session when they gave one, else the agent's own. Reads under
+// hostedMu — setState and republish run inside mutateStateIf, which is a
+// different lock, so the read here is the one that guards the fields.
+func (h *hosted) shownTitle() string {
+	hostedMu.Lock()
+	defer hostedMu.Unlock()
+	if h.userTitle != "" {
+		return h.userTitle
+	}
+	return h.title
 }
 
 // sameRow reports whether two published rows say the same thing.
@@ -736,6 +787,29 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		return acp.Cancelled(), nil
 	}
 
+	subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
+	v := h.askHuman(ctx, preq.ToolName, subject)
+	switch v.decision {
+	case DecisionAllow:
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+	case DecisionDeny:
+		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
+	if v.why == ReasonAgentExited {
+		// The adapter is gone; there is nobody left to explain it to.
+		return acp.Cancelled(), nil
+	}
+	h.narrateUnanswered(v.why, preq.ToolName, subject)
+	return acp.Cancelled(), nil
+}
+
+// askHuman puts one question in the desktop queue and waits for it.
+//
+// The shared half of every path that needs a person: the tool-call
+// approval above, and "this path is outside every folder you gave me"
+// (roots.go). Returns the verdict rather than an ACP response, because
+// the two callers answer their agents in different protocols.
+func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
 	h.setState("needs-input", "permission")
 	// Back to working once answered — but through the turn gate, so an
 	// answer that lands after the turn already ended cannot resurrect it.
@@ -744,8 +818,8 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	answer := make(chan verdict, 1)
 	queued := enqueueAsk(askSpec{
 		Agent:          h.agent,
-		Tool:           preq.ToolName,
-		Subject:        agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput),
+		Tool:           tool,
+		Subject:        subject,
 		Cwd:            h.cwd,
 		RowKey:         h.key,
 		SourceApp:      AppID,
@@ -757,7 +831,6 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		}
 		return nil
 	})
-	subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 	if !queued {
 		// enqueueAsk already answered with defer, and the buffered channel
 		// is holding *which* defer. Read it so the refusal can say which
@@ -767,8 +840,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		case v = <-answer:
 		default:
 		}
-		h.narrateUnanswered(v.why, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return v
 	}
 
 	select {
@@ -776,24 +848,47 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		// The adapter went away under the question (ctx is the ACP
 		// conn's, cancelled when its read loop ends). The question must
 		// go with it — nothing else will delete it for up to 30 minutes.
-		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, preq.ToolName, ReasonAgentExited)
+		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, tool, ReasonAgentExited)
 		cancelAsksFor(h.key, ReasonAgentExited)
-		return acp.Cancelled(), nil
+		return verdict{decision: DecisionDefer, why: ReasonAgentExited}
 	case v := <-answer:
-		switch v.decision {
-		case DecisionAllow:
-			return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
-		case DecisionDeny:
-			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
-		}
-		h.narrateUnanswered(v.why, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return v
 	case <-time.After(hostedAskTTL):
 		// Backstop only: the queue owns expiry and should always have
 		// answered by now. Reaching here means the queue lost the ask.
-		h.narrateUnanswered(ReasonTimeout, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return verdict{decision: DecisionDefer, why: ReasonTimeout}
 	}
+}
+
+// askOutside is the question a path outside every root raises. Same
+// queue, same row, same buttons — the person is being asked about a
+// FOLDER rather than a command, and nothing else about it differs.
+//
+// A yes allows that path for that call. It does not widen the session:
+// widening is addRoot, a deliberate act with a visible result, and an
+// approval buried in a stream of tool calls must not perform one.
+func (h *hosted) askOutside(ctx context.Context, tool, path string) bool {
+	pol := hostedPolicy()
+	if pol.Enabled && !pol.AskDesktopOrDefault() {
+		h.narrateUnanswered(reasonAskOff, tool, path)
+		return false
+	}
+	hostedMu.Lock()
+	yolo := h.yolo
+	hostedMu.Unlock()
+	if yolo {
+		h.note("Auto-approved (yolo): " + tool + " outside this session's folders — " + path)
+		return true
+	}
+	v := h.askHuman(ctx, tool, path+" (outside this session's folders)")
+	if v.decision == DecisionAllow {
+		h.note("Allowed once, outside this session's folders: " + path)
+		return true
+	}
+	if v.decision != DecisionDeny && v.why != ReasonAgentExited {
+		h.narrateUnanswered(v.why, tool, path)
+	}
+	return false
 }
 
 // verdict is an answer plus why it is that answer. The `why` is the whole
@@ -1022,7 +1117,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// one process that owns sessions.
 		first := withDefaultPrompt(loadDefaultPrompt(), req.Prompt)
 		if first != "" {
-			h.submitPrompt(first)
+			h.submitPrompt(turn{text: first})
 		}
 		if from.InstanceID == "" {
 			return nil
@@ -1049,7 +1144,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// Queued inside a turn, run otherwise — never a second concurrent
 		// session/prompt, which the protocol does not allow and which
 		// flipped beginTurn/endTurn out of order.
-		h.submitPrompt(req.Text)
+		h.submitPrompt(turn{text: req.Text, blocks: h.attachmentBlocks(req.Blocks)})
 		return nil
 	})
 
@@ -1204,6 +1299,35 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		return h.client.Cancel(h.sessionID)
 	})
 
+	// agent_add_root / agent_remove_root: widen or narrow which folders a
+	// session may reach (roots.go). Deliberate and visible — the row
+	// publishes the set, so every surface showing the session can say how
+	// wide it is — rather than something a stream of tool approvals can
+	// quietly accumulate.
+	sdk.HandleFromVoid(bus, "agent_add_root", func(_ *sdk.Conn, _ string, req rootReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil || req.Path == "" {
+			return nil
+		}
+		if h.addRoot(req.Path) {
+			h.note("Also allowed: " + req.Path)
+			h.republish()
+		}
+		return nil
+	})
+
+	sdk.HandleFromVoid(bus, "agent_remove_root", func(_ *sdk.Conn, _ string, req rootReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil || req.Path == "" {
+			return nil
+		}
+		if h.removeRoot(req.Path) {
+			h.note("No longer allowed: " + req.Path)
+			h.republish()
+		}
+		return nil
+	})
+
 	// agent_stop: end a session and its adapter.
 	sdk.HandleFromVoid(bus, "agent_stop", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
 		if h := lookupHosted(req.Key); h != nil {
@@ -1307,9 +1431,34 @@ func publicModes(in []acp.SessionMode) []Mode {
 	return out
 }
 
+// rootReq addresses one folder on one session.
+type rootReq struct {
+	Key  string `json:"key"`
+	Path string `json:"path"`
+}
+
 type promptReq struct {
 	Key  string `json:"key"`
 	Text string `json:"text,omitempty"`
+	// Blocks are attachments sent with the text: a pasted image, a file
+	// the composer's Attach button picked. Kept as a wash-shaped struct
+	// rather than acp.ContentBlock so the app→service wire is ours to
+	// validate — the router carries this from a window, and a window is
+	// not trusted to name a mime type or a path.
+	Blocks []promptAttachment `json:"blocks,omitempty"`
+}
+
+// promptAttachment is one attachment on its way to an ACP content block.
+// Type is "image" or "file"; anything else is dropped.
+type promptAttachment struct {
+	Type string `json:"type"`
+	// Image: base64 bytes and their mime type.
+	Mime string `json:"mime,omitempty"`
+	Data string `json:"data,omitempty"`
+	// File: an absolute path, confined against the session cwd before it
+	// becomes a resource_link.
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // modelName is the agent's current model, read out of its generic
@@ -1351,7 +1500,7 @@ func configLabel(c acp.ConfigOption) string {
 // summary, so a session killed with the router still carries its model.
 func (h *hosted) noteSession(endReason string, now time.Time) {
 	hostedMu.Lock()
-	agent, sid, cwd, title := h.agent, h.sessionID, h.cwd, h.title
+	agent, sid, cwd, title, userTitle := h.agent, h.sessionID, h.cwd, h.title, h.userTitle
 	hostedMu.Unlock()
 	if sid == "" {
 		return
@@ -1359,6 +1508,10 @@ func (h *hosted) noteSession(endReason string, now time.Time) {
 	s := transcriptSummary{
 		Agent: agent, Model: h.modelName(), Cwd: cwd, Dir: dirLabel(cwd),
 		Title: title, AtMS: now.UnixMilli(),
+		// Restated on every summary so the final record — the one the
+		// index reads first — carries the name; a clear is its own record
+		// (renameSession) and must not be undone by a later blank.
+		UserTitle: userTitle, UserTitleSet: userTitle != "",
 	}
 	if endReason != "" {
 		s.EndReason = endReason

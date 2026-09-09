@@ -6,25 +6,29 @@
 // launcher, no approval logic, no subscription. Everything arrives as an
 // accessor and leaves as a callback, exactly the contract <Terminal> has.
 //
-// The transcript is deliberately one line per tool call. Diffs open in
-// wash-edit, commands run in a wash-term tab, approvals live in agentd's
-// queue — this component's job is to be the thing that points at them,
-// not to reimplement any of them.
+// The transcript is one line per tool call, plus the diff that call made
+// when it made one: commands run in a wash-term tab and approvals live in
+// agentd's queue, but a change to a file is the one thing a person must
+// be able to read WITHOUT leaving the conversation to go and find it.
 
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { agentStateColor, agentStateLabel } from './agent-status';
-import { Markdown } from './markdown';
+import { HighlightedCode, Markdown } from './markdown';
 import { Terminal } from './terminal';
 import { WASH_SCROLL_CLASS } from './scrollbars';
 import {
   acceptsDrop,
   describeSkipped,
   fencedAttachment,
+  imageFilesFrom,
+  imageTooBig,
   insertAt,
   isTextLike,
+  MAX_IMAGE_BYTES,
   pathRefs,
+  readImageData,
   readTextFile,
   washPathsFrom,
 } from './agent-compose-drop';
@@ -41,6 +45,11 @@ export interface AgentEvent {
   title?: string;
   /** pending | in_progress | completed | failed */
   status?: string;
+  /** the file a tool call touched, when it named one: what a click opens */
+  path?: string;
+  /** a unified diff of what an edit tool changed, rendered by agentd from
+   *  the ACP `diff` content block's before/after pair */
+  diff?: string;
   /** set on kind==="image"; text then holds the base64 bytes */
   mime?: string;
   /** set on kind==="terminal": the raw channel its pty writes to */
@@ -51,6 +60,28 @@ export interface AgentEvent {
   append?: boolean;
   /** the row's UTF-8 byte length after this event applies (message/thought) */
   text_len?: number;
+}
+
+/** Text pushed into the composer from outside, and a counter that says
+ *  "this is a new send" — see AgentSessionProps.insertDraft. */
+export interface InsertedDraft {
+  text: string;
+  seq: number;
+}
+
+/** One attachment on its way out with a prompt, in agentd's wire shape
+ *  (apps/agentd/be/attach.go): an image travels by value because the
+ *  bytes came from a clipboard and exist nowhere on disk; a file travels
+ *  by reference, so the agent reads it through the same confinement and
+ *  the same permission ask as any other read. */
+export interface PromptBlock {
+  type: 'image' | 'file';
+  /** image: the mime type, and base64 bytes without the data: header */
+  mime?: string;
+  data?: string;
+  /** file: an absolute path, and what to call it */
+  path?: string;
+  name?: string;
 }
 
 /** A permission question waiting on this session. */
@@ -88,6 +119,10 @@ export interface AgentStatus {
   configs?: AgentConfig[];
   /** the agent's own slash commands */
   commands?: { name: string; description?: string }[];
+  /** folders allowed beyond `dir` (agentd roots.go). Shown in the status
+   *  bar because the whole hazard of widening a session is forgetting
+   *  that you did. */
+  roots?: string[];
   /** wash is auto-approving this session's permission requests (host-side
    *  yolo). Rendered as a standing badge, never as a quiet flag: an agent
    *  nobody is vetting must not look like one that is being watched. */
@@ -110,8 +145,36 @@ export interface AgentSessionProps {
   events: () => AgentEvent[];
   asks?: () => AgentAsk[];
   status?: () => AgentStatus;
-  /** Send a prompt. Absent while the session is not ready. */
-  onSend?: (text: string) => void;
+  /** Send a prompt, with whatever the composer had attached to it.
+   *  Absent while the session is not ready. */
+  onSend?: (text: string, blocks?: PromptBlock[]) => void;
+  /** Pick files to attach, over the session's own folder. Resolves with
+   *  absolute paths (empty when cancelled). Absent hides the Attach
+   *  button — a host with no file client cannot offer it. */
+  onPickFiles?: () => Promise<string[]>;
+  /** Take back one of the extra folders the session was allowed. Absent
+   *  leaves the status bar's root chips read-only. */
+  onRemoveRoot?: (path: string) => void;
+  /** Text to drop into the composer from OUTSIDE the session.
+   *
+   *  Two kinds of sender, one seam. A separate app sends the standalone
+   *  Agent window an `agent_draft` app message and wash-ai passes it
+   *  here; a host that EMBEDS this component (wash-edit's agent tab) has
+   *  no app on the other end of a message and pushes into the signal
+   *  directly:
+   *
+   *      const [draft, setDraft] = createSignal<InsertedDraft>();
+   *      let n = 0;
+   *      const sendToAgent = (text: string) => setDraft({ text, seq: ++n });
+   *      <AgentSession insertDraft={draft} … />
+   *
+   *  `seq` is what makes sending the same selection twice insert it
+   *  twice; the text alone could not say that. Inserted at the caret when
+   *  the composer has one, else at the end — and it QUEUES for free while
+   *  the session is still starting, because the composer is a controlled
+   *  input on a signal this writes to, so text set before `onSend` exists
+   *  is simply there when the box goes live. */
+  insertDraft?: () => InsertedDraft | undefined;
   /** Answer a pending question. `rule` is set when the user chose "always". */
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
   /** Click on a tool row — the host decides what that opens. */
@@ -185,14 +248,37 @@ const Dot: Component<{ color: string }> = (p) => (
   />
 );
 
-/** One tool call: kind, argument, state. Clickable when the host says so. */
+/** basename: a transcript row has no width for an absolute path, and the
+ *  directory is the session cwd nearly every time. The full path stays in
+ *  the title attribute. */
+function baseName(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i < 0 ? path : path.slice(i + 1);
+}
+
+/** One tool call: kind, argument, state — and, when the agent reported one,
+ *  the diff it made.
+ *
+ *  The diff is the point. An `edit` row that says only "Edit main.go" is a
+ *  claim; the unified diff underneath is the evidence, and reading it is
+ *  the whole reason to watch an agent rather than run one. agentd renders
+ *  it (apps/agentd/be/diff.go) so the wire carries hunks rather than two
+ *  whole copies of the file, and it arrives here as text to colour. */
 const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = (p) => {
   const clickable = () => !!p.onOpen;
+  // Expanded by default: a diff nobody opened is a diff nobody read, and
+  // the box is height-capped so even a big one costs a scroll, not a
+  // transcript.
+  const [open, setOpen] = createSignal(true);
   return (
+    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
     <div
+      data-testid="agent-tool-row"
+      data-path={p.e.path || undefined}
       data-wash-hit={clickable() ? '' : undefined}
       role={clickable() ? 'button' : undefined}
       tabindex={clickable() ? 0 : undefined}
+      title={p.e.path || undefined}
       onClick={() => p.onOpen?.(p.e)}
       onKeyDown={(ev) => {
         if (clickable() && (ev.key === 'Enter' || ev.key === ' ')) {
@@ -239,7 +325,75 @@ const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = 
       >
         {p.e.title || p.e.text || p.e.tool_id || ''}
       </span>
+      {/* The file, named separately from the title: an adapter's title is
+          prose ("Edit file"), and the path is the part you click. */}
+      <Show when={p.e.path && baseName(p.e.path!) !== (p.e.title ?? '')}>
+        <span
+          data-testid="agent-tool-path"
+          style={{
+            flex: 'none',
+            font: tokens.type.monoSm,
+            color: clickable() ? tokens.accentBlue : tokens.fgDim,
+            'max-width': '24ch',
+            overflow: 'hidden',
+            'text-overflow': 'ellipsis',
+            'white-space': 'nowrap',
+          }}
+        >
+          {baseName(p.e.path!)}
+        </span>
+      </Show>
+      <Show when={p.e.diff}>
+        <button
+          type="button"
+          data-testid="agent-tool-diff-toggle"
+          data-wash-hit
+          title={open() ? 'Hide the diff' : 'Show the diff'}
+          onClick={(ev) => {
+            // The row itself opens the file; the caret only folds.
+            ev.stopPropagation();
+            setOpen(!open());
+          }}
+          style={{
+            flex: 'none',
+            background: 'transparent',
+            border: 'none',
+            color: tokens.fgMuted,
+            font: tokens.type.monoSm,
+            cursor: 'pointer',
+            padding: '0 2px',
+          }}
+        >
+          {open() ? '▾' : '▸'} diff
+        </button>
+      </Show>
       <Dot color={dotColor(p.e.status)} />
+    </div>
+
+    <Show when={p.e.diff && open()}>
+      <pre
+        data-testid="agent-tool-diff"
+        class={WASH_SCROLL_CLASS}
+        style={{
+          margin: 0,
+          background: tokens.bgInset,
+          border: `1px solid ${tokens.borderMenu}`,
+          'border-radius': tokens.radiusMd,
+          padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
+          font: tokens.type.monoSm,
+          color: tokens.fgMuted,
+          'max-height': 'min(320px, 45vh)',
+          overflow: 'auto',
+          'white-space': 'pre',
+          // The transcript is a flex column; without this a diff in a
+          // short pane is squeezed to nothing (the terminal row learned
+          // the same lesson).
+          'flex-shrink': 0,
+        }}
+      >
+        <HighlightedCode code={p.e.diff!} lang="diff" />
+      </pre>
+    </Show>
     </div>
   );
 };
@@ -253,6 +407,12 @@ const MAX_SLASH = 8;
 
 const ALLOW_HINT = '⌥A';
 const DENY_HINT = '⌥D';
+const STOP_HINT = 'Esc';
+
+// How many of your own prompts ↑ walks back through. Fifty is a session's
+// worth: far enough that the thing you want is in there, short enough that
+// holding ↑ is not a way to lose your place.
+const MAX_PROMPT_HISTORY = 50;
 
 const hintStyle: JSX.CSSProperties = {
   font: tokens.type.monoSm,
@@ -387,21 +547,162 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     return all.filter((c) => c.name.toLowerCase().startsWith(typed));
   };
 
+  // ↑ history. The ring IS the transcript: every prompt you sent is
+  // already a user row, so recall is per-session for free, survives a
+  // resume, and has nothing to persist. A send agentd has not echoed back
+  // yet is held in `unecho` so ↑ works the instant after Enter, and drops
+  // out again as soon as the row arrives.
+  const [unecho, setUnecho] = createSignal<string[]>([]);
+  const prompts = () => {
+    const sent: string[] = [];
+    for (const e of props.events()) {
+      if (e.kind === 'user' && (e.text ?? '') !== '') sent.push(e.text!);
+    }
+    for (const t of unecho()) {
+      if (!sent.includes(t)) sent.push(t);
+    }
+    return sent.length > MAX_PROMPT_HISTORY ? sent.slice(-MAX_PROMPT_HISTORY) : sent;
+  };
+  // -1 is "not browsing": ↑ only ENTERS history from an empty composer, so
+  // it stays an arrow key in a draft you are editing.
+  const [histAt, setHistAt] = createSignal(-1);
+  const recallPrev = (): boolean => {
+    const h = prompts();
+    if (h.length === 0) return false;
+    const at = histAt();
+    if (at < 0) {
+      if (draft() !== '') return false;
+      setHistAt(h.length - 1);
+      setDraft(h[h.length - 1]);
+      return true;
+    }
+    // At the oldest: stay there rather than wrapping round to the newest,
+    // which loses the place you were walking back to.
+    if (at > 0) {
+      setHistAt(at - 1);
+      setDraft(h[at - 1]);
+    }
+    return true;
+  };
+  const recallNext = (): boolean => {
+    const at = histAt();
+    if (at < 0) return false;
+    const h = prompts();
+    if (at >= h.length - 1) {
+      setHistAt(-1);
+      setDraft('');
+      return true;
+    }
+    setHistAt(at + 1);
+    setDraft(h[at + 1]);
+    return true;
+  };
+
+  // A one-line note under the box for anything the composer would not
+  // take: a binary drop, an oversized image, a file that failed to read.
+  const [dropNote, setDropNote] = createSignal('');
+
+  // What the composer is holding, alongside the text. Cleared on send:
+  // an attachment belongs to the message it was collected for, and a
+  // screenshot silently riding along on the NEXT prompt is a surprise.
+  const [attached, setAttached] = createSignal<PromptBlock[]>([]);
+  const dropAttachment = (i: number) => setAttached((a) => a.filter((_, n) => n !== i));
+
   const send = () => {
     const text = draft().trim();
-    if (!text || !props.onSend) return;
-    props.onSend(text);
+    const blocks = attached();
+    if ((!text && blocks.length === 0) || !props.onSend) return;
+    props.onSend(text, blocks.length > 0 ? blocks : undefined);
+    if (text) setUnecho((u) => [...u, text].slice(-MAX_PROMPT_HISTORY));
+    setHistAt(-1);
     setDraft('');
+    setAttached([]);
     setPinned(true);
   };
 
+  // Paste an image. A text paste is left entirely alone — the default is
+  // correct there, and intercepting it would break every other paste in
+  // the box. Refused BEFORE the read: a 40 MB paste should not become
+  // 53 MB of base64 on its way to being rejected.
+  const attachImages = async (files: readonly File[]) => {
+    const skipped: string[] = [];
+    for (const f of files) {
+      if (f.size > MAX_IMAGE_BYTES) {
+        setDropNote(imageTooBig(f));
+        continue;
+      }
+      try {
+        const data = await readImageData(f);
+        if (!data) throw new Error('empty');
+        setAttached((a) => [...a, { type: 'image', mime: f.type, data, name: f.name || 'pasted image' }]);
+      } catch {
+        skipped.push(f.name || 'image');
+      }
+    }
+    if (skipped.length > 0) setDropNote(describeSkipped(skipped));
+  };
+
+  const onPaste = (e: ClipboardEvent) => {
+    const imgs = imageFilesFrom(e.clipboardData);
+    if (imgs.length === 0) return;
+    e.preventDefault();
+    void attachImages(imgs);
+  };
+
+  // Text handed to this composer by another app. Inserted at the caret,
+  // never sent: what someone does with a pasted-in selection — add a
+  // question above it, trim it, think better of it — is the whole reason
+  // it goes to the composer rather than straight to the agent.
+  let lastDraftSeq = -1;
+  createEffect(() => {
+    const d = props.insertDraft?.();
+    if (!d || d.seq === lastDraftSeq) return;
+    lastDraftSeq = d.seq;
+    if (!d.text) return;
+    const cur = draft();
+    const start = input?.selectionStart ?? cur.length;
+    const end = input?.selectionEnd ?? start;
+    const r = insertAt(cur, start, end, d.text);
+    setDraft(r.text);
+    setHistAt(-1);
+    setPinned(true);
+    queueMicrotask(() => {
+      input?.focus();
+      input?.setSelectionRange(r.caret, r.caret);
+    });
+  });
+
+  const pickFiles = async () => {
+    if (!props.onPickFiles) return;
+    const paths = await props.onPickFiles();
+    if (paths.length === 0) return;
+    setAttached((a) => [
+      ...a,
+      ...paths.map((p): PromptBlock => ({ type: 'file', path: p, name: baseName(p) })),
+    ]);
+    input?.focus();
+  };
+
   const st = () => props.status?.() ?? {};
+
+  // Stop is offered whenever there is a turn to stop — INCLUDING while a
+  // question is pending, which is exactly when a runaway turn is easiest
+  // to notice and, until now, the one moment the button hid itself. Esc
+  // is the same verb from the keyboard. agentd's agent_cancel already
+  // cancels the asks along with the turn (acp.go, cancelAsksFor), so one
+  // press ends both; what was missing was any way to reach it.
+  const pendingAsks = () => (props.asks?.() ?? []).length;
+  const stoppable = () => !!props.onCancel && (st().state === 'working' || pendingAsks() > 0);
+  const cancelTurn = (): boolean => {
+    if (!stoppable()) return false;
+    props.onCancel!();
+    return true;
+  };
 
   // Drops onto the composer (agent-compose-drop.ts): a wash drag becomes
   // @path references at the caret; an OS text file is attached inline as
   // a fenced block; anything else is named in a note under the box. The
   // placeholder has promised this since the composer existed.
-  const [dropNote, setDropNote] = createSignal('');
   const [dropping, setDropping] = createSignal(false);
   const onDragOver = (e: DragEvent) => {
     if (!acceptsDrop(e.dataTransfer)) return;
@@ -423,7 +724,12 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
       insert = pathRefs(paths);
     } else {
       const parts: string[] = [];
+      // An image dropped from the OS becomes an attachment, not a
+      // "not attached" note: it is exactly the thing the agent can use.
+      const imgs = imageFilesFrom(dt);
+      if (imgs.length > 0) void attachImages(imgs);
       for (const f of Array.from(dt!.files ?? [])) {
+        if ((f.type || '').toLowerCase().startsWith('image/')) continue;
         if (!isTextLike(f)) {
           skipped.push(f.name);
           continue;
@@ -453,6 +759,18 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
 
   return (
     <div
+      // Esc anywhere in the session — the composer, an ask row's buttons,
+      // the transcript — is Stop. Handled here rather than on the textarea
+      // so it does not depend on where focus happens to be when a turn
+      // goes wrong, and swallowed only when it actually stopped something,
+      // so Esc still closes whatever is above this when there is no turn.
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        if (cancelTurn()) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
       style={{
         display: 'flex',
         'flex-direction': 'column',
@@ -614,19 +932,23 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             empty transcript is indistinguishable from a broken one. Hidden
             while a question is pending, because then the thing waiting is
             you, not the agent. */}
-        <Show when={props.status?.().state === 'working' && (props.asks?.() ?? []).length === 0}>
+        <Show when={(st().state === 'working' && pendingAsks() === 0) || stoppable()}>
           <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px`, color: tokens.fgDim, font: tokens.type.textSm }}>
-            <Spinner />
-            <span>working…</span>
-            <Show when={props.onCancel}>
+            <Show when={st().state === 'working' && pendingAsks() === 0}>
+              <Spinner />
+              <span>working…</span>
+            </Show>
+            <Show when={stoppable()}>
               <button
                 data-wash-hit
                 type="button"
                 data-testid="agent-stop"
-                onClick={() => props.onCancel?.()}
+                title="End this turn — and the question it is waiting on"
+                onClick={() => cancelTurn()}
                 style={askBtn(tokens.bgNeutral, tokens.fgMuted)}
               >
                 Stop
+                <span style={hintStyle}>{STOP_HINT}</span>
               </button>
             </Show>
           </div>
@@ -691,6 +1013,76 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           </div>
         </Show>
 
+        {/* What is going out with the next message. Shown as chips rather
+            than folded into the text: an image has no textual form, and a
+            file attached by reference is a different thing from its path
+            typed into the prompt. */}
+        <Show when={attached().length > 0}>
+          <div
+            data-testid="agent-attachments"
+            style={{
+              display: 'flex',
+              'flex-wrap': 'wrap',
+              gap: `${tokens.spaceSm}px`,
+              'margin-bottom': `${tokens.spaceXs}px`,
+            }}
+          >
+            <For each={attached()}>
+              {(b, i) => (
+                <span
+                  data-testid="agent-attachment"
+                  data-kind={b.type}
+                  title={b.path || b.name}
+                  style={{
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                    gap: `${tokens.spaceXs}px`,
+                    padding: `1px ${tokens.spaceSm}px`,
+                    'border-radius': tokens.radiusSm,
+                    border: `1px solid ${tokens.borderMenu}`,
+                    background: tokens.bgInset,
+                    font: tokens.type.monoSm,
+                    color: tokens.fgMuted,
+                    'max-width': '28ch',
+                  }}
+                >
+                  <Show when={b.type === 'image' && b.data}>
+                    {/* A thumbnail, so "which screenshot is that" is not a
+                        question. A data: URI — the bytes are already here
+                        and no request is made for them. */}
+                    <img
+                      src={`data:${b.mime || 'image/png'};base64,${b.data}`}
+                      alt=""
+                      style={{ width: '18px', height: '18px', 'object-fit': 'cover', 'border-radius': '2px', flex: 'none' }}
+                    />
+                  </Show>
+                  <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+                    {b.name}
+                  </span>
+                  <button
+                    type="button"
+                    data-wash-hit
+                    data-testid="agent-attachment-remove"
+                    aria-label={`Remove ${b.name ?? 'attachment'}`}
+                    onClick={() => dropAttachment(i())}
+                    style={{
+                      flex: 'none',
+                      background: 'transparent',
+                      border: 'none',
+                      color: tokens.fgDim,
+                      font: tokens.type.monoSm,
+                      cursor: 'pointer',
+                      padding: '0 2px',
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+            </For>
+          </div>
+        </Show>
+
         {/* The composer stays open mid-turn on purpose. A message typed
             while the agent is replying is queued by agentd and sent when
             the turn ends — the way a messenger behaves — rather than the
@@ -709,14 +1101,39 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               ? 'Type the next message — it is sent when this turn ends'
               : 'Ask, or drop a file from wash-fm…')
           }
-          onInput={(e) => setDraft(e.currentTarget.value)}
+          onPaste={onPaste}
+          onInput={(e) => {
+            setDraft(e.currentTarget.value);
+            // Typing leaves history: the recalled prompt is now a draft
+            // you are editing, and ↑ should behave like an arrow key in it.
+            setHistAt(-1);
+          }}
           onKeyDown={(e) => {
+            // Ctrl/Cmd+Enter sends, unconditionally — the muscle memory
+            // every other chat composer trains, and the one that still
+            // works when a modifier is already held down.
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              send();
+              return;
+            }
             // Enter sends; Shift+Enter is a newline. A composer that
             // needed a modifier to send would be wrong for a chat and a
             // surprise in every other wash text field.
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
               e.preventDefault();
               send();
+              return;
+            }
+            // ↑ from an empty composer walks back through your own
+            // prompts, ↓ forward; ↓ past the newest returns the empty box.
+            if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+              if (recallPrev()) e.preventDefault();
+              return;
+            }
+            if (e.key === 'ArrowDown' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+              if (recallNext()) e.preventDefault();
+              return;
             }
           }}
           style={{
@@ -732,11 +1149,37 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             'box-sizing': 'border-box',
           }}
         />
-        <Show when={dropNote()}>
-          <div data-testid="agent-drop-note" style={{ font: tokens.type.textSm, color: tokens.fgMuted, 'margin-top': `${tokens.spaceXs}px` }}>
-            {dropNote()}
-          </div>
-        </Show>
+        <div style={{ display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceXs}px` }}>
+          {/* Attach is offered only by a host that has a file client to
+              open a picker with — the same rule every other callback here
+              follows. Paste and drop need no button. */}
+          <Show when={props.onPickFiles}>
+            <button
+              type="button"
+              data-wash-hit
+              data-testid="agent-attach"
+              title="Attach a file from this session's folder"
+              onClick={() => void pickFiles()}
+              style={{
+                flex: 'none',
+                font: tokens.type.monoSm,
+                padding: `1px ${tokens.spaceSm}px`,
+                'border-radius': tokens.radiusSm,
+                border: `1px solid ${tokens.borderMenu}`,
+                background: 'transparent',
+                color: tokens.fgMuted,
+                cursor: 'pointer',
+              }}
+            >
+              Attach…
+            </button>
+          </Show>
+          <Show when={dropNote()}>
+            <div data-testid="agent-drop-note" style={{ font: tokens.type.textSm, color: tokens.fgMuted }}>
+              {dropNote()}
+            </div>
+          </Show>
+        </div>
       </div>
 
       <div
@@ -791,6 +1234,52 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           <span style={{ color: tokens.fgDim }}>·</span>
           <span>{st().dir}</span>
         </Show>
+        {/* Folders allowed BEYOND the cwd. Named, not counted: "+2
+            folders" tells you that you widened the session and not what
+            you widened it to, and the second is the part that matters. */}
+        <For each={st().roots ?? []}>
+          {(root) => (
+            <span
+              data-testid="agent-root"
+              data-path={root}
+              title={`Also allowed: ${root}`}
+              style={{
+                display: 'inline-flex',
+                'align-items': 'center',
+                gap: '2px',
+                padding: '0 4px',
+                'border-radius': tokens.radiusSm,
+                border: `1px solid ${tokens.borderMenu}`,
+                color: tokens.accentAmber,
+                'max-width': '14ch',
+                'flex-shrink': 0,
+              }}
+            >
+              <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+                {baseName(root)}
+              </span>
+              <Show when={props.onRemoveRoot}>
+                <button
+                  type="button"
+                  data-wash-hit
+                  data-testid="agent-root-remove"
+                  aria-label={`Stop allowing ${root}`}
+                  onClick={() => props.onRemoveRoot?.(root)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: tokens.fgDim,
+                    font: tokens.type.monoSm,
+                    cursor: 'pointer',
+                    padding: 0,
+                  }}
+                >
+                  ×
+                </button>
+              </Show>
+            </span>
+          )}
+        </For>
         {/* The agent's own settings — model, reasoning effort, plan mode
             — all arrive in one generic shape, so ONE control renders
             them and whatever an adapter adds later. When the agent

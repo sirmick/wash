@@ -20,7 +20,7 @@
 
 import { For, Show, createSignal, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { Button, Input, Overlay, fmtBytes, tokens } from '@wash/ui';
+import { Button, Input, Menu, MenuItem, MenuSeparator, Overlay, fmtBytes, tokens } from '@wash/ui';
 
 /** One stored session, as agentd's history index describes it. */
 export interface SessionMeta {
@@ -30,6 +30,8 @@ export interface SessionMeta {
   cwd?: string;
   dir?: string;
   title?: string;
+  /** the name a person gave it; `title` is then the same string */
+  user_title?: string;
   started_ms?: number;
   ended_ms?: number;
   end_reason?: string;
@@ -153,6 +155,14 @@ export const HistoryPanel: Component<{
   /** true between asking and the answer landing — an empty list mid-flight
    *  is not the same claim as "nothing matched". */
   loading?: () => boolean;
+  /** give a session a name of your own; the host opens its dialog */
+  onRename?: (s: SessionMeta) => void;
+  /** delete a stored session — its transcript and its history entry. The
+   *  host confirms; a running session is refused by agentd and disabled
+   *  here. */
+  onDelete?: (s: SessionMeta) => void;
+  /** "Delete all older than…" — the host asks for the horizon */
+  onPrune?: () => void;
 }> = (props) => {
   const now = Date.now();
   let inputEl!: HTMLInputElement;
@@ -160,6 +170,15 @@ export const HistoryPanel: Component<{
   // the first thing every user does is click the box.
   onMount(() => inputEl?.focus());
   const [selected, setSelected] = createSignal(0);
+  // The per-row verbs menu: which row, and where. Menu portals to
+  // document.body, so these are viewport coordinates.
+  const [menuFor, setMenuFor] = createSignal<{ s: SessionMeta; x: number; y: number } | null>(null);
+  const hasVerbs = () => Boolean(props.onRename || props.onDelete);
+  const openMenu = (s: SessionMeta, e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuFor({ s, x: e.clientX, y: e.clientY });
+  };
 
   const rows = () => props.sessions();
 
@@ -177,6 +196,14 @@ export const HistoryPanel: Component<{
             <span data-testid="ai-history-count">{rows().length} session{rows().length === 1 ? '' : 's'}</span>
           </Show>
         </div>
+        {/* Pruning lives up here, beside the count it acts on. The store
+            grows without bound otherwise, and `rm` in the state dir was
+            the only way to lose a conversation. */}
+        <Show when={props.onPrune}>
+          <Button variant="ghost" data-testid="ai-history-prune" onClick={() => props.onPrune?.()}>
+            Delete older than…
+          </Button>
+        </Show>
       </div>
 
       <Input
@@ -227,6 +254,7 @@ export const HistoryPanel: Component<{
                 data-action={historyAction(s)}
                 onMouseEnter={() => setSelected(i())}
                 onClick={() => { if (historyAction(s) !== 'none') props.onResume(s); }}
+                onContextMenu={(e) => hasVerbs() && openMenu(s, e)}
                 style={{
                   display: 'flex',
                   'flex-direction': 'column',
@@ -264,6 +292,32 @@ export const HistoryPanel: Component<{
                   <span style={{ ...metaStyle, 'margin-left': 'auto', 'flex-shrink': 0 }}>
                     {fmtAgo(now, s.ended_ms || s.started_ms || 0)}
                   </span>
+                  {/* Right-click works on the row, but a right-click-only
+                      verb is a verb nobody finds — same ellipsis the
+                      roster rows carry. */}
+                  <Show when={hasVerbs()}>
+                    <button
+                      type="button"
+                      data-testid="ai-history-verbs"
+                      data-wash-hit
+                      title="Session actions"
+                      aria-label="Session actions"
+                      aria-haspopup="menu"
+                      onClick={(e) => openMenu(s, e)}
+                      style={{
+                        background: 'transparent',
+                        color: tokens.fg,
+                        border: 'none',
+                        padding: '0 2px',
+                        cursor: 'pointer',
+                        'font-size': '12px',
+                        'line-height': 1,
+                        'flex-shrink': 0,
+                      }}
+                    >
+                      ⋯
+                    </button>
+                  </Show>
                 </div>
                 {/* The metadata line is why this is a panel and not a
                     menu: it does not fit on one. */}
@@ -328,6 +382,29 @@ export const HistoryPanel: Component<{
       <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceMd}px` }}>
         <Button data-testid="ai-history-close" onClick={props.onClose}>Close</Button>
       </div>
+
+      <Show when={menuFor()}>
+        {(m) => (
+          <Menu x={m().x} y={m().y} onDismiss={() => setMenuFor(null)} data-testid="ai-history-actions">
+            <MenuItem
+              label="Rename…"
+              data-testid="ai-history-menu-rename"
+              disabled={!props.onRename}
+              onClick={() => { const s = m().s; setMenuFor(null); props.onRename?.(s); }}
+            />
+            <MenuSeparator />
+            {/* A running session cannot be deleted — its file is being
+                written — and the item says so by being disabled rather
+                than absent. End it first; then it is history. */}
+            <MenuItem
+              label={m().s.live ? 'Delete (still running)' : 'Delete…'}
+              data-testid="ai-history-menu-delete"
+              disabled={!props.onDelete || m().s.live === true}
+              onClick={() => { const s = m().s; setMenuFor(null); props.onDelete?.(s); }}
+            />
+          </Menu>
+        )}
+      </Show>
     </Overlay>
   );
 };

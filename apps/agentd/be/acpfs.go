@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sirmick/wash/internal/acp"
@@ -40,19 +41,30 @@ const maxAgentReadBytes = 8 << 20 // 8 MiB
 // maxAgentWriteBytes caps a single fs/write_text_file for the same reason.
 const maxAgentWriteBytes = 8 << 20
 
-// fsFor builds the confined filesystem for this session. The root is the
-// session's cwd — the folder the user chose when starting the agent, which
-// is exactly the scope they consented to.
+// fsFor builds the confined filesystem for this session's PRIMARY root:
+// the cwd the user chose when starting the agent. Extra roots (roots.go)
+// are resolved by h.confine, so anything that must honour all of them
+// goes through that and hands the resolved absolute path to a wfs rooted
+// where it landed — see writerFor.
 func (h *hosted) fsFor() *wfs.FS { return wfs.New(h.cwd) }
+
+// writerFor returns a filesystem that will accept `abs`, which h.confine
+// has already established is inside one of this session's roots (or was
+// approved by the person). Rooted at the file's own directory: the check
+// has happened, and re-deriving which root matched is a second chance to
+// get it wrong.
+func writerFor(abs string) *wfs.FS { return wfs.New(filepath.Dir(abs)) }
 
 // ReadTextFile answers fs/read_text_file. Line/Limit are the agent asking
 // for a window into a large file; both are 1-based line numbers per ACP.
-func (h *hosted) ReadTextFile(_ context.Context, req acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
-	abs, err := h.fsFor().Confine(req.Path)
+func (h *hosted) ReadTextFile(ctx context.Context, req acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
+	// Every root, then the person. An agent reaching outside the folders
+	// it was given is worth SEEING — it used to be a line in a log the
+	// person watching the window never read, which looked to them like
+	// the agent being broken and to the agent like the file not existing.
+	abs, err := h.confineOrAsk(ctx, "Read", req.Path)
 	if err != nil {
-		// The refusal is logged loudly: an agent reaching outside the folder
-		// it was given is worth seeing, whether it is malice or a bad path.
-		log.Printf("agentd: acp fs read REFUSED key=%s path=%q root=%q: %v", h.key, req.Path, h.cwd, err)
+		log.Printf("agentd: acp fs read REFUSED key=%s path=%q roots=%v: %v", h.key, req.Path, h.roots(), err)
 		return acp.ReadTextFileResponse{}, err
 	}
 	st, err := os.Stat(abs)
@@ -76,13 +88,18 @@ func (h *hosted) ReadTextFile(_ context.Context, req acp.ReadTextFileRequest) (a
 }
 
 // WriteTextFile answers fs/write_text_file.
-func (h *hosted) WriteTextFile(_ context.Context, req acp.WriteTextFileRequest) error {
+func (h *hosted) WriteTextFile(ctx context.Context, req acp.WriteTextFileRequest) error {
 	if len(req.Content) > maxAgentWriteBytes {
 		return fmt.Errorf("write of %d bytes exceeds the %d-byte limit", len(req.Content), maxAgentWriteBytes)
 	}
-	abs, n, err := h.fsFor().Write(req.Path, []byte(req.Content), maxAgentWriteBytes)
+	target, err := h.confineOrAsk(ctx, "Write", req.Path)
 	if err != nil {
-		log.Printf("agentd: acp fs write REFUSED key=%s path=%q root=%q: %v", h.key, req.Path, h.cwd, err)
+		log.Printf("agentd: acp fs write REFUSED key=%s path=%q roots=%v: %v", h.key, req.Path, h.roots(), err)
+		return err
+	}
+	abs, n, err := writerFor(target).Write(target, []byte(req.Content), maxAgentWriteBytes)
+	if err != nil {
+		log.Printf("agentd: acp fs write FAILED key=%s path=%q: %v", h.key, target, err)
 		return err
 	}
 	log.Printf("agentd: acp fs write key=%s path=%s bytes=%d", h.key, abs, n)
