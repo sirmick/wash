@@ -209,6 +209,7 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
     const arrow = h.sortKey !== key ? null : h.sortDesc ? <ChevronDown size={11} /> : <ChevronUp size={11} />;
     return (
       <button
+        data-wash-hit
         type="button"
         data-testid={`${props.testIdPrefix}-header-${key}`}
         disabled={!sortable}
@@ -236,6 +237,9 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
 
   return (
     <div
+      // The scrolling viewport. Its click handler is for clearing the
+      // selection on empty space; the rows inside are the hit targets.
+      data-wash-no-hit
       ref={containerEl!}
       data-testid={props.listTestId}
       {...(props.containerAttrs ?? {})}
@@ -276,6 +280,7 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
           const dropTarget = () => !!props.isDropTarget?.(row.path);
           return (
             <div
+              data-wash-hit="subtle"
               data-testid={`${props.testIdPrefix}-entry-${entry().name}`}
               data-type={entry().type}
               data-path={row.path}
@@ -325,6 +330,7 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                 }}
               >
                 <span
+                  data-wash-hit
                   data-testid={`${props.testIdPrefix}-chevron-${entry().name}`}
                   style={{
                     width: '12px',

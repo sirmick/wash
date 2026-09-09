@@ -3582,6 +3582,7 @@ const FailedJobRow: Component<{ job: BulkJob; onDismiss: () => void }> = (props)
         </span>
         <span style={{ font: tokens.type.monoSm, color: tokens.fgDanger, 'flex-shrink': 0 }}>failed</span>
         <button
+          data-wash-hit
           type="button"
           data-testid={`fm-dismiss-job-${props.job.job_id}`}
           title="Dismiss"
@@ -3678,6 +3679,7 @@ const InfoSection: Component<{
   return (
     <div style={{ 'border-bottom': `1px solid ${tokens.borderMenu}`, background: tokens.bgMenu }}>
       <button
+        data-wash-hit
         type="button"
         data-testid="fm-info-toggle"
         style={{ ...infoToggleStyle, display: 'flex', 'align-items': 'center', gap: '6px' }}
@@ -3778,6 +3780,7 @@ const EditableRow: Component<{
         when={props.editing}
         fallback={
           <span
+            data-wash-hit
             data-testid={`${props.testid}-value`}
             onClick={props.onStart}
             style={{
@@ -4118,6 +4121,7 @@ const AutocompleteDropdown: Component<{
       <For each={props.matches}>
         {(match, i) => (
           <div
+            data-wash-hit
             data-testid={`fm-complete-${i()}`}
             style={{
               padding: '4px 8px',
@@ -4520,6 +4524,7 @@ const FolderTile: Component<{
   const isDir = () => isDirLike(props.entry);
   return (
     <div
+      data-wash-hit
       ref={el}
       data-testid={`fm-tile-${props.entry.name}`}
       data-type={props.entry.type}

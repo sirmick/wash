@@ -190,6 +190,7 @@ const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = 
   const clickable = () => !!p.onOpen;
   return (
     <div
+      data-wash-hit={clickable() ? '' : undefined}
       role={clickable() ? 'button' : undefined}
       tabindex={clickable() ? 0 : undefined}
       onClick={() => p.onOpen?.(p.e)}
@@ -282,6 +283,7 @@ const AskRow: Component<{
       {p.ask.subject || p.ask.tool}
     </div>
     <button
+      data-wash-hit
       type="button"
       onClick={() => p.onAnswer?.(p.ask.id, 'allow')}
       style={askBtn(tokens.bgSuccess, tokens.fgSuccess)}
@@ -293,6 +295,7 @@ const AskRow: Component<{
     </button>
     <Show when={p.ask.suggested_rule}>
       <button
+        data-wash-hit
         type="button"
         onClick={() => p.onAnswer?.(p.ask.id, 'allow', p.ask.suggested_rule)}
         title={p.ask.rule_cwd ? `Only for ${p.ask.rule_cwd}` : undefined}
@@ -305,6 +308,7 @@ const AskRow: Component<{
       </button>
     </Show>
     <button
+      data-wash-hit
       type="button"
       onClick={() => p.onAnswer?.(p.ask.id, 'deny')}
       style={askBtn(tokens.bgDanger, tokens.fgDanger)}
@@ -616,6 +620,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             <span>working…</span>
             <Show when={props.onCancel}>
               <button
+                data-wash-hit
                 type="button"
                 data-testid="agent-stop"
                 onClick={() => props.onCancel?.()}
@@ -657,6 +662,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             <For each={slashMatches().slice(0, MAX_SLASH)}>
               {(cmd) => (
                 <button
+                  data-wash-hit
                   type="button"
                   title={cmd.description}
                   onClick={() => {

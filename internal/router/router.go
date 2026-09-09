@@ -1707,12 +1707,16 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			// it to a 64 KB window it had never needed. It then blocked
 			// in Reserve while holding shellMu, and the whole reattach
 			// stalled — no windows came back at all.
-			if err := writeChunked(replay, func(p []byte) error {
-				if !s.tryWriteRawClass(id, p, wire.ClassBulk) {
+			// ONE frame, for the reason resyncChannel spells out: a replay
+			// split across frames breaks xterm's viewport follow at a chunk
+			// boundary, and the terminal stops showing its own output while
+			// parsing every byte of it.
+			if err := func() error {
+				if !s.tryWriteRawClass(id, replay, wire.ClassBulk) {
 					return errReplayRefused
 				}
 				return nil
-			}); err != nil {
+			}(); err != nil {
 				// The FE just got a reset (channel.resync) but the
 				// scrollback snapshot behind it was lost — without a
 				// retry the terminal sits WIPED until new output
@@ -1800,18 +1804,24 @@ func (r *Router) resyncChannel(b *channelBinding) {
 		r.log("channel %d: resync deferred (bulk queue full) conn=%d", b.channelID, sh.connID)
 		return
 	}
+	// ONE frame, deliberately — this is the one writer that must not chunk.
+	// The FE writes a resync's bytes into xterm's own write queue, and xterm
+	// only keeps the viewport following its output while ydisp == ybase.
+	// Split across frames, the follow breaks at a chunk boundary: every byte
+	// still arrives and parses, and the viewport stays where it was while the
+	// buffer climbs past it — a terminal that has stopped showing its own
+	// output, which is indistinguishable from a hang (measured at ydisp=1232
+	// with ybase=15183 after a 20k-line burst; two runs in six).
+	//
+	// The cost is the one chunking was added to avoid: a replay frame is not
+	// preemptible once the writer commits it, so a grown ring (up to
+	// ChannelScrollbackMaxBytes) can delay a higher lane for its duration.
+	// That is the trade this path had before 54191d8f and it is the right way
+	// round — a resync is rare and recovers a terminal, while the frames it
+	// might delay are a drag's next position.
 	replayOK := true
 	if len(replay) > 0 {
-		// Chunked: one 4 MiB frame is not preemptible once the writer has
-		// committed it, so it blocks every higher lane for its whole
-		// duration even from down here.
-		_ = writeChunked(replay, func(p []byte) error {
-			if !sh.tryWriteRawClass(b.channelID, p, wire.ClassBulk) {
-				replayOK = false
-				return errReplayRefused
-			}
-			return nil
-		})
+		replayOK = sh.tryWriteRawClass(b.channelID, replay, wire.ClassBulk)
 	}
 	if !replayOK {
 		// Reset went out but the snapshot didn't fit; leave behind set so

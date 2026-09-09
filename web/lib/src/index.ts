@@ -11,6 +11,8 @@ export type { AppBus, AppBusMessage, AppBusMsgBound, AppBusOptions } from './app
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';
 export { Menu, MenuItem, MenuSeparator } from './menu';
+export { Tab, TAB_HEIGHT } from './tab';
+export type { TabProps } from './tab';
 export { MenuBar, kbdStyle } from './menubar';
 export type { MenuBarProps, MenuBarMenu } from './menubar';
 export type { MenuProps, MenuItemProps } from './menu';
@@ -81,6 +83,7 @@ export { b64encode, b64decode, encryptPassword } from './priv-crypto';
 export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';
+export { ensureHitStyles, HIT_ATTR } from './hit';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
 export { defineSettingsPanel, PANEL_PORT_PROP } from './define-settings-panel';
 export type {

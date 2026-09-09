@@ -15,6 +15,7 @@
 // customElements.get).
 
 import { render } from 'solid-js/web';
+import { ensureHitStyles } from './hit';
 import { ensureScrollbarStyles } from './scrollbars';
 import type { Component } from 'solid-js';
 
@@ -76,6 +77,10 @@ export function defineWashApp(
   // overlay bars otherwise paint over content — and get painted over by
   // it — most visibly in the terminal.
   ensureScrollbarStyles();
+  // …and the interaction layer (hit.ts): hover/press/focus feedback for
+  // anything the app marks `data-wash-hit`. Same light-DOM reasoning — one
+  // stylesheet in the document head serves every app.
+  ensureHitStyles();
 
   if (customElements.get(realTag)) return;
 
