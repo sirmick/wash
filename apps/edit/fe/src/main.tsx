@@ -1359,6 +1359,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     editorView.focus();
     openSearchPanel(editorView);
   };
+  // cmdReplace is Ctrl+H: the same panel as Find, with the caret in
+  // the replace field. CM has no command for that — the panel is one
+  // widget with both rows — so the field is focused once it is up.
+  const cmdReplace = () => {
+    if (activeTab()?.mode === 'wysiwyg') {
+      setWysFindOpen(true);
+      return;
+    }
+    if (!editorView) return;
+    editorView.focus();
+    openSearchPanel(editorView);
+    queueMicrotask(() => {
+      const el = editorView?.dom.querySelector('.cm-panel.cm-search input[name="replace"]') as HTMLInputElement | null;
+      el?.focus();
+      el?.select();
+    });
+  };
   // cmdGotoLine opens CM's line dialog. Only source tabs have line
   // numbers to go to; in WYSIWYG the command says so rather than
   // opening a dialog against the hidden source view.
@@ -2822,15 +2839,30 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         openNewTerm();
         return;
       }
-      // Ctrl+F / Ctrl+H: find (and replace) in a WYSIWYG tab. Source
-      // tabs are CM's territory — its searchKeymap handles Mod-f when
-      // the editor is focused, so we deliberately fall through here.
-      if ((ev.key === 'f' || ev.key === 'F' || ev.key === 'h' || ev.key === 'H') && !ev.shiftKey) {
+      // Ctrl+F: find. In a WYSIWYG tab that is the TipTap bar. On a
+      // source tab CM's searchKeymap already owns Mod-f while the
+      // editor is focused, so this only has to cover the case where it
+      // is not — clicking the tree and pressing Ctrl+F used to do
+      // nothing at all.
+      if ((ev.key === 'f' || ev.key === 'F') && !ev.shiftKey && !ev.altKey) {
         if (activeTab()?.mode === 'wysiwyg') {
           ev.preventDefault();
           setWysFindOpen(true);
           return;
         }
+        if (!dialogUp && !isTypingInEditor() && activeTab()) {
+          ev.preventDefault();
+          cmdFind();
+        }
+        return;
+      }
+      // Ctrl+H: find and replace. Unlike Ctrl+F this is never CM's —
+      // Chromium claims it for History — so it is always intercepted
+      // here, including from inside the editor.
+      if ((ev.key === 'h' || ev.key === 'H') && !ev.shiftKey && !ev.altKey) {
+        ev.preventDefault();
+        if (!dialogUp && activeTab()) cmdReplace();
+        return;
       }
       // Ctrl+Shift+P: toggle the active tab between WYSIWYG and
       // source view. No-op for non-markdown tabs (toggleWysiwyg
@@ -3049,7 +3081,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuItem label="Paste" trailing={<kbd style={kbdStyle}>Ctrl+V</kbd>} onClick={run(cmdPaste)} data-testid="edit-menu-paste" />
             <MenuSeparator />
             <MenuItem label="Find" trailing={<kbd style={kbdStyle}>Ctrl+F</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-find" />
-            <MenuItem label="Find & Replace" trailing={<kbd style={kbdStyle}>Ctrl+H</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-replace" />
+            <MenuItem label="Find & Replace" trailing={<kbd style={kbdStyle}>Ctrl+H</kbd>} onClick={run(cmdReplace)} data-testid="edit-menu-replace" />
             <MenuSeparator />
             <MenuItem label="Go to Line…" trailing={<kbd style={kbdStyle}>Ctrl+G</kbd>} disabled={!activeTab()} onClick={run(cmdGotoLine)} data-testid="edit-menu-goto-line" />
           </Menu>
