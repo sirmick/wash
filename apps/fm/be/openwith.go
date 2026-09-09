@@ -13,6 +13,10 @@
 // viewer, terminal) backs it up — the router still validates the target
 // on spawn, so an absent app just fails the spawn (logged, not fatal).
 //
+// "Open terminal here" rides the same seam with a fixed target:
+//
+//	FE → fm   open_terminal {dir}            → open_terminal_ok {dir}
+//
 // The launch itself is SpawnRequestOpen: the router starts the chosen app
 // with `--open <path>` argv (the same seam open routing uses), which needs
 // fm to declare CapSpawn.
@@ -20,6 +24,7 @@ package fm
 
 import (
 	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -47,6 +52,18 @@ type openWithListResp struct {
 type openWithReq struct {
 	AppID string `json:"app_id"`
 	Path  string `json:"path"`
+}
+
+// terminalAppID is the app "Open terminal here" targets. Fixed rather
+// than chosen: the point of the verb is "a shell, here".
+const terminalAppID = "com.wash.term"
+
+type openTerminalReq struct {
+	Dir string `json:"dir"`
+}
+
+type openTerminalResp struct {
+	Dir string `json:"dir"`
 }
 
 // knownOpeners is the fallback roster: apps that take a file (or folder)
@@ -77,6 +94,25 @@ func registerOpenWithHandlers(b *sdk.Bus) {
 		}
 		log.Printf("fm: open_with app=%s path=%q", req.AppID, abs)
 		return conn.SpawnRequestOpen(req.AppID, abs)
+	})
+	// "Open terminal here": spawn wash-term with the folder as its launch
+	// path. A file's parent is used, so the verb works from a file row too.
+	sdk.Handle(b, "open_terminal", func(conn *sdk.Conn, _ string, req openTerminalReq) (openTerminalResp, error) {
+		abs, err := fmFS.Confine(req.Dir)
+		if err != nil {
+			log.Printf("fm: open_terminal dir=%q: %v", req.Dir, err)
+			return openTerminalResp{}, fsErr(err, req.Dir)
+		}
+		if st, serr := os.Stat(abs); serr != nil {
+			return openTerminalResp{}, fsErr(serr, req.Dir)
+		} else if !st.IsDir() {
+			abs = filepath.Dir(abs)
+		}
+		log.Printf("fm: open_terminal dir=%q app=%s", abs, terminalAppID)
+		// TODO: once the term track lands `--open <dir>` as the first tab's
+		// cwd, assert the SHELL's cwd here (e2e currently asserts the spawn
+		// carried the dir + a term window appearing).
+		return openTerminalResp{Dir: abs}, conn.SpawnRequestOpen(terminalAppID, abs)
 	})
 }
 

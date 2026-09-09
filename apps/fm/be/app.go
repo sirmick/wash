@@ -88,8 +88,8 @@ func init() {
 			// CapOpen: routing double-click/Enter to the registered app.
 			// CapSpawn: the "Open with…" chooser and "Open terminal here"
 			// name the target app themselves (openwith.go).
-			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
-			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
+			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
+			Window:       &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},
 		Assets:             sub,
 		OnReady:            onReady,

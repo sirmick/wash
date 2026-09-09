@@ -93,6 +93,7 @@ import {
   Search,
   ShieldAlert,
   Square,
+  Terminal,
   Trash2,
   Upload,
   Video,
@@ -2676,6 +2677,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     closeMenu();
     send({ kind: 'open_with', app_id: appID, path: p });
   };
+  // "Open terminal here" — a shell in the folder being looked at (or the
+  // clicked row's folder). The BE resolves a file to its parent.
+  const openTerminalHere = (dir: string) => {
+    closeMenu();
+    void sendWithReply({ kind: 'open_terminal', dir }).then((reply) => {
+      if (reply.kind !== 'open_terminal_ok') {
+        setStatusOverride(`open terminal: ${String(reply.msg ?? reply.code ?? 'failed')}`);
+        return;
+      }
+      setStatusInfo(`terminal in ${String(reply.dir ?? dir)}`);
+    });
+  };
 
   // ---- lifecycle: events ----
 
@@ -2955,6 +2968,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           }}
         >
           <Download size={14} />
+        </Button>
+        <Button
+          variant="ghost"
+          data-testid="fm-open-terminal"
+          title="Open terminal here"
+          style={{ padding: '4px 8px', 'min-width': '30px' }}
+          onClick={() => openTerminalHere(viewDir())}
+        >
+          <Terminal size={14} />
         </Button>
         <Button variant="ghost" data-testid="fm-sort" title="Sort" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={openSortMenu}>
           <ArrowUpDown size={14} />
@@ -3263,6 +3285,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onOpenWith={() => {
             const m = menu() as { left: number; top: number; path: string };
             void openOpenWithMenu(m.path, m.left, m.top);
+          }}
+          onOpenTerminal={() => {
+            const m = menu() as { entry: Entry; path: string };
+            // A folder row → that folder; a file row → its parent (the BE
+            // resolves it, so the request carries the row's own path).
+            openTerminalHere(isDirLike(m.entry) ? m.path : parentPath(m.path));
           }}
           onCut={() => {
             const m = menu() as { path: string };
@@ -3832,6 +3860,7 @@ const ContextMenu: Component<{
   path: string;
   onOpen: () => void;
   onOpenWith: () => void;
+  onOpenTerminal: () => void;
   // Files-clipboard trio — Cut/Copy mirror the Ctrl+X/C shortcuts on
   // the clicked row (or the whole selection when it contains the row);
   // Paste mirrors Ctrl+V into the row's directory. canPaste greys
@@ -3854,6 +3883,7 @@ const ContextMenu: Component<{
       <Show when={!isDirLike(props.entry)}>
         <MenuItem data-testid="fm-ctx-open-with" label="Open with…" onClick={props.onOpenWith} />
       </Show>
+      <MenuItem data-testid="fm-ctx-open-terminal" label="Open terminal here" onClick={props.onOpenTerminal} />
       <MenuSeparator />
       <MenuItem data-testid="fm-ctx-cut" label="Cut" onClick={props.onCut} />
       <MenuItem data-testid="fm-ctx-copy" label="Copy" onClick={props.onFileCopy} />
