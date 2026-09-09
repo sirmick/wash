@@ -182,6 +182,12 @@ interface PersistedTab {
   // missing) keeps the existing CodeMirror-based behavior. Persisting
   // mode lets us honor a per-tab toggle across reloads.
   mode?: 'source' | 'wysiwyg';
+  // Per-tab view settings. Both used to be one window-wide signal that
+  // reset on every tab switch and every reload: turning wrap on for a
+  // log, or forcing a syntax on an extensionless file, lasted exactly
+  // as long as you stayed on that tab.
+  wrap?: boolean;
+  lang?: string;
 }
 
 interface PersistedState {
@@ -259,6 +265,11 @@ interface Tab {
   size?: number;
   // Line endings on disk. The buffer is always LF; see toDisk.
   eol?: Eol;
+  // Word wrap for this tab, and a manual syntax override ('' / absent =
+  // derive from the path). Per tab because they are properties of what
+  // you are looking at, not of the window.
+  wrap?: boolean;
+  lang?: string | null;
   // The file's mode (or its mount) denies this process a write. Not a
   // `blocked` reason: the buffer is a perfectly good editable buffer,
   // it just cannot go back where it came from, so Ctrl+S routes to
@@ -1286,6 +1297,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           }
         }
         if (scrollTop && scrollTop > 0 && t.mode === 'source') pt.scroll = scrollTop;
+        // The live signals are the truth for the ACTIVE tab: toggleWrap
+        // / setLang write through to the tab too, but a reconfigure that
+        // has not been flushed yet would otherwise be missed.
+        const wrap = isActive ? wordWrap() : !!t.wrap;
+        const lang = isActive ? langOverride() : (t.lang ?? null);
+        if (wrap) pt.wrap = true;
+        if (lang) pt.lang = lang;
         tabList.push(pt);
       });
       const state: PersistedState = {
@@ -1386,6 +1404,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               ...(fresh ? { state: fresh } : {}),
               ...(pt.scroll ? { scrollTop: pt.scroll } : {}),
               ...(persistedMode ? { mode: persistedMode } : {}),
+              ...(pt.wrap ? { wrap: true } : {}),
+              ...(pt.lang ? { lang: pt.lang } : {}),
             } : x));
             if (restoreContent && pt.content !== tab.baseline) {
               setDirtyIDs((s) => {
@@ -1418,6 +1438,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             state: fresh,
             binary: false,
             scrollTop: pt.scroll,
+            wrap: pt.wrap || undefined,
+            lang: pt.lang || undefined,
             mode: pt.mode === 'wysiwyg' ? 'wysiwyg' : 'source',
             wysCache: pt.mode === 'wysiwyg' ? content : undefined,
           };
@@ -1627,10 +1649,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const setLang = (k: string | null) => {
     setLangOverride(k);
+    const t = activeTab();
+    if (t) setTabs(tabs().map((x) => (x.id === t.id ? { ...x, lang: k } : x)));
+    persist();
     editorView?.focus();
   };
   const toggleWrap = () => {
-    setWordWrap(!wordWrap());
+    const next = !wordWrap();
+    setWordWrap(next);
+    const t = activeTab();
+    if (t) setTabs(tabs().map((x) => (x.id === t.id ? { ...x, wrap: next } : x)));
+    persist();
     editorView?.focus();
   };
 
@@ -1863,6 +1892,110 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }]);
     setActiveTermID(localID);
     send({ kind: 'agent.start', tab: localID, agent: agentID });
+  };
+
+  // ---- send to agent ----
+  //
+  // The selection (or the whole buffer) as a fenced block with the
+  // file's path, dropped into the agent tab's composer as a DRAFT: the
+  // point is to type "why is this wrong?" next to it, not to fire the
+  // code off on its own.
+  //
+  // SEAM: the Agent app is growing an `agent_draft` app-message
+  // ({kind:'agent_draft', text}) that it inserts into its composer.
+  // edit does not go through that path because it HOSTS AgentSession
+  // itself — there is no app on the other end of a message — and
+  // AgentSession takes no draft prop (web/lib/src/agent-session.tsx is
+  // the agent track's). Until it does, the draft is written into the
+  // composer's textarea the way a paste would be: set the value through
+  // the native setter and fire `input`, which is exactly what the
+  // component's own onInput consumes. When AgentSession grows a draft
+  // input, this becomes a one-line change.
+
+  // agentDraftFor builds the block: the path (with the line range when
+  // it is a selection) above a fence tagged with the tab's language.
+  const agentDraftFor = (t: Tab): string => {
+    const fence = currentLang() === 'plain' ? '' : currentLang();
+    let body = tabContent(t);
+    let where = t.path || t.displayName;
+    if (t.mode !== 'wysiwyg' && editorView && t.id === activeID()) {
+      const sel = editorView.state.selection.main;
+      if (!sel.empty) {
+        body = editorView.state.sliceDoc(sel.from, sel.to);
+        const from = editorView.state.doc.lineAt(sel.from).number;
+        const to = editorView.state.doc.lineAt(sel.to).number;
+        where += from === to ? `:${from}` : `:${from}-${to}`;
+      }
+    }
+    return `${where}\n\n\`\`\`${fence}\n${body.replace(/\n*$/, '')}\n\`\`\`\n`;
+  };
+
+  // insertAgentDraft finds the composer inside an agent tab's host and
+  // appends to whatever is already typed there. Returns false while the
+  // pane has not painted or the session has not started (the composer is
+  // disabled until it has), which is why the caller retries.
+  const insertAgentDraft = (tabID: string, text: string): boolean => {
+    const host = props.host.querySelector(`[data-testid="edit-term-host-${tabID}"]`);
+    const ta = host?.querySelector('textarea[data-testid="agent-composer"]') as HTMLTextAreaElement | null;
+    if (!ta || ta.disabled) return false;
+    const cur = ta.value;
+    const insert = cur.trim() ? `\n\n${text}` : text;
+    ta.focus();
+    ta.setSelectionRange(cur.length, cur.length);
+    // execCommand, not `ta.value = …`: the composer is a CONTROLLED
+    // input bound to the component's own draft signal, so a value written
+    // behind its back is on screen only until the next render, and the
+    // next roster push is one. execCommand produces the browser's own
+    // input event, which the component's onInput consumes like any
+    // keystroke. Deprecated, and still the only way to put text into a
+    // controlled input from outside it.
+    document.execCommand('insertText', false, insert);
+    // The answer is whether the text is actually THERE: a disabled or
+    // not-yet-wired composer takes the command and does nothing, and the
+    // caller must keep trying rather than report a send that never was.
+    return ta.value !== cur;
+  };
+
+  // sendToAgent opens the pane (starting a session if there is none) and
+  // lands the draft once the composer exists.
+  const sendToAgent = () => {
+    const t = activeTab();
+    if (!t || t.blocked) {
+      setStatusError('nothing to send — this tab has no buffer');
+      return;
+    }
+    const text = agentDraftFor(t);
+    let target = termTabs().find((x) => x.id === activeTermID() && x.kind === 'agent')
+      ?? termTabs().find((x) => x.kind === 'agent');
+    if (!target) {
+      const adapter = agentAdapters()[0];
+      if (!adapter) {
+        setStatusError('no agent installed to send this to');
+        return;
+      }
+      openAgentTab(adapter.id);
+      target = termTabs().find((x) => x.kind === 'agent');
+    }
+    if (!target) return;
+    setTermOpen(true);
+    setActiveTermID(target.id);
+    const id = target.id;
+    // A session that was just started has not rendered — or enabled —
+    // its composer yet, and starting one is a process spawn. Keep trying
+    // for half a minute rather than dropping the text on the floor.
+    let tries = 0;
+    const land = () => {
+      if (insertAgentDraft(id, text)) {
+        setStatusError(null);
+        return;
+      }
+      if (++tries > 300) {
+        setStatusError('the agent session did not start — nothing was sent');
+        return;
+      }
+      window.setTimeout(land, 100);
+    };
+    land();
   };
 
   // Adapters agentd found, for the + menu. Empty until the roster push
@@ -3033,6 +3166,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         toggleWysiwyg();
         return;
       }
+      // Ctrl+Shift+Enter: send the selection (or the buffer) to the
+      // agent pane as a draft.
+      if (ev.key === 'Enter' && ev.shiftKey) {
+        ev.preventDefault();
+        sendToAgent();
+        return;
+      }
       // Ctrl+= / Ctrl+- / Ctrl+0: font zoom. Chromium's own page zoom is
       // not the same thing (it scales the whole desktop, chrome and all)
       // and is not reachable from a keydown anyway.
@@ -3151,13 +3291,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (seededID === null) return;
       seededID = null;
       setLangOverride(null);
+      setWordWrap(false);
       // No active tab — leave the view empty.
       editorView.setState(EditorState.create({ doc: '', extensions: baseExtensions() }));
       return;
     }
     if (seededID === id) return;
     seededID = id;
-    setLangOverride(null);
+    // Adopt this tab's own view settings rather than resetting them.
+    setLangOverride(t.lang ?? null);
+    setWordWrap(!!t.wrap);
     if (t.state) {
       editorView.setState(t.state);
     } else {
@@ -3316,6 +3459,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 )}
               </For>
             </Show>
+            <MenuSeparator />
+            <MenuItem
+              label="Send to Agent"
+              trailing={<kbd style={kbdStyle}>Ctrl+Shift+Enter</kbd>}
+              disabled={!activeTab() || !!activeTab()!.blocked}
+              onClick={run(sendToAgent)}
+              data-testid="edit-menu-send-agent"
+            />
             <MenuSeparator />
             <MenuItem
               label={termOpen() ? 'Hide Panel' : 'Show Panel'}
@@ -3997,6 +4148,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <MenuItem label="Cut" onClick={() => { setTextCtxMenu(null); cmdCut(); }} data-testid="edit-text-ctx-cut" />
           <MenuItem label="Copy" onClick={() => { setTextCtxMenu(null); cmdCopy(); }} data-testid="edit-text-ctx-copy" />
           <MenuItem label="Paste" onClick={() => { setTextCtxMenu(null); cmdPaste(); }} data-testid="edit-text-ctx-paste" />
+          <MenuSeparator />
+          <MenuItem
+            label="Send to Agent"
+            trailing={<kbd style={kbdStyle}>Ctrl+Shift+Enter</kbd>}
+            onClick={() => { setTextCtxMenu(null); sendToAgent(); }}
+            data-testid="edit-text-ctx-send-agent"
+          />
         </Menu>
       </Show>
 
