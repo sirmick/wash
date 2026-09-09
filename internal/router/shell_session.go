@@ -621,8 +621,14 @@ func (s *ShellSession) handlePanelRead(m wire.ShellPanelRead) error {
 	}
 	// Same Interactive class as bundle/asset delivery so the strict-
 	// priority scheduler can't let the Unbind overtake the data frames.
+	// Bulk, like app bundles: a panel is a sizeable transfer, and the
+	// shell now completes it on the byte count promised in panel.read.ok
+	// rather than on the Unbind, so a control frame overtaking the data
+	// can no longer truncate it. Interactive was the workaround for that
+	// completion rule, and it put a quarter-megabyte transfer in the lane
+	// that carries pointer motion.
 	if err := writeChunked(bundle, func(p []byte) error {
-		return s.WriteRawFrameClass(id, p, wire.ClassInteractive)
+		return s.WriteRawFrameClass(id, p, wire.ClassBulk)
 	}); err != nil {
 		return err
 	}
@@ -926,10 +932,13 @@ func (s *ShellSession) writeCtrlLocked(m any) error {
 // Defaults to Bulk class so it yields to user-interactive frames
 // from other channels.
 //
-// Bundle/replay-style transactional flows (Bind → raw … → Unbind)
-// must use WriteRawFrameClass with ClassInteractive instead — Bulk
-// would let the Interactive Unbind overtake the data frames under
-// strict priority, breaking the transaction.
+// Transactional flows (Bind → raw … → Unbind) do NOT need promoting to
+// a higher lane to stay intact: bundles and panels both complete on the
+// byte count announced in their bind, so an Unbind that overtakes the
+// data cannot truncate anything. Promoting them was the old workaround,
+// and it put sizeable transfers in the lane that carries pointer
+// motion. Replay-style flows that still complete on the Unbind must
+// keep their frames in ONE lane, whichever it is.
 //
 // No writeMu: see WriteCtrl. The scheduler's channel handles
 // concurrent-producer ordering.

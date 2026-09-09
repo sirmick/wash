@@ -17,6 +17,12 @@ interface Pending {
   reqID: number;
   appID: string;
   channelID?: number; // set by handlePanelReadOK; bytes/finish keyed off it
+  // size is the byte count the router promised in panel.read.ok. The
+  // import fires when that many bytes have arrived rather than when the
+  // Unbind lands, which is what lets the data ride a lower priority
+  // lane than the control frame that follows it — the same rule
+  // assets.ts uses for app bundles.
+  size: number;
   chunks: Uint8Array[];
   resolve: () => void;
   reject: (err: Error) => void;
@@ -40,7 +46,7 @@ export function loadSettingsPanel(send: SendCtrl, appID: string): Promise<void> 
   if (existing) return existing;
   const p = new Promise<void>((resolve, reject) => {
     const reqID = nextReqID++;
-    const pending: Pending = { reqID, appID, chunks: [], resolve, reject };
+    const pending: Pending = { reqID, appID, size: 0, chunks: [], resolve, reject };
     pendingByReqID.set(reqID, pending);
     send({ t: 'panel.read', req_id: reqID, app_id: appID });
   });
@@ -56,7 +62,10 @@ export function handlePanelReadOK(msg: { req_id: number; channel_id: number; siz
   const p = pendingByReqID.get(msg.req_id);
   if (!p) return;
   p.channelID = msg.channel_id;
+  p.size = msg.size;
   pendingByChannelID.set(msg.channel_id, p);
+  // A zero-byte panel has all of its bytes already.
+  maybeImportPanel(p);
 }
 
 /** handlePanelReadErr rejects the matching pending load. */
@@ -73,29 +82,61 @@ export function pushPanelBytes(channelID: number, bytes: Uint8Array): boolean {
   const p = pendingByChannelID.get(channelID);
   if (!p) return false;
   p.chunks.push(bytes);
+  maybeImportPanel(p);
   return true;
 }
 
-/** finishPanel is called from the channel.unbind handler. If the
- *  channel was a panel stream, concatenates the chunks, blob-imports
- *  the module (its customElements.define side effect makes the panel
- *  element live), and resolves the originating loadSettingsPanel.
- *  No-op for non-panel channels. */
+/** finishPanel is called from the channel.unbind handler. Byte-count
+ *  completion (maybeImportPanel) normally gets there first; this stays
+ *  as the path for a stream that ends short — a router-side read error
+ *  mid-transfer — so the caller is rejected instead of hanging on a
+ *  promise that can never settle. No-op for non-panel channels. */
 export function finishPanel(channelID: number): void {
   const p = pendingByChannelID.get(channelID);
   if (!p) return;
   pendingByChannelID.delete(channelID);
   pendingByReqID.delete(p.reqID);
+  p.reject(new Error(`panel stream ended after ${byteCount(p)} of ${p.size} bytes`));
+}
 
-  const blob = new Blob(p.chunks as BlobPart[], { type: 'application/javascript' });
+function byteCount(p: Pending): number {
+  return p.chunks.reduce((n, c) => n + c.byteLength, 0);
+}
+
+/** importPanelBytes is the DOM step: wrap the accumulated chunks in a
+ *  blob URL and evaluate the module, whose customElements.define side
+ *  effect is the whole point. Named as a seam because a blob URL cannot
+ *  be imported outside a browser, which would otherwise leave the
+ *  completion rule around it untestable. */
+export type PanelImporter = (chunks: Uint8Array[]) => Promise<void>;
+
+let importPanelBytes: PanelImporter = (chunks) => {
+  const blob = new Blob(chunks as BlobPart[], { type: 'application/javascript' });
   const url = URL.createObjectURL(blob);
-  import(/* @vite-ignore */ url)
+  return import(/* @vite-ignore */ url).then(
+    () => { URL.revokeObjectURL(url); },
+    (err) => { URL.revokeObjectURL(url); throw err; },
+  );
+};
+
+/** setPanelImporter replaces the DOM step. For tests only. */
+export function setPanelImporter(fn: PanelImporter): void {
+  importPanelBytes = fn;
+}
+
+/** maybeImportPanel imports the panel module once every promised byte
+ *  has arrived. Idempotent: removal from the maps is the guard. */
+function maybeImportPanel(p: Pending): void {
+  if (p.channelID === undefined) return;
+  if (byteCount(p) < p.size) return;
+  pendingByChannelID.delete(p.channelID);
+  pendingByReqID.delete(p.reqID);
+
+  importPanelBytes(p.chunks)
     .then(() => {
-      URL.revokeObjectURL(url);
       p.resolve();
     })
     .catch((err) => {
-      URL.revokeObjectURL(url);
       const stack = err instanceof Error ? err.stack ?? err.message : String(err);
       wlog(`panel bundle FAILED: app=${p.appID} stack=${stack}`);
       p.reject(err instanceof Error ? err : new Error(String(err)));
