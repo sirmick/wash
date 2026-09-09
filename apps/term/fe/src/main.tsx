@@ -30,6 +30,8 @@ import {
 import type { PasteAnalysis, TermModes, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
+import { SplitIntents } from './intents';
+import type { SplitIntent } from './intents';
 import {
   DEFAULT_GUTTER, ROOT,
   addTab as treeAddTab, canSplit, channels as treeChannels, closeTab as treeCloseTab,
@@ -229,10 +231,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // window-level surface (status bar, Edit menu, paste) talks about.
   const active = (): number => focusedGroup()?.group.active ?? 0;
 
-  // A pending split: the BE round-trip for a new tab is asynchronous, so a
-  // split records where the tab should land and applies it when tab_opened
-  // arrives. FIFO, so two fast Ctrl+Shift+D presses land in order.
-  let splitIntents: Array<{ path: string; dir: Dir }> = [];
+  // Pending splits: the BE round-trip for a new tab is asynchronous, so a
+  // split records where the tab should land, keyed by the request id its
+  // `new_tab` carried, and applies it when the `tab_opened` echoing that id
+  // arrives (intents.ts). Arrivals the FE never asked for take nothing.
+  const splitIntents = new SplitIntents();
   // Window-wide font choice, driven into every <Terminal>. The
   // right-click menu reports changes back here so they persist and
   // apply across all tabs at once.
@@ -310,15 +313,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- tab lifecycle ----
 
-  // addTab records the channel and places it in the tree: into the group a
-  // pending split named, else into the focused group. A tab that arrives
-  // for a split takes focus in its new pane, which is what "split right"
-  // means — you end up typing in the new one.
-  const addTab = (channelID: number, shellPath: string, extra?: Partial<TabMeta>) => {
+  // addTab records the channel and places it in the tree: into the group
+  // the split that requested it named (matched by request id), else into
+  // the focused group. A tab that arrives for a split takes focus in its
+  // new pane, which is what "split right" means — you end up typing in the
+  // new one.
+  const addTab = (channelID: number, shellPath: string, extra?: Partial<TabMeta>, req?: string) => {
     if (tabs().some((t) => t.channelID === channelID)) return;
     setTabs([...tabs(), { channelID, shell: shellPath, ...extra }]);
 
-    const intent = splitIntents.shift();
+    const intent = splitIntents.take(req);
     const next = intent && groupAt(tree(), intent.path)
       ? splitGroup(tree(), intent.path, intent.dir, channelID)
       : treeAddTab(tree(), focusPath(), channelID);
@@ -443,7 +447,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     send({ kind: 'resize', channel_id: channelID, cols, rows });
   };
 
-  const openNewTab = () => send({ kind: 'new_tab' });
+  // openNewTab asks the BE for a pty. Every request carries an id the BE
+  // echoes on tab_opened / tab_error, so a split's placement is bound to
+  // the tab it asked for and a failed spawn cannot leave a stray intent
+  // behind for the next plain New Tab to pick up.
+  const openNewTab = (intent?: SplitIntent) => {
+    const req = splitIntents.mint();
+    if (intent) splitIntents.set(req, intent);
+    send({ kind: 'new_tab', req });
+  };
   const requestCloseTab = (channelID: number) => {
     if (channelID) send({ kind: 'close_tab', channel_id: channelID });
   };
@@ -464,8 +476,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const g = placedAt(path);
     if (!g || !canSplit(g.rect, dir, { gutter: GUTTER })) return;
     focusGroup(path);
-    splitIntents.push({ path: g.path, dir });
-    openNewTab();
+    openNewTab({ path: g.path, dir });
   };
   const splitFocused = (dir: Dir) => splitAt(focusedGroup()?.path ?? ROOT, dir);
 
@@ -739,10 +750,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // ---- BE ----
 
+  // reqOf is the request id a reply echoes, or undefined for a push the FE
+  // never asked for (an exec_tab from agentd carries none).
+  const reqOf = (m: BEMessage): string | undefined => (m.req ? String(m.req) : undefined);
+
   const handleBE = (m: BEMessage) => {
     switch (m.kind) {
       case 'tab_opened':
-        addTab(Number(m.channel_id), String(m.shell ?? 'shell'));
+        addTab(Number(m.channel_id), String(m.shell ?? 'shell'), undefined, reqOf(m));
         return;
       case 'tab_closed':
         removeTab(Number(m.channel_id));
@@ -767,6 +782,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         return;
       }
       case 'tab_error': {
+        // The pty never opened, so the split that asked for it must not
+        // wait for a tab that will never come.
+        splitIntents.drop(reqOf(m));
         const api = apis.get(active());
         if (api) api.write('\r\n\x1b[31mwash-term: ' + String(m.msg) + '\x1b[0m\r\n');
         return;
@@ -1193,7 +1211,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       </Show>
       <Show when={openMenu() === 'tab'}>
         <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-tab" onDismiss={closeMenu}>
-          <MenuItem label="New Tab" data-testid="term-menu-newtab" onClick={run(openNewTab)} />
+          <MenuItem label="New Tab" data-testid="term-menu-newtab" onClick={run(() => openNewTab())} />
           <MenuItem label="Close Tab" data-testid="term-menu-closetab" onClick={run(() => requestCloseTab(active()))} />
           <MenuSeparator />
           <MenuItem

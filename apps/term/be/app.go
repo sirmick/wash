@@ -272,6 +272,10 @@ type resizeReq struct {
 type newTabReq struct {
 	Cols uint64 `json:"cols"`
 	Rows uint64 `json:"rows"`
+	// Req is the FE's request id, echoed on the tab_opened / tab_error it
+	// produces so the FE can match the reply to what it asked for (a split
+	// records its placement against this id).
+	Req string `json:"req"`
 }
 
 // execTabReq is the resume path's tab request (§13). Exec is the argv to
@@ -318,7 +322,7 @@ func registerHandlers(b *sdk.Bus) {
 		if rows == 0 {
 			rows = 24
 		}
-		go openTab(c, c.WindowID(), uint16(cols), uint16(rows))
+		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), nil, req.Req)
 		return nil
 	})
 	// exec_tab opens a tab running a specific command — the session-resume
@@ -348,7 +352,7 @@ func registerHandlers(b *sdk.Bus) {
 			rows = 24
 		}
 		log.Printf("term: exec_tab from=%s argv=%q", from.AppID, req.Exec)
-		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), req.Exec)
+		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), req.Exec, "")
 		return nil
 	})
 	// list_sessions is the FE's mount-time reconcile: a `tab_closed`
@@ -421,13 +425,15 @@ func registerHandlers(b *sdk.Bus) {
 // hands both to internal/pty.Open which wires them with io.Copy
 // pairs. Reports tab_opened / tab_closed app_msgs to the FE.
 func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16) {
-	openTabExec(c, windowID, cols, rows, nil)
+	openTabExec(c, windowID, cols, rows, nil, "")
 }
 
 // openTabExec is openTab with an optional argv override — the resume path
 // (§13) runs a specific command instead of the user's shell. An overridden
-// tab autocloses when the command exits, matching --exec semantics.
-func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []string) {
+// tab autocloses when the command exits, matching --exec semantics. req is
+// the FE's request id, echoed on the reply (empty for tabs nobody in the
+// FE asked for, so a reconcile or an exec_tab can never claim a split).
+func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []string, req string) {
 	var argv []string
 	switch {
 	case len(override) > 0:
@@ -476,7 +482,7 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 	})
 	if err != nil {
 		log.Printf("wash-term open: %v", err)
-		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error()})
+		_ = c.SendAppMsg(map[string]any{"kind": "tab_error", "msg": err.Error(), "req": req})
 		return
 	}
 	st.mu.Lock()
@@ -488,6 +494,7 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 		"kind":       "tab_opened",
 		"channel_id": uint64(sess.ID()),
 		"shell":      sess.Shell,
+		"req":        req,
 	})
 }
 
