@@ -35,10 +35,14 @@ import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
 import { reconcileRemoteAttachments } from './remote-reconcile';
 import {
+  appMatches,
   paletteEntries,
+  pinnedRows,
   recentDir,
+  recentMatches,
   recentName,
   recentPathOf,
+  stepSelection,
   type PaletteEntry,
   type RecentEntry,
 } from './launcher';
@@ -281,6 +285,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // dismissal can be suppressed while it is up — the context menu is a
   // portal, so to the start menu a click on it looks like "outside".
   const [recentMenu, setRecentMenu] = createSignal<{ x: number; y: number; path: string } | null>(null);
+  // Right-click on an APP row: {x, y, appID} while open. Same portal
+  // caveat as recentMenu — the start menu must not dismiss under it.
+  const [appMenu, setAppMenu] = createSignal<{ x: number; y: number; appID: string } | null>(null);
+  // Pinned app ids in pin order, from the same launcher.state push.
+  const [pinned, setPinned] = createSignal<string[]>([]);
   // Desktop config arrives from the BE as desktop.config app_msg
   // (initial push on connect + every fswatch fire). Defaults below
   // = "no config file yet", matching the BE's zero-value reply.
@@ -594,6 +603,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   };
   const clearRecent = () => {
     window.wash.sendAppMsg(props.instance, { kind: 'recent.clear' });
+  };
+  const setPin = (appID: string, on: boolean) => {
+    window.wash.sendAppMsg(props.instance, { kind: 'launcher.pin', app_id: appID, on });
   };
 
   // ---- remote hosts (sidebar) ----
@@ -926,8 +938,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           setNetIfaces((data.interfaces as NetIface[] | undefined) ?? []);
           return;
         case 'launcher.state': {
-          const d = data as unknown as { recent?: RecentEntry[] };
+          const d = data as unknown as { recent?: RecentEntry[]; pinned?: string[] };
           setRecent(Array.isArray(d.recent) ? d.recent : []);
+          setPinned(Array.isArray(d.pinned) ? d.pinned : []);
           return;
         }
         case 'notify.state': {
@@ -1602,9 +1615,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           recent={recent()}
           version={sysInfo()?.router?.version}
           onDismiss={() => {
-            // A click on the Recent context menu is "outside" the start
-            // menu (portal); keep the menu up until that menu is gone.
-            if (recentMenu()) return;
+            // A click on a row context menu is "outside" the start menu
+            // (portal); keep the menu up until that menu is gone.
+            if (recentMenu() || appMenu()) return;
             setMenuOpen(false);
           }}
           onPick={(id) => {
@@ -1615,10 +1628,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             setMenuOpen(false);
             openRecent(path);
           }}
+          pinned={pinned()}
           onRecentContextMenu={(ev, path) => {
             ev.preventDefault();
             ev.stopPropagation();
+            setAppMenu(null);
             setRecentMenu({ x: ev.clientX, y: ev.clientY, path });
+          }}
+          onAppContextMenu={(ev, appID) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            setRecentMenu(null);
+            setAppMenu({ x: ev.clientX, y: ev.clientY, appID });
           }}
           onLogout={() => {
             setMenuOpen(false);
@@ -1664,6 +1685,27 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               onClick={() => {
                 clearRecent();
                 setRecentMenu(null);
+              }}
+            />
+          </Menu>
+        )}
+      </Show>
+
+      <Show when={appMenu()}>
+        {(m) => (
+          <Menu
+            data-testid="start-menu-app-menu"
+            x={m().x}
+            y={m().y}
+            zIndex={tokens.zStartMenu + 1}
+            onDismiss={() => setAppMenu(null)}
+          >
+            <MenuItem
+              data-testid="start-menu-pin"
+              label={pinned().includes(m().appID) ? 'Unpin from start' : 'Pin to start'}
+              onClick={() => {
+                setPin(m().appID, !pinned().includes(m().appID));
+                setAppMenu(null);
               }}
             />
           </Menu>
@@ -2236,9 +2278,12 @@ const StartMenu: Component<{
   rootRows: CatalogApp[];
   /** recent files, newest first (session BE launcher.state) */
   recent: RecentEntry[];
+  /** pinned app ids, in pin order (session BE launcher.state) */
+  pinned: string[];
   onPick: (id: string) => void;
   onOpenRecent: (path: string) => void;
   onRecentContextMenu: (ev: MouseEvent, path: string) => void;
+  onAppContextMenu: (ev: MouseEvent, appID: string) => void;
   onDismiss: () => void;
   onLogout: () => void;
   onDisconnect: () => void;
@@ -2254,6 +2299,48 @@ const StartMenu: Component<{
     return merged;
   });
   const isRootRow = (id: string) => id.startsWith(ROOT_PREFIX);
+
+  // ---- search + keyboard ----
+  // The menu opens with the filter focused, so the whole launcher is
+  // type-then-Enter without ever reaching for the mouse. The three sections
+  // (Pinned, Recent, Apps) are ONE keyboard list: `rows` flattens them in
+  // render order so Arrow keys walk straight through the headers.
+  const [query, setQuery] = createSignal('');
+  const [selected, setSelected] = createSignal(0);
+  const pinnedApps = createMemo(() => appMatches(pinnedRows(items(), props.pinned), query()));
+  const recentHits = createMemo(() => recentMatches(props.recent, query()));
+  const appHits = createMemo(() => appMatches(items(), query()));
+  type Row = { run: () => void };
+  const rows = createMemo<Row[]>(() => [
+    ...pinnedApps().map((a) => ({ run: () => props.onPick(a.id) })),
+    ...recentHits().map((r) => ({ run: () => props.onOpenRecent(r.path) })),
+    ...appHits().map((a) => ({ run: () => props.onPick(a.id) })),
+  ]);
+  // Section offsets into that flat list, for the per-row selected mark.
+  const recentBase = createMemo(() => pinnedApps().length);
+  const appBase = createMemo(() => recentBase() + recentHits().length);
+  // A new query renumbers everything; start again at the top.
+  createEffect(() => {
+    query();
+    setSelected(0);
+  });
+  const selMark = (i: number) => (i === selected() ? 'true' : undefined);
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      props.onDismiss();
+      return;
+    }
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      rows()[selected()]?.run();
+      return;
+    }
+    const next = stepSelection(ev.key, selected(), rows().length);
+    if (next === null) return;
+    ev.preventDefault();
+    setSelected(next);
+  };
   return (
     <Menu
       data-testid="start-menu"
@@ -2310,18 +2397,76 @@ const StartMenu: Component<{
           wash{props.version ? ` ${props.version}` : ''}
         </span>
       </div>
+      <div onKeyDown={onKey}>
+      {/* Filter: matches app names/ids and recent PATHS, the same rule the
+          Ctrl+Space palette uses (launcher.ts). Autofocused, so opening the
+          menu and typing is the fast path; Arrows/Enter/Esc are handled on
+          the wrapper below so they work wherever focus sits inside. */}
+      <input
+        type="text"
+        data-testid="start-menu-search"
+        placeholder="Search…"
+        value={query()}
+        ref={(el) => queueMicrotask(() => el.focus())}
+        onInput={(e) => setQuery(e.currentTarget.value)}
+        style={{
+          width: '100%',
+          'box-sizing': 'border-box',
+          padding: '6px 10px',
+          margin: '0 0 4px',
+          background: 'transparent',
+          color: tokens.fg,
+          border: `1px solid ${tokens.borderMenu}`,
+          'border-radius': tokens.radiusSm,
+          outline: 'none',
+          font: tokens.type.text,
+        }}
+      />
       <div style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }}>
+      {/* Pinned: apps the person put here by hand (right-click → Pin to
+          start), in pin order, above everything the machine decided. An
+          uninstalled app's id simply drops out (pinnedRows). */}
+      <Show when={pinnedApps().length > 0}>
+        <div data-testid="start-menu-pinned" style={sectionHeaderStyle}>Pinned</div>
+        <For each={pinnedApps()}>
+          {(app, i) => (
+            <div
+              data-selected={selMark(i())}
+              style={rowSelStyle(i() === selected())}
+              onContextMenu={(ev) => props.onAppContextMenu(ev, app.id)}
+            >
+              <MenuItem
+                data-testid="start-menu-pinned-item"
+                label={app.name}
+                disabled={app.disabled}
+                icon={
+                  app.icon ? (
+                    <span style={{ color: accentFor(app), display: 'inline-flex' }}>
+                      <SpriteIcon name={app.icon} size={16} />
+                    </span>
+                  ) : undefined
+                }
+                onClick={() => props.onPick(app.id)}
+              />
+            </div>
+          )}
+        </For>
+      </Show>
       {/* Recent: files the router routed to a handler, newest first. A row
           re-issues the open through the session BE (same ext → handler
           resolution as the original double-click); right-click offers
           Remove / Clear recent. The section is absent, not empty, when
           there is nothing to show — a "no recent files" line would only
           push the app list down. */}
-      <Show when={props.recent.length > 0}>
+      <Show when={recentHits().length > 0}>
         <div data-testid="start-menu-recent" style={sectionHeaderStyle}>Recent</div>
-        <For each={props.recent}>
-          {(r) => (
-            <div onContextMenu={(ev) => props.onRecentContextMenu(ev, r.path)}>
+        <For each={recentHits()}>
+          {(r, i) => (
+            <div
+              data-selected={selMark(recentBase() + i())}
+              style={rowSelStyle(recentBase() + i() === selected())}
+              onContextMenu={(ev) => props.onRecentContextMenu(ev, r.path)}
+            >
               <MenuItem
                 data-testid="start-menu-recent-item"
                 label={recentName(r.path)}
@@ -2350,11 +2495,16 @@ const StartMenu: Component<{
             </div>
           )}
         </For>
+      </Show>
+      <Show when={pinnedApps().length > 0 || recentHits().length > 0}>
         <div data-testid="start-menu-apps" style={sectionHeaderStyle}>Apps</div>
       </Show>
-      <Show when={items().length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
-        <For each={items()}>
-          {(app) => {
+      <Show
+        when={appHits().length > 0}
+        fallback={<div style={emptyStyle}>{items().length === 0 ? 'no apps registered' : 'no matches'}</div>}
+      >
+        <For each={appHits()}>
+          {(app, i) => {
             const root = isRootRow(app.id);
             // Stable data-testid hook for every launcher row so e2e
             // tests can disambiguate without relying on accessible
@@ -2376,6 +2526,11 @@ const StartMenu: Component<{
               </span>
             ) : undefined;
             return (
+              <div
+                data-selected={selMark(appBase() + i())}
+                style={rowSelStyle(appBase() + i() === selected())}
+                onContextMenu={(ev) => props.onAppContextMenu(ev, app.id)}
+              >
               <MenuItem
                 data-testid={rowTestid}
                 label={app.name}
@@ -2390,10 +2545,12 @@ const StartMenu: Component<{
                 }
                 onClick={() => props.onPick(app.id)}
               />
+              </div>
             );
           }}
         </For>
       </Show>
+      </div>
       </div>
       <div
         aria-hidden="true"
@@ -2654,6 +2811,14 @@ const clockStyle: JSX.CSSProperties = {
   opacity: 0.7,
   'font-size': '13px',
 };
+
+// Keyboard highlight for a start-menu row. MenuItem paints itself
+// transparent at rest, so a background on the wrapper reads as the row's
+// own selection — no fork of the shared component to add one prop.
+const rowSelStyle = (on: boolean): JSX.CSSProperties => ({
+  background: on ? tokens.bgRowSelected : 'transparent',
+  'border-radius': tokens.radiusSm,
+});
 
 // Section label inside the start menu ("Recent", "Pinned", "Apps").
 const sectionHeaderStyle: JSX.CSSProperties = {
