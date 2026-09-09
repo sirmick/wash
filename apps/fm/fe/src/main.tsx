@@ -2301,11 +2301,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           startRename(Array.from(sel)[0]);
           return;
         }
-        if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel.size > 0) {
+        if (ev.key === 'Delete' && sel.size > 0) {
           ev.preventDefault();
           const paths = Array.from(sel);
           if (paths.length === 1) requestDelete(paths[0]);
           else requestBulkDelete(paths);
+          return;
+        }
+        if (ev.key === 'Backspace') {
+          // Up one level — the convention every desktop file manager
+          // follows (Finder, Nautilus, Dolphin, Explorer). This used to be
+          // a second Delete key, with the confirm dialog as the only
+          // backstop.
+          ev.preventDefault();
+          goUp();
           return;
         }
         if (ev.key === 'Enter' && sel.size === 1) {
