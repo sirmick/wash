@@ -95,12 +95,6 @@ type state struct {
 	// pushed per channel, so an idle tab stays off the wire (we only
 	// send when root/ssh/user actually flips). Cleared on tab close.
 	statusSent map[uint32]string
-	// agents holds each tab's merged agent status (T0 poll + OSC 7770
-	// events); agentSent is its send-on-change dedupe, same shape as
-	// statusSent. See agent.go.
-	// autoApprove holds each tab's trailing-output window for the opt-in
-	// legacy auto-approve path (autoapprove.go). Absent for every tab
-	// until the feature is switched on.
 }
 
 // initState allocates the per-window maps. Both entrypoints (Def for the

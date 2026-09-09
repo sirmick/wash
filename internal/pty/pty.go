@@ -167,11 +167,6 @@ type ForegroundUser struct {
 	State  string // "user" | "root" | "ssh"
 	User   string // login name of the foreground program's euid
 	Target string // ssh destination host, when State == "ssh"
-	// Agent is the coding-agent slug ("claude", "codex", …) when the
-	// foreground program is one — tier T0 of docs/AGENT_TERM.md §2.
-	// Empty for everything else, which is most things: a shell, vi, a
-	// build. Independent of State (an agent can run as root).
-	Agent string
 	// Busy reports that something other than the login shell holds the
 	// foreground — a build, an editor, ssh, an agent. False means the
 	// shell is sitting at its prompt, so closing the tab loses nothing the
