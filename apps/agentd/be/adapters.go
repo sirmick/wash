@@ -275,14 +275,23 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 // SessionUpdate underneath. Callers go through hosted.submitPrompt, which
 // owns the turn claim; calling this directly is only right when the turn
 // is already claimed (tests).
-func promptHosted(h *hosted, text string) (next string) {
+func promptHosted(h *hosted, t turn) (next turn) {
+	text := t.text
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
 	} else {
 		appendPrompt(h.key, text, time.Now())
 	}
 	h.beginTurn()
-	res, err := h.client.Prompt(context.Background(), h.sessionID, acp.Text(text))
+	// Text first, then the attachments: the sentence is what frames them,
+	// and an adapter reading the blocks in order should see the question
+	// before the screenshot it is about.
+	blocks := make([]acp.ContentBlock, 0, 1+len(t.blocks))
+	if text != "" {
+		blocks = append(blocks, acp.Text(text))
+	}
+	blocks = append(blocks, t.blocks...)
+	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
 	switch {
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
@@ -303,7 +312,7 @@ func promptHosted(h *hosted, text string) (next string) {
 			// retry.
 			h.note("The turn failed: " + turnError(err) + "\n\nThe session is still open — send again to retry.")
 		}
-		return ""
+		return turn{}
 	case res.StopReason == acp.StopCancelled:
 		return h.endTurn("done", "cancelled")
 	default:

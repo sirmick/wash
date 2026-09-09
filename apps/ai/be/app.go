@@ -6,7 +6,7 @@
 // composer. Everything it does is a message to com.wash.agentd:
 //
 //	FE → ai   start    {agent, cwd, prompt?}   → ai → agentd  agent_start
-//	FE → ai   prompt   {text}                  → ai → agentd  agent_prompt
+//	FE → ai   prompt   {text, blocks?}         → ai → agentd  agent_prompt
 //	FE → ai   answer   {id, decision, rule?}   → ai → agentd  agent_answer
 //	FE → ai   open_path {path}                 → router open routing
 //	          agentd → ai  transcript_snapshot / transcript_event / state
@@ -421,11 +421,19 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		if session.key == "" {
 			return
 		}
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+		// blocks are attachments the composer collected — a pasted image,
+		// a picked file. Passed through as-is: agentd validates them (mime,
+		// size, and the path against the session's own confinement), and
+		// it is the only party that knows what the session's roots are.
+		msg := map[string]any{
 			"kind": "agent_prompt",
 			"key":  session.key,
 			"text": str(m["text"]),
-		})
+		}
+		if blocks, ok := m["blocks"].([]any); ok && len(blocks) > 0 {
+			msg["blocks"] = blocks
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, msg)
 	case "detach":
 		// Leave the session running. agentd keeps its roster row, which
 		// is where the user gets back to it.

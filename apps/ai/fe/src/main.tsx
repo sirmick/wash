@@ -100,6 +100,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // — so the user chooses what happens to it.
   const [confirmClose, setConfirmClose] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
+  // The composer's Attach button. <AgentSession> asks for paths and waits
+  // on a promise; the picker is this window's, because the picker needs a
+  // BE with a file client and the shared component has neither.
+  const [attaching, setAttaching] = createSignal(false);
+  let attachResolve: ((paths: string[]) => void) | null = null;
+  const finishAttach = (paths: string[]) => {
+    setAttaching(false);
+    const r = attachResolve;
+    attachResolve = null;
+    r?.(paths);
+  };
   // The default prompt (agentd owns the file; this is the editor for it).
   // `draft` is the textarea's contents while the dialog is open — a
   // browser reload loses an unsaved edit, which is the same deal every
@@ -509,6 +520,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         }}
         onCancel={() => setSaving(false)}
         data-testid="ai-save-picker"
+      />
+
+      <FilePicker
+        open={attaching()}
+        mode="open"
+        host={props.host}
+        hostInstanceID={props.instance}
+        start={row()?.cwd || cwd()}
+        onConfirm={(p) => finishAttach([p])}
+        onCancel={() => finishAttach([])}
+        data-testid="ai-attach-picker"
       />
 
       <FilePicker
@@ -1055,7 +1077,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               events={events}
               asks={asks}
               status={status}
-              onSend={(text) => send({ kind: 'prompt', text })}
+              onSend={(text, blocks) => send({ kind: 'prompt', text, blocks })}
+              onPickFiles={() =>
+                new Promise<string[]>((resolve) => {
+                  // A picker already open would strand the earlier waiter.
+                  finishAttach([]);
+                  attachResolve = resolve;
+                  setAttaching(true);
+                })
+              }
               onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
               onCancel={() => send({ kind: 'cancel' })}
               onSetMode={(mode) => send({ kind: 'set_mode', mode })}

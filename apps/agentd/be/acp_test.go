@@ -766,7 +766,7 @@ func TestTurnErrorsReachTheTranscript(t *testing.T) {
 		}
 	}()
 
-	promptHosted(h, "do the thing")
+	promptHosted(h, turn{text: "do the thing"})
 
 	if r := rows[h.key]; r == nil || r.State != "failed" || r.Reason != "error" {
 		t.Fatalf("row = %+v, want failed/error", r)
@@ -912,7 +912,7 @@ func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
 	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
 	h.register()
 
-	if h.submitPrompt("one") {
+	if h.submitPrompt(turn{text: "one"}) {
 		t.Fatal("the first prompt on an idle session was queued rather than run")
 	}
 	p1 := a.next(t)
@@ -922,10 +922,10 @@ func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
 	waitRow(t, h.key, func(r Row) bool { return r.State == "working" })
 
 	// Mid-turn: queued, said so on the row, and NOT on the wire.
-	if !h.submitPrompt("two") {
+	if !h.submitPrompt(turn{text: "two"}) {
 		t.Fatal("a prompt sent mid-turn was not queued")
 	}
-	if !h.submitPrompt("three") {
+	if !h.submitPrompt(turn{text: "three"}) {
 		t.Fatal("a second mid-turn prompt was not queued")
 	}
 	waitRow(t, h.key, func(r Row) bool { return r.Queued == 2 && r.State == "working" })
@@ -974,9 +974,9 @@ func TestStopDropsTheQueueAndSaysWhat(t *testing.T) {
 	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
 	h.register()
 
-	h.submitPrompt("first")
+	h.submitPrompt(turn{text: "first"})
 	p1 := a.next(t)
-	h.submitPrompt("never sent")
+	h.submitPrompt(turn{text: "never sent"})
 	waitRow(t, h.key, func(r Row) bool { return r.Queued == 1 })
 
 	a.end(p1, "cancelled")
@@ -998,7 +998,7 @@ func TestStopDropsTheQueueAndSaysWhat(t *testing.T) {
 		t.Errorf("note = %q", note)
 	}
 	// And the session is idle again: the next prompt runs at once.
-	if h.submitPrompt("again") {
+	if h.submitPrompt(turn{text: "again"}) {
 		t.Fatal("a prompt after the cancelled turn was queued — the turn claim leaked")
 	}
 	p := a.next(t)

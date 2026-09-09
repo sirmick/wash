@@ -22,9 +22,13 @@ import {
   acceptsDrop,
   describeSkipped,
   fencedAttachment,
+  imageFilesFrom,
+  imageTooBig,
   insertAt,
   isTextLike,
+  MAX_IMAGE_BYTES,
   pathRefs,
+  readImageData,
   readTextFile,
   washPathsFrom,
 } from './agent-compose-drop';
@@ -56,6 +60,21 @@ export interface AgentEvent {
   append?: boolean;
   /** the row's UTF-8 byte length after this event applies (message/thought) */
   text_len?: number;
+}
+
+/** One attachment on its way out with a prompt, in agentd's wire shape
+ *  (apps/agentd/be/attach.go): an image travels by value because the
+ *  bytes came from a clipboard and exist nowhere on disk; a file travels
+ *  by reference, so the agent reads it through the same confinement and
+ *  the same permission ask as any other read. */
+export interface PromptBlock {
+  type: 'image' | 'file';
+  /** image: the mime type, and base64 bytes without the data: header */
+  mime?: string;
+  data?: string;
+  /** file: an absolute path, and what to call it */
+  path?: string;
+  name?: string;
 }
 
 /** A permission question waiting on this session. */
@@ -115,8 +134,13 @@ export interface AgentSessionProps {
   events: () => AgentEvent[];
   asks?: () => AgentAsk[];
   status?: () => AgentStatus;
-  /** Send a prompt. Absent while the session is not ready. */
-  onSend?: (text: string) => void;
+  /** Send a prompt, with whatever the composer had attached to it.
+   *  Absent while the session is not ready. */
+  onSend?: (text: string, blocks?: PromptBlock[]) => void;
+  /** Pick files to attach, over the session's own folder. Resolves with
+   *  absolute paths (empty when cancelled). Absent hides the Attach
+   *  button — a host with no file client cannot offer it. */
+  onPickFiles?: () => Promise<string[]>;
   /** Answer a pending question. `rule` is set when the user chose "always". */
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
   /** Click on a tool row — the host decides what that opens. */
@@ -540,14 +564,66 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     return true;
   };
 
+  // A one-line note under the box for anything the composer would not
+  // take: a binary drop, an oversized image, a file that failed to read.
+  const [dropNote, setDropNote] = createSignal('');
+
+  // What the composer is holding, alongside the text. Cleared on send:
+  // an attachment belongs to the message it was collected for, and a
+  // screenshot silently riding along on the NEXT prompt is a surprise.
+  const [attached, setAttached] = createSignal<PromptBlock[]>([]);
+  const dropAttachment = (i: number) => setAttached((a) => a.filter((_, n) => n !== i));
+
   const send = () => {
     const text = draft().trim();
-    if (!text || !props.onSend) return;
-    props.onSend(text);
-    setUnecho((u) => [...u, text].slice(-MAX_PROMPT_HISTORY));
+    const blocks = attached();
+    if ((!text && blocks.length === 0) || !props.onSend) return;
+    props.onSend(text, blocks.length > 0 ? blocks : undefined);
+    if (text) setUnecho((u) => [...u, text].slice(-MAX_PROMPT_HISTORY));
     setHistAt(-1);
     setDraft('');
+    setAttached([]);
     setPinned(true);
+  };
+
+  // Paste an image. A text paste is left entirely alone — the default is
+  // correct there, and intercepting it would break every other paste in
+  // the box. Refused BEFORE the read: a 40 MB paste should not become
+  // 53 MB of base64 on its way to being rejected.
+  const attachImages = async (files: readonly File[]) => {
+    const skipped: string[] = [];
+    for (const f of files) {
+      if (f.size > MAX_IMAGE_BYTES) {
+        setDropNote(imageTooBig(f));
+        continue;
+      }
+      try {
+        const data = await readImageData(f);
+        if (!data) throw new Error('empty');
+        setAttached((a) => [...a, { type: 'image', mime: f.type, data, name: f.name || 'pasted image' }]);
+      } catch {
+        skipped.push(f.name || 'image');
+      }
+    }
+    if (skipped.length > 0) setDropNote(describeSkipped(skipped));
+  };
+
+  const onPaste = (e: ClipboardEvent) => {
+    const imgs = imageFilesFrom(e.clipboardData);
+    if (imgs.length === 0) return;
+    e.preventDefault();
+    void attachImages(imgs);
+  };
+
+  const pickFiles = async () => {
+    if (!props.onPickFiles) return;
+    const paths = await props.onPickFiles();
+    if (paths.length === 0) return;
+    setAttached((a) => [
+      ...a,
+      ...paths.map((p): PromptBlock => ({ type: 'file', path: p, name: baseName(p) })),
+    ]);
+    input?.focus();
   };
 
   const st = () => props.status?.() ?? {};
@@ -570,7 +646,6 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
   // @path references at the caret; an OS text file is attached inline as
   // a fenced block; anything else is named in a note under the box. The
   // placeholder has promised this since the composer existed.
-  const [dropNote, setDropNote] = createSignal('');
   const [dropping, setDropping] = createSignal(false);
   const onDragOver = (e: DragEvent) => {
     if (!acceptsDrop(e.dataTransfer)) return;
@@ -592,7 +667,12 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
       insert = pathRefs(paths);
     } else {
       const parts: string[] = [];
+      // An image dropped from the OS becomes an attachment, not a
+      // "not attached" note: it is exactly the thing the agent can use.
+      const imgs = imageFilesFrom(dt);
+      if (imgs.length > 0) void attachImages(imgs);
       for (const f of Array.from(dt!.files ?? [])) {
+        if ((f.type || '').toLowerCase().startsWith('image/')) continue;
         if (!isTextLike(f)) {
           skipped.push(f.name);
           continue;
@@ -876,6 +956,76 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           </div>
         </Show>
 
+        {/* What is going out with the next message. Shown as chips rather
+            than folded into the text: an image has no textual form, and a
+            file attached by reference is a different thing from its path
+            typed into the prompt. */}
+        <Show when={attached().length > 0}>
+          <div
+            data-testid="agent-attachments"
+            style={{
+              display: 'flex',
+              'flex-wrap': 'wrap',
+              gap: `${tokens.spaceSm}px`,
+              'margin-bottom': `${tokens.spaceXs}px`,
+            }}
+          >
+            <For each={attached()}>
+              {(b, i) => (
+                <span
+                  data-testid="agent-attachment"
+                  data-kind={b.type}
+                  title={b.path || b.name}
+                  style={{
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                    gap: `${tokens.spaceXs}px`,
+                    padding: `1px ${tokens.spaceSm}px`,
+                    'border-radius': tokens.radiusSm,
+                    border: `1px solid ${tokens.borderMenu}`,
+                    background: tokens.bgInset,
+                    font: tokens.type.monoSm,
+                    color: tokens.fgMuted,
+                    'max-width': '28ch',
+                  }}
+                >
+                  <Show when={b.type === 'image' && b.data}>
+                    {/* A thumbnail, so "which screenshot is that" is not a
+                        question. A data: URI — the bytes are already here
+                        and no request is made for them. */}
+                    <img
+                      src={`data:${b.mime || 'image/png'};base64,${b.data}`}
+                      alt=""
+                      style={{ width: '18px', height: '18px', 'object-fit': 'cover', 'border-radius': '2px', flex: 'none' }}
+                    />
+                  </Show>
+                  <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+                    {b.name}
+                  </span>
+                  <button
+                    type="button"
+                    data-wash-hit
+                    data-testid="agent-attachment-remove"
+                    aria-label={`Remove ${b.name ?? 'attachment'}`}
+                    onClick={() => dropAttachment(i())}
+                    style={{
+                      flex: 'none',
+                      background: 'transparent',
+                      border: 'none',
+                      color: tokens.fgDim,
+                      font: tokens.type.monoSm,
+                      cursor: 'pointer',
+                      padding: '0 2px',
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+            </For>
+          </div>
+        </Show>
+
         {/* The composer stays open mid-turn on purpose. A message typed
             while the agent is replying is queued by agentd and sent when
             the turn ends — the way a messenger behaves — rather than the
@@ -894,6 +1044,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               ? 'Type the next message — it is sent when this turn ends'
               : 'Ask, or drop a file from wash-fm…')
           }
+          onPaste={onPaste}
           onInput={(e) => {
             setDraft(e.currentTarget.value);
             // Typing leaves history: the recalled prompt is now a draft
@@ -941,11 +1092,37 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             'box-sizing': 'border-box',
           }}
         />
-        <Show when={dropNote()}>
-          <div data-testid="agent-drop-note" style={{ font: tokens.type.textSm, color: tokens.fgMuted, 'margin-top': `${tokens.spaceXs}px` }}>
-            {dropNote()}
-          </div>
-        </Show>
+        <div style={{ display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceXs}px` }}>
+          {/* Attach is offered only by a host that has a file client to
+              open a picker with — the same rule every other callback here
+              follows. Paste and drop need no button. */}
+          <Show when={props.onPickFiles}>
+            <button
+              type="button"
+              data-wash-hit
+              data-testid="agent-attach"
+              title="Attach a file from this session's folder"
+              onClick={() => void pickFiles()}
+              style={{
+                flex: 'none',
+                font: tokens.type.monoSm,
+                padding: `1px ${tokens.spaceSm}px`,
+                'border-radius': tokens.radiusSm,
+                border: `1px solid ${tokens.borderMenu}`,
+                background: 'transparent',
+                color: tokens.fgMuted,
+                cursor: 'pointer',
+              }}
+            >
+              Attach…
+            </button>
+          </Show>
+          <Show when={dropNote()}>
+            <div data-testid="agent-drop-note" style={{ font: tokens.type.textSm, color: tokens.fgMuted }}>
+              {dropNote()}
+            </div>
+          </Show>
+        </div>
       </div>
 
       <div

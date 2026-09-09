@@ -149,19 +149,33 @@ type hosted struct {
 	// allow and which flipped beginTurn/endTurn out of order. Guarded by
 	// turnMu; queued mirrors len(pending) for the roster row, readable
 	// without the lock (setState runs UNDER turnMu from begin/endTurn).
-	pending []string
+	pending []turn
 	queued  atomic.Int32
 }
+
+// turn is one submitted prompt: what was typed, plus whatever was attached
+// to it. Attachments ride WITH the text rather than as a prompt of their
+// own — a screenshot with "what is wrong here?" is one message, and
+// splitting it into two turns would make the agent answer the first
+// without the second.
+type turn struct {
+	text   string
+	blocks []acp.ContentBlock
+}
+
+// empty reports a turn with nothing in it, which is what the queue drain
+// stops on.
+func (t turn) empty() bool { return t.text == "" && len(t.blocks) == 0 }
 
 // submitPrompt is the one entry for a prompt on a live session. Inside a
 // turn it is queued and the row says so; otherwise it claims the turn
 // under the lock and runs. Claiming here — not in beginTurn — is what
 // stops two prompts arriving in the same instant from both seeing a
 // closed turn and both starting one.
-func (h *hosted) submitPrompt(text string) (queued bool) {
+func (h *hosted) submitPrompt(t turn) (queued bool) {
 	h.turnMu.Lock()
 	if h.turnLive {
-		h.pending = append(h.pending, text)
+		h.pending = append(h.pending, t)
 		h.queued.Store(int32(len(h.pending)))
 		h.turnMu.Unlock()
 		log.Printf("agentd: acp prompt queued key=%s queued=%d", h.key, len(h.pending))
@@ -174,7 +188,7 @@ func (h *hosted) submitPrompt(text string) (queued bool) {
 		if h.idle != nil {
 			defer func() { h.idle <- struct{}{} }()
 		}
-		for next := text; next != ""; {
+		for next := t; !next.empty(); {
 			next = promptHosted(h, next)
 		}
 	}()
@@ -200,7 +214,7 @@ func (h *hosted) beginTurn() {
 // stopped drops the queue — the error would repeat, and Stop means stop
 // — and the transcript lists what was dropped so nothing typed is lost
 // from view.
-func (h *hosted) endTurn(state, reason string) (next string) {
+func (h *hosted) endTurn(state, reason string) (next turn) {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
 	clean := state == "done" && reason != "cancelled"
@@ -222,12 +236,12 @@ func (h *hosted) endTurn(state, reason string) (next string) {
 		}
 		text := "Dropped " + itoa(uint64(len(dropped))) + " queued prompt(s) after " + why + ":"
 		for _, d := range dropped {
-			text += "\n> " + strings.ReplaceAll(d, "\n", "\n> ")
+			text += "\n> " + strings.ReplaceAll(d.text, "\n", "\n> ")
 		}
 		log.Printf("agentd: acp prompts dropped key=%s n=%d reason=%s", h.key, len(dropped), reason)
 		h.note(text)
 	}
-	return ""
+	return turn{}
 }
 
 // narrated reports that the agent said or did something. It only moves the
@@ -1039,7 +1053,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// one process that owns sessions.
 		first := withDefaultPrompt(loadDefaultPrompt(), req.Prompt)
 		if first != "" {
-			h.submitPrompt(first)
+			h.submitPrompt(turn{text: first})
 		}
 		if from.InstanceID == "" {
 			return nil
@@ -1066,7 +1080,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// Queued inside a turn, run otherwise — never a second concurrent
 		// session/prompt, which the protocol does not allow and which
 		// flipped beginTurn/endTurn out of order.
-		h.submitPrompt(req.Text)
+		h.submitPrompt(turn{text: req.Text, blocks: h.attachmentBlocks(req.Blocks)})
 		return nil
 	})
 
@@ -1327,6 +1341,25 @@ func publicModes(in []acp.SessionMode) []Mode {
 type promptReq struct {
 	Key  string `json:"key"`
 	Text string `json:"text,omitempty"`
+	// Blocks are attachments sent with the text: a pasted image, a file
+	// the composer's Attach button picked. Kept as a wash-shaped struct
+	// rather than acp.ContentBlock so the app→service wire is ours to
+	// validate — the router carries this from a window, and a window is
+	// not trusted to name a mime type or a path.
+	Blocks []promptAttachment `json:"blocks,omitempty"`
+}
+
+// promptAttachment is one attachment on its way to an ACP content block.
+// Type is "image" or "file"; anything else is dropped.
+type promptAttachment struct {
+	Type string `json:"type"`
+	// Image: base64 bytes and their mime type.
+	Mime string `json:"mime,omitempty"`
+	Data string `json:"data,omitempty"`
+	// File: an absolute path, confined against the session cwd before it
+	// becomes a resource_link.
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // modelName is the agent's current model, read out of its generic

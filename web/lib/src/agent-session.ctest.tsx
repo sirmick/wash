@@ -90,6 +90,14 @@ function dropEvent(dt: { types: string[]; data?: Record<string, string>; files?:
   });
   return ev;
 }
+// jsdom has no DataTransfer, so a paste is built the same way a drop is.
+function pasteEvent(files: File[]): Event {
+  const ev = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'clipboardData', {
+    value: { types: ['Files'], getData: () => '', files },
+  });
+  return ev;
+}
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
 test('a wash-fm drag inserts @path references at the caret', async () => {
@@ -111,7 +119,7 @@ test('a wash-fm drag inserts @path references at the caret', async () => {
   expect(container.querySelector('[data-testid="agent-drop-note"]')).toBeNull();
 });
 
-test('an OS text file is attached inline as a fenced block; a binary is named as skipped', async () => {
+test('an OS text file is attached inline as a fenced block; an image becomes a chip', async () => {
   const { container } = render(() => <AgentSession events={() => []} onSend={() => {}} />);
   const composer = container.querySelector('[data-testid="agent-composer"]') as HTMLTextAreaElement;
 
@@ -126,8 +134,26 @@ test('an OS text file is attached inline as a fenced block; a binary is named as
   await settle();
 
   expect(composer.value).toBe('main.go:\n```go\npackage main\n```');
-  const note = container.querySelector('[data-testid="agent-drop-note"]');
-  expect(note?.textContent).toMatch(/Not attached .*shot\.png/);
+  // An image is the thing an agent can actually use, so it rides along as
+  // an attachment rather than being named as "not attached".
+  const chip = container.querySelector('[data-testid="agent-attachment"]');
+  expect(chip?.getAttribute('data-kind')).toBe('image');
+  expect(chip?.textContent).toContain('shot.png');
+  expect(container.querySelector('[data-testid="agent-drop-note"]')).toBeNull();
+});
+
+test('a binary that is neither text nor an image is named as skipped', async () => {
+  const { container } = render(() => <AgentSession events={() => []} onSend={() => {}} />);
+  const composer = container.querySelector('[data-testid="agent-composer"]') as HTMLTextAreaElement;
+
+  const ev = dropEvent({
+    types: ['Files'],
+    files: [new File([new Uint8Array([0, 1, 2])], 'a.bin', { type: 'application/octet-stream' })],
+  });
+  composer.dispatchEvent(ev);
+  await settle();
+
+  expect(container.querySelector('[data-testid="agent-drop-note"]')?.textContent).toMatch(/Not attached .*a\.bin/);
 });
 
 test('a drag the composer does not understand is left to the browser', async () => {
@@ -273,4 +299,94 @@ test('Esc does nothing when there is no turn to stop', () => {
   expect(container.querySelector('[data-testid="agent-stop"]')).toBeNull();
   fireEvent.keyDown(composerOf(container), { key: 'Escape' });
   expect(cancels).toBe(0);
+});
+
+// docs/Review-findings.md P2 → agent: "attach files/images or paste an
+// image". The composer sent text and nothing else.
+test('Attach… adds a file chip that goes out as a block and is cleared on send', async () => {
+  const sent: [string, unknown][] = [];
+  const { container } = render(() => (
+    <AgentSession
+      events={() => []}
+      onSend={(t, b) => sent.push([t, b])}
+      onPickFiles={() => Promise.resolve(['/w/proj/notes.txt'])}
+    />
+  ));
+
+  (container.querySelector('[data-testid="agent-attach"]') as HTMLButtonElement).click();
+  await settle();
+  const chip = container.querySelector('[data-testid="agent-attachment"]');
+  expect(chip?.getAttribute('data-kind')).toBe('file');
+  expect(chip?.textContent).toContain('notes.txt');
+
+  const composer = composerOf(container);
+  fireEvent.input(composer, { target: { value: 'look at this' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+
+  expect(sent).toEqual([['look at this', [{ type: 'file', path: '/w/proj/notes.txt', name: 'notes.txt' }]]]);
+  // The attachment belonged to that message; it must not ride along on
+  // the next one.
+  expect(container.querySelector('[data-testid="agent-attachment"]')).toBeNull();
+});
+
+test('a host with no file client is offered no Attach button', () => {
+  const { container } = render(() => <AgentSession events={() => []} onSend={() => {}} />);
+  expect(container.querySelector('[data-testid="agent-attach"]')).toBeNull();
+});
+
+test('an attachment alone is a sendable message', async () => {
+  const sent: [string, unknown][] = [];
+  const { container } = render(() => (
+    <AgentSession events={() => []} onSend={(t, b) => sent.push([t, b])} onPickFiles={() => Promise.resolve(['/w/a.txt'])} />
+  ));
+  (container.querySelector('[data-testid="agent-attach"]') as HTMLButtonElement).click();
+  await settle();
+  fireEvent.keyDown(composerOf(container), { key: 'Enter' });
+  expect(sent).toHaveLength(1);
+  expect(sent[0][0]).toBe('');
+});
+
+test('an oversized pasted image is refused with a reason, not silently', async () => {
+  const { container } = render(() => <AgentSession events={() => []} onSend={() => {}} />);
+  const composer = composerOf(container);
+  const big = new File([new Uint8Array(3 * 1024 * 1024)], 'huge.png', { type: 'image/png' });
+  composer.dispatchEvent(pasteEvent([big]));
+  await settle();
+
+  expect(container.querySelector('[data-testid="agent-attachment"]')).toBeNull();
+  expect(container.querySelector('[data-testid="agent-drop-note"]')?.textContent).toMatch(/huge\.png is \d+ KB, over/);
+});
+
+test('a pasted image becomes a chip and goes out as an image block', async () => {
+  const sent: [string, unknown][] = [];
+  const { container } = render(() => <AgentSession events={() => []} onSend={(t, b) => sent.push([t, b])} />);
+  const composer = composerOf(container);
+
+  const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'shot.png', { type: 'image/png' });
+  const ev = pasteEvent([png]);
+  composer.dispatchEvent(ev);
+  await settle();
+
+  // A text paste must still be the browser's; only an image is taken.
+  expect(ev.defaultPrevented).toBe(true);
+  const chip = container.querySelector('[data-testid="agent-attachment"]');
+  expect(chip?.getAttribute('data-kind')).toBe('image');
+  expect(chip?.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
+
+  fireEvent.input(composer, { target: { value: 'what is this?' } });
+  fireEvent.keyDown(composer, { key: 'Enter' });
+  const blocks = sent[0][1] as { type: string; mime: string; data: string }[];
+  expect(blocks).toHaveLength(1);
+  expect(blocks[0].type).toBe('image');
+  expect(blocks[0].mime).toBe('image/png');
+  expect(blocks[0].data.length).toBeGreaterThan(0);
+});
+
+test('a plain text paste is left to the browser', async () => {
+  const { container } = render(() => <AgentSession events={() => []} onSend={() => {}} />);
+  const ev = pasteEvent([]);
+  composerOf(container).dispatchEvent(ev);
+  await settle();
+  expect(ev.defaultPrevented).toBe(false);
+  expect(container.querySelector('[data-testid="agent-attachment"]')).toBeNull();
 });

@@ -260,6 +260,14 @@ type ContentBlock struct {
 	Path    string  `json:"path,omitempty"`
 	OldText *string `json:"oldText,omitempty"`
 	NewText *string `json:"newText,omitempty"`
+	// URI / Name are the `resource_link` variant: a file the PROMPT points
+	// at, by reference rather than by value. Sending a repo file as a
+	// resource_link rather than pasting its bytes lets the agent read it
+	// with its own tools — through wash's fs confinement, which it must
+	// ask permission for — instead of wash deciding how much of it to
+	// inline.
+	URI  string `json:"uri,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // Diff is one file change the agent reported.
@@ -323,6 +331,12 @@ func (c Content) Kinds() []string {
 }
 
 func Text(s string) ContentBlock { return ContentBlock{Type: "text", Text: s} }
+
+// ResourceLink builds a resource_link block: a file the prompt refers to.
+// name is what the agent shows; uri is a file:// URL.
+func ResourceLink(uri, name string) ContentBlock {
+	return ContentBlock{Type: "resource_link", URI: uri, Name: name}
+}
 
 // Content is one-or-many content blocks.
 //
