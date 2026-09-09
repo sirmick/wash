@@ -1649,6 +1649,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     });
     props.host.addEventListener('wash:msg', onMsg);
     props.host.addEventListener('wash:state', onState);
+    // Ask for the desktop-wide prefs. The BE pushes them at ready, but a
+    // RELOAD reattaches to the same BE process — which has already had its
+    // ready — so a fresh FE would otherwise sit on the defaults while the
+    // file said something else.
+    send({ kind: 'prefs_get' });
 
     // Stage size → rects. Seeded synchronously so the first paint has a
     // real layout rather than a 0×0 one (which would leave every pane

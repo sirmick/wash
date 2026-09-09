@@ -599,6 +599,13 @@ func registerHandlers(b *sdk.Bus) {
 		setPrefs(c, req.Prefs)
 		return nil
 	})
+	// prefs_get: a freshly mounted FE asking for the file. A reload
+	// reattaches to this same process, whose onReady has long since run,
+	// so without this the new FE would sit on the defaults.
+	sdk.HandleVoid(b, "prefs_get", func(c *sdk.Conn, _ string, _ struct{}) error {
+		pushPrefs(c, true)
+		return nil
+	})
 	// bell: a program in this tab rang BEL. The window asks for the human;
 	// the router shows that only while the window is not focused, and
 	// clears it the moment it is (docs/AGENT_UX.md N6) — so this is
