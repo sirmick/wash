@@ -85,6 +85,9 @@ export interface FileTreeProps<E extends FileTreeEntry> {
   rowTint?: (entry: E) => string | undefined; // name + icon colour; undefined → default fg
   rowHint?: (entry: E) => string | undefined; // value for the data-hint attribute (e2e + styling)
   rowTrailing?: (entry: E) => JSX.Element | null; // slot after the name (fm's setid badge)
+  // Replaces the plain name text (not the rename input): fm's filter
+  // highlighting and search-result relative paths. Omit → entry.name.
+  renderName?: (entry: E, path: string) => JSX.Element;
 
   // ---- columns + header ----
   // Extra columns beyond Name. Omit/[] → name-only (edit). The Name track is
@@ -364,7 +367,7 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                     'font-weight': props.isCurrent?.(row.path) ? 'bold' : 'normal',
                   }}
                 >
-                  <Show when={renameState()} fallback={entry().name}>
+                  <Show when={renameState()} fallback={props.renderName ? props.renderName(entry(), row.path) : entry().name}>
                     <input
                       data-testid={`${props.testIdPrefix}-rename-input`}
                       ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}

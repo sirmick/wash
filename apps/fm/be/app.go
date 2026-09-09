@@ -347,6 +347,10 @@ func registerHandlers(b *sdk.Bus) {
 	// Download egress (confined fs → browser save); see download.go.
 	registerDownloadHandlers(b)
 
+	// Recursive name search under a folder (the filter box's "search
+	// subtree" mode); see search.go.
+	registerSearchHandlers(b)
+
 	// Image bytes / thumbnails over a raw channel, for the folder-grid
 	// preview. Confined to the same fs root as every other fm operation.
 	thumbs.RegisterServer(b, fmFS.Confine)

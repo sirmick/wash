@@ -44,6 +44,7 @@ import {
 } from './clipboard.ts';
 import { nextSelection, rekeyPath, rekeySelection, successorAfterRemoval } from './selection.ts';
 import { arrowLeft, arrowRight, nextRow, pageSizeFor, type NavRow, type VerticalMove } from './keynav.ts';
+import { filterRows, isTypeToFilterKey, matchRanges, normalizeQuery, splitByRanges } from './filter.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -89,6 +90,7 @@ import {
   Pencil,
   Presentation,
   RotateCw,
+  Search,
   ShieldAlert,
   Square,
   Trash2,
@@ -397,6 +399,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // paste in window B works naturally.
   const [filesClipboard, setFilesClipboard] = createSignal<ClipboardState | null>(null);
 
+  // Type-to-filter + subtree search (filter.ts holds the pure row rule).
+  // filterQuery narrows the CURRENT folder's rows; searchMode swaps the
+  // rows for the BE's recursive name-search hits under that folder.
+  const [filterOpen, setFilterOpen] = createSignal(false);
+  const [filterQuery, setFilterQuery] = createSignal('');
+  const [searchMode, setSearchMode] = createSignal(false);
+  type SearchHit = { path: string; rel: string; entry: Entry };
+  const [searchHits, setSearchHits] = createSignal<SearchHit[]>([]);
+  const [searchState, setSearchState] = createSignal<{ status: 'idle' | 'running' | 'done' | 'error'; truncated: boolean; error?: string }>({ status: 'idle', truncated: false });
+  let searchSeq = 0;
+  let activeSearchID: string | null = null;
+  let searchTimer: number | null = null;
+  let filterInputEl: HTMLInputElement | undefined;
+  // pendingReveal is a search hit the user asked to reveal: selected once
+  // its parent's listing lands (see onListOk).
+  let pendingReveal: string | null = null;
+
   // Refs / latched state (no reactivity needed)
   let pendingNav: string | null = null;
   // navSnapshot is the state selectPath commits over, kept until the
@@ -662,6 +681,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setFilesClipboard(parseClipboardState(m.op, m.paths));
         return;
       }
+      case 'search_batch': {
+        if (m.search_id !== activeSearchID) return; // a cancelled/stale run
+        const hits = (m.hits as SearchHit[] | undefined) ?? [];
+        setSearchHits((prev) => prev.concat(hits));
+        return;
+      }
+      case 'search_done': {
+        if (m.search_id !== activeSearchID) return;
+        activeSearchID = null;
+        setSearchState({ status: 'done', truncated: !!m.truncated || !!m.cancelled });
+        return;
+      }
       case 'upload_channel': {
         // BE opened the raw channel for this upload — hand its id to the
         // awaiting streamer.
@@ -735,6 +766,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const entries = m.entries as Entry[];
     if (navSnapshot?.target === p) navSnapshot = null; // navigation landed
     setListings(p, entries);
+    if (pendingReveal && parentPath(pendingReveal) === p) {
+      const target = pendingReveal;
+      pendingReveal = null;
+      const entry = entries.find((e) => e.name === baseName(target)) ?? null;
+      if (entry) {
+        applySelection(new Set([target]), 'reveal');
+        selectionAnchor = target;
+        setSelectedEntry(entry);
+        setSelectedPath(target);
+        setGridDir(isDirLike(entry) ? target : '');
+        queueMicrotask(() => scrollRowIntoView(target));
+      }
+    }
     if (m.truncated) setTruncatedDirs(p, { shown: entries.length, total: Number(m.total) || 0 });
     else if (truncatedDirs[p]) setTruncatedDirs(produce((s) => { delete s[p]; }));
     expandDir(p);
@@ -909,7 +953,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     rowPath: string,
     entry: Entry,
     ev: MouseEvent,
-    orderedPaths: string[] = flatRows().map((r) => r.path),
+    orderedPaths: string[] = displayRows().map((r) => r.path),
   ) => {
     const focusForFile = (p: string) => {
       // For a file, single click DOES update path + preview —
@@ -974,14 +1018,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // scrolled into view.
   const cursorPath = (): string | null => {
     const p = selectedPath();
-    if (p && flatRows().some((r) => r.path === p)) return p;
+    if (p && displayRows().some((r) => r.path === p)) return p;
     // A folder the user navigated into is bold but not selected; use it
     // as the starting point so the first arrow press moves from there.
     const cur = path();
-    return cur && flatRows().some((r) => r.path === cur) ? cur : null;
+    return cur && displayRows().some((r) => r.path === cur) ? cur : null;
   };
   const keyRows = (): NavRow[] =>
-    flatRows().map((r) => ({ path: r.path, depth: r.depth, isDir: isDirLike(r.entry), expanded: !!expanded[r.path] }));
+    displayRows().map((r) => ({ path: r.path, depth: r.depth, isDir: isDirLike(r.entry), expanded: !!expanded[r.path] }));
   const listEl = (): HTMLElement | null => props.host.querySelector('[data-testid="fm-list"]');
   const scrollRowIntoView = (p: string) => {
     const row = listEl()?.querySelector(`[data-path="${CSS.escape(p)}"]`);
@@ -996,13 +1040,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // range from the anchor instead of replacing the selection — the
   // keyboard analogue of a Shift-click.
   const moveCursorTo = (p: string, extend: boolean) => {
-    const row = flatRows().find((r) => r.path === p);
+    const row = displayRows().find((r) => r.path === p);
     if (!row) return;
     const entry = row.entry;
     const result = nextSelection(
       { selection: selection(), anchor: selectionAnchor },
       p,
-      flatRows().map((r) => r.path),
+      displayRows().map((r) => r.path),
       { shift: extend, ctrlOrMeta: false },
     );
     applySelection(result.selection, extend ? 'key-extend' : 'key-move');
@@ -1028,7 +1072,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const result = nextSelection(
       { selection: selection(), anchor: selectionAnchor },
       p,
-      flatRows().map((r) => r.path),
+      displayRows().map((r) => r.path),
       { shift: false, ctrlOrMeta: true },
     );
     applySelection(result.selection, 'key-toggle');
@@ -1061,7 +1105,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const activateCursorRow = () => {
     const p = cursorPath();
     if (!p) return;
-    const entry = findEntry(p);
+    // Search hits carry their own entry (their parent may not be listed).
+    const entry = displayRows().find((r) => r.path === p)?.entry ?? findEntry(p);
     if (!entry) return;
     if (entry.type === 'symlink' && !isDirLike(entry)) { followSymlink(entry, p); return; }
     if (isDirLike(entry)) { toggleExpand(p); return; }
@@ -2318,9 +2363,156 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // Row-identity stabilisation (the prevRows reuse that keeps <For> from
   // rebuilding unchanged rows) and scroll-into-view-on-navigate now live inside
-  // the shared <FileTree> (@wash/ui). fm just feeds it flatRows(); callers that
-  // only need the visible PATH order read flatRows() directly.
-  const visibleCount = createMemo(() => flatRows().length);
+  // the shared <FileTree> (@wash/ui). fm feeds it displayRows() (below);
+  // callers that need the whole visible tree read flatRows() directly.
+
+  // displayRows is what the tree actually renders: the search hits (as
+  // flat rows) while a subtree search is on, else flatRows narrowed by the
+  // filter box to the viewed folder's matching children (filter.ts).
+  const displayRows = createMemo<VisibleRow[]>(() => {
+    if (searchMode() && normalizeQuery(filterQuery()) !== '') {
+      return searchHits().map((h) => ({ entry: h.entry, path: h.path, depth: 0 }));
+    }
+    if (!filterOpen() || normalizeQuery(filterQuery()) === '') return flatRows();
+    return filterRows(flatRows(), viewDir(), filterQuery());
+  });
+  // rowName renders a row's name cell: the search hit's relative path, or
+  // the name, with the filter's matches wrapped in <mark>.
+  const hitRelByPath = createMemo(() => new Map(searchHits().map((h) => [h.path, h.rel])));
+  const rowName = (entry: Entry, p: string): JSX.Element => {
+    const q = filterOpen() ? filterQuery() : '';
+    const inSearch = searchMode() && normalizeQuery(q) !== '';
+    const text = inSearch ? (hitRelByPath().get(p) ?? entry.name) : entry.name;
+    const highlight = inSearch || (normalizeQuery(q) !== '' && parentPath(p) === viewDir());
+    const ranges = highlight ? matchRanges(text, q) : [];
+    if (ranges.length === 0) return <>{text}</>;
+    return (
+      <>
+        {splitByRanges(text, ranges).map((seg) =>
+          seg.match ? <mark data-testid="fm-filter-match" style={markStyle}>{seg.text}</mark> : seg.text,
+        )}
+      </>
+    );
+  };
+
+  // ---- filter box + subtree search ----
+
+  const cancelSearch = () => {
+    if (searchTimer != null) { window.clearTimeout(searchTimer); searchTimer = null; }
+    if (activeSearchID) {
+      send({ kind: 'search_cancel', search_id: activeSearchID });
+      activeSearchID = null;
+    }
+  };
+  // startSearch runs (or re-runs, after a short debounce) the BE walk for
+  // the current query under the viewed folder. Hits stream in batches.
+  const startSearch = () => {
+    cancelSearch();
+    const q = normalizeQuery(filterQuery());
+    if (!searchMode() || q === '') {
+      setSearchHits([]);
+      setSearchState({ status: 'idle', truncated: false });
+      return;
+    }
+    searchTimer = window.setTimeout(() => {
+      searchTimer = null;
+      const id = `s-${++searchSeq}`;
+      activeSearchID = id;
+      setSearchHits([]);
+      setSearchState({ status: 'running', truncated: false });
+      void sendWithReply({ kind: 'search', search_id: id, dir: viewDir(), query: filterQuery() }).then((reply) => {
+        if (activeSearchID !== id) return;
+        if (reply.kind !== 'search_ok') {
+          activeSearchID = null;
+          setSearchState({ status: 'error', truncated: false, error: String(reply.msg ?? reply.code ?? 'failed') });
+        }
+      });
+    }, 150);
+  };
+  const openFilter = (seed: string) => {
+    if (!filterOpen()) setFilterOpen(true);
+    if (seed) setFilterQuery(filterQuery() + seed);
+    setTimeout(() => { filterInputEl?.focus(); }, 0);
+    if (searchMode()) startSearch();
+  };
+  const closeFilter = () => {
+    cancelSearch();
+    batch(() => {
+      setFilterOpen(false);
+      setFilterQuery('');
+      setSearchMode(false);
+      setSearchHits([]);
+      setSearchState({ status: 'idle', truncated: false });
+    });
+    props.host.focus();
+  };
+  const setQuery = (q: string) => {
+    setFilterQuery(q);
+    if (searchMode()) startSearch();
+  };
+  const toggleSearchMode = () => {
+    if (!filterOpen()) setFilterOpen(true);
+    setSearchMode(!searchMode());
+    setTimeout(() => { filterInputEl?.focus(); }, 0);
+    startSearch();
+  };
+  // revealHit leaves search mode and shows the hit in the tree: navigate to
+  // its folder and select it once that listing lands (pendingReveal).
+  const revealHit = (p: string) => {
+    pendingReveal = p;
+    closeFilter();
+    const par = parentPath(p);
+    selectPath(par, true);
+    if (listings[par]) {
+      // Already listed: onListOk won't fire, select now.
+      const entry = findEntry(p);
+      pendingReveal = null;
+      if (entry) {
+        applySelection(new Set([p]), 'reveal');
+        selectionAnchor = p;
+        setSelectedEntry(entry);
+        setSelectedPath(p);
+        setGridDir(isDirLike(entry) ? p : '');
+        queueMicrotask(() => scrollRowIntoView(p));
+      }
+    }
+  };
+  const filterStatus = createMemo(() => {
+    const q = normalizeQuery(filterQuery());
+    if (q === '') return searchMode() ? 'type to search this folder and below' : 'type to filter this folder';
+    if (searchMode()) {
+      const st = searchState();
+      const n = searchHits().length;
+      if (st.status === 'error') return `search failed: ${st.error}`;
+      if (st.status === 'running') return `searching… ${n} found`;
+      return `${n.toLocaleString()} found${st.truncated ? ' — more…' : ''}`;
+    }
+    const n = displayRows().filter((r) => parentPath(r.path) === viewDir()).length;
+    return `${n} match${n === 1 ? '' : 'es'}`;
+  });
+  const onFilterKey = (ev: KeyboardEvent) => {
+    ev.stopPropagation();
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      closeFilter();
+      return;
+    }
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      keyVertical(ev.key === 'ArrowDown' ? 'down' : 'up', ev.shiftKey);
+      return;
+    }
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      if (cursorPath()) activateCursorRow();
+      else keyVertical('down', false);
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && (ev.key === 'F' || ev.key === 'f')) {
+      ev.preventDefault();
+      toggleSearchMode();
+    }
+  };
 
   // gridEntries is the previewed folder's listing, sorted/filtered by the
   // SAME comparator the tree uses (sortedFiltered, @wash/fs-client) so the
@@ -2395,7 +2587,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     if (!rootInitialized()) return 'loading…';
     const sel = selection().size;
-    const count = sel > 1 ? `${sel} of ${visibleCount()} selected` : `${visibleCount()} entries`;
+    const shown = displayRows().length;
+    const count = sel > 1 ? `${sel} of ${shown} selected` : `${shown} entries`;
     const trunc = truncationNotice();
     if (trunc) {
       return (
@@ -2505,6 +2698,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           goUp();
           return;
         }
+        if (ev.key === 'Escape' && filterOpen()) {
+          ev.preventDefault();
+          closeFilter();
+          return;
+        }
+        // A bare printable key opens the filter box seeded with it.
+        if (isTypeToFilterKey(ev.key, { ctrl: false, meta: false, alt: false })) {
+          ev.preventDefault();
+          openFilter(ev.key);
+          return;
+        }
         // Row navigation (keynav.ts). Shift extends the range.
         const vertical: Record<string, VerticalMove> = {
           ArrowUp: 'up', ArrowDown: 'down', PageUp: 'pageUp', PageDown: 'pageDown', Home: 'home', End: 'end',
@@ -2544,7 +2748,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (ev.key === 'a' || ev.key === 'A') {
           // Select-all = every currently-visible row in the tree.
           ev.preventDefault();
-          applySelection(new Set(flatRows().map((r) => r.path)), 'select-all');
+          applySelection(new Set(displayRows().map((r) => r.path)), 'select-all');
+          return;
+        }
+        if ((ev.key === 'F' || ev.key === 'f') && ev.shiftKey) {
+          // Ctrl+Shift+F = search this folder and below (toggle).
+          ev.preventDefault();
+          toggleSearchMode();
+          return;
+        }
+        if (ev.key === 'f' || ev.key === 'F') {
+          ev.preventDefault();
+          openFilter('');
           return;
         }
         if ((ev.key === 'N' || ev.key === 'n') && ev.shiftKey) {
@@ -2747,8 +2962,42 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         ref={bodyEl!}
         style={{ ...bodyStyle, 'grid-template-columns': gridCols() }}
       >
+        <div style={{ display: 'grid', 'grid-template-rows': 'auto 1fr', 'min-height': 0, 'min-width': 0, overflow: 'hidden' }}>
+        <Show when={filterOpen()}>
+          <div data-testid="fm-filter" data-search-mode={searchMode() ? 'true' : undefined} style={filterBarStyle}>
+            <Search size={12} style={{ opacity: 0.7, 'flex-shrink': 0 }} />
+            <input
+              ref={filterInputEl}
+              type="text"
+              data-testid="fm-filter-input"
+              spellcheck={false}
+              placeholder={searchMode() ? 'search this folder and below…' : 'filter this folder…'}
+              value={filterQuery()}
+              onInput={(e) => setQuery(e.currentTarget.value)}
+              onKeyDown={onFilterKey}
+              style={filterInputStyle}
+            />
+            <span data-testid="fm-filter-status" style={{ font: tokens.type.textSm, color: tokens.fgMuted, 'white-space': 'nowrap' }}>
+              {filterStatus()}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="fm-filter-subtree"
+              aria-pressed={searchMode()}
+              title={searchMode() ? 'Filter this folder only (Ctrl+Shift+F)' : 'Search this folder and below (Ctrl+Shift+F)'}
+              style={{ padding: '2px 6px', opacity: searchMode() ? 1 : 0.6 }}
+              onClick={toggleSearchMode}
+            >
+              subtree
+            </Button>
+            <Button variant="ghost" size="sm" data-testid="fm-filter-close" title="Clear (Esc)" style={{ padding: '2px 4px', 'min-width': '22px' }} onClick={closeFilter}>
+              <X size={12} />
+            </Button>
+          </div>
+        </Show>
         <FileTree
-          rows={flatRows()}
+          rows={displayRows()}
           listTestId="fm-list"
           testIdPrefix="fm"
           // External drag over empty list space lights the whole pane (drop =
@@ -2786,6 +3035,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           rowTint={(e) => entryTint(e)}
           rowHint={(e) => entryHint(e)}
           rowTrailing={(e) => <SetidBadge entry={e} />}
+          renderName={rowName}
           scrollTarget={() => path()}
           onRowClick={(p, e, ev) => {
             if (renaming()?.path === p) return;
@@ -2795,6 +3045,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             // Native dblclick — the browser's timing window avoids catching
             // pairs of intentional single clicks as double-clicks. This is the
             // only path that calls selectPath for a row.
+            if (searchMode() && normalizeQuery(filterQuery()) !== '') { revealHit(p); return; }
             if (e.type === 'symlink') { followSymlink(e, p); return; }
             if (isDirLike(e)) { selectPath(p, true); return; }
             // A file: hand it to its registered app via the router's open routing.
@@ -2830,16 +3081,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onCancel={cancelNew}
               />
             </Show>
-            <Show when={rootInitialized() && flatRows().length === 0 && !pendingNew()}>
+            <Show when={rootInitialized() && displayRows().length === 0 && !pendingNew()}>
               <div
                 data-testid="fm-empty"
                 style={{ padding: '20px 16px', color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px' }}
               >
-                (empty folder)
+                {filterOpen() && normalizeQuery(filterQuery()) !== '' ? (searchMode() && searchState().status === 'running' ? 'searching…' : '(no matches)') : '(empty folder)'}
               </div>
             </Show>
           </>}
         />
+        </div>
         <Show when={previewOpen()}>
           <Splitter
             container={bodyEl}
@@ -3803,6 +4055,34 @@ const pathInputStyle: JSX.CSSProperties = {
   outline: 'none',
 };
 
+const filterBarStyle: JSX.CSSProperties = {
+  display: 'flex',
+  'align-items': 'center',
+  gap: '6px',
+  padding: '3px 8px',
+  background: tokens.bgMenu,
+  'border-bottom': `1px solid ${tokens.borderMenu}`,
+};
+
+const filterInputStyle: JSX.CSSProperties = {
+  flex: 1,
+  'min-width': 0,
+  background: tokens.bgInset,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderFocus}`,
+  'border-radius': `${tokens.radiusSm}`,
+  padding: '2px 6px',
+  font: tokens.type.textMd,
+  outline: 'none',
+};
+
+const markStyle: JSX.CSSProperties = {
+  background: tokens.bgWarning,
+  color: tokens.fgWarning,
+  'border-radius': '2px',
+  padding: '0 1px',
+};
+
 const bodyStyle: JSX.CSSProperties = {
   display: 'grid',
   'grid-template-columns': '1fr 1fr',
@@ -3820,6 +4100,7 @@ const treeStyle: JSX.CSSProperties = {
   // re-scrolling to keep some lower row stable, which would yank the folder
   // the user just toggled out of view.
   'overflow-anchor': 'none',
+  'min-height': 0,
   background: tokens.bgWindow,
   padding: '0 0 4px 0',
 };
