@@ -222,8 +222,6 @@ bug list — all fully landed; see `git log` if you need their content.)
 - [ ] `connect()` from async `reconnectTick`: a throwing factory becomes an
   unhandled rejection that permanently kills the reconnect loop (unreachable
   with the stock factory; cheap to guard).
-- [ ] `pendingRaw` buffers unboundedly for a channel that never gets a
-  subscriber (`web/shell/src/api.ts:199-204`).
 - [ ] `ListenControl` (`internal/router/control.go:88`) doesn't join
   per-connection handler goroutines on shutdown — same hazard class as the
   fixed `runRawListener` (42d6698); latent today, one log line away from the
