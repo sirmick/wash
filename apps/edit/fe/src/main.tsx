@@ -2607,6 +2607,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       editorView.setState(fresh);
     }
     editorView.dispatch({ effects: langCompartment.reconfigure(langExtensions()) });
+    // Put the scroll back where captureActiveState left it. The
+    // EditorState carries cursor + undo history but not the scroll
+    // position, so a switched-away tab used to come back at the top;
+    // only session restore (restoreFrom) put it back. Applied in CM's
+    // measure write phase rather than a bare microtask: the fresh state's
+    // first measure calibrates CM's line-height estimate, and a scrollTop
+    // set before that lands in uncalibrated units and drifts by a few
+    // percent once the estimate is corrected.
+    if (t.scrollTop && t.mode !== 'wysiwyg') {
+      const top = t.scrollTop;
+      editorView.requestMeasure({
+        read: () => null,
+        write: (_m, view) => { if (seededID === id) view.scrollDOM.scrollTop = top; },
+      });
+    }
     // For wysiwyg tabs, hand focus to TipTap instead of CM — CM is
     // hidden under the wysiwyg layer. The handle may not exist yet
     // (mount ref callback runs after this effect on first activation);
