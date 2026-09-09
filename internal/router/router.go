@@ -1865,10 +1865,7 @@ func (r *Router) broadcastPatches(patches []wire.SessionPatch) {
 	if len(patches) == 0 {
 		return
 	}
-	msg := wire.NewShellSessionPatch(patches...)
 	for _, s := range r.shellList() {
-		if err := s.WriteCtrl(msg); err != nil {
-			r.log("broadcast patch: %v", err)
-		}
+		s.queuePatches(patches)
 	}
 }

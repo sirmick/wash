@@ -22,6 +22,13 @@ type ShellSession struct {
 	router  *Router
 	writeMu sync.Mutex
 
+	// patches collapses successive session patches for the same window
+	// while the writer is behind, so a drag does not deliver a backlog
+	// of stale positions. See patchcoalesce.go. Lazily built by
+	// queuePatches so a zero-value ShellSession (tests) still works.
+	patchesOnce sync.Once
+	patches     *patchCoalescer
+
 	// declared is guarded by writeMu (set when announcing, cleared
 	// when undeclaring) — kept under the same lock as writes so a
 	// declare and any follow-on relay are observed in order by the
@@ -155,6 +162,11 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 		// closing transport, then wait for it to exit.
 		sess.scheduler.Close()
 		<-sess.drainerDone
+		// The coalescer's retry timer outlives the scheduler otherwise,
+		// firing a flush at a closed queue for every dropped connection.
+		if sess.patches != nil {
+			sess.patches.stop()
+		}
 		// Bank this connection's counters into the session running totals
 		// so the desktop info panel + About survive the disconnect.
 		snap := sess.scheduler.StatsSnapshot()
@@ -1013,6 +1025,18 @@ func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
 		return false
 	}
 	return true
+}
+
+// queuePatches sends a batch of session patches, collapsing them against
+// anything still waiting for the wire. Interactive class: geometry and
+// focus are what a human is waiting on.
+func (s *ShellSession) queuePatches(patches []wire.SessionPatch) {
+	s.patchesOnce.Do(func() {
+		s.patches = newPatchCoalescer(func(batch []wire.SessionPatch) bool {
+			return s.tryWriteCtrlClass(wire.NewShellSessionPatch(batch...), wire.ClassInteractive)
+		})
+	})
+	s.patches.add(patches)
 }
 
 // tryWriteCtrlClass enqueues a control message non-blocking at an explicit
