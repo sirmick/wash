@@ -52,6 +52,7 @@ import {
   viewportFor,
   windows,
   dropOrigin,
+  focused,
   type Win,
   type WinState,
   nextGeomTok,
@@ -68,6 +69,7 @@ import {
   showDesktopPlan,
 } from './switcher';
 import { SwitcherOverlay } from './switcher-ui';
+import { shouldSwallowDesktopKey } from './keyguard';
 import { FloatingWindow } from './window';
 import {
   CatalogApp,
@@ -1623,6 +1625,18 @@ window.addEventListener(
 // rather than leaving the overlay stuck over the desktop forever.
 window.addEventListener('blur', () => {
   if (switcher()) commitSwitcher();
+});
+
+// Desktop-background browser-key guard (keyguard.ts): with no wash window
+// focused, Ctrl+W / Ctrl+N / Ctrl+T would reach the browser and close or
+// duplicate the tab the whole desktop lives in. Bubbling, not capture: an
+// app that wants these keys is welcome to them, and the guard only fires
+// when nothing has focus at all. F5 is deliberately left alone — reload is
+// how you recover a wedged shell — and there is no beforeunload.
+window.addEventListener('keydown', (ev: KeyboardEvent) => {
+  if (!shouldSwallowDesktopKey(ev, focused() != null)) return;
+  ev.preventDefault();
+  shellLog('info', 'shell', `swallowed browser chord ctrl+${ev.key.toLowerCase()} on the desktop background`);
 });
 
 // Viewport pan: the cam div translates the windows layer by
