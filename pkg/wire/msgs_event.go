@@ -437,10 +437,22 @@ type EvtSpawnRequest struct {
 	ReqID   uint64 `json:"req_id,omitempty"`
 	AppID   string `json:"app_id"`
 	Prepare bool   `json:"prepare,omitempty"`
+	// Open, when set, is forwarded to the spawned app as `--open <path>`
+	// argv — the same launch seam the router's open routing uses
+	// (Conn.LaunchOpenPath). Lets an app spawn another AT a path
+	// ("reveal in Files") without going through extension routing.
+	// Ignored for Prepare spawns (the caller builds its own argv).
+	Open string `json:"open,omitempty"`
 }
 
 func NewEvtSpawnRequest(appID string) EvtSpawnRequest {
 	return EvtSpawnRequest{T: TEvtSpawnRequest, AppID: appID}
+}
+
+// NewEvtSpawnRequestOpen is a normal spawn whose target is launched with
+// `--open <path>`.
+func NewEvtSpawnRequestOpen(appID, path string) EvtSpawnRequest {
+	return EvtSpawnRequest{T: TEvtSpawnRequest, AppID: appID, Open: path}
 }
 
 // NewEvtPrepareSpawnRequest is the prepare-spawn variant. Same wire

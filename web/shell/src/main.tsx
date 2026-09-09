@@ -1459,6 +1459,29 @@ createEffect(() => {
 
 // Ctrl+Alt+Arrows pan one viewport. Listening at the document level
 // means the chord works regardless of which (if any) window has focus.
+// An OS file dropped where nothing accepts it — the wallpaper, a window's
+// chrome, an app without a drop handler — used to take the browser's
+// default action: navigate this tab to file://…, which tears the whole
+// desktop down. Both halves of the guard are needed: without a prevented
+// dragover the drop event never fires and the navigation happens anyway.
+// Bubble phase, so an app that takes OS drops (fm's upload) has already
+// run and preventDefault'd — the guard only acts on drops nobody claimed.
+// Internal wash drags (application/x-wash-paths) are not touched, so the
+// file managers' move/copy gestures are unaffected. Deliberately no
+// beforeunload prompt: reconnect relies on plain reloads.
+const isOsFileDrag = (dt: DataTransfer | null): boolean =>
+  !!dt && Array.from(dt.types).includes('Files');
+window.addEventListener('dragover', (ev: DragEvent) => {
+  if (ev.defaultPrevented || !isOsFileDrag(ev.dataTransfer)) return;
+  ev.preventDefault();
+});
+window.addEventListener('drop', (ev: DragEvent) => {
+  if (ev.defaultPrevented || !isOsFileDrag(ev.dataTransfer)) return;
+  ev.preventDefault();
+  const n = ev.dataTransfer?.files.length ?? 0;
+  shellLog('info', 'shell', `swallowed an OS file drop outside any drop target files=${n}`);
+});
+
 // Apps inside windows that want to swallow these keys can preventDefault
 // on their own keydown handler — keypresses bubble up to here only when
 // nobody else stops them.

@@ -92,7 +92,7 @@ func init() {
 			Accent:          "#e0b060",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 600},
-			// Declared so the FE's "Open in fm" button can ask the
+			// Declared so the FE's "Reveal in Files" button can ask the
 			// router to spawn fm via SpawnRequest. The router checks
 			// this capability before honoring the request.
 			Capabilities: []string{sdk.CapSpawn},
@@ -175,6 +175,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 
 type spawnReq struct {
 	AppID string `json:"app_id"`
+	// Open is a launch path for the target (`--open <path>`): "Reveal in
+	// Files" spawns fm at the active file's folder.
+	Open string `json:"open"`
 }
 
 type termOpenReq struct {
@@ -277,10 +280,19 @@ func registerHandlers(b *sdk.Bus) {
 	})
 
 	sdk.HandleVoid(b, "spawn", func(c *sdk.Conn, _ string, req spawnReq) error {
-		// FE-driven app spawn (e.g. the "Open in fm" button). The
-		// router validates CapSpawn on the manifest.
+		// FE-driven app spawn (e.g. the "Reveal in Files" button). The
+		// router validates CapSpawn on the manifest. The launch path is
+		// confined here so the editor never hands the router a path
+		// outside its own root.
 		if req.AppID == "" {
 			return nil
+		}
+		if req.Open != "" {
+			abs, err := editFS.Confine(req.Open)
+			if err != nil {
+				return sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+			}
+			return c.SpawnRequestOpen(req.AppID, abs)
 		}
 		return c.SpawnRequest(req.AppID)
 	})

@@ -9,6 +9,7 @@
 
 import { test, expect, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, waitFor } from '@solidjs/testing-library';
+import { createSignal } from 'solid-js';
 import { FilePicker } from './file-picker.tsx';
 
 afterEach(cleanup);
@@ -146,4 +147,48 @@ test('Back retraces committed navigations and disables when the trail is empty',
   fireEvent.click(back);
   await waitFor(() => expect(pathValue(getByTestId)).toBe(HOME));
   expect(back.disabled).toBe(true);
+});
+
+// Hosts keep one <FilePicker> mounted and toggle `open`, so the per-open
+// props must be re-read on every false → true transition: a Save As
+// suggested name, and a start folder that changed since the last open
+// (edit re-saving a file that vanished from disk). A start that did NOT
+// change leaves the user's last navigation alone.
+test('re-opening re-seeds defaultName and a changed start', async () => {
+  const [open, setOpen] = createSignal(true);
+  const [start, setStart] = createSignal(HOME);
+  const [name, setName] = createSignal('first.txt');
+  const { getByTestId } = render(() => (
+    <FilePicker
+      open={open()}
+      mode="save"
+      host={host}
+      hostInstanceID="i-test"
+      start={start()}
+      defaultName={name()}
+      onConfirm={() => {}}
+      onCancel={() => {}}
+      data-testid="picker"
+    />
+  ));
+  const saveName = () => (getByTestId('fp-save-name') as HTMLInputElement).value;
+  await waitFor(() => expect(pathValue(getByTestId)).toBe(HOME));
+  expect(saveName()).toBe('first.txt');
+
+  // Navigate away, close, change the name only, reopen: name re-seeded,
+  // the navigated folder kept (start unchanged).
+  fireEvent.click(getByTestId('fp-root'));
+  await waitFor(() => expect(pathValue(getByTestId)).toBe('/'));
+  setOpen(false);
+  setName('second.txt');
+  setOpen(true);
+  await waitFor(() => expect(saveName()).toBe('second.txt'));
+  expect(pathValue(getByTestId)).toBe('/');
+
+  // A changed start is honoured on the next open.
+  setOpen(false);
+  setStart('/home/mick/docs');
+  setOpen(true);
+  await waitFor(() => expect(pathValue(getByTestId)).toBe('/home/mick/docs'));
+  expect(listed[listed.length - 1]).toBe('/home/mick/docs');
 });

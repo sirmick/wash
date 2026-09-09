@@ -24,6 +24,7 @@ import (
 	"log"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -112,6 +113,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		log.Printf("wash-fm: sandbox root=%s (from router session)", fmRoot)
 	}
 	fmFS = wfs.New(fmRoot)
+	launchDir = resolveLaunchDir(c.LaunchOpenPath())
 
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
@@ -132,8 +134,44 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	go pushFilesClipboardToFE(c)
 }
 
+// launchDir is the folder a `--open <path>` launch asked for (see
+// resolveLaunchDir); empty for a normal launch.
+var launchDir string
+
+// resolveLaunchDir turns the `--open <path>` launch argv (edit's "Reveal
+// in Files", or any spawn.request carrying an open path) into the folder
+// fm should land on: a directory is listed itself, a file's parent is
+// listed. Confined to fm's root like every other path; anything outside
+// or missing falls back to the default start so a bad argv never leaves
+// fm blank. Selecting the file within that listing is the FE's job and
+// is not wired yet — the launch only positions the window.
+func resolveLaunchDir(p string) string {
+	if p == "" {
+		return ""
+	}
+	abs, err := fmFS.Confine(p)
+	if err != nil {
+		log.Printf("wash-fm: launch open=%q rejected: %v", p, err)
+		return ""
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		log.Printf("wash-fm: launch open=%q rejected: %v", p, err)
+		return ""
+	}
+	dir := abs
+	if !st.IsDir() {
+		dir = filepath.Dir(abs)
+	}
+	log.Printf("wash-fm: launch open=%s dir=%s", abs, dir)
+	return dir
+}
+
 // initialPath is the directory fm shows on first paint.
 func initialPath() string {
+	if launchDir != "" {
+		return launchDir
+	}
 	if fmRoot != "" {
 		return fmRoot
 	}
