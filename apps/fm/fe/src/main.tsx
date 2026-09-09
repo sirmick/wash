@@ -406,6 +406,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // fm windows therefore share one clipboard: cut in window A,
   // paste in window B works naturally.
   const [filesClipboard, setFilesClipboard] = createSignal<ClipboardState | null>(null);
+  // cutPaths is what the tree and grid render dimmed: items on the files
+  // clipboard under `cut`, which are going somewhere but haven't moved
+  // yet. A copy dims nothing — nothing is leaving.
+  const cutPaths = createMemo(() => {
+    const cb = filesClipboard();
+    return new Set(cb?.op === 'cut' ? cb.paths : []);
+  });
+  // focusDock says which half of the window the last interaction was in,
+  // so Ctrl+A knows whether "everything" means the tree's visible rows or
+  // the folder grid's tiles. Focus itself can't answer: the shell's host
+  // element owns the tabindex, so document.activeElement is the same in
+  // both docks.
+  const [focusDock, setFocusDock] = createSignal<'tree' | 'grid'>('tree');
 
   // Type-to-filter + subtree search (filter.ts holds the pure row rule).
   // filterQuery narrows the CURRENT folder's rows; searchMode swaps the
@@ -963,6 +976,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     ev: MouseEvent,
     orderedPaths: string[] = displayRows().map((r) => r.path),
   ) => {
+    // A click in the tree hands the dock focus back to it (focusDock).
+    // Grid tiles route through gridClick, which claims it the other way.
+    setFocusDock('tree');
     const focusForFile = (p: string) => {
       // For a file, single click DOES update path + preview —
       // there's no "navigate into a file" so this is the normal
@@ -1005,6 +1021,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // view — double-click drills folders / opens files).
   const gridClick = (p: string, entry: Entry, ev: MouseEvent) => {
     setStatusOverride(null);
+    setFocusDock('grid');
     const result = nextSelection(
       { selection: selection(), anchor: selectionAnchor },
       p,
@@ -2801,14 +2818,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           applySelection(new Set(), 'escape-clear');
           return;
         }
+        if (ev.key === 'Escape' && cutPaths().size > 0) {
+          // Nothing selected but a cut is still pending: Escape abandons
+          // it, which is what un-dims the rows.
+          ev.preventDefault();
+          send({ kind: 'clipboard_files_set', op: 'copy', paths: [] });
+          setFilesClipboard(null);
+          setStatusInfo('cut cleared');
+          return;
+        }
       }
 
       // Ctrl/Cmd shortcuts.
       if (cmd && !ev.altKey) {
         if (ev.key === 'a' || ev.key === 'A') {
-          // Select-all = every currently-visible row in the tree.
+          // Select-all = everything visible in the dock you were last in:
+          // the folder grid's tiles when that is the grid, else the tree's
+          // visible rows.
           ev.preventDefault();
-          applySelection(new Set(displayRows().map((r) => r.path)), 'select-all');
+          const inGrid = focusDock() === 'grid' && gridDir() !== '';
+          applySelection(new Set(inGrid ? gridPaths() : displayRows().map((r) => r.path)), 'select-all');
           return;
         }
         if ((ev.key === 'F' || ev.key === 'f') && ev.shiftKey) {
@@ -2827,6 +2856,28 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           // incognito window" muscle memory in reverse.
           ev.preventDefault();
           startNewFolder();
+          return;
+        }
+        if (ev.key === 'n' || ev.key === 'N') {
+          // Ctrl+N = new file, the unshifted sibling of new folder.
+          ev.preventDefault();
+          startNewFile();
+          return;
+        }
+        if (ev.key === 'l' || ev.key === 'L') {
+          // Ctrl+L = the address bar, as in every browser and file
+          // manager: focus the path field and select it, ready to type.
+          ev.preventDefault();
+          pathInputEl?.focus();
+          pathInputEl?.select();
+          return;
+        }
+        if (ev.key === 'h' || ev.key === 'H') {
+          // Ctrl+H = show/hide dotfiles (the sort menu's toggle).
+          ev.preventDefault();
+          setShowHidden(!showHidden());
+          persist();
+          setStatusInfo(showHidden() ? 'showing hidden files' : 'hiding hidden files');
           return;
         }
         if (ev.key === 'i' || ev.key === 'I') {
@@ -3112,6 +3163,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           rowHint={(e) => entryHint(e)}
           rowTrailing={(e) => <SetidBadge entry={e} />}
           renderName={rowName}
+          isDimmed={(p) => cutPaths().has(p)}
           scrollTarget={() => path()}
           onRowClick={(p, e, ev) => {
             if (renaming()?.path === p) return;
@@ -3198,6 +3250,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 entries={gridEntries()}
                 fileUrl={(p, dim) => fileClient.url(p, { dim })}
                 isSelected={(p) => selection().has(p)}
+                isDimmed={(p) => cutPaths().has(p)}
                 isDropTarget={(p) => dropTargetPath() === p}
                 uploadActive={gridUploadActive()}
                 onClick={gridClick}
@@ -4439,6 +4492,8 @@ const FolderGrid: Component<{
   entries: Entry[];
   fileUrl: (path: string, dim: number) => Promise<string>;
   isSelected: (path: string) => boolean;
+  /** cut-but-not-yet-pasted tiles, rendered dimmed like the tree's rows. */
+  isDimmed: (path: string) => boolean;
   isDropTarget: (path: string) => boolean;
   /** the shown folder itself is an external-upload drop target right now. */
   uploadActive: boolean;
@@ -4498,6 +4553,7 @@ const FolderGrid: Component<{
             path={path}
             fileUrl={props.fileUrl}
             selected={props.isSelected(path)}
+            dimmed={props.isDimmed(path)}
             isDropTarget={props.isDropTarget(path)}
             onClick={props.onClick}
             onActivate={props.onActivate}
@@ -4524,6 +4580,7 @@ const FolderTile: Component<{
   path: string;
   fileUrl: (path: string, dim: number) => Promise<string>;
   selected: boolean;
+  dimmed: boolean;
   isDropTarget: boolean;
   onClick: (path: string, entry: Entry, ev: MouseEvent) => void;
   onActivate: (path: string, entry: Entry) => void;
@@ -4561,6 +4618,7 @@ const FolderTile: Component<{
       data-type={props.entry.type}
       data-hint={entryHint(props.entry)}
       data-selected={props.selected ? 'true' : undefined}
+      data-dimmed={props.dimmed ? 'true' : undefined}
       data-drop-target={props.isDropTarget ? 'true' : undefined}
       draggable="true"
       style={{
@@ -4573,6 +4631,7 @@ const FolderTile: Component<{
           ? tokens.bgRowHover
           : 'transparent',
         'box-shadow': props.isDropTarget ? `inset 0 0 0 2px ${tokens.borderDropTarget}` : 'none',
+        opacity: props.dimmed ? 0.45 : 1,
       }}
       title={props.entry.name}
       onMouseEnter={() => setHover(true)}
