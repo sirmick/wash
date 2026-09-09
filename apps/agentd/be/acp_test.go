@@ -1,8 +1,10 @@
 package agentd
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -726,5 +728,78 @@ func TestAdapterExitFailsTheRowAndCancelsAsks(t *testing.T) {
 	}
 	if !found {
 		t.Error("history entry dropped by the exit — the session would not be resumable")
+	}
+}
+
+// A turn that fails must say WHY in the transcript. promptHosted logged
+// the error and set the row failed, and the window showed a red dot and
+// nothing else — expired auth, a rate limit and a refused request all
+// looked identical, and the answer was in the router log.
+func TestTurnErrorsReachTheTranscript(t *testing.T) {
+	withStateDir(t)
+	reset()
+	withState(t, 1)
+
+	toAgentR, toAgentW := io.Pipe()
+	toClientR, toClientW := io.Pipe()
+	h := &hosted{key: "acp:err", agent: "codex", sessionID: "sess-err", cwd: t.TempDir()}
+	h.client = acp.NewClient(toClientR, toAgentW, h)
+	t.Cleanup(func() { h.client.Close(); toAgentW.Close(); toClientW.Close() })
+	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+	h.register()
+
+	// The "adapter": answer the prompt with an RPC error, the way a real
+	// one reports an expired login or a rate limit.
+	go func() {
+		sc := bufio.NewScanner(toAgentR)
+		for sc.Scan() {
+			var m struct {
+				ID     json.Number `json:"id"`
+				Method string      `json:"method"`
+			}
+			if json.Unmarshal(sc.Bytes(), &m) != nil || m.Method != acp.MethodSessionPrompt {
+				continue
+			}
+			_, _ = io.WriteString(toClientW, `{"jsonrpc":"2.0","id":`+m.ID.String()+`,"error":{"code":-32000,"message":"rate limit exceeded, retry in 30s"}}`+"\n")
+		}
+	}()
+
+	promptHosted(h, "do the thing")
+
+	if r := rows[h.key]; r == nil || r.State != "failed" || r.Reason != "error" {
+		t.Fatalf("row = %+v, want failed/error", r)
+	}
+	var note string
+	for _, e := range snapshot(h.key) {
+		if strings.Contains(e.Text, "The turn failed") {
+			note = e.Text
+		}
+	}
+	if note == "" {
+		t.Fatalf("no failure note in the transcript: %+v", snapshot(h.key))
+	}
+	if !strings.Contains(note, "rate limit exceeded, retry in 30s") {
+		t.Errorf("note does not carry the adapter's own message: %q", note)
+	}
+	if strings.Contains(note, "rpc -32000") {
+		t.Errorf("note leaks the wire framing: %q", note)
+	}
+	// The session is still up — the composer's next prompt is the retry
+	// — so it must still be registered, not retired.
+	if lookupHosted(h.key) == nil {
+		t.Error("a failed turn retired the session")
+	}
+}
+
+func TestTurnErrorReadsAsAPersonWould(t *testing.T) {
+	cases := map[error]string{
+		acp.ErrClosed: "the agent's adapter has gone away",
+		errors.New("acp: rpc -32000: authentication required"): "authentication required",
+		errors.New("something else entirely"):                  "something else entirely",
+	}
+	for err, want := range cases {
+		if got := turnError(err); got != want {
+			t.Errorf("turnError(%v) = %q, want %q", err, got, want)
+		}
 	}
 }

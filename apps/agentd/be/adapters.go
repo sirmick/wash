@@ -18,6 +18,7 @@ package agentd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -289,6 +290,13 @@ func promptHosted(h *hosted, text string) {
 			h.endTurn("failed", "exited")
 		} else {
 			h.endTurn("failed", "error")
+			// The error itself goes in the transcript. A red dot alone
+			// said nothing about WHY — expired auth, a rate limit, a
+			// refused request all looked the same — and the person had
+			// to find the router log to learn which. The composer stays
+			// usable: the session is still up, so the next prompt is the
+			// retry.
+			h.note("The turn failed: " + turnError(err) + "\n\nThe session is still open — send again to retry.")
 		}
 	case res.StopReason == acp.StopCancelled:
 		h.endTurn("done", "cancelled")
@@ -307,6 +315,25 @@ func killGroup(p *os.Process) {
 	if err := syscall.Kill(-p.Pid, syscall.SIGKILL); err != nil {
 		_ = p.Kill()
 	}
+}
+
+// turnError is the adapter's error as a person should read it. An RPC
+// error's message is the adapter's own words ("authentication required",
+// "rate limit exceeded") and is kept verbatim; the client's framing
+// prefix is dropped, and a closed wire is named for what it means.
+func turnError(err error) string {
+	if errors.Is(err, acp.ErrClosed) {
+		return "the agent's adapter has gone away"
+	}
+	msg := err.Error()
+	msg = strings.TrimPrefix(msg, "acp: ")
+	if i := strings.Index(msg, "rpc "); i == 0 {
+		// "rpc -32000: <message>" → "<message>"
+		if j := strings.Index(msg, ": "); j > 0 {
+			msg = msg[j+2:]
+		}
+	}
+	return msg
 }
 
 // authNames renders the auth methods an adapter offers, for an error a
