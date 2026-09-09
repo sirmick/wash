@@ -17,7 +17,7 @@
 // just the views that read them. No more "I changed a field but
 // forgot to re-render" bugs.
 
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
+import { For, Show, batch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
@@ -42,7 +42,7 @@ import {
 import {
   type ClipboardState, parseClipboardState, planPaste, pasteStatus,
 } from './clipboard.ts';
-import { nextSelection } from './selection.ts';
+import { nextSelection, rekeyPath, rekeySelection, successorAfterRemoval } from './selection.ts';
 import {
   ArrowLeft,
   ArrowRight,
@@ -478,6 +478,52 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (!expanded[p]) return;
     setExpanded(produce((s) => { delete s[p]; }));
     fsWatch.unwatch(p);
+  };
+
+  // subtreeKeys lists every listed/expanded dir at or under p — the
+  // per-directory state a rename or delete of p has to carry along or drop.
+  const subtreeKeys = (p: string): string[] => {
+    const under = (k: string) => k === p || k.startsWith(p + '/');
+    const keys = new Set<string>();
+    for (const k of Object.keys(listings)) if (under(k)) keys.add(k);
+    for (const k of Object.keys(expanded)) if (under(k)) keys.add(k);
+    return Array.from(keys);
+  };
+
+  // dropSubtreeState forgets the listings, expansion and watches of p and
+  // everything under it — after p was deleted or moved away. Without this
+  // a re-created dir at the same path would come back pre-expanded and the
+  // BE would keep a watch on a path that no longer exists.
+  const dropSubtreeState = (p: string) => {
+    for (const k of subtreeKeys(p)) {
+      if (expanded[k]) collapseDir(k);
+      if (listings[k]) setListings(produce((s) => { delete s[k]; }));
+    }
+  };
+
+  // rekeySubtreeState moves the listings/expansion/watches of `from` and
+  // its descendants to their paths under `to` (a rename or move of a dir),
+  // so an expanded folder stays expanded — with its rows — across a rename
+  // instead of collapsing until the user re-opens it.
+  const rekeySubtreeState = (from: string, to: string) => {
+    for (const k of subtreeKeys(from)) {
+      const nk = rekeyPath(k, from, to);
+      if (!nk) continue;
+      const wasExpanded = !!expanded[k];
+      const entries = listings[k];
+      if (wasExpanded) collapseDir(k);
+      if (entries) setListings(produce((s) => { delete s[k]; s[nk] = entries; }));
+      if (wasExpanded) expandDir(nk);
+    }
+  };
+
+  // patchListing edits one directory's cached entries in place — the
+  // optimistic local mirror of a mutation the BE just confirmed, applied
+  // BEFORE the re-list round-trip so the tree (and the selection invariant
+  // that checks every selected path is a visible row) never sees a gap.
+  const patchListing = (dir: string, fn: (entries: Entry[]) => Entry[]) => {
+    const cur = listings[dir];
+    if (cur) setListings(dir, fn(cur));
   };
 
   const handleBE = (m: BEMessage) => {
@@ -936,9 +982,33 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       'rename_err',
     );
     if (reply.kind === 'rename_ok') {
+      // Re-key everything that referred to the old path — the selection,
+      // the cursor, the info-pane entry and any expanded subtree — so the
+      // next F2/Delete/Ctrl+C/drag acts on the path that now exists. This
+      // was the "ghost selection": the selection kept the OLD path and the
+      // next verb failed not_found. The listing is patched in place first
+      // so the new name is a visible row before the re-list lands.
+      const oldName = baseName(r.path);
+      batch(() => {
+        patchListing(parent, (entries) =>
+          entries.filter((e) => e.name !== draft).map((e) => (e.name === oldName ? { ...e, name: draft } : e)));
+        rekeySubtreeState(r.path, to);
+        if (selection().size > 0) applySelection(rekeySelection(selection(), r.path, to), 'rename-rekey');
+        if (selectionAnchor) selectionAnchor = rekeyPath(selectionAnchor, r.path, to) ?? selectionAnchor;
+        const selP = rekeyPath(selectedPath(), r.path, to);
+        if (selP) {
+          setSelectedPath(selP);
+          setSelectedEntry(findEntry(selP));
+        }
+        const gd = rekeyPath(gridDir(), r.path, to);
+        if (gd) setGridDir(gd);
+        const cur = rekeyPath(path(), r.path, to);
+        if (cur) {
+          setPath(cur);
+          setPathInputValue(cur);
+        }
+      });
       invalidateAndList(parent);
-      setPath(to);
-      setPathInputValue(to);
     } else if (reply.kind === 'cancelled') {
       // User dismissed the Replace prompt — silent no-op.
     } else if (reply.kind === 'rename_err' && reply.code === 'not_empty_dir') {
@@ -1038,13 +1108,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const reply = await sendWithReply({ kind: 'delete', path: target });
     if (reply.kind === 'delete_ok') {
       const par = parentPath(target);
+      // Desktop-FM convention: the selection moves to the next sibling
+      // (else the previous), computed from the rows as they were BEFORE
+      // the row is dropped. The listing is patched in place so the
+      // deleted row disappears now and the successor is a visible row —
+      // no ghost between delete_ok and the re-list.
+      const next = successorAfterRemoval(flatRows().map((row) => row.path), target);
+      batch(() => {
+        patchListing(par, (entries) => entries.filter((e) => e.name !== baseName(target)));
+        dropSubtreeState(target);
+        if (rekeyPath(path(), target, par)) {
+          setPath(par);
+          setPathInputValue(par);
+        }
+        if (next) {
+          applySelection(new Set([next]), 'delete-select-next');
+          selectionAnchor = next;
+          const nextEntry = findEntry(next);
+          setSelectedEntry(nextEntry);
+          setSelectedPath(next);
+          setGridDir(nextEntry && isDirLike(nextEntry) ? next : '');
+        } else {
+          applySelection(new Set(), 'delete-clear');
+          selectionAnchor = null;
+          setSelectedEntry(null);
+          setSelectedPath('');
+          setGridDir('');
+        }
+        setPreviewContent(null);
+      });
       invalidateAndList(par);
-      setPath(par);
-      setPathInputValue(par);
-      setSelectedEntry(null);
-      setSelectedPath('');
-      setGridDir('');
-      setPreviewContent(null);
     } else if (reply.kind === 'delete_err' && reply.code === 'not_empty') {
       dispatchBulkDelete([target]);
     } else {
@@ -1855,6 +1948,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       'rename_err',
     );
     if (reply.kind === 'rename_ok') {
+      // The source row is gone: drop it from its listing now and clear
+      // the selection (the moved path is selected nowhere), so the next
+      // verb can't target the path that no longer exists.
+      batch(() => {
+        patchListing(srcParent, (entries) => entries.filter((e) => e.name !== baseName(src)));
+        rekeySubtreeState(src, dest);
+        if (selection().size > 0) applySelection(new Set(), 'move-clear');
+        selectionAnchor = null;
+        if (rekeyPath(selectedPath(), src, dest)) {
+          setSelectedEntry(null);
+          setSelectedPath('');
+        }
+        const gd = rekeyPath(gridDir(), src, dest);
+        if (gd) setGridDir(gd);
+        const cur = rekeyPath(path(), src, dest);
+        if (cur) {
+          setPath(cur);
+          setPathInputValue(cur);
+        }
+      });
       // Refresh both ends ourselves rather than waiting for
       // fs.watch — for a drop into a collapsed target dir, the
       // watch never fires (we only subscribe to expanded dirs).
@@ -1862,10 +1975,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       invalidateAndList(srcParent);
       expandDir(targetDir);
       invalidateAndList(targetDir);
-      if (path() === src) {
-        setPath(dest);
-        setPathInputValue(dest);
-      }
     } else if (reply.kind === 'cancelled') {
       // user dismissed Replace prompt — silent no-op.
     } else if (reply.kind === 'rename_err' && reply.code === 'not_empty_dir') {
