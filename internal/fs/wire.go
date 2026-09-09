@@ -47,6 +47,9 @@ type ListReply struct {
 	Path      string  `json:"path"`
 	Entries   []Entry `json:"entries"`
 	Truncated bool    `json:"truncated"`
+	// Total is the directory's full entry count when Truncated (the FE
+	// says "showing first N of Total"); omitted otherwise.
+	Total int `json:"total,omitempty"`
 }
 
 // ReadReply is the BE → FE response payload for a read request.

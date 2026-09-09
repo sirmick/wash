@@ -213,7 +213,7 @@ func registerHandlers(b *sdk.Bus) {
 		if err != nil {
 			log.Printf("fm: list path=%q: %v", req.Path, err)
 		} else {
-			log.Printf("fm: list path=%q n=%d truncated=%v", reply.Path, len(reply.Entries), reply.Truncated)
+			log.Printf("fm: list path=%q n=%d truncated=%v total=%d", reply.Path, len(reply.Entries), reply.Truncated, max(reply.Total, len(reply.Entries)))
 		}
 		return reply, err
 	})
@@ -377,11 +377,16 @@ func listReplyFor(_, path string) (wfs.ListReply, error) {
 	if path == "" {
 		return wfs.ListReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
 	}
-	entries, abs, truncated, err := fmFS.List(path, maxListEntries)
+	entries, abs, total, err := fmFS.ListN(path, maxListEntries)
 	if err != nil {
 		return wfs.ListReply{}, fsErr(err, path)
 	}
-	return wfs.ListReply{Path: abs, Entries: entries, Truncated: truncated}, nil
+	reply := wfs.ListReply{Path: abs, Entries: entries}
+	if total > len(entries) {
+		reply.Truncated = true
+		reply.Total = total
+	}
+	return reply, nil
 }
 
 // readFile loads up to maxReadBytes of path. Binary files report a

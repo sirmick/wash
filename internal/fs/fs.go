@@ -134,25 +134,34 @@ func (f *FS) Confine(p string) (string, error) {
 // When the cap is reached, truncated is true and the entries slice
 // is exactly maxEntries long.
 func (f *FS) List(p string, maxEntries int) (entries []Entry, abs string, truncated bool, err error) {
+	entries, abs, total, err := f.ListN(p, maxEntries)
+	return entries, abs, err == nil && total > len(entries), err
+}
+
+// ListN is List with the directory's TOTAL entry count alongside the
+// (possibly capped) slice, so a caller can say "showing first 5,000 of
+// 5,050" rather than just "truncated". The count is free: the whole
+// directory is read before the cap is applied.
+func (f *FS) ListN(p string, maxEntries int) (entries []Entry, abs string, total int, err error) {
 	if maxEntries <= 0 {
 		maxEntries = DefaultMaxListEntries
 	}
 	abs, err = f.Confine(p)
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", 0, err
 	}
 	dir, err := os.Open(abs)
 	if err != nil {
-		return nil, abs, false, err
+		return nil, abs, 0, err
 	}
 	defer dir.Close()
 	infos, err := dir.Readdir(-1)
 	if err != nil {
-		return nil, abs, false, err
+		return nil, abs, 0, err
 	}
+	total = len(infos)
 	if len(infos) > maxEntries {
 		infos = infos[:maxEntries]
-		truncated = true
 	}
 	out := make([]Entry, 0, len(infos))
 	owners := map[uint32]string{}
@@ -173,7 +182,7 @@ func (f *FS) List(p string, maxEntries int) (entries []Entry, abs string, trunca
 		}
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
-	return out, abs, truncated, nil
+	return out, abs, total, nil
 }
 
 // Stat returns metadata for a single path. Mirrors List's entry

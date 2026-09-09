@@ -216,6 +216,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const fileClient: FileClient = createFileClient({ instance: props.instance, host: props.host });
   onCleanup(() => fileClient.dispose());
   const [listings, setListings] = createStore<Record<string, Entry[]>>({});
+  // truncatedDirs records listings the BE capped (maxListEntries): dir →
+  // { shown, total }. The status line surfaces it for the viewed folder —
+  // a silently-capped /usr/bin is indistinguishable from a complete one
+  // otherwise. Cleared when a full listing (or list_err) replaces it.
+  const [truncatedDirs, setTruncatedDirs] = createStore<Record<string, { shown: number; total: number }>>({});
   const [expanded, setExpanded] = createStore<Record<string, true>>({});
   // Back/forward history. The push/back/forward index arithmetic lives
   // in ./nav-history.ts (unit-tested); this signal just holds the state
@@ -524,6 +529,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     for (const k of subtreeKeys(p)) {
       if (expanded[k]) collapseDir(k);
       if (listings[k]) setListings(produce((s) => { delete s[k]; }));
+      if (truncatedDirs[k]) setTruncatedDirs(produce((s) => { delete s[k]; }));
     }
   };
 
@@ -692,6 +698,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const p = String(m.path);
     const entries = m.entries as Entry[];
     setListings(p, entries);
+    if (m.truncated) setTruncatedDirs(p, { shown: entries.length, total: Number(m.total) || 0 });
+    else if (truncatedDirs[p]) setTruncatedDirs(produce((s) => { delete s[p]; }));
     expandDir(p);
     if (!rootInitialized()) {
       setRootInitialized(true);
@@ -2199,9 +2207,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
     if (!rootInitialized()) return 'loading…';
     const sel = selection().size;
-    if (sel > 1) return `${sel} of ${visibleCount()} selected`;
-    return `${visibleCount()} entries`;
+    const count = sel > 1 ? `${sel} of ${visibleCount()} selected` : `${visibleCount()} entries`;
+    const trunc = truncationNotice();
+    if (trunc) {
+      return (
+        <>
+          {trunc.forView ? '' : `${count} · `}
+          <span data-status-kind="truncated" style={{ color: tokens.fgWarning }}>
+            {trunc.text}
+          </span>
+        </>
+      );
+    }
+    return count;
   });
+
+  // truncationNotice names a capped listing the user is looking at: the
+  // viewed folder first ("showing first 5,000 of 5,050 entries"), else the
+  // first expanded folder in the tree that was capped, by name.
+  const truncationNotice = (): { text: string; forView: boolean } | null => {
+    const fmt = (n: number) => n.toLocaleString();
+    const describe = (t: { shown: number; total: number }) =>
+      t.total > 0 ? `showing first ${fmt(t.shown)} of ${fmt(t.total)} entries` : `listing truncated at ${fmt(t.shown)} entries`;
+    const dir = viewDir();
+    const own = truncatedDirs[dir];
+    if (own) return { text: describe(own), forView: true };
+    for (const k of Object.keys(truncatedDirs)) {
+      if (expanded[k] && listings[k]) return { text: `${baseName(k)}: ${describe(truncatedDirs[k])}`, forView: false };
+    }
+    return null;
+  };
 
   // ---- menus ----
 
