@@ -347,6 +347,12 @@ const MAX_SLASH = 8;
 
 const ALLOW_HINT = '⌥A';
 const DENY_HINT = '⌥D';
+const STOP_HINT = 'Esc';
+
+// How many of your own prompts ↑ walks back through. Fifty is a session's
+// worth: far enough that the thing you want is in there, short enough that
+// holding ↑ is not a way to lose your place.
+const MAX_PROMPT_HISTORY = 50;
 
 const hintStyle: JSX.CSSProperties = {
   font: tokens.type.monoSm,
@@ -478,15 +484,82 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     return all.filter((c) => c.name.toLowerCase().startsWith(typed));
   };
 
+  // ↑ history. The ring IS the transcript: every prompt you sent is
+  // already a user row, so recall is per-session for free, survives a
+  // resume, and has nothing to persist. A send agentd has not echoed back
+  // yet is held in `unecho` so ↑ works the instant after Enter, and drops
+  // out again as soon as the row arrives.
+  const [unecho, setUnecho] = createSignal<string[]>([]);
+  const prompts = () => {
+    const sent: string[] = [];
+    for (const e of props.events()) {
+      if (e.kind === 'user' && (e.text ?? '') !== '') sent.push(e.text!);
+    }
+    for (const t of unecho()) {
+      if (!sent.includes(t)) sent.push(t);
+    }
+    return sent.length > MAX_PROMPT_HISTORY ? sent.slice(-MAX_PROMPT_HISTORY) : sent;
+  };
+  // -1 is "not browsing": ↑ only ENTERS history from an empty composer, so
+  // it stays an arrow key in a draft you are editing.
+  const [histAt, setHistAt] = createSignal(-1);
+  const recallPrev = (): boolean => {
+    const h = prompts();
+    if (h.length === 0) return false;
+    const at = histAt();
+    if (at < 0) {
+      if (draft() !== '') return false;
+      setHistAt(h.length - 1);
+      setDraft(h[h.length - 1]);
+      return true;
+    }
+    // At the oldest: stay there rather than wrapping round to the newest,
+    // which loses the place you were walking back to.
+    if (at > 0) {
+      setHistAt(at - 1);
+      setDraft(h[at - 1]);
+    }
+    return true;
+  };
+  const recallNext = (): boolean => {
+    const at = histAt();
+    if (at < 0) return false;
+    const h = prompts();
+    if (at >= h.length - 1) {
+      setHistAt(-1);
+      setDraft('');
+      return true;
+    }
+    setHistAt(at + 1);
+    setDraft(h[at + 1]);
+    return true;
+  };
+
   const send = () => {
     const text = draft().trim();
     if (!text || !props.onSend) return;
     props.onSend(text);
+    setUnecho((u) => [...u, text].slice(-MAX_PROMPT_HISTORY));
+    setHistAt(-1);
     setDraft('');
     setPinned(true);
   };
 
   const st = () => props.status?.() ?? {};
+
+  // Stop is offered whenever there is a turn to stop — INCLUDING while a
+  // question is pending, which is exactly when a runaway turn is easiest
+  // to notice and, until now, the one moment the button hid itself. Esc
+  // is the same verb from the keyboard. agentd's agent_cancel already
+  // cancels the asks along with the turn (acp.go, cancelAsksFor), so one
+  // press ends both; what was missing was any way to reach it.
+  const pendingAsks = () => (props.asks?.() ?? []).length;
+  const stoppable = () => !!props.onCancel && (st().state === 'working' || pendingAsks() > 0);
+  const cancelTurn = (): boolean => {
+    if (!stoppable()) return false;
+    props.onCancel!();
+    return true;
+  };
 
   // Drops onto the composer (agent-compose-drop.ts): a wash drag becomes
   // @path references at the caret; an OS text file is attached inline as
@@ -544,6 +617,18 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
 
   return (
     <div
+      // Esc anywhere in the session — the composer, an ask row's buttons,
+      // the transcript — is Stop. Handled here rather than on the textarea
+      // so it does not depend on where focus happens to be when a turn
+      // goes wrong, and swallowed only when it actually stopped something,
+      // so Esc still closes whatever is above this when there is no turn.
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        if (cancelTurn()) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
       style={{
         display: 'flex',
         'flex-direction': 'column',
@@ -705,18 +790,22 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             empty transcript is indistinguishable from a broken one. Hidden
             while a question is pending, because then the thing waiting is
             you, not the agent. */}
-        <Show when={props.status?.().state === 'working' && (props.asks?.() ?? []).length === 0}>
+        <Show when={(st().state === 'working' && pendingAsks() === 0) || stoppable()}>
           <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px`, color: tokens.fgDim, font: tokens.type.textSm }}>
-            <Spinner />
-            <span>working…</span>
-            <Show when={props.onCancel}>
+            <Show when={st().state === 'working' && pendingAsks() === 0}>
+              <Spinner />
+              <span>working…</span>
+            </Show>
+            <Show when={stoppable()}>
               <button
                 type="button"
                 data-testid="agent-stop"
-                onClick={() => props.onCancel?.()}
+                title="End this turn — and the question it is waiting on"
+                onClick={() => cancelTurn()}
                 style={askBtn(tokens.bgNeutral, tokens.fgMuted)}
               >
                 Stop
+                <span style={hintStyle}>{STOP_HINT}</span>
               </button>
             </Show>
           </div>
@@ -798,14 +887,38 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               ? 'Type the next message — it is sent when this turn ends'
               : 'Ask, or drop a file from wash-fm…')
           }
-          onInput={(e) => setDraft(e.currentTarget.value)}
+          onInput={(e) => {
+            setDraft(e.currentTarget.value);
+            // Typing leaves history: the recalled prompt is now a draft
+            // you are editing, and ↑ should behave like an arrow key in it.
+            setHistAt(-1);
+          }}
           onKeyDown={(e) => {
+            // Ctrl/Cmd+Enter sends, unconditionally — the muscle memory
+            // every other chat composer trains, and the one that still
+            // works when a modifier is already held down.
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              send();
+              return;
+            }
             // Enter sends; Shift+Enter is a newline. A composer that
             // needed a modifier to send would be wrong for a chat and a
             // surprise in every other wash text field.
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
               e.preventDefault();
               send();
+              return;
+            }
+            // ↑ from an empty composer walks back through your own
+            // prompts, ↓ forward; ↓ past the newest returns the empty box.
+            if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+              if (recallPrev()) e.preventDefault();
+              return;
+            }
+            if (e.key === 'ArrowDown' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+              if (recallNext()) e.preventDefault();
+              return;
             }
           }}
           style={{

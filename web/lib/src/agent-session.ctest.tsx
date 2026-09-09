@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from 'vitest';
-import { render, cleanup } from '@solidjs/testing-library';
+import { render, cleanup, fireEvent } from '@solidjs/testing-library';
 import { AgentSession, type AgentEvent } from './agent-session.tsx';
 
 beforeEach(() => {
@@ -181,4 +181,96 @@ test('a tool row with no diff renders no diff box', () => {
   const { container } = render(() => <AgentSession events={() => events} />);
   expect(container.querySelector('[data-testid="agent-tool-diff"]')).toBeNull();
   expect(container.querySelector('[data-testid="agent-tool-diff-toggle"]')).toBeNull();
+});
+
+// docs/Review-findings.md P2 → agent: "Esc-to-cancel, Ctrl+Enter, ↑ prompt
+// history".
+const composerOf = (c: HTMLElement) => c.querySelector('[data-testid="agent-composer"]') as HTMLTextAreaElement;
+
+test('Ctrl+Enter sends, Enter still sends, Shift+Enter does not', () => {
+  const sent: string[] = [];
+  const { container } = render(() => <AgentSession events={() => []} onSend={(t) => sent.push(t)} />);
+  const box = composerOf(container);
+
+  fireEvent.input(box, { target: { value: 'one' } });
+  fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+  expect(sent).toEqual(['one']);
+
+  fireEvent.input(box, { target: { value: 'two' } });
+  fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+  expect(sent).toEqual(['one']);
+
+  fireEvent.keyDown(box, { key: 'Enter' });
+  expect(sent).toEqual(['one', 'two']);
+});
+
+test('the up arrow walks back through this session\'s own prompts', () => {
+  const events: AgentEvent[] = [
+    { seq: 1, kind: 'user', text: 'first', at_ms: 0 },
+    { seq: 2, kind: 'message', text: 'ok', at_ms: 0 },
+    { seq: 3, kind: 'user', text: 'second', at_ms: 0 },
+  ];
+  const { container } = render(() => <AgentSession events={() => events} onSend={() => {}} />);
+  const box = composerOf(container);
+
+  fireEvent.keyDown(box, { key: 'ArrowUp' });
+  expect(box.value).toBe('second');
+  fireEvent.keyDown(box, { key: 'ArrowUp' });
+  expect(box.value).toBe('first');
+  // The oldest is a floor, not a wrap-around.
+  fireEvent.keyDown(box, { key: 'ArrowUp' });
+  expect(box.value).toBe('first');
+
+  fireEvent.keyDown(box, { key: 'ArrowDown' });
+  expect(box.value).toBe('second');
+  fireEvent.keyDown(box, { key: 'ArrowDown' });
+  expect(box.value).toBe('');
+
+  // A non-empty draft keeps the arrow as an arrow.
+  fireEvent.input(box, { target: { value: 'typing' } });
+  fireEvent.keyDown(box, { key: 'ArrowUp' });
+  expect(box.value).toBe('typing');
+});
+
+test('a prompt is recallable before agentd has echoed it back', () => {
+  const { container } = render(() => <AgentSession events={() => []} onSend={() => {}} />);
+  const box = composerOf(container);
+  fireEvent.input(box, { target: { value: 'not yet echoed' } });
+  fireEvent.keyDown(box, { key: 'Enter' });
+  expect(box.value).toBe('');
+  fireEvent.keyDown(box, { key: 'ArrowUp' });
+  expect(box.value).toBe('not yet echoed');
+});
+
+test('Stop is offered while a question is pending, and Esc is the same verb', () => {
+  const asks = [{ id: 'a1', tool: 'Bash', subject: 'rm -rf /', age_ms: 0 }];
+  let cancels = 0;
+  const { container } = render(() => (
+    <AgentSession
+      events={() => []}
+      asks={() => asks}
+      status={() => ({ state: 'needs-input' })}
+      onSend={() => {}}
+      onCancel={() => { cancels++; }}
+    />
+  ));
+
+  // Previously the Stop button hid itself the moment an ask appeared.
+  const stop = container.querySelector('[data-testid="agent-stop"]') as HTMLButtonElement;
+  expect(stop).not.toBeNull();
+  stop.click();
+  expect(cancels).toBe(1);
+
+  fireEvent.keyDown(composerOf(container), { key: 'Escape' });
+  expect(cancels).toBe(2);
+});
+
+test('Esc does nothing when there is no turn to stop', () => {
+  let cancels = 0;
+  const { container } = render(() => (
+    <AgentSession events={() => []} status={() => ({ state: 'done' })} onSend={() => {}} onCancel={() => { cancels++; }} />
+  ));
+  expect(container.querySelector('[data-testid="agent-stop"]')).toBeNull();
+  fireEvent.keyDown(composerOf(container), { key: 'Escape' });
+  expect(cancels).toBe(0);
 });
