@@ -327,6 +327,23 @@ function modesToSeq(m: TermModes): string {
   return s;
 }
 
+// parseOsc7 turns an OSC 7 payload into a path. The payload is a
+// `file://` URL whose host is the machine name (empty or "localhost" in
+// the common case); a non-file scheme yields null. The host is not
+// checked here — a shell reached over ssh reports ITS paths, and the
+// consumer's backend already refuses a directory that does not exist
+// locally, which is the check that matters. Percent-escapes are decoded
+// (a space is `%20` on the wire).
+export function parseOsc7(data: string): string | null {
+  const m = /^file:\/\/[^/]*(\/.*)$/.exec(data.trim());
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
+}
+
 // Bound on distinct tracked mode numbers — a guardrail against a
 // hostile/buggy stream growing the persisted blob without limit.
 const MAX_TRACKED_MODES = 64;
@@ -393,6 +410,12 @@ export interface TerminalProps {
   // whenever the running program sets it — used by the term app to
   // label the tab. Empty string when the program clears the title.
   onTitle?: (title: string) => void;
+  // onCwd fires with the shell's working directory whenever it reports
+  // one through OSC 7 (`ESC ] 7 ; file://host/path BEL` — zsh, fish, and
+  // bash with a PROMPT_COMMAND hook all emit it). A consumer uses it to
+  // start the next tab where this one is. Absent for shells that never
+  // report; the consumer's backend falls back to /proc.
+  onCwd?: (cwd: string) => void;
   // contextMenu enables the right-click Copy/Paste menu (default on).
   contextMenu?: boolean;
   // menuExtras appends host-supplied items to that menu (below a
@@ -794,6 +817,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // OSC window title (set by the shell's PROMPT_COMMAND, vim, ssh, …)
     // bubbles to the consumer so it can label the tab.
     if (props.onTitle) term.onTitleChange((t) => props.onTitle?.(t));
+    // OSC 7 — the shell's cwd. Observed, never consumed (return false so
+    // xterm's default handling, which is nothing, still runs); wrapped so a
+    // throw can never wedge the parser (see noteDec).
+    if (props.onCwd) {
+      term.parser.registerOscHandler(7, (data) => {
+        try {
+          const cwd = parseOsc7(data);
+          if (cwd !== null) props.onCwd?.(cwd);
+        } catch (e) {
+          window.wash.log('error', 'terminal', `onCwd threw: ${e}`, (e as Error)?.stack);
+        }
+        return false;
+      });
+    }
 
     // PuTTY-style select = copy: xterm keeps its own selection model
     // (not a DOM selection), so on selection-end we push the selected

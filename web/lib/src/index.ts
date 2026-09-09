@@ -36,6 +36,7 @@ export {
   fontById,
   TERM_THEMES,
   themeById,
+  parseOsc7,
 } from './terminal';
 export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme } from './terminal';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';

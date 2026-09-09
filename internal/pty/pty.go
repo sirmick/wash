@@ -56,6 +56,10 @@ type Session struct {
 	chMu   sync.Mutex
 	chHeld bool
 
+	// dir is the working directory the child starts in (WithDir). Empty
+	// inherits the process cwd, as every caller did before cwd existed.
+	dir string
+
 	// cap is the optional output capture (WithCapture). Nil unless a
 	// caller asked for one: wash-term does not need it — the browser is
 	// its buffer — but a caller that must ANSWER for the output later
@@ -114,6 +118,45 @@ func WithCapture(max int) Option {
 			s.cap = &capture{max: max}
 		}
 	}
+}
+
+// WithDir starts the child in dir instead of the process's own cwd — a
+// new tab inheriting the focused tab's directory, or `wash-term --open
+// <dir>`. The caller has already checked dir exists; a bad dir would
+// make StartWithSize fail and the tab never open, so Open ignores a dir
+// that is not a directory rather than failing the whole spawn.
+func WithDir(dir string) Option {
+	return func(s *Session) {
+		if dir == "" {
+			return
+		}
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+			log.Printf("pty: cwd %q unusable, inheriting: %v", dir, err)
+			return
+		}
+		s.dir = dir
+	}
+}
+
+// Cwd reports the child's current working directory from
+// /proc/<pid>/cwd. It follows the SHELL, not the foreground program: a
+// `cd` is what the user means by "where this tab is", and a build running
+// in a subdirectory does not move the tab. Empty when unreadable (the
+// child is gone, or a setuid child's /proc entry is not ours to read —
+// the Root Terminal case, where the caller falls back to inheriting).
+func (s *Session) Cwd() string {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return ""
+	}
+	dir, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", s.cmd.Process.Pid))
+	if err != nil {
+		return ""
+	}
+	// A directory deleted under the shell reads as "/path (deleted)".
+	if strings.HasSuffix(dir, " (deleted)") {
+		return ""
+	}
+	return dir
 }
 
 // WithExitHold keeps the raw channel open after the pty ends whenever
@@ -440,14 +483,7 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 	}
 	cmd.Env = env
 
-	f, startErr := creackpty.StartWithSize(cmd, &creackpty.Winsize{Cols: cols, Rows: rows})
-	if startErr != nil {
-		_ = ch.Close()
-		return nil, startErr
-	}
-
 	s := &Session{
-		pty:     f,
 		cmd:     cmd,
 		ch:      ch,
 		Shell:   shellPath,
@@ -456,11 +492,22 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 		onClose: onClose,
 		done:    make(chan struct{}),
 	}
-	// Before the copy goroutines start, so a capture cannot miss the
-	// first bytes a fast command writes.
+	// Options run BEFORE the child starts: WithDir has to land on cmd.Dir
+	// ahead of StartWithSize, and a capture must exist before the copy
+	// goroutines so it cannot miss the first bytes a fast command writes.
 	for _, o := range opts {
 		o(s)
 	}
+	if s.dir != "" {
+		cmd.Dir = s.dir
+	}
+
+	f, startErr := creackpty.StartWithSize(cmd, &creackpty.Winsize{Cols: cols, Rows: rows})
+	if startErr != nil {
+		_ = ch.Close()
+		return nil, startErr
+	}
+	s.pty = f
 
 	// pty → channel, teed into the capture when one was asked for. The
 	// tee is on the READ side of the pty so the bytes captured are the

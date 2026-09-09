@@ -281,6 +281,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [tabTitles, setTabTitles] = createSignal<Map<number, string>>(new Map());
   // Per-tab user badge/status from the BE poll (see TabStatus).
   const [tabStatus, setTabStatus] = createSignal<Map<number, TabStatus>>(new Map());
+  // Per-tab cwd as the shell reported it via OSC 7 — forwarded to the BE
+  // (tab_cwd) so New Tab / split start there. Not reactive: nothing
+  // renders it; the BE is the reader. Shells that never emit OSC 7 leave
+  // no entry and the BE reads /proc instead.
+  const tabCwds = new Map<number, string>();
   // Tabs whose pty has ended but which the BE HELD open (`tab_exited`):
   // the command failed, was killed, or finished before anyone could read
   // it. The BE wrote the exit banner in-band; here the xterm just stays,
@@ -360,6 +365,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       next.delete(channelID);
       setTabStatus(next);
     }
+    tabCwds.delete(channelID);
     if (exitedTabs().has(channelID)) {
       const next = new Map(exitedTabs());
       next.delete(channelID);
@@ -468,11 +474,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // the tab's pane will have, so the pty opens at that size and the first
   // prompt is drawn at the right width instead of at 80×24 and reflowed a
   // frame later.
+  // The new tab starts in the focused tab's directory: `from` names it and
+  // the BE resolves the cwd (OSC 7 report, else /proc) at spawn time.
   const openNewTab = (intent?: SplitIntent) => {
     const req = splitIntents.mint();
     if (intent) splitIntents.set(req, intent);
     const grid = intent ? gridAfterSplit(intent) : gridOfGroup(focusPath());
-    send({ kind: 'new_tab', req, ...(grid ?? {}) });
+    send({ kind: 'new_tab', req, from: active(), ...(grid ?? {}) });
+  };
+
+  // onTabCwd forwards a shell's OSC 7 report. Deduped: a prompt hook emits
+  // it on every prompt, and an idle tab should stay off the wire.
+  const onTabCwd = (channelID: number, cwd: string) => {
+    if (tabCwds.get(channelID) === cwd) return;
+    tabCwds.set(channelID, cwd);
+    send({ kind: 'tab_cwd', channel_id: channelID, cwd });
   };
 
   // gridOfGroup is the grid a new tab in an existing group gets: that
@@ -1534,6 +1550,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   fontSize={fontSize()}
                   theme={themeById(themeId())?.theme}
                   onTitle={(t) => setTabTitle(tab.channelID, t)}
+                  onCwd={(cwd) => onTabCwd(tab.channelID, cwd)}
                   initialCols={tab.init?.cols}
                   initialRows={tab.init?.rows}
                   initialModes={tab.modes}
