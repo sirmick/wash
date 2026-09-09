@@ -24,6 +24,9 @@ export interface OverlayProps {
 export const Overlay: ParentComponent<OverlayProps> = (props) => {
   return (
     <div
+      // Dismiss backdrop — clicking the scrim closes the overlay, but the
+      // scrim itself is not something you point AT.
+      data-wash-no-hit
       data-testid={props['data-testid']}
       onClick={(ev) => {
         if (ev.target === ev.currentTarget) props.onDismiss();
@@ -99,6 +102,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
       {props.children}
       <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end', 'margin-top': '14px' }}>
         <button
+          data-wash-hit
           type="button"
           data-testid={props.cancelTestid}
           onClick={props.onCancel}
@@ -108,6 +112,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
         </button>
         {props.altLabel ? (
           <button
+            data-wash-hit
             type="button"
             data-testid={props.altTestid}
             onClick={props.onAlt}
@@ -117,6 +122,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
           </button>
         ) : null}
         <button
+          data-wash-hit
           type="button"
           data-testid={props.confirmTestid}
           onClick={props.onConfirm}

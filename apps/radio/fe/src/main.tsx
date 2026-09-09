@@ -657,6 +657,7 @@ function RadioApp(props: WashAppProps) {
             {(entry) =>
               entry.kind === 'genre' ? (
                 <button
+                  data-wash-hit
                   type="button"
                   data-testid={`genre-${slug(entry.genre)}`}
                   aria-expanded={!entry.collapsed}
@@ -683,6 +684,7 @@ function RadioApp(props: WashAppProps) {
                 </button>
               ) : entry.kind === 'subtype' ? (
                 <button
+                  data-wash-hit
                   type="button"
                   data-testid={`subtype-${slug(entry.genre)}-${slug(entry.subtype)}`}
                   aria-expanded={!entry.collapsed}
@@ -715,6 +717,7 @@ function RadioApp(props: WashAppProps) {
                   const fav = () => favs().has(r.name);
                   return (
                     <div
+                      data-wash-hit="subtle"
                       data-testid={`media-row-${entry.di}`}
                       data-selected={selected() ? 'true' : undefined}
                       data-playing={playing() ? 'true' : undefined}
@@ -739,6 +742,7 @@ function RadioApp(props: WashAppProps) {
                       <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{r.name}</span>
                       <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeSm, 'flex-shrink': 0 }}>{r.codec}</span>
                       <span
+                        data-wash-hit
                         data-testid={`fav-${r.be}`}
                         data-fav={fav() ? 'true' : undefined}
                         title={fav() ? 'Unfavorite' : 'Favorite'}

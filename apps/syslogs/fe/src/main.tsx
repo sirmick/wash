@@ -351,6 +351,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <For each={sortedFiles()}>
               {(f) => (
                 <div
+                  data-wash-hit
                   data-testid="syslogs-file-row"
                   data-file-path={f.path}
                   style={fileRowStyle(selected() === f.path)}
@@ -421,6 +422,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               <span style={{ opacity: 0.7 }}>{statusError()}</span>
             </span>
             <button
+              data-wash-hit
               data-testid="syslogs-retry-root"
               onClick={retryAsRoot}
               style={{
@@ -443,6 +445,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               tail: <span style={{ opacity: 0.85 }}>{statusError() || 'failed'}</span>
             </span>
             <button
+              data-wash-hit
               onClick={() => requestStream(selected())}
               style={{
                 background: 'transparent',

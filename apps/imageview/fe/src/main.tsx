@@ -333,6 +333,7 @@ const Thumb: Component<{
   });
   return (
     <div
+      data-wash-hit
       ref={el}
       data-testid={`iv-thumb-${props.img.name}`}
       style={{ ...thumbStyle, background: props.active ? tokens.bgRowSelected : 'transparent' }}

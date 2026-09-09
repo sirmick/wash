@@ -293,7 +293,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             >
               <div
                 style={rowStyle(row, selectedId() === row.id)}
-                data-testid={`disks-row-${row.id}`}
+                data-wash-hit="subtle"
+              data-testid={`disks-row-${row.id}`}
                 onClick={() => row.selectable && selectRow(row.id)}
               >
                 <span style={{ display: 'inline-flex', flex: '0 0 auto', width: `${row.depth * 14}px` }} />

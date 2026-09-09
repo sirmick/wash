@@ -297,6 +297,26 @@ bug list — all fully landed; see `git log` if you need their content.)
   `edit` (it shares the package but keeps an inline store).
 - [ ] **(optional) Phase 7** — same playbook for `session` / `top`.
 
+## Interaction / visual consistency  (docs/INTERACTION.md)
+
+The hover/press/focus sweep landed the layer, the guard and the shared
+`<Tab>`. What it deliberately left:
+
+- [ ] **`<select>` has no hover treatment.** Replaced elements cannot render
+  the `::after` overlay the layer draws, so `panel-kit`'s `Select` is the one
+  control the sweep does not reach. Needs either a custom listbox or a
+  bespoke rule.
+- [ ] **139 raw `<button>`s that could be `<Button>`.** They all carry the
+  interaction layer now, so this is appearance-only drift (padding, radius,
+  font) rather than a missing-state bug. Worth folding in per app, biggest
+  first — `edit`, `net`, `term`, `fm`.
+- [ ] **`SmallBtn` and `Button` are two small-button styles.** `panel-kit`'s
+  `SmallBtn` predates `Button variant="ghost" size="sm"`; fold it in and keep
+  the name as an alias so the settings panels don't churn.
+- [ ] **wash-net's underline section nav** is a third tab idiom (alongside
+  `<Tab>` and the sidebar's icon rail). Fine as-is, but if a second app wants
+  section tabs it should become a shared `<SectionTabs>` rather than a copy.
+
 ## Won't-do / deliberate no-ops (recorded so they don't get re-flagged)
 
 - **fm trash** (decided 2026-09-08) — delete stays `os.Remove`/`RemoveAll`

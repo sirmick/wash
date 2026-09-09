@@ -458,6 +458,13 @@ func (h *hosted) setState(state, reason string) {
 	mutateStateIf(func(s *State) bool {
 		r := rows[h.key]
 		if r == nil {
+			// A session being ended has had its row deleted by retire;
+			// the turn it killed then reports "failed" through endTurn
+			// and used to put the row straight back, where it lingered
+			// until the sweep. Ended is ended.
+			if h.closing.Load() {
+				return false
+			}
 			r = &row{}
 			rows[h.key] = r
 		}

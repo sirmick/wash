@@ -221,6 +221,7 @@ export const HistoryPanel: Component<{
           <For each={rows()}>
             {(s, i) => (
               <div
+                data-wash-hit="subtle"
                 data-testid="ai-history-row"
                 data-session-id={s.session_id}
                 data-action={historyAction(s)}

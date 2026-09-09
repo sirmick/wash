@@ -181,6 +181,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       </div>
       <Show when={!isOpen()}>
         <div
+          data-wash-hit
           data-testid="sidebar-tab"
           title={
             props.badge

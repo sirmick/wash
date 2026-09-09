@@ -74,6 +74,7 @@ export const Section: Component<SectionProps> = (props) => {
       style={{ display: 'flex', 'flex-direction': 'column' }}
     >
       <div
+        data-wash-hit
         style={headerStyle()}
         onClick={props.onToggle}
         data-testid={`sidebar-section-header-${props.id}`}
