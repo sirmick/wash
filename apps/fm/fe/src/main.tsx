@@ -825,6 +825,32 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     sendList(p);
   };
 
+  // viewDir is the directory the tree is showing — the folder itself
+  // when path() is a (listed or known) directory, else the folder that
+  // contains the file the cursor is on. This is what Reload refreshes:
+  // after navigating into a folder path() IS that folder, so refreshing
+  // parentPath(path()) — the old behaviour — re-listed the parent and
+  // never the folder being looked at.
+  const viewDir = (): string => {
+    const p = path();
+    if (!p) return home();
+    if (listings[p]) return p;
+    const entry = findEntry(p);
+    if (entry && isDirLike(entry)) return p;
+    return parentPath(p);
+  };
+
+  // reloadView re-lists the viewed directory plus every listed +
+  // expanded descendant of it, so a Reload refreshes the whole subtree
+  // the user can see, not just one level.
+  const reloadView = () => {
+    const dir = viewDir();
+    const under = (p: string) => p === dir || p.startsWith(dir === '/' ? '/' : dir + '/');
+    const targets = Object.keys(listings).filter((p) => under(p) && (p === dir || expanded[p]));
+    if (!targets.includes(dir)) targets.unshift(dir);
+    for (const p of targets) invalidateAndList(p);
+  };
+
   const toggleExpand = (p: string) => {
     if (expanded[p]) {
       collapseDir(p);
@@ -2207,7 +2233,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           data-testid="fm-reload"
           title="Reload"
           style={{ padding: '4px 8px', 'min-width': '30px' }}
-          onClick={() => { if (path()) invalidateAndList(parentPath(path())); }}
+          onClick={reloadView}
         >
           <RotateCw size={14} />
         </Button>

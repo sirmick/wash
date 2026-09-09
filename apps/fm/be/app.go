@@ -207,7 +207,15 @@ func registerHandlers(b *sdk.Bus) {
 	fmWatch = sdk.NewWatchClient(c) // intercepts the service's fs_event pushes
 
 	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req wfs.ListReq) (wfs.ListReply, error) {
-		return listReplyFor("", req.Path)
+		reply, err := listReplyFor("", req.Path)
+		// Audit line for every explicit FE list (not the initial paint):
+		// e2e uses it to prove WHICH directory a Reload re-requested.
+		if err != nil {
+			log.Printf("fm: list path=%q: %v", req.Path, err)
+		} else {
+			log.Printf("fm: list path=%q n=%d truncated=%v", reply.Path, len(reply.Entries), reply.Truncated)
+		}
+		return reply, err
 	})
 	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (wfs.ReadReply, error) {
 		return readFile(req.Path)
