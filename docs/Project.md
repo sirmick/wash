@@ -113,63 +113,63 @@ reconnects, snapshot is a copy), `apps/about/fe/src/app-traffic.test.ts`
 `e2e/tests/about-app-traffic.spec.ts` (a terminal's real pty bytes are
 attributed to the terminal, in the Bulk column).
 
-### QoS lanes — IN FLIGHT
+### QoS lanes — DONE, unreleased
 
-**Problem.** Window drag stutters even after the drag-jank work
-(sndbuf clamp, geometry token, transcript deltas). The scheduler is
-sound; the *taxonomy* is not. Everything a human waits on and everything
-sizeable share one FIFO:
+**Problem.** Window drag stuttered even after the drag-jank work (sndbuf
+clamp, geometry token, transcript deltas). The scheduler is sound; the
+*taxonomy* was not. Everything a human waits on and everything sizeable
+shared one FIFO, and strict priority does nothing inside a class.
 
-- geometry patches go through `WriteCtrl`, which sets no class, so they
-  are Interactive by default (`router.go` broadcastPatches);
-- bundle delivery is Interactive **on purpose**, at 256 KB per frame,
-  so its Interactive Unbind cannot overtake the data and so it bypasses
-  the credit gate (`shell_session.go` handlePanelRead);
-- app messages default to Interactive (`classifyKind`);
-- `link.stats` telemetry rides ClassControl — the *highest* lane — once
-  a second.
+**Two mechanisms, not one.**
 
-Strict priority does nothing inside a class, and a frame is written
-whole: there is no preemption point inside one. With a 256 KB sndbuf
-clamp and 256 KB Interactive frames, a single bundle chunk is one full
-send buffer of head-of-line blocking that the scheduler cannot help.
+*Lane collision.* Geometry patches go through `WriteCtrl`, which sets no
+class, so they were Interactive — alongside 256 KB panel-bundle frames,
+4 MiB scrollback replays, and app messages, while `link.stats` telemetry
+rode ClassControl, the highest lane of all, once a second.
 
-**Root cause.** Class is doing two jobs — priority *and* ordering — and
-a third by accident: it also gates credit (`class == ClassBulk`). Any
-sequence that must stay ordered has to live in one class, which is what
-pushed bulk-sized data up into the latency lane.
+*Frame-level head-of-line blocking.* The scheduler is preemptive between
+frames and not inside one: the drain loop commits a whole frame to the
+socket before it looks at the queues again. The largest frame a lane
+emits is the worst-case delay it imposes on every lane above it, so a
+4 MiB replay stopped everything for its whole duration no matter what
+class it was in. The sndbuf clamp did not help — it bounds what the
+KERNEL queues ahead, not what one frame costs.
 
 **The lanes, stated once.**
 
 | Class | What belongs there |
 |---|---|
 | Control | protocol liveness only: ping/pong, error envelopes |
-| Interactive | what a human is waiting on NOW: input echo, geometry, focus, window lifecycle |
-| Bulk | anything sized: bundles, assets, pty output, transcripts, transfers |
+| Interactive | what a human is waiting on NOW: input echo, geometry, focus, window lifecycle, small transactional replies |
+| Bulk | anything sized: bundles, panels, assets, pty output, scrollback replay, transcripts |
 | Background | best-effort periodic: telemetry, thumbnails |
 
-**Four changes.**
+**What shipped.**
 
-1. **Chunk smaller.** One `writeChunked` helper at 32 KB replaces three
-   copies at 256/64/32 KB. Bounds worst-case head-of-line blocking to
-   one small frame instead of one whole send buffer.
-2. **Coalesce geometry.** A queued patch for a window is superseded by a
-   newer one rather than both being delivered — X11's motion
-   compression. Only bites when the writer is behind; zero added latency
-   when it is not.
-3. **Decouple credit from class.** The credit gate keys on the channel's
-   ledger (`b.credit != nil`, the existing `noCredit` seam used by peer
-   and file channels), not on the class bits. Bundle channels are bound
-   creditless, which frees their data to ride Bulk; the Unbind rides
-   Bulk too, so same-class FIFO keeps the transaction ordered — the
-   precedent `closeChannel` already sets.
-4. **Evict non-critical traffic.** Telemetry Control → Background.
+1. **One 32 KB frame cap** (`writeChunked`) replacing three copies at
+   256/64/32 KB, applied to bundles, panels, assets and both scrollback
+   replay paths.
+2. **Motion compression.** A session patch supersedes the pending patch
+   for the same target instead of queueing behind it, so a stalled drag
+   delivers the current position rather than a backlog of old ones.
+   Lossless because a window upsert carries the complete SessionWindow.
+   Only engages when the writer refuses; an uncongested link is
+   unchanged.
+3. **Panels complete on byte count**, as app bundles already did, which
+   is what freed them off Interactive. Class had been standing in for
+   ordering: the Unbind was the completion signal, so the data had to
+   share its lane.
+4. **Non-critical traffic evicted.** Telemetry Control → Background;
+   panels and scrollback replay Interactive → Bulk.
 
-**Test plan.** The gate this has always lacked: a latency-critical frame
-must reach the wire promptly while a lower lane saturates. Scheduler
-unit test for the overtake, a pure test for the coalescer's merge, a
-router test that the bundle Unbind still lands after its data, and a
-frame-size property test so the chunk cap cannot silently regress.
+**What was NOT done, and why.** App state pushes stay Interactive. They
+are small and Background is drained last under strict priority, so a
+sustained download would starve the sidebar — the wrong trade for a few
+KB. Their real problem was volume, fixed separately in agentd.
+
+**Verify with** About → Link: during a bad drag, Interactive `depth_hi`
+pegged near 256 with `queue_full` climbing means the lane is still the
+problem; Interactive near zero means it is the FE's own render path.
 
 ## Conventions this repo holds to
 

@@ -350,3 +350,37 @@ This is the panel to reach for when one app is suspected of crowding a
 class — it is how the roster-push flood was confirmed to be agentd's
 state pushes rather than the transcript stream (§10's Bulk suffixes had
 already moved the transcript).
+
+### 12.2 Frame size is part of the priority contract
+
+The scheduler is preemptive BETWEEN frames and not inside one: the drain
+loop commits a whole frame to the transport before it consults the queues
+again. So the largest frame a lane emits is the worst-case delay that lane
+can impose on every lane above it, and priority cannot undo it.
+
+`writeChunked` caps every router-side chunked emitter at `maxChunkBytes`
+(32 KB) for that reason. Before it, panel bundles emitted 256 KB — one
+whole clamped send buffer — and scrollback replay emitted the entire ring
+in a single frame, up to `ChannelScrollbackMaxBytes` (4 MiB). Both sat on
+the Interactive lane, so a reattach or a settings-panel load stalled
+pointer motion for as long as the transfer took.
+
+A new emitter that writes more than a few KB belongs behind
+`writeChunked`, whatever lane it uses. The sndbuf clamp (shell_sndbuf.go)
+is the companion rule and bounds a different thing: what the KERNEL may
+queue ahead of a control frame, not what one frame costs to write.
+
+### 12.3 Class is priority, not ordering
+
+Frames of the same class are FIFO, so it is tempting to use a shared
+class to keep a transaction ordered. Two flows did, and both paid for it
+by dragging bulk-sized data up into the latency lane.
+
+The rule instead: a transactional flow announces its byte count in its
+bind (`channel.bind` Size, `panel.read.ok` size) and the shell completes
+on that count, never on the Unbind. Then the data can ride whatever lane
+its size deserves and a control frame overtaking it cannot truncate
+anything. `assets.ts` and `panels.ts` both work this way.
+
+A flow that genuinely cannot announce its length must keep all of its
+frames in ONE lane — but it should be a low one.
