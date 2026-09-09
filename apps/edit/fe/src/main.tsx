@@ -54,7 +54,7 @@ import {
   rectangularSelection,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from '@codemirror/commands';
-import { getSearchQuery, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen, SearchQuery, setSearchQuery, search } from '@codemirror/search';
+import { getSearchQuery, gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, searchPanelOpen, SearchQuery, setSearchQuery, search } from '@codemirror/search';
 import { unifiedMergeView } from '@codemirror/merge';
 import {
   autocompletion,
@@ -1359,6 +1359,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     editorView.focus();
     openSearchPanel(editorView);
   };
+  // cmdGotoLine opens CM's line dialog. Only source tabs have line
+  // numbers to go to; in WYSIWYG the command says so rather than
+  // opening a dialog against the hidden source view.
+  const cmdGotoLine = () => {
+    if (!editorView || !activeTab()) return;
+    if (activeTab()!.mode === 'wysiwyg') {
+      setStatusError('go to line needs the source view (Ctrl+Shift+P)');
+      return;
+    }
+    editorView.focus();
+    gotoLine(editorView);
+  };
   // closeWysFind tears the bar down, drops the highlights, and hands
   // focus back to the document — CM's closeSearchPanel contract.
   const closeWysFind = () => {
@@ -2430,7 +2442,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       ...closeBracketsKeymap,
       ...defaultKeymap,
       ...historyKeymap,
-      ...searchKeymap,
+      // CM binds Mod-g to find-next; every other editor binds it to
+      // go-to-line, and F3 / Shift+F3 (still in searchKeymap) already
+      // cover find-next. CM's own Mod-Alt-g stays bound as well.
+      ...searchKeymap.filter((b) => b.key !== 'Mod-g'),
+      { key: 'Mod-g', run: gotoLine, scope: 'editor search-panel', preventDefault: true },
       ...foldKeymap,
       ...completionKeymap,
       indentWithTab,
@@ -2824,6 +2840,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         toggleWysiwyg();
         return;
       }
+      // Ctrl+G: go to line. The editor's own keymap covers the focused
+      // editor; this is the same command reached from the sidebar or the
+      // tab strip, where CM never sees the key.
+      if ((ev.key === 'g' || ev.key === 'G') && !ev.shiftKey && !ev.altKey) {
+        ev.preventDefault();
+        if (!dialogUp && !isTypingInEditor()) cmdGotoLine();
+        return;
+      }
       // Ctrl+P: quick open (Chromium's Print otherwise).
       if ((ev.key === 'p' || ev.key === 'P') && !ev.shiftKey && !ev.altKey) {
         ev.preventDefault();
@@ -3026,6 +3050,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuSeparator />
             <MenuItem label="Find" trailing={<kbd style={kbdStyle}>Ctrl+F</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-find" />
             <MenuItem label="Find & Replace" trailing={<kbd style={kbdStyle}>Ctrl+H</kbd>} onClick={run(cmdFind)} data-testid="edit-menu-replace" />
+            <MenuSeparator />
+            <MenuItem label="Go to Line…" trailing={<kbd style={kbdStyle}>Ctrl+G</kbd>} disabled={!activeTab()} onClick={run(cmdGotoLine)} data-testid="edit-menu-goto-line" />
           </Menu>
         </Show>
         <Show when={openMenu() === 'terminal'}>
