@@ -165,6 +165,34 @@ test.describe('interaction layer', () => {
     expect(lum(mid.bg)).toBeLessThan(200);
   });
 
+  test('the hover tint fades out when the pointer leaves', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    const apps = 'button[title="Apps"]';
+    await page.locator(apps).hover();
+    await page.waitForTimeout(250);
+    expect(Number((await overlay(page, apps))?.opacity)).toBeCloseTo(0.1, 2);
+
+    // Somewhere genuinely off the control. Not a corner: the taskbar spans
+    // the bottom edge and the Apps button sits at the far left of it, so
+    // (20, 700) — the obvious "move away" — is dead centre of the button.
+    await page.mouse.move(640, 260);
+
+    // Two assertions, neither timing-sensitive. Sampling the curve mid-flight
+    // would be, and under load the sample can land past the end and read a
+    // legitimate 0 as a missing transition.
+    // 1. It really is a fade, not a cut: the fade-out duration is declared.
+    const dur = await page.evaluate((s) => {
+      const cs = getComputedStyle(document.querySelector(s)!, '::after');
+      return cs.transitionDuration;
+    }, apps);
+    expect(dur.split(',').map((d) => parseFloat(d)).every((d) => d > 0)).toBe(true);
+    // 2. And it lands: measured 0.100 -> 0.076 -> 0.045 -> 0.014 -> 0 over 240ms.
+    await expect
+      .poll(async () => Number((await overlay(page, apps))?.opacity), { timeout: 5000 })
+      .toBe(0);
+  });
+
   test('disabled controls stay inert', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
