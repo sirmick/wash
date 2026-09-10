@@ -687,3 +687,41 @@ now asserts atomicity.
 **The lesson for this log**: a rerun that goes green is not evidence of
 a flake. The baseline A/B is, and it took one run of each to separate
 "my branch broke it" from "the release is broken".
+
+
+## 2026-09-09 — `agent-roots` "a sibling folder becomes readable once allowed": CI-only, once, NOT established
+
+Red on the ui-hit push (7d6995d4), CI run 34430662342, one test of 684:
+after a sibling folder is granted as a per-session root, the fake agent's
+`READ<<SIBLING-CONTENT` never appeared inside 20s. Green on re-run of the
+same commit with no change.
+
+**Filed deliberately as unestablished.** The entry directly above says a
+green re-run is not evidence of a flake, and this is that situation
+exactly — so the verdict here rests on the other evidence, not the re-run:
+
+- the local `make push` gate passed on that exact commit, full e2e green;
+- the spec passed 7/7 locally, run alone;
+- the change under suspicion cannot reach the failing path. The push
+  carried the interaction-layer sweep, whose only contact with this test
+  is attribute-only (`data-wash-hit`) edits to `file-picker.tsx` — and the
+  failure lands AFTER the picker has closed and the root chip has been
+  asserted by both `data-path` and label, so the picker demonstrably
+  worked;
+- the CI run on the pre-change commit (66539040) was green — but per this
+  file's own rule, one green baseline proves nothing about a flake that
+  fires one run in three. No A/B was run at repetition.
+
+**Same shape as the 2026-08-25 `agent-session` sighting**: fake-agent
+output not arriving on a loaded run, CI-only, unreproducible locally. That
+one was also unroot-caused until its diagnostic gap was closed.
+
+**The gap is the same, and closing it is the fix.** A root grant has to
+reach agentd, be applied to the session, and return through the transcript
+before the assertion fires; the test asserts only the FE end. So a failure
+still cannot say whether agentd never served the read or the browser never
+showed it. If it recurs, wait on the agentd-side log line for the read as
+well as the transcript text — do that before touching the timeout.
+
+**Owner:** the spec came with the per-session-roots work (a9355717,
+c250a140), not with the push it went red on.
