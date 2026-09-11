@@ -84,7 +84,7 @@ export type { PrivUnlockOverlayProps, PrivUnlockState } from './priv-unlock';
 export { b64encode, b64decode, encryptPassword } from './priv-crypto';
 export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
 export { defineWashApp } from './define-app';
-export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';
+export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS, WASH_SCROLL_HIDDEN_CLASS } from './scrollbars';
 export { ensureHitStyles, HIT_ATTR } from './hit';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
 export { defineSettingsPanel, PANEL_PORT_PROP } from './define-settings-panel';

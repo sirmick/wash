@@ -17,7 +17,7 @@
 // handle from each <Terminal> via onReady so tab activation can
 // trigger focus/fit.
 
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Bell, Check, ChevronDown, ChevronUp, Columns2, Globe, Maximize2, Minimize2, Plus, Rows2, ShieldAlert, User, X } from 'lucide-solid';
 import {
@@ -25,7 +25,7 @@ import {
   Menu, MenuItem, MenuSeparator, Tab, Terminal,
   TERM_DEFAULT_FONT_ID, TERM_DEFAULT_FONT_SIZE, TERM_FONTS,
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_SCROLLBACK_LINES, TERM_THEMES, themeById,
-  defineWashApp, tokens, WASH_SCROLL_CLASS,
+  defineWashApp, tokens, WASH_SCROLL_HIDDEN_CLASS,
 } from '@wash/ui';
 import type { PasteAnalysis, TermCursorStyle, TermModes, TermSearchOptions, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
@@ -1565,6 +1565,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           accent={tagHex() ?? undefined}
           dragging={isDragging()}
           dropBefore={isDropBefore()}
+          style={{ 'flex-shrink': 1, 'min-width': `${TAB_MIN_WIDTH}px` }}
           leading={
             <span data-testid={`term-tab-badge-${channelID}`} style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px' }}>
               {statusBadge(tabStatus().get(channelID))}
@@ -1626,6 +1627,90 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         </Tab>
         </Show>
       </Show>
+    );
+  };
+
+  // ---- tab scroller (the tabs half of a group's strip) ----
+
+  // The strip is a fixed STRIP_HEIGHT overlay — layoutTree reserves exactly
+  // that much above each pane — so a space-taking horizontal scrollbar would
+  // eat the tabs it scrolls, and scrolling the whole strip would carry the
+  // new-tab/split controls off its end. So only the tabs scroll, with no
+  // visible bar: tabs first shrink like browser tabs (to TAB_MIN_WIDTH), then
+  // the row scrolls — sideways under the wheel, always far enough to keep the
+  // active tab in view — and a faded edge says there are more tabs that way.
+  const tabScroller = (path: string): JSX.Element => {
+    let el: HTMLDivElement | undefined;
+    const [edges, setEdges] = createSignal({ left: false, right: false });
+    const measure = () => {
+      if (!el) return;
+      const left = el.scrollLeft > 1;
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      const e = edges();
+      if (e.left !== left || e.right !== right) setEdges({ left, right });
+    };
+    const revealActive = () => {
+      if (!el) return;
+      const id = placedAt(path)?.group.active;
+      const btn = id === undefined ? null : el.querySelector<HTMLElement>(`[data-testid="term-tab-${id}"]`);
+      if (btn) {
+        const l = btn.offsetLeft;
+        const r = l + btn.offsetWidth;
+        if (l - TAB_FADE_PX < el.scrollLeft) el.scrollLeft = Math.max(0, l - TAB_FADE_PX);
+        else if (r + TAB_FADE_PX > el.scrollLeft + el.clientWidth) el.scrollLeft = r + TAB_FADE_PX - el.clientWidth;
+      }
+      measure();
+    };
+    // Tab widths change without the scroller resizing (a label arrives, a
+    // badge appears once the row is already overflowing), so every tab is
+    // observed too; re-observed whenever this group's tabs change.
+    // The active tab re-reveals when IT or the scroller resizes (its label
+    // arriving after it opened); any other tab resizing only re-measures the
+    // fades, so a 1 Hz badge change can't yank a strip you scrolled away.
+    const ro = new ResizeObserver((entries) => {
+      const id = placedAt(path)?.group.active;
+      const reveal = entries.some((en) => en.target === el ||
+        (en.target as HTMLElement).dataset?.testid === `term-tab-${id}`);
+      if (reveal) revealActive();
+      else measure();
+    });
+    createEffect(() => {
+      const g = placedAt(path)?.group;
+      void g?.active;
+      void g?.tabs.length;
+      if (!el) return;
+      ro.disconnect();
+      ro.observe(el);
+      for (const child of Array.from(el.children)) ro.observe(child);
+      // Untracked: measure() reads edges(), and a scroll updating the fades
+      // must not re-run this and snap the row back to the active tab.
+      untrack(revealActive);
+    });
+    onCleanup(() => ro.disconnect());
+    const fade = () => {
+      const { left, right } = edges();
+      if (!left && !right) return undefined;
+      return `linear-gradient(to right, transparent 0, #000 ${left ? TAB_FADE_PX : 0}px, ` +
+        `#000 calc(100% - ${right ? TAB_FADE_PX : 0}px), transparent 100%)`;
+    };
+    return (
+      <div
+        ref={(e) => { el = e; }}
+        data-testid="term-tabs-scroll"
+        class={WASH_SCROLL_HIDDEN_CLASS}
+        style={{ ...tabScrollStyle, 'mask-image': fade(), '-webkit-mask-image': fade() }}
+        onScroll={measure}
+        onWheel={(ev) => {
+          // Ctrl+wheel stays the stage's font zoom.
+          if (!el || ev.ctrlKey || el.scrollWidth <= el.clientWidth) return;
+          const d = Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
+          if (!d) return;
+          ev.preventDefault();
+          el.scrollLeft += ev.deltaMode === WheelEvent.DOM_DELTA_LINE ? d * 16 : d;
+        }}
+      >
+        <For each={placedAt(path)?.group.tabs ?? []}>{(id) => tabButton(id, path)}</For>
+      </div>
     );
   };
 
@@ -2153,7 +2238,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <For each={placedPaths()}>
           {(path) => {
             const place = () => placedAt(path);
-            const group = () => place()?.group;
             const focused = () => focusPath() === path;
             return (
               <Show when={place()}>
@@ -2161,7 +2245,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   data-testid="term-tabbar"
                   data-path={path}
                   data-focused={focused() ? 'true' : 'false'}
-                  class={WASH_SCROLL_CLASS}
                   style={{
                     ...stripStyle,
                     left: `${place()!.rect.x}px`,
@@ -2176,7 +2259,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   }}
                   onMouseDown={() => focusGroup(path)}
                 >
-                  <For each={group()!.tabs}>{(id) => tabButton(id, path)}</For>
+                  {tabScroller(path)}
                   <span style={{ flex: 1, 'min-width': '4px' }} />
                   <Button
                     variant="icon"
@@ -2444,11 +2527,30 @@ const stripStyle: JSX.CSSProperties = {
   // padding-top creates the gap above the tabs; tabs round into the
   // border-bottom line, matching how browser tabs sit on a bar.
   padding: '3px 3px 0',
-  'overflow-x': 'auto',
-  'overflow-y': 'hidden',
+  overflow: 'hidden',
   font: tokens.type.monoMd,
   'box-sizing': 'border-box',
 };
+
+// The tabs half of a strip (see tabScroller): content-sized until the row
+// runs out of room, then it shrinks and scrolls. position:relative makes it
+// the tabs' offsetParent, which revealActive measures against.
+const tabScrollStyle: JSX.CSSProperties = {
+  position: 'relative',
+  display: 'flex',
+  'align-items': 'stretch',
+  gap: '2px',
+  flex: '0 1 auto',
+  'min-width': 0,
+  'overflow-x': 'auto',
+  'overflow-y': 'hidden',
+};
+// TAB_MIN_WIDTH is how far a tab shrinks before the row scrolls instead:
+// the badge, a few characters of label and the × still fit.
+const TAB_MIN_WIDTH = 120;
+// TAB_FADE_PX is the faded edge on an overflowing side, and the margin
+// revealActive leaves so the active tab never sits under it.
+const TAB_FADE_PX = 16;
 
 const statusBarStyle: JSX.CSSProperties = {
   position: 'absolute',

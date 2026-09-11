@@ -294,6 +294,13 @@ async function ensureFontLoaded(f: TermFont): Promise<void> {
   }
 }
 
+// The slice of xterm 5.5's private RenderService the reveal repaint uses
+// (see remeasureGlyphs). Every member optional: absent means a no-op.
+interface RenderServiceInternals {
+  _renderer?: { value?: { handleCharSizeChanged?: () => void } };
+  _renderRows?: (start: number, end: number) => void;
+}
+
 // TermModes is the terminal-mode state a reattaching consumer
 // persists and re-seeds. The scrollback replay only carries the
 // byte TAIL of a session, so mode-setting sequences emitted once at
@@ -746,6 +753,24 @@ export const Terminal: Component<TerminalProps> = (props) => {
     try { fit.fit(); } catch { /* fit itself rejected; next tick will retry */ }
   };
 
+  // xterm's DOM renderer measures each glyph's width with offsetWidth, which
+  // is 0 while the terminal is display:none. A hidden terminal still renders
+  // — it is blurred as you switch away from its tab, and a font change reaches
+  // every tab — and a 0 width becomes letter-spacing of one whole cell, so the
+  // first frame after it is shown drew its text double-spaced, and only
+  // settled once xterm's own IntersectionObserver repainted a frame later.
+  // These two reach into xterm 5.5 internals (the public API has no remeasure
+  // and no synchronous render); if a later xterm renames them they no-op,
+  // which is the old flash, not a break.
+  const renderService = () =>
+    (term as unknown as { _core?: { _renderService?: RenderServiceInternals } } | null)?._core?._renderService;
+  const remeasureGlyphs = () => {
+    renderService()?._renderer?.value?.handleCharSizeChanged?.();
+  };
+  const renderAllRows = () => {
+    if (term) renderService()?._renderRows?.(0, term.rows - 1);
+  };
+
   const applyFamily = (stack: string) => {
     if (!term || term.options.fontFamily === stack) return;
     term.options.fontFamily = stack;
@@ -1173,8 +1198,18 @@ export const Terminal: Component<TerminalProps> = (props) => {
       }
     });
 
-    const ro = new ResizeObserver(() => {
+    // A host coming back from display:none (a background tab brought
+    // forward, a minimized window restored) repaints with fresh glyph
+    // metrics in THIS observer tick, which runs before the frame paints.
+    let hidden = true;
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.contentRect;
+      const nowHidden = !box || box.width < 10 || box.height < 10;
+      const revealed = hidden && !nowHidden;
+      hidden = nowHidden;
+      if (revealed) remeasureGlyphs();
       safeFit();
+      if (revealed) renderAllRows();
       reportResize();
     });
     ro.observe(hostEl);
