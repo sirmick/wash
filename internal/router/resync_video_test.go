@@ -279,3 +279,101 @@ func TestResyncReplayIsOneFrame(t *testing.T) {
 		t.Errorf("replay is %d bytes, want %d", len(got), len(scrollback))
 	}
 }
+
+// TestVideo_NoCreditDropsWithoutBehind — a video frame that finds no FE
+// credit is DROPPED: the channel must not go behind (behind → channel.resync
+// makes the FE clear its canvas, which flashed a busy guest's window
+// transparent several times a second). Once credit is back, the next frame is
+// forwarded and the app is asked for a whole frame to repaint the rects the
+// dropped frame left stale.
+func TestVideo_NoCreditDropsWithoutBehind(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+	sess := &ShellSession{scheduler: NewScheduler(), drainerDone: make(chan struct{})}
+	sess.router = r
+	defer sess.scheduler.Close()
+	r.registerShell(sess)
+
+	app, feApp, cApp := observableApp(t, r)
+	defer cApp()
+
+	const channelID = 61
+	const winID = 9
+	b := &channelBinding{
+		channelID: channelID,
+		kind:      wire.ChannelKindVideo,
+		app:       app,
+		shell:     sess,
+		windowID:  winID,
+		buf:       newRingBuffer(ChannelScrollbackBytes),
+		credit:    NewChannelCredit(0),
+	}
+	r.registerChannel(b)
+	frame := func(p string) wire.Frame {
+		return wire.Frame{Flags: wire.FlagEnd, Channel: channelID, Payload: []byte(p)}.WithClass(wire.ClassBulk)
+	}
+
+	// No credit: dropped, not behind, no resync, nothing forwarded.
+	if err := app.dispatchFrame(frame("frame-1")); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	b.shellMu.Lock()
+	behind, needFull := b.behind, b.videoNeedFull
+	b.shellMu.Unlock()
+	if behind {
+		t.Fatal("video channel went behind on a would-block — must drop the frame instead")
+	}
+	if !needFull {
+		t.Fatal("dropped video frame did not mark the channel as needing a full frame")
+	}
+	for _, f := range drainAll(t, sess.scheduler) {
+		if f.Channel == channelID {
+			t.Fatalf("frame forwarded without credit: %q", f.Payload)
+		}
+		if f.Channel == ChannelControl {
+			if msg, err := wire.DecodeCtrl(f.Payload); err == nil {
+				if _, ok := msg.(wire.ShellChannelResync); ok {
+					t.Fatal("video drop sent a channel.resync (the FE would clear its canvas)")
+				}
+			}
+		}
+	}
+
+	// Credit back: the next frame is forwarded and a force-frame follows.
+	if err := b.credit.Grant(1024); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	if err := app.dispatchFrame(frame("frame-2")); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	sawFrame := false
+	for _, f := range drainAll(t, sess.scheduler) {
+		if f.Channel == channelID && string(f.Payload) == "frame-2" {
+			sawFrame = true
+		}
+	}
+	if !sawFrame {
+		t.Error("frame not forwarded once credit was back")
+	}
+	sawForce := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !sawForce {
+		f := readWithin(t, feApp, 1*time.Second)
+		if f.Channel != ChannelEvent {
+			continue
+		}
+		if msg, err := wire.DecodeEvt(f.Payload); err == nil {
+			if ff, ok := msg.(wire.EvtWindowForceFrame); ok && ff.Win == winID {
+				sawForce = true
+			}
+		}
+	}
+	if !sawForce {
+		t.Error("recovery after a dropped video frame did not send window.force_frame")
+	}
+	b.shellMu.Lock()
+	needFull = b.videoNeedFull
+	b.shellMu.Unlock()
+	if needFull {
+		t.Error("videoNeedFull still set after recovery")
+	}
+}

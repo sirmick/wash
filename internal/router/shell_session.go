@@ -673,6 +673,11 @@ func (s *ShellSession) handleChannelCredit(m wire.ShellChannelCredit) error {
 	// which live forwarding resumes. No-op if the channel isn't behind.
 	// (docs/PTY_ROBUST.md, Fix B)
 	s.router.resyncChannel(b)
+	// A video channel that dropped frames (it never goes behind for that)
+	// gets its whole-frame repaint now that credit is back.
+	if isVideoKind(b.kind) {
+		s.router.recoverVideoChannel(b)
+	}
 	return nil
 }
 

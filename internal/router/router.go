@@ -697,6 +697,17 @@ type channelBinding struct {
 	// shellMu. Always false for peer/noCredit channels.
 	behind bool
 
+	// videoNeedFull marks a video channel that dropped a frame because the
+	// FE was out of credit. Video never goes behind on a would-block (see
+	// forwardVideoFrame): a dropped delta only leaves its rect stale, so the
+	// frame is discarded and, once credit is back, the owning app is asked
+	// for one whole frame. videoDrops counts the frames dropped since the
+	// last recovery log line (videoLoggedAt rate-limits those lines).
+	// Guarded by shellMu.
+	videoNeedFull bool
+	videoDrops    uint64
+	videoLoggedAt time.Time
+
 	// credit is the FE-→router flow-control ledger for this
 	// channel (docs/QOS.md §5). Bulk-class router→shell writes
 	// reserve from it; the FE replenishes via channel.credit on
@@ -1779,9 +1790,9 @@ func (r *Router) resyncChannel(b *channelBinding) {
 	// ring is a concatenation of framed WebP payloads, and realignReplay's
 	// UTF-8/CSI trimming would corrupt them — replaying it hands the FE
 	// garbage (at best one frame decodes, the rest are discarded). Send the
-	// reset ONLY; the FE clears its canvas on channel.resync and waits for the
-	// next frame (REVIEW-X11-WAYLAND #6). Terminal (generic) channels keep the
-	// realigned scrollback replay.
+	// reset ONLY; the FE keeps its last frame on channel.resync and the
+	// force-frame nudge below repaints it (REVIEW-X11-WAYLAND #6). Terminal
+	// (generic) channels keep the realigned scrollback replay.
 	if b.buf != nil && !isVideoKind(b.kind) {
 		replay = b.buf.Snapshot()
 		if b.buf.Truncated() {
@@ -1833,10 +1844,10 @@ func (r *Router) resyncChannel(b *channelBinding) {
 	b.behind = false
 
 	// Video kinds carry a DELTA stream that assumes lossless delivery, and the
-	// resync above sent NO ring replay for them (isVideoKind) — the FE just
-	// cleared its canvas on channel.resync. Nudge the owning app (wash-display)
-	// to clear its per-surface delta state and re-emit a whole frame, or the
-	// canvas stays blank until natural damage (REVIEW-X11-WAYLAND #6). On its
+	// resync above sent NO ring replay for them (isVideoKind), and frames were
+	// suppressed while behind. Nudge the owning app (wash-display) to clear its
+	// per-surface delta state and re-emit a whole frame, or the stale canvas
+	// stays until natural damage (REVIEW-X11-WAYLAND #6). On its
 	// own goroutine so the app write — bounded by appWriteTimeout but still a
 	// network write — never blocks the forward path holding shellMu here.
 	if isVideoKind(b.kind) && b.app != nil {
@@ -1847,6 +1858,69 @@ func (r *Router) resyncChannel(b *channelBinding) {
 			}
 		}()
 	}
+}
+
+// videoLogInterval rate-limits the per-channel video drop/recovery log lines:
+// a 60-70 fps guest over a slow link can drop and recover several times a
+// second, and a line per episode would flood the router log.
+const videoLogInterval = 5 * time.Second
+
+// forwardVideoFrame is the credit-gated forward for a video channel. Unlike a
+// terminal, a video stream tolerates a hole: each frame is an independent
+// image of a dirty rect, so a dropped frame only leaves that rect stale until
+// something repaints it. So a would-block DROPS the frame instead of marking
+// the channel behind — behind → channel.resync made the FE clear its canvas,
+// and a busy guest (e.g. a 70 fps emulator whose frames outran the 64 KiB
+// credit window) cycled that several times a second: the window flashed
+// transparent. The first successful forward after a drop asks the app for a
+// whole frame to repaint the stale rects (recoverVideoChannel).
+func (r *Router) forwardVideoFrame(sh *ShellSession, b *channelBinding, payload []byte) {
+	if !sh.tryWriteRawBulk(b, payload) {
+		b.shellMu.Lock()
+		b.videoNeedFull = true
+		b.videoDrops++
+		b.shellMu.Unlock()
+		return
+	}
+	r.recoverVideoChannel(b)
+}
+
+// recoverVideoChannel nudges the owning app (wash-display) for a whole frame
+// if the channel dropped frames since the last nudge. Called after a
+// successful video forward and on a credit grant (so a guest that went quiet
+// right after a drop still gets its stale rects repainted). If the forced
+// frame itself doesn't fit, it's dropped like any other and the next grant or
+// forward nudges again — one nudge per recovery, never a loop on its own.
+func (r *Router) recoverVideoChannel(b *channelBinding) {
+	b.shellMu.Lock()
+	if !b.videoNeedFull {
+		b.shellMu.Unlock()
+		return
+	}
+	b.videoNeedFull = false
+	app, win, ch := b.app, b.windowID, b.channelID
+	var drops uint64
+	now := time.Now()
+	logIt := now.Sub(b.videoLoggedAt) >= videoLogInterval
+	if logIt {
+		drops = b.videoDrops
+		b.videoDrops = 0
+		b.videoLoggedAt = now
+	}
+	b.shellMu.Unlock()
+	if logIt {
+		r.log("channel %d: video dropped %d frame(s) for lack of FE credit — requested a full frame", ch, drops)
+	}
+	if app == nil {
+		return
+	}
+	// Own goroutine, as in resyncChannel: the app write must never block the
+	// forward path.
+	go func() {
+		if err := app.WriteEvt(wire.NewEvtWindowForceFrame(win)); err != nil {
+			r.log("channel %d: force-frame nudge failed: %v", ch, err)
+		}
+	}()
 }
 
 // resyncBehindChannels re-runs resyncChannel for every channel currently

@@ -323,6 +323,14 @@ func (inst *AppInstance) dispatchFrame(f wire.Frame) error {
 		// would strand the terminal in a wrong mode. Peer/noCredit and
 		// Interactive (transactional) forwards keep the lossless path.
 		if class == wire.ClassBulk && b.credit != nil && b.peerConn == nil {
+			// Video drops frames on a would-block rather than going behind
+			// (a behind video channel gets its canvas cleared on resync).
+			// A channel already behind from another path (reattach replay)
+			// still waits for its resync below.
+			if isVideoKind(b.kind) && !behind {
+				inst.router.forwardVideoFrame(sh, b, f.Payload)
+				return nil
+			}
 			if behind {
 				// Already desynced: ring holds the bytes; a resync replays
 				// them — driven by credit recovery, reattach, or the per-shell
