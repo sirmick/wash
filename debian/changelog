@@ -1,3 +1,41 @@
+wash (0.14.5-1) unstable; urgency=low
+
+  * The apps sweep, part two: the everyday workflows each surface was still
+    missing (docs/Review-findings.md P2). The file manager gets keyboard row
+    navigation, type-to-filter and recursive subtree search, Duplicate, a
+    Keep-both conflict action, Extract here / Compress, Open with… and Open
+    terminal here. The editor gets Ctrl+P quick open with a recent-files list,
+    Ctrl+F / Ctrl+H, Ctrl+G, Save All / Close All / Close Others / Revert, tab
+    cycling, drag-to-reorder and middle-click close, per-tab wrap and syntax,
+    detected indentation and a status bar that reports it. The terminal gets
+    find in scrollback, per-tab cwd that New Tab inherits, tab rename, window
+    title, restart shell, file drop, bell and activity indicators, clickable
+    URLs and paths, and desktop-wide preferences including zoom. The agent gets
+    session rename and delete, Esc to stop and Ctrl+Enter to send, up-arrow
+    recall, readable diffs, per-session roots beyond the cwd, file attachments
+    and pasted images, and configurable adapter launch and MCP servers.
+  * The desktop shell learns the keys a desktop is expected to have:
+    Ctrl+Alt+Tab window switching, show desktop, middle-click close, pinned
+    apps and a filtered, keyboard-driven start menu, recent files in the start
+    menu and the palette, and Ctrl+W / Ctrl+N / Ctrl+T swallowed on the
+    wallpaper instead of acting on the browser. `wash open <path>` and an
+    xdg-open shim route a file from a terminal to the app that handles it.
+  * The taskbar icon no longer flickers. A window event (a focus change, a
+    move, a retitle) rebuilt every taskbar pill rather than restyling it, and
+    each rebuilt pill re-created an external-document <use> reference that does
+    not paint on its first frame — measured as a blank icon on 7 frames of a
+    25fps capture of 24 focus switches, now zero.
+  * wash-display frames Wayland clients that ask for server-side decorations,
+    so a window that expects a titlebar from the compositor has one, and drops
+    a video frame when the link would block instead of flashing the window
+    clear. A backgrounded terminal tab is revealed at settled metrics, and an
+    overflowing tab strip scrolls without a scrollbar.
+  * wash-login scopes its session registry to an explicitly-passed --run-root,
+    so a test front no longer enumerates the host's real desktop session.
+    Production is unchanged: one run root per host, still unscoped.
+
+ -- sirmick <sirmick@gmail.com>  Fri, 11 Sep 2026 18:10:00 -0700
+
 wash (0.14.4-1) unstable; urgency=low
 
   * The apps sweep. A full read of the editor, file manager, terminal and

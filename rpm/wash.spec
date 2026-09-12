@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.14.4
+Version:        0.14.5
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,16 @@ fi
 exit 0
 
 %changelog
+* Fri Sep 11 2026 sirmick <sirmick@gmail.com> - 0.14.5-1
+- The apps sweep part two (docs/Review-findings.md P2): the everyday
+  workflows fm, edit, term and the agent were still missing — search,
+  quick open, find/replace, per-tab cwd, session rename, attachments —
+  plus the desktop keys the shell owed (Ctrl+Alt+Tab, show desktop,
+  pinned apps, recent files).
+- Taskbar icons no longer flicker on a window event; wash-display frames
+  clients that ask for server-side decorations and drops a video frame
+  instead of flashing the window clear; wash-login scopes its session
+  registry to an explicit --run-root.
 * Tue Sep 09 2026 sirmick <sirmick@gmail.com> - 0.14.4-1
 - The apps sweep: seven data-loss items closed (editor saves keep file
   identity; binary/oversized/non-UTF-8 files refuse to save; CRLF kept;
