@@ -267,7 +267,11 @@ the panic and fixed itself with a no-op logger; the fix never propagated.
 - Follow-up (note in Todo.md, not this pass): with B1+B2+B3 landed, trial removing `-p 1` from
   the unit gate for a parallel speedup.
 
-### B3 [P1] loopback: join router goroutines on ALL paths; race-scale the p99 cap
+### B3 [P1] loopback: join router goroutines on ALL paths; race-scale the p99 cap — DONE (2026-09-11)
+Landed as specified below, after `make test-race` caught the predicted race for real: a
+`t.Logf` from `HandleShell`'s exit path in `qos_soak_test.go` raced test completion and
+reded the pre-push gate. Verified with the command at the end of this entry (20 runs green).
+
 - `qos_soak_test.go:82-101`: never joins `routerAppDone`/`routerShellDone`, never closes the
   pipes — drainLoop's exit log races test completion (B1's panic) and leaked readers park
   forever. Fix: right after spawning the handlers, register

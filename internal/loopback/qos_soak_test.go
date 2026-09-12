@@ -52,8 +52,14 @@ func TestQoSSoakInteractiveLatencyUnderBulkFlood(t *testing.T) {
 	const interactiveInterval = 2 * time.Millisecond
 	// p99 latency cap. Generous because we're at Go-test scheduling
 	// granularity, not bare-metal: ~5-10ms p99 is realistic, 50ms
-	// catches obvious regressions.
-	const p99Cap = 50 * time.Millisecond
+	// catches obvious regressions. Under -race the whole process runs
+	// 2-10x slower, which would eat the very margin this test measures,
+	// so the cap scales with it rather than the test becoming a
+	// race-only flake (docs/TEST_FLAKES.md B3).
+	p99Cap := 50 * time.Millisecond
+	if raceEnabled {
+		p99Cap *= 4
+	}
 
 	manifest := sdk.Manifest{
 		ID:              "com.wash.test",
@@ -98,6 +104,19 @@ func TestQoSSoakInteractiveLatencyUnderBulkFlood(t *testing.T) {
 	go func() {
 		_ = r.HandleShell(ctx, shellPair.EndA())
 		close(routerShellDone)
+	}()
+	// Join the router goroutines before this function returns, on EVERY path
+	// (a mid-test t.Fatalf included). They log through the closure above, and
+	// a t.Logf from a goroutine that outlives its test races the testing
+	// package's completion bookkeeping — which is exactly what -race caught
+	// here (docs/TEST_FLAKES.md B3). Closing the router's ends unblocks the
+	// handlers' reads so cancel alone doesn't have to.
+	defer func() {
+		cancel()
+		_ = appPair.EndA().Close()
+		_ = shellPair.EndA().Close()
+		<-routerAppDone
+		<-routerShellDone
 	}()
 
 	def := &sdk.AppDef{
@@ -264,10 +283,10 @@ collect:
 		t.Errorf("interactive p99 latency %v exceeds cap %v under sustained bulk load (collected %d samples)", p99, p99Cap, len(lats))
 	}
 
-	// Don't strand the drainer — it'll exit when shell pipe closes.
+	// Don't strand the drainer — it exits when the shell pipe closes. The
+	// router halves are joined by the defer registered at spawn time.
 	cancel()
 	<-bulkDone
-	_ = shellPair.EndA().Close()
 	_ = shellPair.EndB().Close()
 	select {
 	case <-drainerDone:
