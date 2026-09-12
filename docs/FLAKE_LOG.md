@@ -16,6 +16,39 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-11 — term-prefs zoom: a stale prefs echo rewinds the live value
+
+**Seen during:** the `make push` gate for 0.14.5 (full `e2e-test`, 8 workers,
+677 passed / 1 failed). `term-prefs.spec.ts:96` ("Ctrl+= / Ctrl+- / Ctrl+0
+zoom the terminal font") failed on the Ctrl+Minus step:
+
+```
+Expected: 13   Received: 12     (start = 12)
+```
+
+25 consecutive passes of the whole `term-prefs.spec.ts` in isolation
+afterwards — so: load-only, and not a assertion-order mistake.
+
+**Mechanism — a full-file prefs broadcast has no ordering against newer
+local state** (`apps/term/fe/src/main.tsx`). A font change sets the signal
+locally AND sends `prefs_set`; the BE writes the file and pushes it back to
+every terminal, and `applyPrefs` applied whatever arrived. Under load the
+echo for the FIRST Ctrl+= (13) can land after the SECOND (14) has already
+been applied here, rewinding the size to 13; Ctrl+Minus then steps to 12,
+which is exactly the numbers above. Nothing about this is test-only — two
+quick zoom presses on a busy link rewind the same way for a user.
+
+**Verdict:** real defect, pre-existing, surfaced by the gate. Not the branch
+under test (nothing in 0.14.5 touches term prefs; the same tree's earlier
+full run had it green).
+
+**Fix:** `sendPrefs` records each changed key's last-sent value, and
+`applyPrefs` holds that key until the BE echoes that value back (3s TTL so a
+dropped send can't deafen the window). Every other key in the push still
+applies, so another window's change still propagates — covered by the
+existing "change it in the second window, watch the first follow" spec.
+Same shape as the WM's geometry tokens (`web/shell/src/wm.ts`).
+
 ## 2026-08-08 — agent-spec trio: two send/complete races, root-caused and fixed
 
 **Seen during:** four consecutive CI `ci` runs on main/tags (0.13.0 →

@@ -791,7 +791,36 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Every setter applies LOCALLY at once (so the change is instant) and
   // sends the patch; the echo back is a no-op, and the other windows'
   // watches turn it into their own update.
-  const sendPrefs = (patch: Record<string, unknown>) => send({ kind: 'prefs_set', prefs: patch });
+  // pendingPrefs: keys this window has changed and not yet seen echoed back,
+  // with the value it last sent and when. A prefs push is a full-file
+  // broadcast, so the echo for an earlier change can land AFTER a later one
+  // has already been applied here — two quick Ctrl+= under load, and the
+  // first echo rewinds the size the second just set (caught as a red
+  // term-prefs zoom spec, 2026-09-11). Each changed key is held until the BE
+  // echoes the value we last sent for it; every other key in the push still
+  // applies, so another window's change is never missed. The TTL is the
+  // safety valve: a dropped send must not deafen this window to a key
+  // forever. Same shape as the WM's geometry tokens (web/shell/src/wm.ts).
+  const pendingPrefs = new Map<string, { value: unknown; at: number }>();
+  const PENDING_PREFS_TTL = 3_000;
+  const sendPrefs = (patch: Record<string, unknown>) => {
+    const at = Date.now();
+    for (const [k, v] of Object.entries(patch)) pendingPrefs.set(k, { value: v, at });
+    send({ kind: 'prefs_set', prefs: patch });
+  };
+  // settled reports whether an incoming value for `key` may be applied: yes
+  // when this window has no change in flight for it, when the echo carries
+  // the value we last sent (our own change catching up), or when the wait
+  // has outlived the TTL.
+  const settled = (key: string, incoming: unknown): boolean => {
+    const p = pendingPrefs.get(key);
+    if (!p) return true;
+    if (p.value === incoming || Date.now() - p.at > PENDING_PREFS_TTL) {
+      pendingPrefs.delete(key);
+      return true;
+    }
+    return false;
+  };
   // prefsSeen: the BE has pushed the file at least once. Until then a
   // restored window blob may still speak (the migration path).
   let prefsSeen = false;
@@ -835,19 +864,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // preference stated", which is the default — never a reset of what this
   // window already shows, so an older build's file can't blank the rest.
   const applyPrefs = (p: Record<string, unknown>) => {
-    if (typeof p.font_id === 'string' && p.font_id) setFontId(p.font_id);
-    if (typeof p.font_size === 'number' && p.font_size > 0) setFontSize(p.font_size);
+    if (typeof p.font_id === 'string' && p.font_id && settled('font_id', p.font_id)) setFontId(p.font_id);
+    if (typeof p.font_size === 'number' && p.font_size > 0 && settled('font_size', p.font_size)) {
+      setFontSize(p.font_size);
+    }
     // theme_id absent = follow the pack, which IS a value here (the BE
     // stores 'auto' as absent), so it is applied either way.
-    setThemeId(typeof p.theme_id === 'string' && p.theme_id ? p.theme_id : undefined);
+    const theme = typeof p.theme_id === 'string' && p.theme_id ? p.theme_id : undefined;
+    if (settled('theme_id', theme ?? 'auto')) setThemeId(theme);
     if (p.smart_paste === 'ask' || p.smart_paste === 'always' || p.smart_paste === 'off') {
-      setSmartPaste(p.smart_paste);
+      if (settled('smart_paste', p.smart_paste)) setSmartPaste(p.smart_paste);
     }
     if (p.cursor_style === 'block' || p.cursor_style === 'underline' || p.cursor_style === 'bar') {
-      setCursorStyle(p.cursor_style);
+      if (settled('cursor_style', p.cursor_style)) setCursorStyle(p.cursor_style);
     }
-    if (typeof p.cursor_blink === 'boolean') setCursorBlink(p.cursor_blink);
-    if (typeof p.scrollback === 'number' && p.scrollback > 0) setScrollback(p.scrollback);
+    if (typeof p.cursor_blink === 'boolean' && settled('cursor_blink', p.cursor_blink)) {
+      setCursorBlink(p.cursor_blink);
+    }
+    if (typeof p.scrollback === 'number' && p.scrollback > 0 && settled('scrollback', p.scrollback)) {
+      setScrollback(p.scrollback);
+    }
   };
 
   // ---- zoom ----
