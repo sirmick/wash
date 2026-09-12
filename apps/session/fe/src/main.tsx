@@ -10,6 +10,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
+import { createStore, reconcile } from 'solid-js/store';
 import {
   AgentAsks,
   Menu,
@@ -121,6 +122,15 @@ interface WindowInfo {
   w: number;
   h: number;
   viewport: { vx: number; vy: number };
+}
+
+// WinRow is a WindowInfo carrying the identity reconcile() matches rows on.
+// (origin, windowID) is the only unique window identity — window ids are
+// per-router — so the key folds both.
+type WinRow = WindowInfo & { key: string };
+
+function keyWindows(wins: WindowInfo[]): WinRow[] {
+  return wins.map((w) => ({ ...w, key: `${w.origin}#${w.windowID}` }));
 }
 
 // DesktopConfigMsg mirrors the BE's desktop.config app_msg. `bytes` is
@@ -265,7 +275,20 @@ function describeErr(err: unknown): string {
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
   const [catalog, setCatalog] = createSignal<CatalogApp[]>(window.wash.catalog());
-  const [windows, setWindows] = createSignal<WindowInfo[]>(window.wash.windows());
+  // Window rows are RECONCILED, never replaced wholesale. The shell rebuilds
+  // the entire WindowInfo array on every wm patch (a focus change, a move, a
+  // retitle), so a plain signal handed <For> all-new object references — and
+  // <For> keys on reference, so it tore down and rebuilt every taskbar pill on
+  // every window event. A rebuilt pill re-creates its <svg><use
+  // href="/icons.svg#…">, and an external-document <use> does not paint on the
+  // frame it is inserted: the icon blanked for a frame each time, which is the
+  // taskbar icon flicker. reconcile keyed on origin#windowID (ids are
+  // per-router, so neither half is unique alone) merges field changes into the
+  // existing row objects, so the pill's DOM — and its icon — survives and only
+  // the changed properties re-render.
+  const [winRows, setWinRows] = createStore<{ list: WinRow[] }>({ list: keyWindows(window.wash.windows()) });
+  const windows = (): WinRow[] => winRows.list;
+  const setWindows = (next: WindowInfo[]) => setWinRows('list', reconcile(keyWindows(next), { key: 'key' }));
   // Pager subscribes to viewport + screen size so it can highlight the
   // active cell and scale window outlines correctly when the user
   // resizes the browser.
