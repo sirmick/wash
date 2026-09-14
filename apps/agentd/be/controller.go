@@ -97,9 +97,25 @@ func managerView(state State) State {
 		row.Configs = nil
 		row.Commands = nil
 		row.Modes = nil
+		row.Preview = liveTranscriptPreview(row.Key, 2)
 		out.Rows[i] = row
 	}
 	return out
+}
+
+func publishManagerPreviews(p previewPatch) {
+	if controllerConn == nil {
+		return
+	}
+	controllerState.Lock()
+	managers := make([]string, 0, len(controllerState.managers))
+	for instance := range controllerState.managers {
+		managers = append(managers, instance)
+	}
+	controllerState.Unlock()
+	for _, instance := range managers {
+		_ = controllerConn.SendAppMsgToBulk(wire.Recipient{InstanceID: instance}, p)
+	}
 }
 
 func managerSubscriberCount() int {

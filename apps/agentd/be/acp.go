@@ -657,6 +657,9 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		for _, e := range appendUpdate(h.key, n.Update, time.Now()) {
 			pushEvent(h.conn, h.key, e)
 		}
+		if n.Update.SessionUpdate == acp.UpdateAgentMessageChunk {
+			queuePreviewPatch(h.key)
+		}
 	}
 
 	switch n.Update.SessionUpdate {

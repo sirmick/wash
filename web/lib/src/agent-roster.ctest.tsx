@@ -71,6 +71,20 @@ test('elapsed counts from the row anchor, not the push', () => {
   expect(getByTestId('agents-row-a').textContent).toContain('1m');
 });
 
+test('running preview is bounded to two transcript lines', () => {
+  const { getByTestId } = render(() => (
+    <AgentRoster
+      rows={() => [row({ preview: 'first question\nlatest answer\nnot shown' })]}
+      startedAt={at}
+      now={() => 0}
+      onActivate={noop}
+    />
+  ));
+  const preview = getByTestId('agents-preview');
+  expect(preview.textContent).toContain('first question');
+  expect(preview.style.getPropertyValue('-webkit-line-clamp')).toBe('2');
+});
+
 test('clicking a row asks to focus that agent’s terminal', () => {
   const rows = [row({ key: 'a' }), row({ key: 'b', term_instance: 'i-2' })];
   const seen: string[] = [];

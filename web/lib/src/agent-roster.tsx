@@ -35,6 +35,8 @@ export interface RosterRow {
   session_id?: string;
   /** the agent's own name for this session, when it has one */
   title?: string;
+  /** bounded recent human/agent lines, manager view only */
+  preview?: string;
   cwd?: string;
   dir?: string;
   branch?: string;
@@ -471,6 +473,24 @@ const AgentRowView: Component<{
           style={{ opacity: 0.75, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
         >
           {props.row.title}
+        </div>
+      </Show>
+      <Show when={props.row.preview}>
+        <div
+          data-testid="agents-preview"
+          style={{
+            opacity: 0.62,
+            'font-size': '10px',
+            'line-height': 1.35,
+            'white-space': 'pre-line',
+            overflow: 'hidden',
+            display: '-webkit-box',
+            '-webkit-box-orient': 'vertical',
+            '-webkit-line-clamp': '2',
+            'word-break': 'break-word',
+          }}
+        >
+          {props.row.preview}
         </div>
       </Show>
       <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px', opacity: 0.8 }}>

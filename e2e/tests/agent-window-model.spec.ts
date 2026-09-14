@@ -21,6 +21,11 @@ test('manager is singleton and a session has one dedicated controller', async ({
   await expect(manager.locator('[data-testid="agents-new-pane"]')).toBeVisible();
   await expect(manager.locator('[data-testid="agents-history-pane"]')).toBeVisible();
   await expect(manager.locator('[data-testid="agents-running-pane"]')).toBeVisible();
+  await expect(manager.locator('[data-testid="agents-manager-splitter"]')).toBeVisible();
+  const paneOrder = await manager.locator('[data-testid="agents-new-pane"], [data-testid="agents-manager-splitter"], [data-testid="agents-running-pane"]').evaluateAll(
+    (nodes) => nodes.map((node) => node.getAttribute('data-testid')),
+  );
+  expect(paneOrder).toEqual(['agents-new-pane', 'agents-manager-splitter', 'agents-running-pane']);
   await expect(manager.locator('[data-testid="ai-history-panel"]')).toBeVisible();
   await expect(manager.locator('[data-testid="ai-history-close"]')).toHaveCount(0);
   await expect(manager.locator('[data-testid="ai-roster-pane"]')).toBeVisible();

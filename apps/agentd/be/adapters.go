@@ -310,6 +310,7 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	text := t.text
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
+		queuePreviewPatch(h.key)
 	} else {
 		appendPrompt(h.key, text, time.Now())
 	}

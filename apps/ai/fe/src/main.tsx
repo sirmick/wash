@@ -10,7 +10,7 @@ import { applyUsagePatch } from './usage-patch.ts';
 import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
-  Overlay, Select,
+  Overlay, Select, Splitter,
   applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
@@ -56,6 +56,11 @@ interface PersistedState {
   session_key?: string;
 }
 
+interface PreviewPatchRow {
+  key: string;
+  preview?: string;
+}
+
 const mergeEvents = mergeAgentEvents;
 
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
@@ -66,6 +71,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [sessionKey, setSessionKey] = createSignal('');
   const [roster, setRoster] = createSignal<RosterState>({});
   const [error, setError] = createSignal('');
+  const [managerSplit, setManagerSplit] = createSignal(68);
+  let managerBody!: HTMLDivElement;
 
   // Launcher form. agentDefaulted latches N5a's one-shot preselect so
   // later roster pushes can't overwrite a deliberate "Choose…".
@@ -300,6 +307,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'usage_patch':
         setRoster((prev) => applyUsagePatch(prev, m.rows));
         break;
+      case 'preview_patch': {
+        const patches = new Map(((m.rows as PreviewPatchRow[] | undefined) ?? []).map((r) => [r.key, r.preview ?? '']));
+        setRoster((prev) => ({
+          ...prev,
+          rows: (prev.rows ?? []).map((r) => patches.has(r.key) ? { ...r, preview: patches.get(r.key) } : r),
+        }));
+        break;
+      }
     }
   };
 
@@ -341,8 +356,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // drag to nothing is a better answer than a list that appears on
   // conditions.
   //
-  // Width is per window and BE-persisted (see set_split), so a pane you
-  // sized stays sized across a browser reload.
+  // Width is local to this manager window. The default keeps the launcher
+  // and history roomy while leaving enough space to scan running agents.
   const rows = () => roster().rows ?? [];
   // Elapsed per row, anchored on arrival: since_ms is measured at PUSH
   // time, so it can't be compared against a local clock directly. Same
@@ -990,11 +1005,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           Agents
         </div>
         <div
+          ref={managerBody}
           style={{
             flex: 1,
             'min-height': 0,
             display: 'grid',
-            'grid-template-columns': 'minmax(320px, 42%) minmax(280px, 1fr)',
+            'grid-template-columns': `minmax(320px, ${managerSplit()}%) 5px minmax(220px, 1fr)`,
             overflow: 'hidden',
           }}
         >
@@ -1004,8 +1020,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               'min-height': 0,
               display: 'grid',
               'grid-template-rows': 'minmax(220px, 36%) minmax(0, 1fr)',
-              border: `0 solid ${tokens.borderMenu}`,
-              'border-right-width': '1px',
             }}
           >
             <section data-testid="agents-new-pane" style={{ overflow: 'auto', 'min-height': 0 }}>
@@ -1018,6 +1032,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               {historyPanel}
             </section>
           </div>
+          <Splitter
+            container={managerBody}
+            min={45}
+            max={80}
+            thickness={5}
+            onChange={setManagerSplit}
+            data-testid="agents-manager-splitter"
+          />
           <section
             data-testid="agents-running-pane"
             style={{ 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column', background: tokens.bgInset }}

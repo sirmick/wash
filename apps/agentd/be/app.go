@@ -102,6 +102,10 @@ type Row struct {
 	Used  int64  `json:"used,omitempty"`
 	Size  int64  `json:"size,omitempty"`
 	Title string `json:"title,omitempty"`
+	// Preview is populated only in the compact manager projection. Live
+	// transcript changes arrive as bounded Bulk patches, never by
+	// republishing the complete roster.
+	Preview string `json:"preview,omitempty"`
 	// Mode is the agent's active approval preset and Modes what it offers
 	// (docs/AGENT_APP.md §9). Empty for an agent with no such notion.
 	Mode  string `json:"mode,omitempty"`
