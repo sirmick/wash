@@ -6,7 +6,29 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/pkg/sdk"
 )
+
+func TestApplyGitPublishesOnlyWhenBranchOrDirtyChanges(t *testing.T) {
+	oldRows, oldSvc := rows, svc
+	rows = map[string]*row{
+		"acp:1": {Row: Row{Key: "acp:1", Cwd: "/work", Branch: "main", Dirty: false}},
+	}
+	svc = new(sdk.StateService[State]) // applyGit uses the test mutation seam below
+	pushes := countingState(t)
+	t.Cleanup(func() { rows, svc = oldRows, oldSvc })
+
+	applyGit("/work", gitInfo{branch: "main", dirty: false, at: time.Now()})
+	if *pushes != 0 {
+		t.Fatalf("unchanged cached git result published %d full states, want 0", *pushes)
+	}
+
+	applyGit("/work", gitInfo{branch: "main", dirty: true, at: time.Now()})
+	if *pushes != 1 {
+		t.Fatalf("changed git result published %d full states, want 1", *pushes)
+	}
+}
 
 // gitRepo makes a throwaway repo with one commit on a known branch.
 func gitRepo(t *testing.T) string {

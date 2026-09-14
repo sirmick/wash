@@ -104,7 +104,7 @@ func applyGit(cwd string, info gitInfo) {
 		return
 	}
 	now := time.Now()
-	mutateState(func(s *State) {
+	mutateStateIf(func(s *State) bool {
 		changed := false
 		for _, r := range rows {
 			if r.Cwd != cwd {
@@ -116,8 +116,9 @@ func applyGit(cwd string, info gitInfo) {
 			}
 		}
 		if !changed {
-			return
+			return false
 		}
 		s.Rows = publish(now)
+		return true
 	})
 }

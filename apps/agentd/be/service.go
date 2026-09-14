@@ -213,7 +213,7 @@ func sweepLoop(c *sdk.Conn) {
 		case <-t.C:
 			now := time.Now()
 			var wantHold string
-			mutateState(func(s *State) {
+			mutateStateIf(func(s *State) bool {
 				changed := false
 				for key, r := range rows {
 					// A session this process HOSTS cannot go silent: we
@@ -246,11 +246,10 @@ func sweepLoop(c *sdk.Conn) {
 				// own.
 				wantHold = holdReason(now)
 				if !changed {
-					// Republish anyway only if something moved; a quiet
-					// roster stays off the wire.
-					return
+					return false
 				}
 				s.Rows = publish(now)
+				return true
 			})
 			// Outside Mutate: the router is a different lock than the
 			// state service, and nothing good comes of holding one while
