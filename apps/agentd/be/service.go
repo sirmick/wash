@@ -23,9 +23,9 @@ const (
 	sweepEvery = 10 * time.Second
 )
 
-// gitCacheTTL bounds how often we shell git for one directory. Rows
-// refresh at least every 15s and there may be several in one repo; the
-// branch does not change that fast.
+// gitCacheTTL bounds how often the maintenance sweep shells git for one
+// directory. Tool completion invalidates the cache immediately; otherwise
+// the 10-second sweep observes each checkout at most once every 30 seconds.
 const gitCacheTTL = 30 * time.Second
 
 var svc *sdk.StateService[State]
@@ -88,9 +88,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 				r.Cwd = req.Cwd
 				r.Dir = dirLabel(req.Cwd)
 				r.Branch, r.Dirty = "", false
-			}
-			if r.Cwd != "" {
-				wantGit = r.Cwd
+				wantGit = req.Cwd
 			}
 			// Remember it too: the roster is "now", the history is "what
 			// I lost" (§13).
@@ -213,9 +211,13 @@ func sweepLoop(c *sdk.Conn) {
 		case <-t.C:
 			now := time.Now()
 			var wantHold string
+			gitDirs := map[string]struct{}{}
 			mutateStateIf(func(s *State) bool {
 				changed := false
 				for key, r := range rows {
+					if r.Cwd != "" {
+						gitDirs[r.Cwd] = struct{}{}
+					}
 					// A session this process HOSTS cannot go silent: we
 					// own the adapter, so its exit is a fact (retire()
 					// removes the row) rather than something to infer from
@@ -255,6 +257,11 @@ func sweepLoop(c *sdk.Conn) {
 			// state service, and nothing good comes of holding one while
 			// waiting on the other.
 			applyIdleHold(c, wantHold)
+			// Git context is maintenance, not narration. resolveGit's cache
+			// limits actual commands to once per TTL per checkout.
+			for cwd := range gitDirs {
+				go resolveGit(cwd)
+			}
 		}
 	}
 }

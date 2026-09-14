@@ -33,6 +33,9 @@ var (
 	// gitInFlight collapses concurrent lookups for the same directory —
 	// several tabs in one repo report at once.
 	gitInFlight = map[string]bool{}
+	// gitGeneration makes invalidation reliable when a lookup is already
+	// running. The stale lookup discards its answer and starts a fresh one.
+	gitGeneration = map[string]uint64{}
 )
 
 // resolveGit fills a directory's branch/dirty state and pushes the result
@@ -50,11 +53,18 @@ func resolveGit(cwd string) {
 		return
 	}
 	gitInFlight[cwd] = true
+	generation := gitGeneration[cwd]
 	gitMu.Unlock()
 
 	info := lookupGit(cwd)
 
 	gitMu.Lock()
+	if generation != gitGeneration[cwd] {
+		delete(gitInFlight, cwd)
+		gitMu.Unlock()
+		go resolveGit(cwd)
+		return
+	}
 	gitCache[cwd] = info
 	delete(gitInFlight, cwd)
 	// Bound the cache: directories come and go with terminals, and this
@@ -63,11 +73,28 @@ func resolveGit(cwd string) {
 		for k, v := range gitCache {
 			if time.Since(v.at) > gitCacheTTL {
 				delete(gitCache, k)
+				if !gitInFlight[k] {
+					delete(gitGeneration, k)
+				}
 			}
 		}
 	}
 	gitMu.Unlock()
 	applyGit(cwd, info)
+}
+
+// refreshGitAfterTool bypasses the time cache after a tool that may have
+// changed the checkout. Generation tracking handles the rare case where the
+// tool finishes while an older lookup is already in flight.
+func refreshGitAfterTool(cwd string) {
+	if cwd == "" {
+		return
+	}
+	gitMu.Lock()
+	gitGeneration[cwd]++
+	delete(gitCache, cwd)
+	gitMu.Unlock()
+	go resolveGit(cwd)
 }
 
 // lookupGit runs the two git commands. Anything unexpected — not a repo,

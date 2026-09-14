@@ -20,6 +20,33 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
+func TestToolMayChangeCheckout(t *testing.T) {
+	h := &hosted{}
+	tests := []struct {
+		name   string
+		update acp.SessionUpdate
+		want   bool
+	}{
+		{"pending edit", acp.SessionUpdate{ToolCall: acp.ToolCall{Kind: acp.ToolKindEdit, Status: acp.ToolStatusPending}}, false},
+		{"completed read", acp.SessionUpdate{ToolCall: acp.ToolCall{Kind: acp.ToolKindRead, Status: acp.ToolStatusCompleted}}, false},
+		{"failed search", acp.SessionUpdate{ToolCall: acp.ToolCall{Kind: acp.ToolKindSearch, Status: acp.ToolStatusFailed}}, false},
+		{"completed edit", acp.SessionUpdate{ToolCall: acp.ToolCall{Kind: acp.ToolKindEdit, Status: acp.ToolStatusCompleted}}, true},
+		{"completed execute", acp.SessionUpdate{ToolCall: acp.ToolCall{Kind: acp.ToolKindExecute, Status: acp.ToolStatusCompleted}}, true},
+		{"failed execute", acp.SessionUpdate{ToolCall: acp.ToolCall{Kind: acp.ToolKindExecute, Status: acp.ToolStatusFailed}}, true},
+		{"opening read", acp.SessionUpdate{ToolCall: acp.ToolCall{ToolCallID: "read-1", Kind: acp.ToolKindRead, Status: acp.ToolStatusPending}}, false},
+		// ACP completion updates commonly identify the call but omit its kind.
+		{"completed read with omitted kind", acp.SessionUpdate{ToolCall: acp.ToolCall{ToolCallID: "read-1", Status: acp.ToolStatusCompleted}}, false},
+		{"completed unknown with omitted kind", acp.SessionUpdate{ToolCall: acp.ToolCall{Status: acp.ToolStatusCompleted}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := h.toolMayChangeCheckout(tt.update); got != tt.want {
+				t.Errorf("toolMayChangeCheckout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func withPolicy(t *testing.T, p agentpolicy.Policy) {
 	t.Helper()
 	old := hostedPolicy

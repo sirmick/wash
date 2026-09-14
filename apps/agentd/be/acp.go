@@ -109,6 +109,10 @@ type hosted struct {
 	configs []acp.ConfigOption
 	// commands are the agent's own slash commands.
 	commands []acp.AvailableCommand
+	// toolKinds retains the kind from a tool's opening notification. ACP
+	// completion updates commonly omit it; without this, completed reads
+	// would be mistaken for mutations and needlessly invalidate Git.
+	toolKinds map[string]string
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
@@ -525,9 +529,7 @@ func (h *hosted) setState(state, reason string) {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
 			r.Branch, r.Dirty = "", false
-		}
-		if r.Cwd != "" {
-			wantGit = r.Cwd
+			wantGit = h.cwd
 		}
 		remembered := rememberSession(h.agent, h.sessionID, h.cwd, h.title, now)
 		if remembered {
@@ -658,13 +660,17 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 	}
 
 	switch n.Update.SessionUpdate {
-	case acp.UpdateAgentMessageChunk, acp.UpdateAgentThoughtChunk,
-		acp.UpdateToolCall, acp.UpdateToolCallUpdate, acp.UpdatePlan:
+	case acp.UpdateAgentMessageChunk, acp.UpdateAgentThoughtChunk, acp.UpdatePlan:
 		// Anything the agent says or does means it is working — but only
 		// while a turn is open. A response can overtake the tail of its
 		// own notification stream, so an unconditional write here left
 		// finished sessions stuck on "working…" (see turnMu).
 		h.narrated()
+	case acp.UpdateToolCall, acp.UpdateToolCallUpdate:
+		h.narrated()
+		if h.toolMayChangeCheckout(n.Update) {
+			refreshGitAfterTool(h.cwd)
+		}
 	case acp.UpdateUsage:
 		if n.Update.Size > 0 || n.Update.Used > 0 {
 			h.setUsage(n.Update.Used, n.Update.Size)
@@ -727,6 +733,38 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		// protocol under active development this is the early warning
 		// that a payload shape moved (AGENT_APP.md §12b).
 		log.Printf("agentd: acp update undecoded key=%s raw=%s", h.key, truncate(n.Update.Raw, 200))
+	}
+}
+
+func (h *hosted) toolMayChangeCheckout(u acp.SessionUpdate) bool {
+	kind := u.Kind
+	hostedMu.Lock()
+	if h.toolKinds == nil {
+		h.toolKinds = map[string]string{}
+	}
+	if u.ToolCallID != "" {
+		if kind != "" {
+			h.toolKinds[u.ToolCallID] = kind
+		} else {
+			kind = h.toolKinds[u.ToolCallID]
+		}
+	}
+	terminal := u.Status == acp.ToolStatusCompleted || u.Status == acp.ToolStatusFailed
+	if terminal && u.ToolCallID != "" {
+		delete(h.toolKinds, u.ToolCallID)
+	}
+	hostedMu.Unlock()
+
+	if !terminal {
+		return false
+	}
+	switch kind {
+	case acp.ToolKindRead, acp.ToolKindSearch, acp.ToolKindFetch, acp.ToolKindThink:
+		return false
+	default:
+		// A completion with no known opening event is conservatively treated
+		// like execute/edit: failed tools can still leave partial changes.
+		return true
 	}
 }
 

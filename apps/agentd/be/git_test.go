@@ -104,6 +104,7 @@ func TestResolveGitCaches(t *testing.T) {
 	gitMu.Lock()
 	gitCache = map[string]gitInfo{}
 	gitInFlight = map[string]bool{}
+	gitGeneration = map[string]uint64{}
 	gitMu.Unlock()
 
 	resolveGit(dir)
@@ -137,5 +138,35 @@ func TestResolveGitCaches(t *testing.T) {
 	gitMu.Unlock()
 	if third.branch != "trunk" {
 		t.Errorf("cache did not refresh past the TTL: %+v", third)
+	}
+}
+
+func TestRefreshGitAfterToolInvalidatesWarmCache(t *testing.T) {
+	reset()
+	svc = nil
+	dir := gitRepo(t)
+
+	gitMu.Lock()
+	gitCache = map[string]gitInfo{
+		dir: {branch: "sentinel", at: time.Now()},
+	}
+	gitInFlight = map[string]bool{}
+	gitGeneration = map[string]uint64{}
+	gitMu.Unlock()
+
+	refreshGitAfterTool(dir)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		gitMu.Lock()
+		info, cached := gitCache[dir]
+		inFlight := gitInFlight[dir]
+		gitMu.Unlock()
+		if cached && !inFlight && info.branch == "trunk" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("forced refresh did not replace warm cache: cached=%v inFlight=%v info=%+v", cached, inFlight, info)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
