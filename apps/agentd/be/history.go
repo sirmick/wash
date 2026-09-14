@@ -266,14 +266,7 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 			forgetSession(sid)
 			return
 		}
-		pendingAttachMu.Lock()
-		pendingAttach = append(pendingAttach, hs.key)
-		pendingAttachMu.Unlock()
-		if err := c.SpawnRequest(aiAppID); err != nil {
-			log.Printf("agentd: resume spawn session=%s: %v", sid, err)
-			popAttach()
-			restoreDetached(hs.key)
-		}
+		openHosted(c, hs.key)
 	}()
 }
 
@@ -333,6 +326,17 @@ func popAttach() (string, bool) {
 	return k, true
 }
 
+func removePendingAttach(key string) {
+	pendingAttachMu.Lock()
+	defer pendingAttachMu.Unlock()
+	for i, pending := range pendingAttach {
+		if pending == key {
+			pendingAttach = append(pendingAttach[:i], pendingAttach[i+1:]...)
+			return
+		}
+	}
+}
+
 // onSpawnResult fires when the router has started the window a resume
 // asked for; it is then told which live session to attach to.
 func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
@@ -345,7 +349,12 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 	}
 	if err != nil {
 		log.Printf("agentd: resume spawn failed: %v", err)
+		clearControllerLaunch(key)
 		restoreDetached(key)
+		return
+	}
+	if _, ok := claimController(key, instanceID); !ok {
+		clearControllerLaunch(key)
 		return
 	}
 	if e := c.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
@@ -353,6 +362,7 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 		"key":  key,
 	}); e != nil {
 		log.Printf("agentd: resume attach instance=%s: %v", instanceID, e)
+		releaseController(instanceID)
 		restoreDetached(key)
 	}
 }

@@ -102,15 +102,12 @@ func focusHosted(conn *sdk.Conn, key string) {
 		log.Printf("agentd: focus key=%s: not a hosted session", key)
 		return
 	}
-	watchers := transcriptWatchers(key)
-	if len(watchers) > 0 {
-		for _, instanceID := range watchers {
-			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
-				"kind": FocusKind,
-				"key":  key,
-			})
-		}
-		log.Printf("agentd: focus key=%s raising %d window(s)", key, len(watchers))
+	if instanceID := controllerFor(key); instanceID != "" {
+		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
+			"kind": FocusKind,
+			"key":  key,
+		})
+		log.Printf("agentd: focus key=%s raising controller=%s", key, instanceID)
 		return
 	}
 	// Nobody is rendering this session. Whether it was detached on purpose
@@ -119,19 +116,8 @@ func focusHosted(conn *sdk.Conn, key string) {
 	// rather than trusted: claimDetached is the one atomic gate that keeps
 	// two clicks from becoming two windows.
 	restoreDetached(key)
-	h := claimDetached(key)
-	if h == nil {
-		return
+	openHosted(conn, key)
+	if h := lookupHosted(key); h != nil {
+		h.republish()
 	}
-	pendingAttachMu.Lock()
-	pendingAttach = append(pendingAttach, h.key)
-	pendingAttachMu.Unlock()
-	if err := conn.SpawnRequest(aiAppID); err != nil {
-		log.Printf("agentd: focus spawn key=%s: %v", key, err)
-		popAttach()
-		restoreDetached(h.key)
-		return
-	}
-	log.Printf("agentd: focus key=%s opening a window", key)
-	h.republish()
 }

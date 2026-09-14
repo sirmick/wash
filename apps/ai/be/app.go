@@ -1,5 +1,6 @@
-// Package ai is wash-ai (com.wash.ai) — a window onto one managed agent
-// session (docs/AGENT_APP.md §9).
+// Package ai provides two deliberately separate surfaces over agentd:
+// com.wash.agents is the singleton roster/history/launcher manager, while
+// each com.wash.ai process controls exactly one hosted session.
 //
 // It is a thin host. agentd owns the session, the transcript, the roster
 // and the approval queue; this app owns a window, a subscription and a
@@ -25,23 +26,9 @@
 //	agentd → ai  transcript_snapshot / transcript_event / state
 //	ai → FE      snapshot / event / status / adapters
 //
-// The empty window is the launcher: an app with no session yet renders the
-// form. That is why there is no separate "new session" dialog anywhere.
-//
-// InstancingMulti on purpose — one window per session, and the taskbar is
-// still the window switcher.
-//
-// Since docs/SIDEBAR.md M2 the window also carries a ROSTER pane: every
-// session agentd knows about, not just this window's. That is where the
-// per-session verbs live, because this is where they can be correct — an
-// app talking to its own host's agentd carries a router-attested sender,
-// so it may act, whereas the desktop rail had to gateway through the
-// session BE and could only ever reach the LOCAL host. The rail keeps the
-// counts and deep-links here (§3.1).
-//
-// Master-detail: picking a roster row re-points THIS window's detail pane
-// at that session (`select`). agentd supports several transcript watchers
-// per session by design, so two windows on one session is fine.
+// Only the manager subscribes to agentd's global roster. A controller gets a
+// keyed row/ask view plus its keyed transcript, avoiding N copies of the
+// complete backend data structure on every active window.
 package ai
 
 import (
@@ -89,6 +76,8 @@ const maxTranscriptBytes = 32 << 20
 var aiFS *wfs.FS
 
 var def *sdk.AppDef
+var managerDef *sdk.AppDef
+var managerMode bool
 
 func init() {
 	sub, err := fs.Sub(assetsFS, "assets")
@@ -106,6 +95,7 @@ func init() {
 			Icon:            aiIcon,
 			Accent:          "violet",
 			Instancing:      sdk.InstancingMulti,
+			Hidden:          true,
 			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
 			// 600, not 720: the composer grew a row (Attach…) and the
 			// status bar grew root chips, and a window as tall as a
@@ -133,10 +123,33 @@ func init() {
 		Assets: def.Assets,
 		Run:    run,
 	})
+	managerDef = &sdk.AppDef{
+		Manifest: sdk.Manifest{
+			ID: "com.wash.agents", Name: "Agents", Version: version.Version,
+			ProtocolVersion: sdk.ProtocolVersion, Element: "wash-app-agents",
+			Surface: sdk.SurfaceWindow, Icon: aiIcon, Accent: "violet",
+			Instancing:   sdk.InstancingSingleton,
+			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
+			Window:       &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 600},
+		},
+		Assets: sub,
+		OnReady: func(c *sdk.Conn, instanceID string, windowID uint32) {
+			managerMode = true
+			onReady(c, instanceID, windowID)
+		},
+		OnAppMsg: onAppMsg, OnAppMsgFrom: onAppMsgFrom,
+		OnCloseRequested: onCloseRequested,
+	}
+	registry.Register(&registry.App{Name: "wash-agents", Manifest: managerDef.Manifest, Assets: managerDef.Assets, Run: func(ctx context.Context) error { return sdk.Run(ctx, managerDef) }})
 }
 
 // Def is the AppDef for the standalone shim's sdk.Main call.
 func Def() *sdk.AppDef { return def }
+
+// AgentsDef is the singleton manager surface. It deliberately shares the FE
+// bundle with the session window; agentd sends the role at startup and the
+// bundle renders only the manager half.
+func AgentsDef() *sdk.AppDef { return managerDef }
 
 func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 
@@ -208,12 +221,6 @@ var session struct {
 	key   string
 	agent string
 	title string
-	// splitPct is the sessions-pane width this window was left at. FE
-	// view-state, backend-owned like the session key beside it, so the
-	// two cannot be saved separately and clobber each other. Zero means
-	// "never set" — the FE keeps its own default rather than being told
-	// to be 0% wide.
-	splitPct int
 	// attention mirrors what we last told the router, so a roster push
 	// every second doesn't become a wire frame every second (docs/
 	// AGENT_UX.md N6).
@@ -226,9 +233,6 @@ var session struct {
 // returns it as wash:state whenever the browser remounts this instance.
 func persistSessionView(c *sdk.Conn) {
 	view := map[string]any{"session_key": session.key}
-	if session.splitPct > 0 {
-		view["split_pct"] = session.splitPct
-	}
 	if err := c.SaveState(view); err != nil {
 		log.Printf("wash-ai: persist session key=%s: %v", session.key, err)
 	}
@@ -287,8 +291,11 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// DISPATCHER's argv. `wash list-apps` was being read as
 	// `wash-ai list-apps` — which then ran an adapter probe, shelling out
 	// and logging, on every multicall invocation of every app.
-	parseFlags()
-	log.Printf("wash-ai ready instance=%s", instanceID)
+	if !managerMode {
+		parseFlags()
+	}
+	log.Printf("wash-ai ready instance=%s manager=%v", instanceID, managerMode)
+	c.SendAppMsg(map[string]any{"kind": "role", "role": map[bool]string{true: "manager", false: "session"}[managerMode]})
 	// The launcher picks a working directory with the shared
 	// <FilePicker mode="directory">, which talks to its own BE rather than
 	// a service. Typing a path into a text field was the placeholder, and
@@ -299,14 +306,18 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	aiFS = wfs.New(c.Session().Root)
 	// Subscribe to the roster so the window can show adapters in the
 	// launcher and its own row's state in the status line.
-	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": sdk.StateServiceKindSubscribe})
+	if managerMode {
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "manager_subscribe"})
+	}
 	// ONE transcript keepalive per window, from the start, whatever later
 	// sets the key. It used to be started by agent_started and attach only,
 	// so a window that reached its session through `select` (the roster
 	// row, the way the start menu's fresh window gets anywhere) never
 	// re-affirmed and went quiet after watcherTTL — and each of those two
 	// paths started another goroutine on the same conn.
-	go keepWatching(c)
+	if !managerMode {
+		go keepWatching(c)
+	}
 	if flagAgent == "" {
 		return
 	}
@@ -385,18 +396,6 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"key":  rowKey,
 		})
 
-	case "set_split":
-		// The sessions pane was dragged to a new width. Persisted with
-		// the session key rather than beside it, because SaveState
-		// replaces the whole blob — two writers with two halves of the
-		// view would each erase the other's.
-		pct, _ := m["pct"].(float64)
-		if pct <= 0 || pct >= 100 {
-			return
-		}
-		session.splitPct = int(pct)
-		persistSessionView(c)
-
 	case "row_focus":
 		// History picked a session that is live and already has a window
 		// (docs/AGENT_UX.md N1): go to it. Not a row_* passthrough,
@@ -414,6 +413,13 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		})
 
 	case "select":
+		if managerMode {
+			key := str(m["key"])
+			if key != "" {
+				_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": agentd.FocusKind, "key": key})
+			}
+			return
+		}
 		// Master-detail: point this window at another of agentd's sessions.
 		// Same three steps as the agentd-initiated `attach` below — set the
 		// key, tell the FE (which clears the old transcript), then subscribe
@@ -449,12 +455,18 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		})
 
 	case "start":
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+		msg := map[string]any{
 			"kind":   "agent_start",
 			"agent":  str(m["agent"]),
 			"cwd":    str(m["cwd"]),
 			"prompt": str(m["prompt"]),
-		})
+		}
+		if managerMode {
+			msg["open"] = true
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, msg)
+	case "open_agents":
+		_ = c.SpawnRequest("com.wash.agents")
 	case "prompt":
 		if session.key == "" {
 			return
@@ -677,6 +689,7 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		session.key = str(m["key"])
 		persistSessionView(c)
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "session_claim", "key": session.key})
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind": "transcript_subscribe",
 			"key":  session.key,
@@ -698,9 +711,17 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			log.Printf("wash-ai: raise key=%s: %v", session.key, err)
 		}
 
+	case "claim_denied":
+		log.Printf("wash-ai: controller already exists for key=%s; closing duplicate", str(m["key"]))
+		os.Exit(0)
+
 	case "agent_started":
 		if e := str(m["error"]); e != "" {
 			c.SendAppMsg(map[string]any{"kind": "start_failed", "error": e})
+			return
+		}
+		if managerMode {
+			c.SendAppMsg(map[string]any{"kind": "session_opened", "key": m["key"], "session_id": m["session_id"]})
 			return
 		}
 		session.key = str(m["key"])
@@ -709,6 +730,7 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			log.Printf("wash-ai: session started key=%s", session.key)
 		}
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key, "session_id": str(m["session_id"])})
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "session_claim", "key": session.key})
 		// Watch this session's transcript — a separate subscription from
 		// the roster, deliberately (see agentd/transcript.go).
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
@@ -763,7 +785,7 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 	case "usage_patch":
 		c.SendAppMsgBulk(m)
 
-	case sdk.StateServiceKindState:
+	case "manager_state", "session_state", sdk.StateServiceKindState:
 		// The window title follows the agent's own name for the session.
 		// A taskbar full of "Agent" is unreadable the moment there are
 		// three of them; "Fix the reconnect banner race" is not.
@@ -797,6 +819,9 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 //
 // With no session there is nothing to ask about, so the close is allowed.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
+	if managerMode {
+		return true
+	}
 	if session.key == "" {
 		return true
 	}

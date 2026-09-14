@@ -1505,7 +1505,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               })
             }
           />
-          {/* The roster and its verbs live in com.wash.ai now. The rail
+		  {/* The roster and its verbs live in com.wash.agents now. The rail
               says how many and where, and opens the app on the right
               host — which is the whole point: launchOn carries an origin,
               and the verbs it used to hold could not.
@@ -1516,17 +1516,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               among four identical windows. */}
           <AgentOpen
             hosts={() => agentHostSummary(hostgw())}
-            onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.ai')}
+			onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.agents')}
           />
           {/* The sharpest case in the whole plan (§1.2): an agent on B was
               invisible here. It now has a host, a count and a summary that
               distinguishes "waiting on you" from "working". The roster and
-              its verbs move into com.wash.ai in M2. */}
+			  its verbs move into com.wash.agents. */}
           <HostGroups
             section="agents"
             rows={() => hostRows(SERVICE_AGENT, countBadge(waitingAgents), agentSummary)}
             {...groupProps}
-            onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.ai')}
+			onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.agents')}
             openTitle={(origin) => `Open Agent on ${origin}`}
           />
         </Section>

@@ -1117,6 +1117,11 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		if first != "" {
 			h.submitPrompt(turn{text: first})
 		}
+		if req.Open {
+			openHosted(conn, h.key)
+		} else if from.AppID == aiAppID {
+			claimController(h.key, from.InstanceID)
+		}
 		if from.InstanceID == "" {
 			return nil
 		}
@@ -1159,9 +1164,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		log.Printf("agentd: acp detached key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
 		h.republish()
 		// A detach requested from the desktop rail must also close the window.
-		// Transcript subscribers are the authoritative set of Agent windows
-		// currently rendering this hosted session.
-		for _, instanceID := range transcriptWatchers(h.key) {
+		// Only the controller owns this window. Transcript watchers may be
+		// editor tabs and must not be closed with it.
+		if instanceID := controllerFor(h.key); instanceID != "" {
 			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
 				"kind": "detach",
 				"key":  h.key,
@@ -1172,19 +1177,11 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 
 	// agent_reattach: open a window onto a session that is still running.
 	sdk.HandleFromVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
-		h := claimDetached(req.Key)
+		h := lookupHosted(req.Key)
 		if h == nil {
 			return nil
 		}
-		pendingAttachMu.Lock()
-		pendingAttach = append(pendingAttach, h.key)
-		pendingAttachMu.Unlock()
-		if err := conn.SpawnRequest(aiAppID); err != nil {
-			log.Printf("agentd: reattach spawn key=%s: %v", h.key, err)
-			popAttach()
-			restoreDetached(h.key)
-			return nil
-		}
+		openHosted(conn, h.key)
 		h.republish()
 		return nil
 	})
@@ -1345,6 +1342,7 @@ type startReq struct {
 	Agent  string `json:"agent"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt,omitempty"`
+	Open   bool   `json:"open,omitempty"`
 	// ReqID is opaque to agentd and echoed back on agent_started, success
 	// or failure. A host with ONE session per process (wash-ai) never needs
 	// it — the reply can only be about the one thing it asked for. A host

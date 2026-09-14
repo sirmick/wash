@@ -104,7 +104,7 @@ func applyGit(cwd string, info gitInfo) {
 		return
 	}
 	now := time.Now()
-	svc.Mutate(func(s *State) {
+	mutateState(func(s *State) {
 		changed := false
 		for _, r := range rows {
 			if r.Cwd != cwd {

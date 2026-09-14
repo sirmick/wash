@@ -84,6 +84,10 @@ BINS := wash-router wash-login \
         $(addprefix wash-,$(SVC_APPS)) \
         wash-launch wash-fswatchd
 
+# The singleton Agents manager shares wash-ai's frontend/backend package, but
+# remains a distinct applet and standalone binary.
+BINS += wash-agents
+
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
 # Opt-out by setting WASH_NO_SUDO=1 — useful for headless / kiosk
@@ -408,6 +412,9 @@ $(foreach a,$(FE_APPS) $(FE_PANEL_APPS) test,$(eval $(call web_embed_rule,$(a)))
 $(foreach a,$(FE_APPS) test,$(eval $(call fe_bin_rule,$(a))))
 $(foreach a,$(FE_PANEL_APPS),$(eval $(call panel_bin_rule,$(a))))
 $(foreach a,$(SVC_APPS),$(eval $(call svc_bin_rule,$(a))))
+
+$(SC)/wash-agents: apps/ai/be/assets/.stamp vendor-sync | $(SC)
+	$(call go_build,$@,apps/agents/be/cmd)
 
 # ----- shared-vendor coherence guard -----
 #

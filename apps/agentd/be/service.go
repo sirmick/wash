@@ -48,6 +48,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	bus := sdk.NewBus(c)
 	loadHistory()
 	svc = sdk.NewStateService(bus, State{Recent: publishHistory(), Adapters: Probe(), HasDefaultPrompt: loadDefaultPrompt() != ""})
+	controllerConn = c
 
 	// agent_status: a terminal states (or re-states) one tab's agent. The
 	// sender is router-attested, so the key can't be forged and a
@@ -60,7 +61,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		key := rowKey(from.InstanceID, req.ChannelID)
 		var wantGit string
 		var changedState bool
-		svc.Mutate(func(s *State) {
+		mutateState(func(s *State) {
 			r := rows[key]
 			if r == nil {
 				r = &row{}
@@ -120,7 +121,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			return nil
 		}
 		key := rowKey(from.InstanceID, req.ChannelID)
-		svc.Mutate(func(s *State) {
+		mutateState(func(s *State) {
 			delete(rows, key)
 			s.Rows = publish(time.Now())
 			// The row is gone but the session is now exactly what the
@@ -178,6 +179,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	registerACPHandlers(bus, c)
 	registerSessionAdminHandlers(bus)
 	registerTranscriptHandlers(bus)
+	registerControllerHandlers(bus)
 	// Child-spawning services group-kill on SIGTERM AND on connection
 	// close; the SDK fires this hook on both.
 	sdk.OnTerminate(stopAllHosted)
@@ -193,6 +195,10 @@ func onInstanceGone(_ *sdk.Conn, _ string, instanceID string) {
 		svc.ForgetSubscriber(instanceID)
 	}
 	forgetInstanceTranscripts(instanceID)
+	forgetManager(instanceID)
+	if key := releaseController(instanceID); key != "" {
+		detachLostController(key)
+	}
 }
 
 // sweepLoop ages rows out: a terminal that died without saying goodbye
@@ -207,7 +213,7 @@ func sweepLoop(c *sdk.Conn) {
 		case <-t.C:
 			now := time.Now()
 			var wantHold string
-			svc.Mutate(func(s *State) {
+			mutateState(func(s *State) {
 				changed := false
 				for key, r := range rows {
 					// A session this process HOSTS cannot go silent: we

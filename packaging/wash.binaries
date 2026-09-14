@@ -32,4 +32,5 @@ wash-agentd
 wash-hostgw
 wash-launch
 wash-fswatchd
+wash-agents
 wash-sudo

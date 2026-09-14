@@ -23,6 +23,7 @@ var (
 		if svc != nil {
 			svc.PublishBulk(p)
 		}
+		publishControllerUsage(p)
 	}
 )
 

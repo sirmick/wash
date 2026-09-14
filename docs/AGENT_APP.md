@@ -219,7 +219,8 @@ when wash-edit became its second consumer.
 
 | Surface | Shape | Notes |
 |---|---|---|
-| **`com.wash.ai`** | standalone window, `InstancingMulti`, one per session + a roster pane | empty state **is** the launcher; the default surface. Since [SIDEBAR.md](SIDEBAR.md) M2 the window is master-detail: `<AgentRoster>` lists every session agentd holds, and the per-session verbs live here rather than in the desktop rail |
+| **`com.wash.agents`** | singleton manager window | owns the launcher, live roster, history, and row-addressed verbs; it subscribes to agentd's global roster |
+| **`com.wash.ai`** | standalone controller window, `InstancingMulti`, one per live session | renders only one `<AgentSession>`; agentd enforces an exclusive controller lease and sends a keyed session view rather than the global roster |
 | **wash-term** | a pane in the layout tree | `Group.tabs` is `number[]` — the tree never asks what a channel is, so `layout.ts` needs **no change**. Needs a non-colliding id space, a renderer branch in `main.tsx`, and a prune rule matching TERM_LAYOUT §238 |
 | **wash-edit** | a side panel | third consumer; already embeds `terminal.tsx`, so the seam exists |
 
@@ -247,7 +248,12 @@ Three rules that must be designed in, not discovered:
   `{kind:"usage_patch",rows:[…]}`. One send may be in flight; values arriving
   behind it replace the pending value for that row. Permission, lifecycle and
   other structural roster changes remain full Interactive snapshots.
-- **N renderers, zero affinity.** With three surfaces plus the sidebar, a
+- **N renderers, one controller.** Permission asks remain pure state and may
+  be answered from any authorized renderer, but a hosted session has exactly
+  zero or one controlling `com.wash.ai` window. Transcript-only consumers do
+  not acquire that lease.
+
+- **N renderers for approvals.** With three surfaces plus the sidebar, a
   pending ask is pure state in agentd with no per-view ownership. Answering
   anywhere resolves everywhere. This is what let SIDEBAR.md §3.2(8) keep
   answering in the rail while every other verb moved into the app: the two
@@ -258,11 +264,11 @@ Three rules that must be designed in, not discovered:
   to route every verb through the session BE gateway — which resolves
   inside its own router, and therefore could never act on a remote host. An
   app talking to its own host's agentd is attested by construction, so
-  `launchOn(origin, 'com.wash.ai')` yields working verbs on any host with
+  `focusOrLaunch(origin, 'com.wash.agents')` yields working verbs on any host with
   no new addressing.
 
-Naming: `com.wash.agent` is claimed by `docs/AGENT.md` (the
-desktop-operating AI). This app is `com.wash.ai` unless that doc is renamed.
+Naming: `com.wash.agent` remains claimed by `docs/AGENT.md`; the manager is
+`com.wash.agents` and individual controllers remain `com.wash.ai`.
 
 ## 10. Removal — and the migration obligation
 

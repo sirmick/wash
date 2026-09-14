@@ -149,7 +149,7 @@ The M2 rework cost (§M2, the GH #21 verb set) was accepted on this basis.
 
 | Widget | Control | Awareness in rail | Notes |
 |---|---|---|---|
-| **Agents** | → `com.wash.ai` — **DONE** (M2) | running count + pending-ask count + a per-host door; asks stay answerable here (§3.2(8)) | the app grew a roster pane and the key-addressed verbs |
+| **Agents** | → `com.wash.agents` | running count + pending-ask count + a per-host door; asks stay answerable here (§3.2(8)) | singleton manager owns roster/history/new-session; each `com.wash.ai` window controls one session |
 | **Bulk** | → `com.wash.fm` (M3) | active jobs + aggregate progress, per host | **only** consumer is `apps/fm/be/upload.go` — single-app today |
 | **Priv** | → wash-priv's own **modal surface** — **DONE** (M4) | pending escalation count, per host; local yes/no stays (§3.2(8)) | irreducibly cross-app on the *producing* side: `journal`, `syslogs`, `packages` — but the *prompt* is one thing, so only where it renders moved |
 | **Notify** | stays chrome | merged, host-tinted — **DONE** (M0/M1) | cross-app by definition; transport already works (§1.1) |

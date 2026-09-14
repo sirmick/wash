@@ -6,29 +6,25 @@ polish-release scope and is **done** — see §5 for what each item became;
 phase "Next" (§6) now has that doc — [AGENT_MESSENGER.md](AGENT_MESSENGER.md)
 — and two of its bullets shipped early with 0.14.0; §6 says which.
 
-Related: [SIDEBAR.md](SIDEBAR.md) (the relocation that put the roster in
-`com.wash.ai`), [AGENT_APP.md](AGENT_APP.md) (the app's contract),
+Related: [SIDEBAR.md](SIDEBAR.md) (the agent control surface),
+[AGENT_APP.md](AGENT_APP.md) (the app's contract),
 [AGENT_TERM.md](AGENT_TERM.md) (term-embedded agents; their toast path is
 the one that already works), Todo.md §Agent UX.
 
 ---
 
-## 1. The problem: three half-models
+## 1. The resolved window model
 
-Ask "what is the agent feature?" and the code answers three ways at once:
+There are now two explicit surfaces:
 
-1. **A window is a session.** `com.wash.ai` is `InstancingMulti`, one
-   window per conversation, "the taskbar is still the window switcher"
-   (apps/ai/be/app.go header).
-2. **A window is a viewer onto any session.** The roster pane's
-   single-click re-points *this* window's detail at the clicked row
-   (`select`, apps/ai/fe/src/main.tsx), so windows and sessions are in
-   fact decoupled.
-3. **The rail is the real roster.** Counts, asks, doors, per-host groups
-   (SIDEBAR.md M2c).
+1. **`com.wash.agents` is the singleton manager.** It owns the launcher,
+   live roster, history, and row-addressed administration.
+2. **`com.wash.ai` is one session controller.** It renders one transcript
+   and composer and never re-points itself at another session. agentd holds
+   an exclusive controller lease, so a session has zero or one such window.
 
-Each is defensible; together they are incoherent — a user cannot predict
-what a click does because the design has not decided what the noun is.
+Sessions outlive windows. A detached session has no controller; selecting it
+in the manager atomically focuses its existing controller or opens one.
 
 **Decision: the agent app is a messenger, not a terminal.** Sessions
 outlive windows (LIFETIME), carry blocked/unread state (ASK), are
@@ -143,10 +139,8 @@ window state and BE router log).
 (2026-08-24). What that doc settles, and how this section's bullets
 turned out:
 
-- Roster as the app's permanent pane — **shipped early, in 0.14.0**. It
-  is always on screen with a `<Splitter>` divider, its width persisted
-  per window; the "▶ Roster" toggle and its three auto-open rules are
-  gone. This bullet was overtaken by a direct request during testing.
+- Roster as a singleton manager — **shipped**. `com.wash.agents` owns the
+  roster, history, and launcher; session windows contain only their session.
 - Launcher defaults (agent + folder) — **shipped**, as N5. "Recent
   sessions inline" did not: it becomes part of the list merge.
 - Sessions-not-windows, history merged into the list, and one status

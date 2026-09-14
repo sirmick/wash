@@ -16,8 +16,8 @@ windows, focus, app lifecycle and the wire protocol; **apps** are separate
 processes (Go backend + SolidJS frontend) that attach to it over a unix
 socket; the **shell** is the browser-side chrome that renders what the
 router says exists. AI is a first-class service rather than a bolt-on —
-`com.wash.agentd` hosts agent sessions, `com.wash.ai` is a window onto
-them.
+`com.wash.agentd` hosts agent sessions, `com.wash.agents` manages their
+roster/history, and each `com.wash.ai` window controls exactly one session.
 
 Deeper: [Architecture](ARCHITECTURE.md) (structure),
 [Internals](INTERNALS.md) (wire protocol), [Agent app](AGENT_APP.md)

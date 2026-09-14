@@ -165,12 +165,21 @@ var asks = map[string]*pending{}
 // answers exactly once — is unit-testable without a live StateService
 // (which needs a Bus, which needs a Conn).
 var (
-	stateSubscribers = func() int { return svc.SubscriberCount() }
+	stateSubscribers = func() int { return svc.SubscriberCount() + managerSubscriberCount() }
 	// mutateStateIf is the ONE state-write seam: fn returns false when
 	// nothing a subscriber can see moved, and no snapshot is sent. See
 	// StateService.MutateIf — a narrating agent hits this several times a
 	// second, and the row it writes is usually the row already there.
-	mutateStateIf = func(fn func(*State) bool) { svc.MutateIf(fn) }
+	mutateStateIf = func(fn func(*State) bool) {
+		changed := false
+		svc.MutateIf(func(s *State) bool {
+			changed = fn(s)
+			return changed
+		})
+		if changed {
+			publishControllerViews()
+		}
+	}
 	// mutateState is the always-publish form, defined in terms of the
 	// seam above rather than beside it: two independent hooks are two
 	// things a test must remember to stub, and the one it forgets fails
