@@ -185,6 +185,27 @@ func (s *StateService[S]) SubscriberCount() int {
 	return len(s.subs)
 }
 
+// PublishBulk sends an auxiliary, non-state payload to every current
+// subscriber at Bulk priority. It is for high-rate, latest-wins updates that
+// complement the canonical snapshot: progress counters, usage telemetry and
+// similar data that must not compete with input or permission prompts.
+//
+// The caller owns coalescing. StateService only snapshots the recipient set so
+// a slow local write never holds its lock and block subscribe/unsubscribe.
+func (s *StateService[S]) PublishBulk(data any) {
+	s.mu.RLock()
+	subs := make([]string, 0, len(s.subs))
+	for inst := range s.subs {
+		subs = append(subs, inst)
+	}
+	s.mu.RUnlock()
+
+	conn := s.bus.Conn()
+	for _, inst := range subs {
+		_ = conn.SendAppMsgToBulk(wire.Recipient{InstanceID: inst}, data)
+	}
+}
+
 // statePayload wraps an S value in the {kind:"state", state:<S>}
 // envelope. Kept as a single chokepoint so the wire shape is
 // definitely consistent across subscribe-reply and Mutate-broadcast.

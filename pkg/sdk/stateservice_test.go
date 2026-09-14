@@ -350,3 +350,33 @@ func TestStateServiceMutateIfSkipsUnchanged(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 }
+
+func TestStateServicePublishBulkUsesBulkClass(t *testing.T) {
+	bus, router, cleanup := busTestConn(t)
+	defer cleanup()
+
+	svc := NewStateService(bus, jobsState{})
+	go func() { _ = bus.conn.Run(context.Background()) }()
+
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{InstanceID: "i-sub"}))
+	_ = readStateMsgToInstance(t, router, "i-sub")
+
+	svc.PublishBulk(map[string]any{"kind": "usage_patch", "used": 42})
+	f, err := router.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Class(); got != wire.ClassBulk {
+		t.Fatalf("class=%s, want bulk", got)
+	}
+	evt, err := wire.DecodeEvt(f.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := evt.(wire.EvtAppMsg)
+	if !ok || m.To == nil || m.To.InstanceID != "i-sub" {
+		t.Fatalf("message=%#v, want recipient i-sub", evt)
+	}
+}

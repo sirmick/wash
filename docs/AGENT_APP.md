@@ -233,14 +233,20 @@ Three rules that must be designed in, not discovered:
   defer-on-nobody-home for approvals. A transcript subscription is not a
   roster subscription; sharing the counter would make opening a pane change
   approval behaviour, and closing the last pane defer a live question.
-- **A transcript is bulk traffic.** A streamed reply is one push per chunk,
-  each carrying the message accumulated so far, so one paragraph is hundreds
-  of frames. Both hops — agentd → the app, and the app → its FE — send it on
-  the Bulk class (docs/QOS.md §3), the same class pty output rides, so the
+- **A transcript is bulk traffic.** Streamed chunks are coalesced into text
+  deltas rather than re-sending the accumulated message. Both hops — agentd →
+  the app, and the app → its FE — send them on the Bulk class (docs/QOS.md
+  §3), the same class pty output rides, so the
   scheduler puts a talking agent behind the keystrokes and window moves the
   human is making while it talks. The cost is that Bulk can be overtaken:
   session-scoped frames carry the key they belong to, and a window drops the
   ones addressed to a session it has since switched away from.
+- **Usage is a latest-wins Bulk patch.** An adapter may report changing token
+  counts for every streamed chunk. agentd updates its canonical roster state
+  immediately, but coalesces those counters for 500ms and sends only
+  `{kind:"usage_patch",rows:[…]}`. One send may be in flight; values arriving
+  behind it replace the pending value for that row. Permission, lifecycle and
+  other structural roster changes remain full Interactive snapshots.
 - **N renderers, zero affinity.** With three surfaces plus the sidebar, a
   pending ask is pure state in agentd with no per-view ownership. Answering
   anywhere resolves everywhere. This is what let SIDEBAR.md §3.2(8) keep
@@ -381,8 +387,8 @@ Three things real traffic taught that the spec pages did not:
   version field, so that leniency is load-bearing rather than sloppy.
 - Adapters emit update variants beyond the documented set —
   `available_commands_update`, `usage_update`, `session_info_update`. All
-  decoded; none consumed. They are named in `types.go` so that ignoring
-  one is a decision rather than a surprise.
+  decoded and consumed. In particular, `usage_update` takes the coalesced Bulk
+  patch path above rather than republishing the full roster at stream cadence.
 - `authMethods` advertises what is *available*, not what is *required*
   (§6).
 

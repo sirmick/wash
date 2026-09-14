@@ -757,6 +757,12 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		}
 		c.SendAppMsgBulk(map[string]any{"kind": "event", "key": session.key, "event": m["event"]})
 
+	// Usage is a coalesced, latest-wins patch from agentd. Forward it as
+	// Bulk: a token counter must never sit ahead of typing, window movement,
+	// or a permission question on the browser's single socket.
+	case "usage_patch":
+		c.SendAppMsgBulk(m)
+
 	case sdk.StateServiceKindState:
 		// The window title follows the agent's own name for the session.
 		// A taskbar full of "Agent" is unreadable the moment there are

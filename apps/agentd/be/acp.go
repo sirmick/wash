@@ -458,6 +458,7 @@ func (h *hosted) releaseOwned(why string) {
 // running, which is the child-process leak class the audit already cost
 // us once (docs/CORE_AUDIT.md).
 func stopAllHosted() {
+	stopUsagePatches()
 	hostedMu.Lock()
 	all := make([]*hosted, 0, len(hostedAll))
 	for _, h := range hostedAll {
@@ -666,10 +667,7 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		h.narrated()
 	case acp.UpdateUsage:
 		if n.Update.Size > 0 || n.Update.Used > 0 {
-			hostedMu.Lock()
-			h.used, h.size = n.Update.Used, n.Update.Size
-			hostedMu.Unlock()
-			h.republish()
+			h.setUsage(n.Update.Used, n.Update.Size)
 		}
 
 	case acp.UpdateCurrentMode:

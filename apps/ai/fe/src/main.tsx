@@ -15,6 +15,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
 import { isStaleTranscript } from './transcript-guard.ts';
+import { applyUsagePatch } from './usage-patch.ts';
 import type { Component } from 'solid-js';
 import { Plus } from 'lucide-solid';
 import {
@@ -309,6 +310,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             if (cwd() === '') setCwd(defaultCwd(roster().recent ?? []));
           }
         }
+        break;
+
+      case 'usage_patch':
+        setRoster((prev) => applyUsagePatch(prev, m.rows));
         break;
     }
   };
