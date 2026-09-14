@@ -18,6 +18,11 @@ test('manager is singleton and a session has one dedicated controller', async ({
   await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agents', exact: true }).click();
   const manager = page.locator('wash-app-agents');
   await expect(manager).toBeVisible();
+  await expect(manager.locator('[data-testid="agents-new-pane"]')).toBeVisible();
+  await expect(manager.locator('[data-testid="agents-history-pane"]')).toBeVisible();
+  await expect(manager.locator('[data-testid="agents-running-pane"]')).toBeVisible();
+  await expect(manager.locator('[data-testid="ai-history-panel"]')).toBeVisible();
+  await expect(manager.locator('[data-testid="ai-history-close"]')).toHaveCount(0);
   await expect(manager.locator('[data-testid="ai-roster-pane"]')).toBeVisible();
 
   await manager.locator('select').selectOption('codex');

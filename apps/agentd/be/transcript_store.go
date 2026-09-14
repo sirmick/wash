@@ -628,7 +628,7 @@ type SessionMeta struct {
 	Model     string `json:"model,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
 	Dir       string `json:"dir,omitempty"`
-	Title string `json:"title,omitempty"`
+	Title     string `json:"title,omitempty"`
 	// UserTitle is the person's name for the session, when they gave one.
 	// Title above is then the SAME string — the effective title, so every
 	// reader shows the name without knowing where it came from — and this
@@ -641,6 +641,10 @@ type SessionMeta struct {
 	// Bytes is the transcript's size on disk, so the UI can say what
 	// history costs and offer to prune the expensive ones.
 	Bytes int64 `json:"bytes,omitempty"`
+	// Preview is a few recent human/agent lines taken from the same bounded
+	// tail read used for the metadata. It gives the always-visible history
+	// list enough context without loading or sending whole transcripts.
+	Preview string `json:"preview,omitempty"`
 	// Snippet is the line that matched, with a little either side. Absent
 	// when the query matched metadata instead (the row already shows the
 	// title and directory, so quoting them back is noise) or when there
@@ -714,6 +718,8 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		tail.Scan() // discard the partial first line
 	}
 	var lastEventAt int64
+	previewBySeq := make(map[uint64]string)
+	previewOrder := make([]uint64, 0, 3)
 	for tail.Scan() {
 		b := tail.Bytes()
 		if len(b) == 0 {
@@ -729,6 +735,13 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		if probe.Kind != summaryKind {
 			if probe.AtMS > lastEventAt {
 				lastEventAt = probe.AtMS
+			}
+			var e Event
+			if json.Unmarshal(b, &e) == nil && (e.Kind == EventUser || e.Kind == EventMessage) && e.Text != "" {
+				if _, seen := previewBySeq[e.Seq]; !seen {
+					previewOrder = append(previewOrder, e.Seq)
+				}
+				previewBySeq[e.Seq] = previewLine(e.Text)
 			}
 			continue
 		}
@@ -778,7 +791,34 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 	if out.UserTitle != "" {
 		out.Title = out.UserTitle
 	}
+	if len(previewOrder) > 3 {
+		previewOrder = previewOrder[len(previewOrder)-3:]
+	}
+	preview := make([]string, 0, len(previewOrder))
+	for _, seq := range previewOrder {
+		if line := previewBySeq[seq]; line != "" {
+			preview = append(preview, line)
+		}
+	}
+	out.Preview = strings.Join(preview, "\n")
 	return out, true
+}
+
+// previewLine keeps each preview row compact before it crosses the app bus.
+// The UI clamps the result visually too, but bounding it here is what keeps
+// the history response proportional to the number of sessions rather than to
+// the size of their messages.
+func previewLine(s string) string {
+	const maxBytes = 180
+	s = collapseSpace(s)
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return strings.TrimSpace(s[:end]) + "…"
 }
 
 // listSessionMeta is the history index: every stored transcript, newest

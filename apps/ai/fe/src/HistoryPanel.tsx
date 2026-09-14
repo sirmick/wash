@@ -18,8 +18,8 @@
 // stored transcript into a fresh session — is not built yet. A button
 // that guesses is worse than one that is missing.
 
-import { For, Show, createSignal, onMount } from 'solid-js';
-import type { Component } from 'solid-js';
+import { For, Show, children, createSignal, onMount } from 'solid-js';
+import type { Component, ParentComponent } from 'solid-js';
 import { Button, Input, Menu, MenuItem, MenuSeparator, Overlay, fmtBytes, tokens } from '@wash/ui';
 
 /** One stored session, as agentd's history index describes it. */
@@ -49,6 +49,8 @@ export interface SessionMeta {
    * already shows the title and directory.
    */
   snippet?: string;
+  /** bounded recent transcript lines for the unfiltered history list */
+  preview?: string;
 }
 
 /**
@@ -146,12 +148,51 @@ const metaStyle = {
   'white-space': 'nowrap',
 } as const;
 
+const HistoryFrame: ParentComponent<{
+  embedded?: boolean;
+  onClose?: () => void;
+}> = (props) => {
+  const content = children(() => props.children);
+  return (
+    <Show
+      when={props.embedded}
+      fallback={
+        <Overlay
+          onDismiss={() => props.onClose?.()}
+          align="top"
+          data-testid="ai-history-panel"
+          innerStyle={{ width: 'min(760px, 92vw)', 'max-height': '76vh', display: 'flex', 'flex-direction': 'column' }}
+        >
+          {content()}
+        </Overlay>
+      }
+    >
+      <section
+        data-testid="ai-history-panel"
+        style={{
+          height: '100%',
+          'min-height': 0,
+          display: 'flex',
+          'flex-direction': 'column',
+          padding: `${tokens.spaceMd}px`,
+          'box-sizing': 'border-box',
+          background: tokens.bgWindow,
+        }}
+      >
+        {content()}
+      </section>
+    </Show>
+  );
+};
+
 export const HistoryPanel: Component<{
   sessions: () => SessionMeta[];
   query: () => string;
   onQuery: (q: string) => void;
   onResume: (s: SessionMeta) => void;
-  onClose: () => void;
+  onClose?: () => void;
+  /** render as a pane in the Agents workspace instead of a modal */
+  embedded?: boolean;
   /** true between asking and the answer landing — an empty list mid-flight
    *  is not the same claim as "nothing matched". */
   loading?: () => boolean;
@@ -168,7 +209,7 @@ export const HistoryPanel: Component<{
   let inputEl!: HTMLInputElement;
   // Typing is why the panel is open; landing focus anywhere else means
   // the first thing every user does is click the box.
-  onMount(() => inputEl?.focus());
+  onMount(() => { if (!props.embedded) inputEl?.focus(); });
   const [selected, setSelected] = createSignal(0);
   // The per-row verbs menu: which row, and where. Menu portals to
   // document.body, so these are viewport coordinates.
@@ -183,12 +224,7 @@ export const HistoryPanel: Component<{
   const rows = () => props.sessions();
 
   return (
-    <Overlay
-      onDismiss={props.onClose}
-      align="top"
-      data-testid="ai-history-panel"
-      innerStyle={{ width: 'min(760px, 92vw)', 'max-height': '76vh', display: 'flex', 'flex-direction': 'column' }}
-    >
+    <HistoryFrame embedded={props.embedded} onClose={props.onClose}>
       <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px`, 'margin-bottom': `${tokens.spaceMd}px` }}>
         <div style={{ 'font-weight': 600 }}>History</div>
         <div style={{ font: tokens.type.textSm, color: tokens.fgMuted, 'margin-left': 'auto' }}>
@@ -348,18 +384,21 @@ export const HistoryPanel: Component<{
                 {/* Why this row is in the list. Without it a search
                     result is a title you still have to open to identify,
                     which is the thing searching was meant to save. */}
-                <Show when={s.snippet}>
+                <Show when={s.snippet || s.preview}>
                   <div
                     data-testid="ai-history-snippet"
                     style={{
                       ...metaStyle,
                       'margin-top': '2px',
                       overflow: 'hidden',
-                      'text-overflow': 'ellipsis',
-                      'white-space': 'nowrap',
+                      'white-space': 'pre-line',
+                      display: '-webkit-box',
+                      '-webkit-line-clamp': 3,
+                      '-webkit-box-orient': 'vertical',
+                      'line-height': 1.35,
                     }}
                   >
-                    <For each={highlightParts(s.snippet ?? '', props.query())}>
+                    <For each={highlightParts(s.snippet || s.preview || '', s.snippet ? props.query() : '')}>
                       {(part) => (
                         <Show when={part.hit} fallback={<span>{part.t}</span>}>
                           <span
@@ -379,9 +418,11 @@ export const HistoryPanel: Component<{
         </Show>
       </div>
 
-      <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceMd}px` }}>
-        <Button data-testid="ai-history-close" onClick={props.onClose}>Close</Button>
-      </div>
+      <Show when={!props.embedded}>
+        <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceMd}px` }}>
+          <Button data-testid="ai-history-close" onClick={() => props.onClose?.()}>Close</Button>
+        </div>
+      </Show>
 
       <Show when={menuFor()}>
         {(m) => (
@@ -405,6 +446,6 @@ export const HistoryPanel: Component<{
           </Menu>
         )}
       </Show>
-    </Overlay>
+    </HistoryFrame>
   );
 };

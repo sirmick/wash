@@ -8,7 +8,6 @@ import { defaultAgent, defaultCwd } from './default-agent.ts';
 import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
 import type { Component } from 'solid-js';
-import { Plus } from 'lucide-solid';
 import {
   AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
   Overlay, Select,
@@ -130,7 +129,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // History panel (HistoryPanel.tsx). The query round-trips through
   // agentd rather than filtering here: it searches the stored
   // CONVERSATIONS, which the FE has never seen.
-  const [historyOpen, setHistoryOpen] = createSignal(false);
   const [historyQuery, setHistoryQuery] = createSignal('');
   const [historySessions, setHistorySessions] = createSignal<SessionMeta[]>([]);
   const [historyLoading, setHistoryLoading] = createSignal(false);
@@ -145,10 +143,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     setHistoryQuery(q);
     if (historyTimer) clearTimeout(historyTimer);
     historyTimer = setTimeout(() => askHistory(q), 150);
-  };
-  const openHistory = () => {
-    setHistoryOpen(true);
-    askHistory(historyQuery());
   };
   onCleanup(() => { if (historyTimer) clearTimeout(historyTimer); });
 
@@ -269,7 +263,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // The store changed under the panel: re-ask with the current
         // query rather than editing the list locally, so what is shown is
         // what is on disk.
-        if (historyOpen()) askHistory(historyQuery());
+        if (role() === 'manager') askHistory(historyQuery());
         break;
 
       case 'default_prompt':
@@ -321,6 +315,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setSessionKey(key);
       send({ kind: 'restore', key });
     },
+  });
+
+  // History is a permanent manager pane now, so populate it as soon as
+  // agentd assigns this window the manager role. Session controllers do
+  // not ask for or retain the archive.
+  let historyLoaded = false;
+  createEffect(() => {
+    if (role() === 'manager' && !historyLoaded) {
+      historyLoaded = true;
+      askHistory(historyQuery());
+    }
   });
 
   // ---- sessions pane (docs/SIDEBAR.md M2) ----
@@ -482,7 +487,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   );
 
   const launcher = (
-    <div style={{ padding: `${tokens.spaceXl}px`, display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceLg}px` }}>
+    <div style={{ padding: `${tokens.spaceMd}px`, display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceMd}px` }}>
       <div style={{ font: tokens.type.titleSm, color: tokens.fg }}>New session</div>
 
       <label style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
@@ -686,19 +691,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     />
   );
 
-  // rosterPane is the master half. Verbs arrive in M2b; for now it lists
-  // and selects, which is already the thing the rail could not do for a
-  // remote host.
   const rosterPane = (
     <div
       data-testid="ai-roster-pane"
       style={{
-        // No width here: the grid column owns it, so dragging the
-        // splitter is the only thing that decides how wide this is.
-        // No height either, for the same reason — the row is clamped to
-        // the body, and min-height:0 keeps a long list from arguing.
         'min-width': 0,
         'min-height': 0,
+        height: '100%',
+        'box-sizing': 'border-box',
         background: tokens.bgInset,
         overflow: 'auto',
         // Wheel past the end of the list and the scroll stops here rather
@@ -709,38 +709,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         padding: `${tokens.spaceSm}px`,
       }}
     >
-        {/* The verbs are key-addressed, so they act on the row rather than
-            on whatever this window happens to be showing — including a
-            session with no window at all. That is the whole difference
-            between here and the rail: an app talking to its own host's
-            agentd has a router-attested sender, so it may act. */}
-        {/* New session — the way back to the launcher from a window that
-            is showing one. Without it the roster is a one-way door: the
-            launcher is only ever the EMPTY state of a window, so a window
-            with a session had no route to starting another.
-
-            A new WINDOW, not a new view: this app is one window per
-            conversation by design, and clearing the view in place would
-            leave this window's backend still watching the old session,
-            streaming its events into what looks like a fresh one.
-            launchOn is the explicit spawn verb — focusOrLaunch, its
-            sibling, would just re-raise this very window — and
-            props.origin keeps it on the host this window belongs to,
-            which is the whole point on a remote one. */}
-		<Show when={role() !== 'manager'}><Button
-          variant="ghost"
-          data-testid="ai-roster-new"
-          title="Start another session on this host"
-          style={{
-            width: '100%',
-            'margin-bottom': `${tokens.spaceSm}px`,
-            'justify-content': 'flex-start',
-            gap: `${tokens.spaceSm}px`,
-          }}
-		  onClick={() => window.wash.focusOrLaunch(props.origin, 'com.wash.agents')}
-        >
-          <Plus size={13} /> New session
-		</Button></Show>
         <AgentRoster
           rows={rows}
           // Off-row questions only. The detail pane on the right already
@@ -770,29 +738,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   );
 
   const historyPanel = (
-    <Show when={historyOpen()}>
-      <HistoryPanel
-        sessions={historySessions}
-        query={historyQuery}
-        loading={historyLoading}
-        onQuery={onHistoryQuery}
-        onClose={() => setHistoryOpen(false)}
-        onRename={(s) => openRename({ key: s.row_key, session_id: s.session_id, title: s.title })}
-        onDelete={(s) => setDeleteFor(s)}
-        onPrune={() => setPruning(true)}
-        onResume={(s) => {
-          setHistoryOpen(false);
-          // Same predicate as the menu, same two verbs. The panel used to
-          // send `resume` unconditionally, which for an already-running
-          // session meant duplicating it — the exact outcome the menu's
-          // filter existed to prevent, in the view that had no filter.
-          const act = historyAction(s);
-          if (act === 'reattach') send({ kind: 'row_reattach', key: s.row_key });
-          else if (act === 'focus') send({ kind: 'row_focus', key: s.row_key });
-          else send({ kind: 'resume', session_id: s.session_id });
-        }}
-      />
-    </Show>
+    <HistoryPanel
+      embedded
+      sessions={historySessions}
+      query={historyQuery}
+      loading={historyLoading}
+      onQuery={onHistoryQuery}
+      onRename={(s) => openRename({ key: s.row_key, session_id: s.session_id, title: s.title })}
+      onDelete={(s) => setDeleteFor(s)}
+      onPrune={() => setPruning(true)}
+      onResume={(s) => {
+        const act = historyAction(s);
+        if (act === 'reattach') send({ kind: 'row_reattach', key: s.row_key });
+        else if (act === 'focus') send({ kind: 'row_focus', key: s.row_key });
+        else send({ kind: 'resume', session_id: s.session_id });
+      }}
+    />
   );
 
   // The initial-prompt editor. An Overlay like the close dialog, because
@@ -1007,34 +968,68 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </Show>
   );
 
-  // Master-detail. The menubar sits ABOVE the split, so the sessions pane
-  // survives every detail state — including the launcher, which is what
-  // makes "new session while three are running" a coherent thing to do
-  // rather than a mode you leave the list to enter.
-  //
-  // A grid, not a flex row, for the same reason wash-edit uses one: the
-  // splitter's percentage is a column width, and a grid can express
-  // "<pct>% | handle | rest" directly. The 4px middle column IS the
-  // <Splitter>.
+  // The manager is a stable workspace rather than a sequence of modes:
+  // start a session in the compact upper-left pane, find an older one
+  // below it, and keep the live roster visible on the right throughout.
   const managerView = (
-	<>
-	{promptDialog}
-	{historyPanel}
-	{renameDialog}
-	{deleteDialog}
-	{pruneDialog}
-	{rootPicker}
-	<div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
-	  <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between', padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`, border: `0 solid ${tokens.borderMenu}`, 'border-bottom-width': '1px' }}>
-		<div style={{ font: tokens.type.titleSm }}>Agents</div>
-		<Button variant="ghost" onClick={openHistory}>History…</Button>
-	  </div>
-	  <div style={{ flex: 1, 'min-height': 0, display: 'grid', 'grid-template-columns': 'minmax(260px, 38%) 1fr', overflow: 'hidden' }}>
-		{rosterPane}
-		<div style={{ 'min-width': 0, overflow: 'auto' }}>{launcher}</div>
-	  </div>
-	</div>
-	</>
+    <>
+      {promptDialog}
+      {renameDialog}
+      {deleteDialog}
+      {pruneDialog}
+      {rootPicker}
+      <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
+        <div
+          style={{
+            padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
+            border: `0 solid ${tokens.borderMenu}`,
+            'border-bottom-width': '1px',
+            font: tokens.type.titleSm,
+          }}
+        >
+          Agents
+        </div>
+        <div
+          style={{
+            flex: 1,
+            'min-height': 0,
+            display: 'grid',
+            'grid-template-columns': 'minmax(320px, 42%) minmax(280px, 1fr)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              'min-width': 0,
+              'min-height': 0,
+              display: 'grid',
+              'grid-template-rows': 'minmax(220px, 36%) minmax(0, 1fr)',
+              border: `0 solid ${tokens.borderMenu}`,
+              'border-right-width': '1px',
+            }}
+          >
+            <section data-testid="agents-new-pane" style={{ overflow: 'auto', 'min-height': 0 }}>
+              {launcher}
+            </section>
+            <section
+              data-testid="agents-history-pane"
+              style={{ overflow: 'hidden', 'min-height': 0, border: `0 solid ${tokens.borderMenu}`, 'border-top-width': '1px' }}
+            >
+              {historyPanel}
+            </section>
+          </div>
+          <section
+            data-testid="agents-running-pane"
+            style={{ 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column', background: tokens.bgInset }}
+          >
+            <div style={{ padding: `${tokens.spaceMd}px`, font: tokens.type.titleSm, color: tokens.fg }}>
+              Running
+            </div>
+            <div style={{ flex: 1, 'min-height': 0, overflow: 'hidden' }}>{rosterPane}</div>
+          </section>
+        </div>
+      </div>
+    </>
   );
 
   const sessionView = (

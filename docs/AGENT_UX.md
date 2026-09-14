@@ -18,7 +18,10 @@ the one that already works), Todo.md §Agent UX.
 There are now two explicit surfaces:
 
 1. **`com.wash.agents` is the singleton manager.** It owns the launcher,
-   live roster, history, and row-addressed administration.
+   live roster, history, and row-addressed administration. Its workspace
+   keeps all three visible: compact New above History on the left, Running
+   on the right. History rows carry a bounded three-line transcript preview;
+   history is no longer a menu or modal mode.
 2. **`com.wash.ai` is one session controller.** It renders one transcript
    and composer and never re-points itself at another session. agentd holds
    an exclusive controller lease, so a session has zero or one such window.

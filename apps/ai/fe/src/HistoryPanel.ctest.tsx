@@ -33,6 +33,7 @@ const panel = (over: {
   query?: string;
   onResume?: (s: SessionMeta) => void;
   onQuery?: (q: string) => void;
+  embedded?: boolean;
 } = {}) =>
   render(() => (
     <HistoryPanel
@@ -41,6 +42,7 @@ const panel = (over: {
       onQuery={over.onQuery ?? noop}
       onResume={over.onResume ?? noop}
       onClose={noop}
+      embedded={over.embedded}
     />
   ));
 
@@ -261,6 +263,17 @@ test('a row with no snippet renders none — a metadata match quotes nothing bac
     />
   ));
   expect(queryByTestId('ai-history-snippet')).toBeNull();
+});
+
+test('embedded history shows a three-line transcript preview without modal controls', () => {
+  const { getByTestId, queryByTestId } = panel({
+    embedded: true,
+    sessions: [sess({ preview: 'first question\nfirst answer\nlatest detail\nnot visible' })],
+  });
+  const preview = getByTestId('ai-history-snippet');
+  expect(preview.textContent).toContain('first question');
+  expect(preview.style.getPropertyValue('-webkit-line-clamp')).toBe('3');
+  expect(queryByTestId('ai-history-close')).toBeNull();
 });
 
 // --- rename / delete / prune (docs/Review-findings.md P2 → agent) ---

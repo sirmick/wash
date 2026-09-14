@@ -549,6 +549,31 @@ func TestHistoryQuerySearchesContentAndMetadata(t *testing.T) {
 	}
 }
 
+func TestHistoryRowsCarryBoundedRecentTranscriptPreview(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "s-preview", "codex", "/tmp", now)
+	appendPrompt("acp:1", "first question", now)
+	appendEvent("acp:1", Event{Kind: EventMessage, Text: "first answer"}, now.Add(time.Second))
+	appendPrompt("acp:1", "latest "+strings.Repeat("detail ", 80), now.Add(2*time.Second))
+	waitForTranscriptWrites()
+
+	got := historyQuery("", 0)
+	if len(got) != 1 {
+		t.Fatalf("history = %v, want one", ids(got))
+	}
+	lines := strings.Split(got[0].Preview, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("preview lines = %q, want three", got[0].Preview)
+	}
+	if lines[0] != "first question" || lines[1] != "first answer" {
+		t.Errorf("preview lost transcript order: %q", got[0].Preview)
+	}
+	if len(lines[2]) > 184 || !strings.HasSuffix(lines[2], "…") {
+		t.Errorf("latest preview line is not bounded: %q", lines[2])
+	}
+}
+
 // An image's Text field is base64. Searching it would match noise no
 // human ever typed.
 func TestHistorySearchIgnoresImageBytes(t *testing.T) {
