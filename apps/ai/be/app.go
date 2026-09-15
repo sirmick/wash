@@ -416,34 +416,17 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		})
 
 	case "select":
-		if managerMode {
-			key := str(m["key"])
-			if key != "" {
-				_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": agentd.FocusKind, "key": key})
-			}
+		// A roster row picked in the manager goes to that session's own
+		// controller (agentd focuses it, or opens one). A controller never
+		// re-points itself: that was master-detail, and a window showing a
+		// session it holds no lease on is exactly the second controller the
+		// lease exists to prevent.
+		if !managerMode {
 			return
 		}
-		// Master-detail: point this window at another of agentd's sessions.
-		// Same three steps as the agentd-initiated `attach` below — set the
-		// key, tell the FE (which clears the old transcript), then subscribe
-		// with replay so the pane fills with where that session actually is.
-		//
-		// Re-selecting the session we already show would clear the
-		// transcript and re-fetch it for nothing.
-		key := str(m["key"])
-		if key == "" || key == session.key {
-			return
+		if key := str(m["key"]); key != "" {
+			_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": agentd.FocusKind, "key": key})
 		}
-		log.Printf("wash-ai: select key=%s (was %s)", key, session.key)
-		session.key = key
-		session.title = ""
-		persistSessionView(c)
-		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
-			"kind":   "transcript_subscribe",
-			"key":    session.key,
-			"replay": true,
-		})
 
 	case "resync":
 		// The FE holds a transcript it can no longer append deltas to (it

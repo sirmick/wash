@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
@@ -19,7 +20,33 @@ var controllerState = struct {
 	byInstance map[string]string
 	launching  map[string]bool
 	managers   map[string]struct{}
-}{byKey: map[string]string{}, byInstance: map[string]string{}, launching: map[string]bool{}, managers: map[string]struct{}{}}
+	// gone remembers instances the router reported dead, briefly. The
+	// router's spawn.ok and instance.gone for one child come from different
+	// goroutines, so a window that dies in startup can report gone BEFORE
+	// its spawn result; claiming for it then would lease the session to a
+	// corpse no instance.gone will ever release, and the session could
+	// never get a window again.
+	gone map[string]time.Time
+}{byKey: map[string]string{}, byInstance: map[string]string{}, launching: map[string]bool{}, managers: map[string]struct{}{}, gone: map[string]time.Time{}}
+
+// goneMemory bounds how long a dead instance is remembered. Instance ids
+// are never reused within a router's life, so this only limits the map.
+const goneMemory = 2 * time.Minute
+
+// noteInstanceGone records a dead instance for claimController to refuse.
+func noteInstanceGone(instance string, now time.Time) {
+	if instance == "" {
+		return
+	}
+	controllerState.Lock()
+	defer controllerState.Unlock()
+	for id, at := range controllerState.gone {
+		if now.Sub(at) > goneMemory {
+			delete(controllerState.gone, id)
+		}
+	}
+	controllerState.gone[instance] = now
+}
 
 var controllerConn *sdk.Conn
 
@@ -29,6 +56,10 @@ func claimController(key, instance string) (string, bool) {
 	}
 	controllerState.Lock()
 	defer controllerState.Unlock()
+	if _, dead := controllerState.gone[instance]; dead {
+		delete(controllerState.launching, key)
+		return "", false
+	}
 	if owner := controllerState.byKey[key]; owner != "" && owner != instance {
 		return owner, false
 	}
@@ -148,11 +179,21 @@ var (
 	}
 )
 
-// sendViewLocked sends msg unless it is byte-identical to what instance
-// last received. force sends regardless (a fresh subscribe or claim is
-// asking for the current view, and its FE may have remounted).
-func sendViewLocked(instance string, msg map[string]any, force bool) {
-	b, err := json.Marshal(msg)
+// sendViewLocked sends a view unless what it says is what instance last
+// received. force sends regardless (a fresh subscribe or claim is asking
+// for the current view, and its FE may have remounted).
+//
+// "What it says" leaves out each row's since_ms. publish() restamps every
+// row's age on every rebuild, so a change to one session made every other
+// session's bytes differ and the comparison suppressed almost nothing. The
+// FE anchors elapsed time on arrival and counts locally, so a view that
+// differs only in since_ms has nothing new to show.
+func sendViewLocked(instance, kind, key string, state State, force bool) {
+	msg := map[string]any{"kind": kind, "state": state}
+	if key != "" {
+		msg["key"] = key
+	}
+	b, err := json.Marshal(viewSignature(kind, key, state))
 	if err == nil && !force && bytes.Equal(viewSent[instance], b) {
 		return
 	}
@@ -162,10 +203,31 @@ func sendViewLocked(instance string, msg map[string]any, force bool) {
 	viewSend(instance, msg)
 }
 
-func sendView(instance string, msg map[string]any) {
+func viewSignature(kind, key string, state State) any {
+	rows := make([]Row, len(state.Rows))
+	for i, r := range state.Rows {
+		r.SinceMS = 0
+		rows[i] = r
+	}
+	state.Rows = rows
+	return struct {
+		Kind, Key string
+		State     State
+	}{kind, key, state}
+}
+
+// sendView force-sends the view build returns. build runs UNDER viewMu:
+// a snapshot taken before the lock could be sent after a newer one that a
+// concurrent publish delivered first — a reloading controller then showed
+// a permission question as gone, and nothing corrected it until the row
+// next changed.
+func sendView(instance, kind, key string, build func(State) State) {
+	if svc == nil {
+		return
+	}
 	viewMu.Lock()
 	defer viewMu.Unlock()
-	sendViewLocked(instance, msg, true)
+	sendViewLocked(instance, kind, key, build(svc.Snapshot()), true)
 }
 
 func forgetView(instance string) {
@@ -192,15 +254,13 @@ func publishControllerViews() {
 	}
 	controllerState.Unlock()
 	if len(managers) > 0 {
-		msg := map[string]any{"kind": "manager_state", "state": managerView(snap)}
+		view := managerView(snap)
 		for _, instance := range managers {
-			sendViewLocked(instance, msg, false)
+			sendViewLocked(instance, "manager_state", "", view, false)
 		}
 	}
 	for key, instance := range targets {
-		sendViewLocked(instance, map[string]any{
-			"kind": "session_state", "key": key, "state": sessionView(snap, key),
-		}, false)
+		sendViewLocked(instance, "session_state", key, sessionView(snap, key), false)
 	}
 }
 
@@ -258,7 +318,7 @@ func registerControllerHandlers(bus *sdk.Bus) {
 		controllerState.Lock()
 		controllerState.managers[from.InstanceID] = struct{}{}
 		controllerState.Unlock()
-		sendView(from.InstanceID, map[string]any{"kind": "manager_state", "state": managerView(svc.Snapshot())})
+		sendView(from.InstanceID, "manager_state", "", managerView)
 		return nil
 	})
 	sdk.HandleFromVoid(bus, "session_claim", func(conn *sdk.Conn, _ string, req transReq, from wire.Sender) error {
@@ -280,7 +340,7 @@ func registerControllerHandlers(bus *sdk.Bus) {
 			h.republish()
 		}
 		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{"kind": "session_claimed", "key": req.Key})
-		sendView(from.InstanceID, map[string]any{"kind": "session_state", "key": req.Key, "state": sessionView(svc.Snapshot(), req.Key)})
+		sendView(from.InstanceID, "session_state", req.Key, func(s State) State { return sessionView(s, req.Key) })
 		return nil
 	})
 }

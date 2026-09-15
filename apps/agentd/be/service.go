@@ -194,6 +194,7 @@ func onInstanceGone(_ *sdk.Conn, _ string, instanceID string) {
 	}
 	forgetInstanceTranscripts(instanceID)
 	forgetManager(instanceID)
+	noteInstanceGone(instanceID, time.Now())
 	if key := releaseController(instanceID); key != "" {
 		detachLostController(key)
 	}

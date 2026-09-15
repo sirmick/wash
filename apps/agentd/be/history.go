@@ -366,8 +366,14 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 		restoreDetached(key)
 		return
 	}
-	if _, ok := claimController(key, instanceID); !ok {
+	if owner, ok := claimController(key, instanceID); !ok {
 		clearControllerLaunch(key)
+		if owner == "" {
+			// The window died before it could be told its session: leave
+			// the session detached, so the roster offers to open it again.
+			log.Printf("agentd: controller instance=%s gone before attach key=%s", instanceID, key)
+			restoreDetached(key)
+		}
 		return
 	}
 	if e := c.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{

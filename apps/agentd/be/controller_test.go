@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"testing"
+	"time"
 
 	"github.com/sirmick/wash/pkg/sdk"
 )
@@ -12,6 +13,7 @@ func resetControllersForTest() {
 	controllerState.byInstance = map[string]string{}
 	controllerState.launching = map[string]bool{}
 	controllerState.managers = map[string]struct{}{}
+	controllerState.gone = map[string]time.Time{}
 	controllerState.Unlock()
 }
 
@@ -123,9 +125,46 @@ func TestControllerViewsSendOnlyWhatChanged(t *testing.T) {
 	if sent["i1"] != 1 || sent["i2"] != 2 {
 		t.Fatalf("a k2 change sent %v, want only i2 again", sent)
 	}
+	// A row's age alone is not news: publish() restamps every row's since_ms
+	// on every rebuild, so ignoring it is what lets the comparison work.
+	svc.MutateIf(func(s *State) bool {
+		s.Rows = []Row{{Key: "k1", Title: "one", SinceMS: 5000}, {Key: "k2", Title: "renamed", SinceMS: 7000}}
+		return false
+	})
+	publishControllerViews()
+	if sent["i1"] != 1 || sent["i2"] != 2 {
+		t.Fatalf("an age-only change re-sent views: %v", sent)
+	}
 	// A claim or subscribe is a request for the current view and always answers.
-	sendView("i1", map[string]any{"kind": "session_state", "key": "k1", "state": sessionView(svc.Snapshot(), "k1")})
+	sendView("i1", "session_state", "k1", func(s State) State { return sessionView(s, "k1") })
 	if sent["i1"] != 2 {
 		t.Fatalf("forced view not sent: %v", sent)
+	}
+}
+
+// A window that died before its spawn result arrived must not take the
+// lease: nothing would ever release it, and the session could never get a
+// window again.
+func TestClaimRefusesAnInstanceAlreadyGone(t *testing.T) {
+	resetControllersForTest()
+	t.Cleanup(resetControllersForTest)
+
+	if !reserveControllerLaunch("k1") {
+		t.Fatal("reservation rejected")
+	}
+	noteInstanceGone("i-dead", time.Now())
+	if _, ok := claimController("k1", "i-dead"); ok {
+		t.Fatal("a gone instance was granted the controller lease")
+	}
+	if controllerFor("k1") != "" {
+		t.Fatalf("lease held by %q, want none", controllerFor("k1"))
+	}
+	// The failed claim released the launch reservation, so the session can
+	// try again.
+	if !reserveControllerLaunch("k1") {
+		t.Fatal("session stuck launching after a claim for a dead window")
+	}
+	if _, ok := claimController("k1", "i-live"); !ok {
+		t.Fatal("a live instance could not claim")
 	}
 }
