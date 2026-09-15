@@ -99,6 +99,18 @@ export function highlightParts(text: string, query: string): { t: string; hit: b
  * the view that had no filter. The two views may differ in presentation;
  * they may not differ about what is safe to click.
  */
+/**
+ * historySignature is what History shows about agentd's remembered
+ * sessions, as one comparable string: which sessions, and the facts that
+ * change a row's text or verb. The manager re-queries the (disk-backed)
+ * list only when this moves.
+ */
+export function historySignature(recent: ReadonlyArray<SessionMeta & { last_seen?: number }>): string {
+  return recent
+    .map((s) => [s.session_id, s.title ?? '', s.live ? 1 : 0, s.detached ? 1 : 0, s.row_key ?? '', s.last_seen ?? ''].join('\u0001'))
+    .join('\u0002');
+}
+
 export function historyAction(s: SessionMeta): 'resume' | 'restart' | 'reattach' | 'focus' | 'none' {
   if (s.detached && s.row_key) return 'reattach';
   // Live with a window: picking it goes THERE (docs/AGENT_UX.md N1).

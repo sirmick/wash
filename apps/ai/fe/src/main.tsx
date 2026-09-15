@@ -1,12 +1,14 @@
 // Shared bundle for two surfaces: the singleton Agents manager renders the
 // roster/history/launcher; an Agent controller renders one AgentSession.
-// agentd sends the role and remains authoritative for both stores.
+// The custom element names the role; agentd remains authoritative for both
+// stores.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
+import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
 import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
+import { isManagerElement } from './role.ts';
 import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
@@ -63,8 +65,15 @@ interface PreviewPatchRow {
 
 const mergeEvents = mergeAgentEvents;
 
+
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
-	const [role, setRole] = createSignal<'session' | 'manager'>('session');
+  // The element says which surface this is. A BE `role` message alone was
+  // not enough: it is sent once at startup, and a browser reload remounts
+  // the FE without replaying it — the manager came back as a blank session
+  // window.
+  const [role, setRole] = createSignal<'session' | 'manager'>(
+    isManagerElement(props.host.tagName) ? 'manager' : 'session',
+  );
   const [events, setEvents] = createSignal<AgentEvent[]>([]);
   // One replay request in flight at a time; the snapshot clears it.
   let resyncPending = false;
@@ -146,6 +155,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
   // Debounced: every keystroke would otherwise grep every transcript on
   // the machine.
+  let lastHistorySig: string | undefined;
   const onHistoryQuery = (q: string) => {
     setHistoryQuery(q);
     if (historyTimer) clearTimeout(historyTimer);
@@ -190,9 +200,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
-	  case 'role':
-		setRole(m.role === 'manager' ? 'manager' : 'session');
-		break;
+      case 'role':
+        setRole(m.role === 'manager' ? 'manager' : 'session');
+        break;
       case 'autostart':
         setAutostart({ agent: String(m.agent ?? ''), cwd: String(m.cwd ?? '') });
         setAgent(String(m.agent ?? ''));
@@ -205,13 +215,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setStarting(false);
         setError('');
         break;
-	  case 'session_opened':
-		setStarting(false);
-		setError('');
-		break;
-	  case 'claim_denied':
-		setError('This session is already controlled by another window.');
-		break;
+      case 'session_opened':
+        setStarting(false);
+        setError('');
+        break;
+      case 'claim_denied':
+        setError('This session is already controlled by another window.');
+        break;
       case 'restore_failed':
         setSessionKey('');
         setEvents([]);
@@ -287,6 +297,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
       case 'roster':
         setRoster((m.state as RosterState) ?? {});
+        // History is always on screen in the manager, so it must follow
+        // the sessions agentd remembers: one started, ended, renamed or
+        // detached changes what a row says and which verb it offers.
+        // Re-ask only when that set moved — roster pushes also carry
+        // state flips that change nothing History shows.
+        if (role() === 'manager') {
+          const sig = historySignature(roster().recent ?? []);
+          if (sig !== lastHistorySig) {
+            const first = lastHistorySig === undefined;
+            lastHistorySig = sig;
+            if (!first) onHistoryQuery(historyQuery());
+          }
+        }
         // Fill the launcher in on the first roster that names the
         // adapters (docs/AGENT_UX.md N5a/N5b): the agent you used last,
         // in the folder you used it in. Once only, and only while the
@@ -340,6 +363,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (role() === 'manager' && !historyLoaded) {
       historyLoaded = true;
       askHistory(historyQuery());
+      // Every mount, not just the first: after a reload the BE has long
+      // since sent its one manager_state, and this FE never saw it.
+      send({ kind: 'manager_refresh' });
     }
   });
 
@@ -441,12 +467,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return msgs.length ? (msgs[msgs.length - 1].text ?? '') : '';
   };
 
-  // Live and REACHABLE are not the same thing. Hiding live sessions is
-  // right — offering to resume one that is already running would be
-  // offering to duplicate it — but a DETACHED session is live and is
-  // exactly what you opened this menu to get back. It gets listed with a
-  // reattach verb instead of a resume one.
-  const recent = () => (roster().recent ?? []).filter((s) => historyAction(s) !== 'none');
   const configs = () => row()?.configs ?? [];
 
   // The menus advertise these, so they have to exist. A menu that shows a
@@ -1074,7 +1094,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         style={{
           flex: 1,
           'min-height': 0,
-		  display: 'flex',
+          display: 'flex',
           // One row, clamped to the body — the same `grid-template-rows`
           // + `overflow: hidden` pair wash-edit's and wash-fm's split
           // bodies use. The row is otherwise implicit and auto-sized, so
@@ -1088,10 +1108,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           overflow: 'hidden',
         }}
       >
-		<div style={{ flex: 1, 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column' }}>
+        <div style={{ flex: 1, 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column' }}>
           <Show
             when={sessionKey()}
-			fallback={<div style={{ padding: `${tokens.spaceXl}px`, color: tokens.fgMuted }}><Show when={autostart()} fallback={<><div style={{ 'margin-bottom': `${tokens.spaceMd}px` }}>This window is not attached to a session.</div><Button onClick={() => send({ kind: 'open_agents' })}>Open Agents</Button></>}>{booting}</Show></div>}
+            fallback={
+              <div style={{ padding: `${tokens.spaceXl}px`, color: tokens.fgMuted }}>
+                <Show
+                  when={autostart()}
+                  fallback={
+                    <>
+                      <div style={{ 'margin-bottom': `${tokens.spaceMd}px` }}>This window is not attached to a session.</div>
+                      <Button onClick={() => send({ kind: 'open_agents' })}>Open Agents</Button>
+                    </>
+                  }
+                >
+                  {booting}
+                </Show>
+              </div>
+            }
           >
             <AgentSession
               events={events}

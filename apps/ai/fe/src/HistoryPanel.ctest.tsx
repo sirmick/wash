@@ -9,7 +9,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
-import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
+import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, historySignature, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
 
 afterEach(cleanup);
 
@@ -355,4 +355,15 @@ test('prune lives beside the count it acts on', () => {
   ));
   fireEvent.click(getByTestId('ai-history-prune'));
   expect(pruned).toBe(1);
+});
+
+// The always-visible History pane re-queries agentd when this moves, so it
+// must move for what a row shows and stay put for everything else.
+test('historySignature moves with a row\'s facts, not with the roster\'s churn', () => {
+  const base = [sess({ session_id: 'a', title: 'one' })];
+  const same = historySignature([sess({ session_id: 'a', title: 'one', events: 99 })]);
+  expect(historySignature(base)).toBe(same);
+  expect(historySignature([sess({ session_id: 'a', title: 'renamed' })])).not.toBe(historySignature(base));
+  expect(historySignature([sess({ session_id: 'a', title: 'one', live: true, row_key: 'acp:1' })])).not.toBe(historySignature(base));
+  expect(historySignature([...base, sess({ session_id: 'b' })])).not.toBe(historySignature(base));
 });

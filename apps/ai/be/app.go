@@ -354,6 +354,9 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		// return over the agentd connection immediately, and started clears the
 		// old event list by design.
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+		// Re-claiming is idempotent for the owner and answers with the
+		// session's row and asks, which the remounted FE has never seen.
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "session_claim", "key": session.key})
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":   "transcript_subscribe",
 			"key":    session.key,
@@ -465,6 +468,12 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			msg["open"] = true
 		}
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, msg)
+	case "manager_refresh":
+		// A remounted manager FE asks for the roster again. Re-subscribing
+		// is idempotent in agentd and answers with the current view.
+		if managerMode {
+			_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "manager_subscribe"})
+		}
 	case "open_agents":
 		_ = c.SpawnRequest("com.wash.agents")
 	case "prompt":
