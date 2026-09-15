@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirmick/wash/internal/unixsock"
 	"github.com/sirmick/wash/pkg/sdk"
 )
 
@@ -128,9 +128,7 @@ func EscapePath(rel string) string {
 // base + "lib/" + EscapePath(rel). The socket + ingress are torn down on
 // c.Done().
 func Serve(c *sdk.Conn, instanceID, sockPrefix string, rootFn func() string) (string, error) {
-	sock := filepath.Join(os.TempDir(), sockPrefix+instanceID+".sock")
-	_ = os.Remove(sock)
-	ln, err := net.Listen("unix", sock)
+	ln, sock, closeSock, err := unixsock.Listen(sockPrefix)
 	if err != nil {
 		return "", err
 	}
@@ -157,14 +155,14 @@ func Serve(c *sdk.Conn, instanceID, sockPrefix string, rootFn func() string) (st
 	base, err := c.PublishIngress(ctx, "unix", sock)
 	if err != nil {
 		_ = srv.Close()
-		_ = os.Remove(sock)
+		closeSock()
 		return "", err
 	}
 	go func() {
 		<-c.Done()
 		_ = c.UnpublishIngress(base)
 		_ = srv.Close()
-		_ = os.Remove(sock)
+		closeSock()
 	}()
 	return base, nil
 }

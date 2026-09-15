@@ -5,16 +5,15 @@ import (
 	"context"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sirmick/wash/internal/audiorelay"
+	"github.com/sirmick/wash/internal/unixsock"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -162,11 +161,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // serveAndPublish stands up the /stream proxy on a per-instance unix
 // socket and publishes it through the ingress proxy.
 func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
-	sock := filepath.Join(os.TempDir(), "wash-radio-"+instanceID+".sock")
-	_ = os.Remove(sock)
-	ln, err := net.Listen("unix", sock)
+	ln, sock, closeSock, err := unixsock.Listen("wash-radio-")
 	if err != nil {
-		log.Printf("wash-radio: listen %s: %v", sock, err)
+		log.Printf("wash-radio: listen: %v", err)
 		return
 	}
 	// ICY metadata arrives on the stream path; keep it tagged by BE index so
@@ -190,8 +187,9 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 		}
 		name := all[i].Name
 		proxyStream(w, r, all[i].URL, func(title string) { onTitle(i, title) }, func(info streamInfo) {
-			// The upstream answered, so this station really played: tell
-			// the start menu. A failed connect never reaches here.
+			// The upstream started a stream (a 2xx), so this station really
+			// played: tell the start menu. A failed connect or an error
+			// status never reaches here (proxyStream).
 			if s.notes.allow(name, time.Now()) {
 				noteStation(c, name)
 			}
@@ -207,7 +205,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 	if err != nil {
 		log.Printf("wash-radio: publish ingress: %v", err)
 		_ = srv.Close()
-		_ = os.Remove(sock)
+		closeSock()
 		return
 	}
 	s.mu.Lock()
@@ -220,7 +218,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 		<-c.Done()
 		_ = c.UnpublishIngress(base)
 		_ = srv.Close()
-		_ = os.Remove(sock)
+		closeSock()
 	}()
 }
 
@@ -230,6 +228,11 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 // (the browser's <audio> can't parse them) and push each new StreamTitle
 // to the FE via onTitle. The browser cancelling (pause / station switch)
 // closes r.Context() → the copy unwinds.
+//
+// onInfo fires only once the upstream has answered with a 2xx — the one
+// point where a stream is really starting. A dead station's 404 or 5xx is
+// answered 502, like an unreachable one: relaying it as a 200 would hand
+// <audio> an error page to play and tell the start menu the station played.
 func proxyStream(w http.ResponseWriter, r *http.Request, upstream string, onTitle func(string), onInfo func(streamInfo)) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream, nil)
 	if err != nil {
@@ -244,6 +247,11 @@ func proxyStream(w http.ResponseWriter, r *http.Request, upstream string, onTitl
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		log.Printf("wash-radio: upstream status=%d", resp.StatusCode)
+		http.Error(w, "upstream status "+strconv.Itoa(resp.StatusCode), http.StatusBadGateway)
+		return
+	}
 	metaint, _ := strconv.Atoi(resp.Header.Get("Icy-Metaint"))
 	onInfo(headerStreamInfo(resp, metaint))
 	if ct := resp.Header.Get("Content-Type"); ct != "" {

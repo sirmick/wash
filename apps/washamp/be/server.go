@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"log"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/audiorelay"
+	"github.com/sirmick/wash/internal/unixsock"
 	"github.com/sirmick/wash/pkg/sdk"
 )
 
@@ -124,11 +124,9 @@ func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
 	root := musicDir()
 	lib := scanLibrary(root)
 
-	sock := filepath.Join(os.TempDir(), "wash-washamp-"+instanceID+".sock")
-	_ = os.Remove(sock)
-	ln, err := net.Listen("unix", sock)
+	ln, sock, closeSock, err := unixsock.Listen("wash-washamp-")
 	if err != nil {
-		log.Printf("wash-washamp: listen %s: %v", sock, err)
+		log.Printf("wash-washamp: listen: %v", err)
 		return
 	}
 
@@ -160,7 +158,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
 	if err != nil {
 		log.Printf("wash-washamp: publish ingress: %v", err)
 		_ = srv.Close()
-		_ = os.Remove(sock)
+		closeSock()
 		return
 	}
 
@@ -180,7 +178,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, p *player) {
 		<-c.Done()
 		_ = c.UnpublishIngress(base)
 		_ = srv.Close()
-		_ = os.Remove(sock)
+		closeSock()
 	}()
 }
 

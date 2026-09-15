@@ -1,6 +1,8 @@
 package radio
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -45,5 +47,36 @@ func TestTunerHoldsUntilLoadedThenForwards(t *testing.T) {
 	}
 	if got := tu.loaded(); got != "" {
 		t.Errorf("a forwarded request was also held: %q", got)
+	}
+}
+
+// Only a stream that really started is reported (and so noted in the start
+// menu): a dead station's error status is a 502, with no stream_info.
+func TestProxyStreamReportsOnlyA2xxStart(t *testing.T) {
+	for _, tc := range []struct {
+		status   int
+		wantInfo bool
+		wantCode int
+	}{
+		{http.StatusOK, true, http.StatusOK},
+		{http.StatusNotFound, false, http.StatusBadGateway},
+		{http.StatusServiceUnavailable, false, http.StatusBadGateway},
+	} {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "audio/mpeg")
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte("abc"))
+		}))
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/stream?i=0", nil)
+		infos := 0
+		proxyStream(rec, req, up.URL, func(string) {}, func(streamInfo) { infos++ })
+		up.Close()
+		if got := infos > 0; got != tc.wantInfo {
+			t.Errorf("upstream %d: onInfo called=%v, want %v", tc.status, got, tc.wantInfo)
+		}
+		if rec.Code != tc.wantCode {
+			t.Errorf("upstream %d: proxied status %d, want %d", tc.status, rec.Code, tc.wantCode)
+		}
 	}
 }
