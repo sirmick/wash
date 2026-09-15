@@ -1,3 +1,32 @@
+wash (0.15.0-1) unstable; urgency=low
+
+  * Agents are a manager and one window per session. The Agents app (new,
+    com.wash.agents) is a single window holding New session, an always-
+    visible History with transcript previews, and the Running roster; each
+    live session gets exactly one Agent window, which agentd opens and leases,
+    so focusing, reattaching or resuming a session can never produce a second
+    copy. Windows are sent only their own session's view, token usage and
+    previews travel as coalesced low-priority patches, and git refresh is
+    decoupled from narration: a chatty agent no longer floods every Agent
+    window with the whole roster (one session measured 1.25 GB sent).
+  * The start menu's Recent is one row per app — Files, Edit, Agent, Radio —
+    each popping out its last few items: the folder the file manager was
+    showing when it closed, recently edited files, agent sessions (resumed,
+    reattached or brought forward as appropriate) and stations Radio played
+    (relaunching Radio tuned to one). Any other app with recent files gets a
+    row of its own. The pop-outs follow a diagonal pointer and work from the
+    keyboard.
+  * Radio, Washamp and Music bind their stream and file sockets in a private
+    directory. Two wash routers on one machine used to share one path per
+    instance number, so one session's Radio could stream into another's and a
+    second user's media apps failed to start.
+  * Fixes found on the way: a remote host's Agents door could raise the wrong
+    window; the roster's action menu closed under the cursor after each turn
+    and End session raised the window mid-confirm; a reloaded Agents window
+    came back blank; Radio no longer relays an upstream error page as audio.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 14 Sep 2026 21:30:00 -0700
+
 wash (0.14.5-1) unstable; urgency=low
 
   * The apps sweep, part two: the everyday workflows each surface was still

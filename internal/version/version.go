@@ -15,4 +15,4 @@ package version
 
 // Version is the wash release version (see package doc). Keep in sync with
 // the root VERSION file; the build stamps it from there.
-var Version = "0.14.5"
+var Version = "0.15.0"

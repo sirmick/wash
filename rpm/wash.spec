@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.14.5
+Version:        0.15.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,14 @@ fi
 exit 0
 
 %changelog
+* Mon Sep 14 2026 sirmick <sirmick@gmail.com> - 0.15.0-1
+- Agents split into a single Agents manager (New, History, Running) and one
+  leased window per live session; per-window views and coalesced usage and
+  preview patches end the roster flood a chatty agent caused.
+- Start menu Recent pops out per app: Files (last fm folder), Edit, Agent
+  sessions and Radio stations, plus any other app with recent files.
+- Radio, Washamp and Music bind private sockets, so two routers on one host
+  no longer cross streams; assorted agent window and roster fixes.
 * Fri Sep 11 2026 sirmick <sirmick@gmail.com> - 0.14.5-1
 - The apps sweep part two (docs/Review-findings.md P2): the everyday
   workflows fm, edit, term and the agent were still missing — search,
