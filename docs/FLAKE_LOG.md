@@ -16,6 +16,25 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-14 — fm-shortcuts: the router lost its fixture port to another test
+
+**Seen during:** the full `e2e-test` for PR #24's review branch (8 workers,
+674 passed / 1 failed / 17 skipped). `fm-shortcuts-clipboard.spec.ts:36`
+failed before the test body ran:
+
+```
+wash-router exited before listening: code=1
+http: listen 127.0.0.1:34227: bind: address already in use
+```
+
+90/90 passes of the spec (`--repeat-each=5`) straight afterwards.
+
+**Mechanism:** the fixture picks a free loopback port, closes it, and hands
+it to the router — a check-then-use window another worker's listener can
+land in. Nothing in the branch touches fm or the fixture's port choice.
+**Verdict:** fixture flake, unrelated to the branch. **Fix:** not yet; the
+cure is letting the router bind :0 and report the port it got.
+
 ## 2026-09-11 — term-prefs zoom: a stale prefs echo rewinds the live value
 
 **Seen during:** the `make push` gate for 0.14.5 (full `e2e-test`, 8 workers,
