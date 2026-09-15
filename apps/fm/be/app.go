@@ -94,6 +94,7 @@ func init() {
 		Assets:             sub,
 		OnReady:            onReady,
 		OnClipboardChanged: onClipboardChanged,
+		OnCloseRequested:   onCloseRequested,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-fm",
@@ -402,7 +403,19 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return b.Emit("list_ok", reply)
 	})
-	sdk.HandlePersist(b)
+	// save_state is sdk.HandlePersist plus one read: the blob's path is
+	// the folder this window is showing, which is what closing it records
+	// for the start menu (recent.go).
+	sdk.HandleVoid(b, "save_state", func(c *sdk.Conn, _ string, req persistReq) error {
+		if err := c.SaveState(req.State); err != nil {
+			return err
+		}
+		if p, ok := req.State["path"].(string); ok {
+			shownDir.set(p)
+		}
+		log.Printf("bus: com.wash.fm save_state persisted")
+		return nil
+	})
 	sdk.HandleVoid(b, "clipboard_copy_path", func(conn *sdk.Conn, _ string, req clipboardCopyPathReq) error {
 		if req.Path == "" {
 			return nil
