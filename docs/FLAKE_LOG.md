@@ -16,6 +16,18 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-14 — edit-readonly: Save As copy not on disk within the poll
+
+**Seen during:** the second `make push` attempt for 0.15.0 (full `e2e-test`,
+692 passed / 1 failed / 9 skipped). `edit-readonly.spec.ts:39` failed at its
+last step: `ENOENT … copy.txt` from the `expect.poll` after the Save As
+picker closed. The first attempt's e2e run of the same tree passed it, and
+10/10 passes of the spec (`--repeat-each=10`) straight afterwards.
+
+**Mechanism:** not established. Load-only; the spec and wash-edit are
+untouched by the release. **Verdict:** flake under full-suite load — watch
+for a repeat before digging.
+
 ## 2026-09-14 — agentclient: a keepalive tick in flight outlives Forget
 
 **Seen during:** `make push` for 0.15.0 (`test-race` on the main checkout;
