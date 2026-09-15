@@ -383,9 +383,15 @@ function raiseWindow(w: WindowInfo): void {
 // appIDForWindow resolves a window's app id from the router-attested
 // instance→app-id map (app.declared). The app cannot forge it, which is
 // what makes it safe to route navigation off.
+//
+// The window's own origin decides which host's map to read. Window infos
+// carry the BARE instance id ("i-1"), which parses as LOCAL — so a remote
+// window was looked up in this host's table, and ids are small counters
+// that collide: B's controller at i-1 read as A's manager at i-1, and the
+// door to B's manager raised the wrong window instead of launching.
 function appIDForWindow(w: WindowInfo): string {
-  const { origin, bare } = parseInstanceId(w.instanceID);
-  return clientForOrigin(origin)?.appIDs.get(bare) ?? '';
+  const { bare } = parseInstanceId(w.instanceID);
+  return clientForOrigin(w.origin)?.appIDs.get(bare) ?? '';
 }
 
 // focusOrLaunch is the one door primitive (docs/AGENT_UX.md N1): raise this
