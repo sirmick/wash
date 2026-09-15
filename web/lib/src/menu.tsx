@@ -153,6 +153,9 @@ export interface MenuItemProps {
   icon?: JSX.Element;
   trailing?: JSX.Element;
   disabled?: boolean;
+  /** opens a submenu (a start-menu Recent row): announced as a menu item
+   *  with a popup rather than a button, which is what it is */
+  popup?: { expanded: boolean };
   'data-testid'?: string;
   onClick: () => void;
 }
@@ -169,6 +172,9 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
       // braces (a click can still be dispatched programmatically).
       disabled={props.disabled}
       aria-disabled={props.disabled ? 'true' : undefined}
+      role={props.popup ? 'menuitem' : undefined}
+      aria-haspopup={props.popup ? 'menu' : undefined}
+      aria-expanded={props.popup ? (props.popup.expanded ? 'true' : 'false') : undefined}
       onClick={() => {
         if (!props.disabled) props.onClick();
       }}
