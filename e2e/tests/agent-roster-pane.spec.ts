@@ -78,10 +78,13 @@ test('each manager pane scrolls its own content rather than growing the window',
   await page.goto(router.url);
   await expect(page.locator('wash-app-session')).toBeVisible();
 
+  // Two sessions, not one: a single row can come out exactly as tall as
+  // the shrunk pane (98 = 98 on CI's fonts), and then nothing overflows.
   await startAgentSession(page, 'a session to look at');
+  await startAgentSession(page, 'and another, so the list outgrows its pane');
   const manager = await openAgents(page);
   const pane = manager.locator('[data-testid="ai-roster-pane"]');
-  await expect(pane.locator(rowSel)).toHaveCount(1, { timeout: 20_000 });
+  await expect(pane.locator(rowSel)).toHaveCount(2, { timeout: 20_000 });
 
   // Short enough that the list is taller than its pane — the situation the
   // clamp exists for. Asserted below, so a window that turns out to be
