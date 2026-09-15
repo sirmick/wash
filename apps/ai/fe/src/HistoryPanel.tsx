@@ -99,7 +99,7 @@ export function highlightParts(text: string, query: string): { t: string; hit: b
  * the view that had no filter. The two views may differ in presentation;
  * they may not differ about what is safe to click.
  */
-export function historyAction(s: SessionMeta): 'resume' | 'reattach' | 'focus' | 'none' {
+export function historyAction(s: SessionMeta): 'resume' | 'restart' | 'reattach' | 'focus' | 'none' {
   if (s.detached && s.row_key) return 'reattach';
   // Live with a window: picking it goes THERE (docs/AGENT_UX.md N1).
   // Resuming would fork a second adapter onto one conversation, which is
@@ -108,6 +108,9 @@ export function historyAction(s: SessionMeta): 'resume' | 'reattach' | 'focus' |
   // list was always implying.
   if (s.live && s.row_key) return 'focus';
   if (s.live) return 'none';
+  // A transcript can outlive the metadata needed by the agent's native
+  // resume API. It is still useful: restart a fresh session in its folder.
+  if (!s.agent) return 'restart';
   return 'resume';
 }
 
@@ -190,6 +193,8 @@ export const HistoryPanel: Component<{
   query: () => string;
   onQuery: (q: string) => void;
   onResume: (s: SessionMeta) => void;
+  /** start a new agent session in this row's recorded folder */
+  onRestart?: (s: SessionMeta) => void;
   onClose?: () => void;
   /** render as a pane in the Agents workspace instead of a modal */
   embedded?: boolean;
@@ -214,7 +219,12 @@ export const HistoryPanel: Component<{
   // The per-row verbs menu: which row, and where. Menu portals to
   // document.body, so these are viewport coordinates.
   const [menuFor, setMenuFor] = createSignal<{ s: SessionMeta; x: number; y: number } | null>(null);
-  const hasVerbs = () => Boolean(props.onRename || props.onDelete);
+  const hasVerbs = () => Boolean(props.onRestart || props.onRename || props.onDelete);
+  const activate = (s: SessionMeta) => {
+    const action = historyAction(s);
+    if (action === 'restart') props.onRestart?.(s);
+    else if (action !== 'none') props.onResume(s);
+  };
   const openMenu = (s: SessionMeta, e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -259,7 +269,7 @@ export const HistoryPanel: Component<{
             setSelected((i) => Math.max(0, i - 1));
           } else if (e.key === 'Enter') {
             const s = rows()[selected()];
-            if (s && historyAction(s) !== 'none') props.onResume(s);
+            if (s) activate(s);
           }
         }}
       />
@@ -289,7 +299,7 @@ export const HistoryPanel: Component<{
                 data-session-id={s.session_id}
                 data-action={historyAction(s)}
                 onMouseEnter={() => setSelected(i())}
-                onClick={() => { if (historyAction(s) !== 'none') props.onResume(s); }}
+                onClick={() => activate(s)}
                 onContextMenu={(e) => hasVerbs() && openMenu(s, e)}
                 style={{
                   display: 'flex',
@@ -322,7 +332,11 @@ export const HistoryPanel: Component<{
                         color: historyAction(s) === 'reattach' ? tokens.accentAmber : tokens.fgMuted,
                       }}
                     >
-                      {historyAction(s) === 'reattach' ? 'running — open' : 'running — go to it'}
+                      {historyAction(s) === 'restart'
+                        ? 'restart fresh'
+                        : historyAction(s) === 'reattach'
+                          ? 'running — open'
+                          : 'running — go to it'}
                     </span>
                   </Show>
                   <span style={{ ...metaStyle, 'margin-left': 'auto', 'flex-shrink': 0 }}>
@@ -427,6 +441,19 @@ export const HistoryPanel: Component<{
       <Show when={menuFor()}>
         {(m) => (
           <Menu x={m().x} y={m().y} onDismiss={() => setMenuFor(null)} data-testid="ai-history-actions">
+            <MenuItem
+              label={historyAction(m().s) === 'reattach' ? 'Open running session' : historyAction(m().s) === 'focus' ? 'Go to running session' : 'Resume natively'}
+              data-testid="ai-history-menu-resume"
+              disabled={historyAction(m().s) === 'none' || historyAction(m().s) === 'restart'}
+              onClick={() => { const s = m().s; setMenuFor(null); props.onResume(s); }}
+            />
+            <MenuItem
+              label={m().s.live ? 'Restart fresh (still running)' : 'Restart fresh'}
+              data-testid="ai-history-menu-restart"
+              disabled={!props.onRestart || m().s.live === true}
+              onClick={() => { const s = m().s; setMenuFor(null); props.onRestart?.(s); }}
+            />
+            <MenuSeparator />
             <MenuItem
               label="Rename…"
               data-testid="ai-history-menu-rename"

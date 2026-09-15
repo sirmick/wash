@@ -32,6 +32,7 @@ const panel = (over: {
   sessions?: SessionMeta[];
   query?: string;
   onResume?: (s: SessionMeta) => void;
+  onRestart?: (s: SessionMeta) => void;
   onQuery?: (q: string) => void;
   embedded?: boolean;
 } = {}) =>
@@ -41,6 +42,7 @@ const panel = (over: {
       query={() => over.query ?? ''}
       onQuery={over.onQuery ?? noop}
       onResume={over.onResume ?? noop}
+      onRestart={over.onRestart}
       onClose={noop}
       embedded={over.embedded}
     />
@@ -168,6 +170,7 @@ test('fmtAgo reads as recency, and says nothing about a session with no time', (
 // view that had no filter. Both views now ask the same question.
 test('historyAction tells resume from reattach from focus from neither', () => {
   expect(historyAction(sess())).toBe('resume');
+  expect(historyAction(sess({ agent: undefined }))).toBe('restart');
   expect(historyAction(sess({ live: true, detached: true, row_key: 'acp:2' }))).toBe('reattach');
   // Live with a window: go to it. Resuming would fork a second adapter
   // onto one conversation (docs/AGENT_UX.md N1).
@@ -176,6 +179,22 @@ test('historyAction tells resume from reattach from focus from neither', () => {
   // either a reattach or a focus, and resuming would start a second copy.
   expect(historyAction(sess({ live: true }))).toBe('none');
   expect(historyAction(sess({ live: true, detached: true }))).toBe('none');
+});
+
+test('a session without native agent metadata restarts fresh', () => {
+  const resumed: string[] = [];
+  const restarted: string[] = [];
+  const { getByTestId } = panel({
+    sessions: [sess({ session_id: 'damaged', agent: undefined })],
+    onResume: (s) => resumed.push(s.session_id),
+    onRestart: (s) => restarted.push(s.session_id),
+  });
+  const row = getByTestId('ai-history-row');
+  expect(row.getAttribute('data-action')).toBe('restart');
+  expect(row.textContent).toContain('restart fresh');
+  fireEvent.click(row);
+  expect(resumed).toEqual([]);
+  expect(restarted).toEqual(['damaged']);
 });
 
 test('a running session does not act like one more thing to open', () => {
@@ -284,6 +303,7 @@ test('embedded history shows a three-line transcript preview without modal contr
 test('a row offers Rename and Delete, and Delete is disabled while it runs', () => {
   const renamed: string[] = [];
   const deleted: string[] = [];
+  const restarted: string[] = [];
   const { getAllByTestId } = render(() => (
     <HistoryPanel
       sessions={() => [sess({ session_id: 's-gone' }), sess({ session_id: 's-live', live: true, row_key: 'acp:1' })]}
@@ -291,12 +311,17 @@ test('a row offers Rename and Delete, and Delete is disabled while it runs', () 
       onQuery={noop}
       onClose={noop}
       onResume={noop}
+      onRestart={(s) => restarted.push(s.session_id)}
       onRename={(s) => renamed.push(s.session_id)}
       onDelete={(s) => deleted.push(s.session_id)}
     />
   ));
   const verbs = getAllByTestId('ai-history-verbs');
   expect(verbs).toHaveLength(2);
+
+  fireEvent.click(verbs[0]);
+  fireEvent.click(screen.getByTestId('ai-history-menu-restart'));
+  expect(restarted).toEqual(['s-gone']);
 
   fireEvent.click(verbs[0]);
   fireEvent.click(screen.getByTestId('ai-history-menu-rename'));
@@ -309,6 +334,7 @@ test('a row offers Rename and Delete, and Delete is disabled while it runs', () 
 
   // The running one: Rename still works (a name is a name), Delete does not.
   fireEvent.click(verbs[1]);
+  expect(screen.getByTestId('ai-history-menu-restart').hasAttribute('disabled')).toBe(true);
   expect(screen.getByTestId('ai-history-menu-delete').hasAttribute('disabled')).toBe(true);
   expect(screen.getByTestId('ai-history-menu-delete').textContent).toContain('still running');
   fireEvent.click(screen.getByTestId('ai-history-menu-rename'));

@@ -762,6 +762,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       onRename={(s) => openRename({ key: s.row_key, session_id: s.session_id, title: s.title })}
       onDelete={(s) => setDeleteFor(s)}
       onPrune={() => setPruning(true)}
+      onRestart={(s) => {
+        const a = s.agent || defaultAgent(adapters(), roster().recent ?? []);
+        if (!a) return;
+        setStarting(true);
+        setError('');
+        send({ kind: 'start', agent: a, cwd: s.cwd ?? '' });
+      }}
       onResume={(s) => {
         const act = historyAction(s);
         if (act === 'reattach') send({ kind: 'row_reattach', key: s.row_key });

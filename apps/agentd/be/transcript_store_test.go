@@ -163,7 +163,7 @@ func TestReconcileResumeKeepsTheRicherRecord(t *testing.T) {
 	waitForTranscriptWrites()
 
 	// Resume: a new roster key, and an adapter that replayed nothing.
-	reconcileResume("acp:2", "sess-c", now)
+	reconcileResume("acp:2", "sess-c", "codex", "/tmp", now)
 
 	transMu.Lock()
 	got := append([]Event(nil), trans["acp:2"].events...)
@@ -211,7 +211,7 @@ func TestReconcileResumePrefersAFullReplay(t *testing.T) {
 	bindTranscript("acp:2", "sess-d", "codex", "/tmp", now)
 	appendPrompt("acp:2", "replayed one", now)
 	appendEvent("acp:2", Event{Kind: EventMessage, Text: "replayed two"}, now)
-	reconcileResume("acp:2", "sess-d", now)
+	reconcileResume("acp:2", "sess-d", "codex", "/tmp", now)
 	waitForTranscriptWrites()
 
 	got, err := loadTranscript("sess-d")
@@ -225,6 +225,17 @@ func TestReconcileResumePrefersAFullReplay(t *testing.T) {
 	}
 	if got[0].Text != "replayed one" || got[1].Text != "replayed two" {
 		t.Errorf("wrong events: %+v", got)
+	}
+
+	meta, ok := readSessionMeta(transcriptPath("sess-d"))
+	if !ok {
+		t.Fatal("rewritten transcript has no readable metadata")
+	}
+	if meta.Agent != "codex" || meta.Cwd != "/tmp" {
+		t.Errorf("rewrite dropped launch identity: agent=%q cwd=%q", meta.Agent, meta.Cwd)
+	}
+	if meta.StartedMS != now.UnixMilli() {
+		t.Errorf("rewrite changed started_ms: got %d want %d", meta.StartedMS, now.UnixMilli())
 	}
 }
 

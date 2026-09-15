@@ -351,4 +351,12 @@ func TestResumeResolvesFromTheStoreWhenHistoryMisses(t *testing.T) {
 	if got.Agent != "codex" || got.Cwd != "/elsewhere" {
 		t.Errorf("history entry did not take precedence: %+v", got)
 	}
+
+	// An index damaged by an older rewrite can still be repaired from the
+	// transcript instead of attempting to launch an unnamed agent.
+	history = []Session{{SessionID: "old-sess"}}
+	got, ok = resolveResumeTarget("old-sess")
+	if !ok || got.Agent != "claude" || got.Cwd != proj {
+		t.Errorf("transcript did not fill incomplete history: ok=%v got=%+v", ok, got)
+	}
 }

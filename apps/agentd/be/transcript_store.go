@@ -429,7 +429,7 @@ func loadTranscript(sessionID string) ([]Event, error) {
 //
 // The second case is transcript replay doing real work: a session the
 // agent has half-forgotten still comes back whole.
-func reconcileResume(key, sessionID string, now time.Time) {
+func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 	if key == "" || sessionID == "" {
 		return
 	}
@@ -472,7 +472,7 @@ func reconcileResume(key, sessionID string, now time.Time) {
 	storeMu.Lock()
 	storeSession[key] = sessionID
 	storeMu.Unlock()
-	if err := rewriteTranscript(sessionID, events, now); err != nil {
+	if err := rewriteTranscript(sessionID, agent, cwd, events, now); err != nil {
 		log.Printf("agentd: transcript rewrite session=%s: %v", sessionID, err)
 	}
 }
@@ -482,7 +482,7 @@ func reconcileResume(key, sessionID string, now time.Time) {
 // new one — never a half-written conversation. This is the one path that
 // does not append; it exists because resume has to reconcile two
 // numbering schemes into one.
-func rewriteTranscript(sessionID string, events []Event, now time.Time) error {
+func rewriteTranscript(sessionID, agent, cwd string, events []Event, now time.Time) error {
 	path := transcriptPath(sessionID)
 	if path == "" {
 		return nil
@@ -505,9 +505,25 @@ func rewriteTranscript(sessionID string, events []Event, now time.Time) error {
 		tmp.Close()
 		return err
 	}
+	// Reconciliation used to replace a rich header with only the session id.
+	// Preserve the original start time, and prefer the adapter identity from
+	// this live resume so an already-damaged header repairs itself.
+	startedMS := now.UnixMilli()
+	if old, ok := readSessionMeta(path); ok {
+		if old.StartedMS != 0 {
+			startedMS = old.StartedMS
+		}
+		if agent == "" {
+			agent = old.Agent
+		}
+		if cwd == "" {
+			cwd = old.Cwd
+		}
+	}
 	w := bufio.NewWriter(tmp)
 	meta, _ := json.Marshal(transcriptMeta{
-		Kind: metaKind, Version: transcriptVer, SessionID: sessionID, StartedMS: now.UnixMilli(),
+		Kind: metaKind, Version: transcriptVer, SessionID: sessionID,
+		Agent: agent, Cwd: cwd, StartedMS: startedMS,
 	})
 	w.Write(meta)
 	w.WriteByte('\n')

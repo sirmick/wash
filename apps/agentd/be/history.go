@@ -260,10 +260,9 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 		if err != nil {
 			log.Printf("agentd: resume session=%s: %v", sid, err)
 			c.Warn("Could not reopen that session", err.Error())
-			// A session the agent no longer knows is not coming back, and
-			// leaving it in the list invites the same failed click
-			// forever.
-			forgetSession(sid)
+			// Keep the transcript in History. Native state can disappear
+			// independently of wash's transcript, and the row still offers
+			// the explicit restart-fresh and delete choices.
 			return
 		}
 		openHosted(c, hs.key)
@@ -284,7 +283,21 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 func resolveResumeTarget(sessionID string) (Session, bool) {
 	for i := range history {
 		if history[i].SessionID == sessionID {
-			return history[i], true
+			s := history[i]
+			// The transcript header is authoritative for launch identity.
+			// Fill holes left by an older or partially recovered history
+			// index instead of sending an empty agent to resumeHosted.
+			if s.Agent == "" || s.Cwd == "" {
+				if m, ok := readSessionMeta(transcriptPath(sessionID)); ok {
+					if s.Agent == "" {
+						s.Agent = m.Agent
+					}
+					if s.Cwd == "" {
+						s.Cwd = m.Cwd
+					}
+				}
+			}
+			return s, s.Agent != ""
 		}
 	}
 	m, ok := readSessionMeta(transcriptPath(sessionID))
@@ -299,7 +312,7 @@ func resolveResumeTarget(sessionID string) (Session, bool) {
 		Title:     m.Title,
 		UserTitle: m.UserTitle,
 		LastSeen:  sessionRecency(m) / 1000,
-	}, true
+	}, m.Agent != ""
 }
 
 // aiAppID is the window a reopened session appears in. Resume used to
