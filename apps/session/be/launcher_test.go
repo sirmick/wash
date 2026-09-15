@@ -22,15 +22,54 @@ func TestLauncherStore_NoteDedupesNewestFirstAndCaps(t *testing.T) {
 	if snap.Recent[0].AppID != "com.wash.imageview" {
 		t.Errorf("re-open should carry the latest handler, got %s", snap.Recent[0].AppID)
 	}
-	for i := 0; i < maxRecent+10; i++ {
+	for i := 0; i < maxRecentPerApp+10; i++ {
 		s.Note(fmt.Sprintf("/f%d", i), "x")
 	}
 	snap = s.Snapshot()
-	if len(snap.Recent) != maxRecent {
-		t.Errorf("cap: %d entries, want %d", len(snap.Recent), maxRecent)
+	count := map[string]int{}
+	for _, e := range snap.Recent {
+		count[e.AppID]++
 	}
-	if snap.Recent[0].Path != fmt.Sprintf("/f%d", maxRecent+9) {
+	if count["x"] != maxRecentPerApp {
+		t.Errorf("cap: %d entries for app x, want %d", count["x"], maxRecentPerApp)
+	}
+	if snap.Recent[0].Path != fmt.Sprintf("/f%d", maxRecentPerApp+9) {
 		t.Errorf("newest first: got %s", snap.Recent[0].Path)
+	}
+	// The cap is per app: a flood from one app keeps every other app's.
+	if count["com.wash.edit"] != 1 || count["com.wash.imageview"] != 1 {
+		t.Errorf("per-app cap evicted another app's entries: %v", count)
+	}
+}
+
+// A station has no path. It dedupes by app and name, is never hidden as a
+// "missing file", and is removable by name.
+func TestLauncherStore_NameEntries(t *testing.T) {
+	s := newLauncherStore("")
+	s.exists = func(string) bool { return false } // every PATH is missing
+	s.NoteName("Groove Salad", "com.wash.radio")
+	s.NoteName("Drone Zone", "com.wash.radio")
+	s.NoteName("Groove Salad", "com.wash.radio")
+	s.NoteName("Groove Salad", "com.other") // same name, other app: distinct
+	s.Note("/gone.txt", "com.wash.edit")
+	snap := s.Snapshot()
+	if len(snap.Recent) != 3 {
+		t.Fatalf("recent = %+v, want 3 name entries and the missing file hidden", snap.Recent)
+	}
+	if snap.Recent[0].Name != "Groove Salad" || snap.Recent[0].AppID != "com.other" ||
+		snap.Recent[1].Name != "Groove Salad" || snap.Recent[1].AppID != "com.wash.radio" ||
+		snap.Recent[2].Name != "Drone Zone" {
+		t.Errorf("order/dedupe = %+v", snap.Recent)
+	}
+	s.Remove("", "Groove Salad", "com.wash.radio")
+	snap = s.Snapshot()
+	if len(snap.Recent) != 2 || snap.Recent[0].AppID != "com.other" || snap.Recent[1].Name != "Drone Zone" {
+		t.Errorf("remove by name = %+v", snap.Recent)
+	}
+	s.NoteName("", "com.wash.radio")
+	s.NoteName("x", "")
+	if got := len(s.Snapshot().Recent); got != 2 {
+		t.Errorf("empty name or app should be ignored, have %d entries", got)
 	}
 }
 
@@ -76,7 +115,7 @@ func TestLauncherStore_RemoveClearAndPins(t *testing.T) {
 	s.exists = func(string) bool { return true }
 	s.Note("/a", "e")
 	s.Note("/b", "e")
-	s.Remove("/a")
+	s.Remove("/a", "", "")
 	if got := s.Snapshot().Recent; len(got) != 1 || got[0].Path != "/b" {
 		t.Fatalf("after remove: %+v", got)
 	}
@@ -157,5 +196,19 @@ func TestLauncherStatePath(t *testing.T) {
 	t.Setenv("HOME", "/home/u")
 	if got := launcherStatePath(); got != "/home/u/.local/state/wash/recent.json" {
 		t.Errorf("fallback: %s", got)
+	}
+}
+
+// Two quick Radio clicks before the router answers tune to the second
+// station, once — not both in turn.
+func TestPlayQueueLatestWinsAndTakesOnce(t *testing.T) {
+	q := &playQueue{names: map[string]string{}}
+	q.set(RadioAppID, "one")
+	q.set(RadioAppID, "two")
+	if got := q.take(RadioAppID); got != "two" {
+		t.Errorf("take = %q, want two", got)
+	}
+	if got := q.take(RadioAppID); got != "" {
+		t.Errorf("second take = %q, want empty (an unrelated spawn result must not replay it)", got)
 	}
 }

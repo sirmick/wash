@@ -19,21 +19,38 @@ import (
 // BE owns it (not the router's per-instance persist blob) because it must
 // outlive the session process and be readable by tests and humans.
 //
-// Recent is fed by the router's open.routed notice (internal/router/
-// open_routed.go): every open.request the router routed, every
+// Recent is fed two ways. The router's open.routed notice (internal/
+// router/open_routed.go) covers every open.request it routed, every
 // spawn.request that carried a launch path, every terminal-launched
-// `wash-edit --open`. Deduped by path, newest first, capped at
-// maxRecent. Entries whose file is gone are dropped at READ time (not at
-// write time) — a file on a mount that comes and goes should reappear
-// when the mount does, so nothing is forgotten until the person removes
-// it or it ages out of the cap.
+// `wash-edit --open`. Apps add the rest themselves with recent.note
+// (launcher_bus.go): fm the folder it was showing when it closed, Radio
+// the station it played — things no open request ever describes.
+//
+// Newest first. Path entries dedupe by path; name entries (a station has
+// no path) by app and name. The cap is per app, so a morning of radio
+// cannot push yesterday's documents out. Entries whose file is gone are
+// dropped at READ time (not at write time) — a file on a mount that comes
+// and goes should reappear when the mount does, so nothing is forgotten
+// until the person removes it or it ages out of the cap.
 
-const maxRecent = 30
+const maxRecentPerApp = 10
 
 type recentEntry struct {
-	Path  string    `json:"path"`
+	Path string `json:"path,omitempty"`
+	// Name identifies an entry that is not a file — a radio station. Set
+	// instead of Path, never with it.
+	Name  string    `json:"name,omitempty"`
 	AppID string    `json:"app_id"`
 	At    time.Time `json:"at"`
+}
+
+// key is the dedupe identity: the path for a file or folder, the app and
+// name for anything else.
+func (e recentEntry) key() string {
+	if e.Path != "" {
+		return "p\x00" + e.Path
+	}
+	return "n\x00" + e.AppID + "\x00" + e.Name
 }
 
 // launcherState is the on-disk shape. Pinned is app ids in pin order.
@@ -91,21 +108,20 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// normalizeRecent dedupes by path (first occurrence wins — the slice is
-// newest-first), sorts newest-first, and applies the cap.
+// normalizeRecent dedupes (first occurrence wins — the slice is sorted
+// newest-first first) and applies the per-app cap.
 func normalizeRecent(in []recentEntry) []recentEntry {
 	sort.SliceStable(in, func(i, j int) bool { return in[i].At.After(in[j].At) })
 	seen := map[string]bool{}
+	perApp := map[string]int{}
 	out := make([]recentEntry, 0, len(in))
 	for _, e := range in {
-		if e.Path == "" || seen[e.Path] {
+		if (e.Path == "" && e.Name == "") || seen[e.key()] || perApp[e.AppID] >= maxRecentPerApp {
 			continue
 		}
-		seen[e.Path] = true
+		seen[e.key()] = true
+		perApp[e.AppID]++
 		out = append(out, e)
-		if len(out) == maxRecent {
-			break
-		}
 	}
 	return out
 }
@@ -115,19 +131,37 @@ func (s *launcherStore) Note(path, appID string) {
 	if path == "" {
 		return
 	}
+	s.note(recentEntry{Path: path, AppID: appID})
+}
+
+// NoteName records a non-file item (a radio station) by appID.
+func (s *launcherStore) NoteName(name, appID string) {
+	if name == "" || appID == "" {
+		return
+	}
+	s.note(recentEntry{Name: name, AppID: appID})
+}
+
+func (s *launcherStore) note(e recentEntry) {
+	e.At = time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.st.Recent = normalizeRecent(append([]recentEntry{{Path: path, AppID: appID, At: time.Now()}}, s.st.Recent...))
+	s.st.Recent = normalizeRecent(append([]recentEntry{e}, s.st.Recent...))
 	s.saveLocked()
 }
 
-// Remove forgets one path.
-func (s *launcherStore) Remove(path string) {
+// Remove forgets one entry: by path, or by name within appID when path is
+// empty.
+func (s *launcherStore) Remove(path, name, appID string) {
+	target := recentEntry{Path: path, Name: name, AppID: appID}
+	if path == "" && name == "" {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	kept := s.st.Recent[:0]
 	for _, e := range s.st.Recent {
-		if e.Path != path {
+		if e.key() != target.key() {
 			kept = append(kept, e)
 		}
 	}
@@ -169,7 +203,8 @@ func (s *launcherStore) SetPinned(appID string, on bool) {
 	s.saveLocked()
 }
 
-// Snapshot returns the state with vanished files filtered out of Recent.
+// Snapshot returns the state with vanished files filtered out of Recent
+// (name entries have no file to vanish).
 // The filter is read-side only: the entries stay on disk (see the file
 // comment). Pinned is copied so callers can't alias the store.
 func (s *launcherStore) Snapshot() launcherState {
@@ -177,7 +212,7 @@ func (s *launcherStore) Snapshot() launcherState {
 	defer s.mu.Unlock()
 	out := launcherState{Recent: make([]recentEntry, 0, len(s.st.Recent)), Pinned: append([]string{}, s.st.Pinned...)}
 	for _, e := range s.st.Recent {
-		if s.exists(e.Path) {
+		if e.Path == "" || s.exists(e.Path) {
 			out.Recent = append(out.Recent, e)
 		}
 	}

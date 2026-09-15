@@ -46,9 +46,10 @@ func init() {
 			Capabilities: []string{sdk.CapSpawn, sdk.CapOpen},
 			Window:       &sdk.WindowHints{},
 		},
-		Assets:   sub,
-		OnReady:  onReady,
-		OnAppMsg: onAppMsg,
+		Assets:        sub,
+		OnReady:       onReady,
+		OnAppMsg:      onAppMsg,
+		OnSpawnResult: onSpawnResult,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-session",
@@ -284,6 +285,43 @@ func registerAgentGateway(bus *sdk.Bus) {
 			"rule":     req.Rule,
 		})
 	})
+	// agent_open reopens a session from the start menu's Agent flyout —
+	// the one per-session verb besides answer the chrome keeps, because a
+	// recent list you cannot open is not a recent list. Three verbs,
+	// never confused: resuming a session that is still running would
+	// start a second adapter on one conversation.
+	sdk.HandleVoid(bus, "agent_open", func(conn *sdk.Conn, _ string, req agentOpenReq) error {
+		to := wire.Recipient{AppID: AgentdAppID}
+		log.Printf("wash-session: agent open action=%s session=%s key=%s", req.Action, req.SessionID, req.RowKey)
+		switch req.Action {
+		case "resume":
+			if req.SessionID == "" {
+				return nil
+			}
+			return conn.SendAppMsgTo(to, map[string]any{"kind": "agent_resume", "session_id": req.SessionID})
+		case "reattach":
+			if req.RowKey == "" {
+				return nil
+			}
+			return conn.SendAppMsgTo(to, map[string]any{"kind": "agent_reattach", "key": req.RowKey})
+		case "focus":
+			if req.RowKey == "" {
+				return nil
+			}
+			return conn.SendAppMsgTo(to, map[string]any{"kind": "wash.focus", "key": req.RowKey})
+		}
+		return nil
+	})
+}
+
+// agentOpenReq is the start menu's Agent flyout picking a session. The FE
+// chooses the action by the same rule the Agents history list uses
+// (launcher.ts agentRecentAction), because only it can tell a running
+// session from a finished one without a second round trip.
+type agentOpenReq struct {
+	Action    string `json:"action"`
+	SessionID string `json:"session_id"`
+	RowKey    string `json:"row_key"`
 }
 
 type agentAnswerReq struct {
