@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -120,4 +121,37 @@ func TestNoteOpenRouted_NoSessionIsSilent(t *testing.T) {
 	}
 	r.noteOpenRouted("/tmp/x.txt", "com.wash.edit", "attach") // must not panic
 	r.noteOpenRouted("", "com.wash.edit", "attach")
+}
+
+// TestResolveRecipient_DesktopByAppID — the session app is InstancingSingle,
+// not a singleton service, yet apps address it by app id (recent.note from
+// fm and Radio). It resolves to the live desktop instance; any other
+// non-singleton stays forbidden, and a desktop that is not running is not
+// spawned to receive a note.
+func TestResolveRecipient_DesktopByAppID(t *testing.T) {
+	const sessionID = "com.wash.session"
+	reg := NewRegistry()
+	reg.RegisterEntry(&Entry{Path: "/unused/wash-session", Manifest: &Manifest{ID: sessionID, Surface: SurfaceDesktop, Instancing: InstancingSingle}})
+	reg.RegisterEntry(&Entry{Path: "/unused/wash-edit", Manifest: &Manifest{ID: "com.wash.edit", Surface: SurfaceWindow, Instancing: InstancingMulti}})
+	r := NewRouter(Config{SessionAppID: sessionID}, reg, func(string, ...any) {})
+
+	if _, code, err := r.resolveRecipient(context.Background(), wire.Recipient{AppID: sessionID}); err == nil || code != wire.ErrCodeForbidden {
+		t.Fatalf("no desktop running: code=%q err=%v, want forbidden (never spawned for a note)", code, err)
+	}
+
+	sess := &AppInstance{
+		Transport:  wiretest.NewPipePair().EndA(),
+		AppID:      sessionID,
+		InstanceID: "i-session",
+		Manifest:   &Manifest{ID: sessionID, Surface: SurfaceDesktop, Instancing: InstancingSingle},
+		router:     r,
+	}
+	r.registerApp(sess)
+	got, _, err := r.resolveRecipient(context.Background(), wire.Recipient{AppID: sessionID})
+	if err != nil || got != sess {
+		t.Fatalf("desktop by app id = %v, %v; want the session instance", got, err)
+	}
+	if _, code, err := r.resolveRecipient(context.Background(), wire.Recipient{AppID: "com.wash.edit"}); err == nil || code != wire.ErrCodeForbidden {
+		t.Errorf("multi-instance app by app id: code=%q err=%v, want forbidden", code, err)
+	}
 }

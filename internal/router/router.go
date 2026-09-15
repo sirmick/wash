@@ -1421,6 +1421,13 @@ func (r *Router) resolveRecipient(ctx context.Context, rec wire.Recipient) (*App
 		return nil, wire.ErrCodeNotFound, fmt.Errorf("no app %q", rec.AppID)
 	}
 	if entry.Manifest.Instancing != InstancingSingleton {
+		// The desktop is the one non-singleton with exactly one live
+		// instance and a well-known id: apps report to the start menu
+		// (recent.note) without having to learn the session's instance
+		// id first. Never spawned on demand — no desktop, nobody to tell.
+		if sess := r.sessionInstance(); sess != nil && sess.Manifest.ID == rec.AppID {
+			return sess, "", nil
+		}
 		return nil, wire.ErrCodeForbidden, fmt.Errorf("app %q is not singleton; address by instance_id", rec.AppID)
 	}
 	if inst := r.singletonInstance(rec.AppID); inst != nil {
