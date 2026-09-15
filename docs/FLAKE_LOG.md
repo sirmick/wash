@@ -16,6 +16,24 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-14 — agentclient: a keepalive tick in flight outlives Forget
+
+**Seen during:** `make push` for 0.15.0 (`test-race` on the main checkout;
+the same tree was race-green in its worktree an hour earlier).
+`TestWatchKeepsReaffirmingEveryWatchedKey`:
+
+```
+forgotten key kept being re-affirmed: 3 → 4
+```
+
+**Mechanism — the test's own check-then-act.** `keepWatching` copies the
+watched keys under the lock and sends outside it. A tick that copied them a
+moment before `Forget("b")` still sends "b" once, after the test read its
+baseline. The product behaviour is right (no later tick sends it); the
+assertion sampled inside the one-tick window. **Fix:** the test lets an
+in-flight tick land (3× refresh) before taking the baseline. Nothing in the
+0.15.0 changes touches the package.
+
 ## 2026-09-14 — fm-shortcuts: the router lost its fixture port to another test
 
 **Seen during:** the full `e2e-test` for PR #24's review branch (8 workers,

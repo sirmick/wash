@@ -162,6 +162,11 @@ func TestWatchKeepsReaffirmingEveryWatchedKey(t *testing.T) {
 	// A forgotten key stops being re-affirmed: the session is untouched,
 	// but this host no longer claims to be watching it.
 	cl.Forget("b")
+	// A tick copies the watched keys under the lock and sends after it, so
+	// one that copied them just before Forget can still send "b" once. Let
+	// that in-flight tick land before taking the baseline: the claim is
+	// that no LATER tick re-affirms it.
+	time.Sleep(3 * cl.refresh)
 	base := count("b")
 	time.Sleep(40 * time.Millisecond)
 	if got := count("b"); got != base {
