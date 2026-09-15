@@ -54,6 +54,7 @@ interface WashWindowInfo {
   origin: string;
   windowID: number;
   instanceID: string;
+  appID: string;
   element: string;
   icon?: string;
   title: string;
@@ -70,6 +71,12 @@ interface WashWindowInfo {
   w: number;
   h: number;
   viewport: { vx: number; vy: number };
+}
+
+interface WashWindowContext extends WashWindowInfo {
+  contentSource: 'app' | 'backing-store' | 'none';
+  content?: unknown;
+  contentError?: string;
 }
 
 type WashLogLevel = 'error' | 'warn' | 'info' | 'debug';
@@ -177,6 +184,8 @@ interface WashGlobals {
   displayScaleMode(): 'auto' | '1' | '2';
   setDisplayScaleMode(mode: 'auto' | '1' | '2'): 'auto' | '1' | '2';
   windows(): WashWindowInfo[];
+  /** Snapshot window metadata plus each app's Content API or saved-state fallback. */
+  windowContexts(options?: { excludeInstance?: string }): WashWindowContext[];
   onWindowsChanged(cb: (windows: WashWindowInfo[]) => void): () => void;
   // origin (optional) addresses the intent to a specific router. Window ids
   // are per-router, so two origins routinely share id 1; pass the window's

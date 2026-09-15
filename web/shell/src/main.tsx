@@ -84,6 +84,7 @@ import {
   deliverToInstance,
   forgetVideoChannel,
   replaceSavedStates,
+  resolveWindowContent,
   setSavedState,
   subscribeRaw,
   subscribeResync,
@@ -1159,6 +1160,7 @@ createEffect(() => {
       origin: w.origin,
       windowID: w.windowID,
       instanceID: w.instanceID,
+      appID: clientForOrigin(w.origin)?.appIDs.get(parseInstanceId(w.instanceID).bare) ?? '',
       element: w.element,
       icon: w.icon,
       title: w.title,
@@ -1859,6 +1861,11 @@ declare global {
       displayScaleMode(): DisplayScaleMode;
       setDisplayScaleMode(mode: DisplayScaleMode): DisplayScaleMode;
       windows(): WindowInfo[];
+      windowContexts(options?: { excludeInstance?: string }): Array<WindowInfo & {
+        contentSource: 'app' | 'backing-store' | 'none';
+        content?: unknown;
+        contentError?: string;
+      }>;
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
       // origin (optional) addresses the WM intent to a specific router:
       // window ids are per-router, so the shell chrome passes the Win's
@@ -2098,6 +2105,17 @@ window.wash = {
   displayScaleMode: () => displayScaleMode(),
   setDisplayScaleMode: (mode) => setDisplayScaleMode(mode),
   windows: () => windowsSub.value,
+  windowContexts: (options) => windowsSub.value
+    .filter((w) => w.instanceID !== options?.excludeInstance)
+    .map((w) => {
+      const resolved = resolveWindowContent(w.instanceID);
+      return {
+        ...w,
+        contentSource: resolved.source,
+        ...(resolved.content !== undefined ? { content: resolved.content } : {}),
+        ...(resolved.error ? { contentError: resolved.error } : {}),
+      };
+    }),
   onWindowsChanged: (cb) => windowsSub.on(cb),
   focusWindow(id, origin) {
     // Local raise gives instant visual focus feedback; the router's

@@ -61,10 +61,10 @@ SC      := $(OUT)/singlecall
 # apps): wash-router / wash-login embed the shell runtime; wash-launch /
 # wash-fswatchd / wash-sudo are cmd/-rooted CLIs; wash-display is the C++/CMake
 # compositor; the gated `test` app is woven in where TEST_APP applies.
-FE_APPS := session about connect imageview term fm edit vscode-workbench \
+FE_APPS := session session-summary about connect imageview term fm edit vscode-workbench \
            settings top disks journal syslogs services packages net \
            washamp music radio ai priv
-FE_PANEL_APPS := vscode netd remote
+FE_PANEL_APPS := vscode netd remote inference
 # priv left SVC_APPS in docs/SIDEBAR.md M4: it is still a service (autoboots,
 # no launcher entry) but now ships an FE for its session-modal approval queue,
 # so it needs the web/embed rules the FE apps get.

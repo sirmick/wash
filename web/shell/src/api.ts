@@ -36,6 +36,7 @@ export interface WindowInfo {
   origin: Origin;
   windowID: number;
   instanceID: string;
+  appID: string;
   element: string;
   icon?: string;
   title: string;
@@ -97,6 +98,33 @@ const pendingMessages = new Map<string, unknown[]>();
 // as a `wash:state` CustomEvent on (re)mount. Updated by router's
 // session.snapshot / session.patch deliveries.
 const savedStates = new Map<string, unknown>();
+
+export interface ResolvedWindowContent {
+  source: 'app' | 'backing-store' | 'none';
+  content?: unknown;
+  error?: string;
+}
+
+/** Resolve an app's explicit Content API, falling back to saved app_state. */
+export function resolveWindowContent(instanceID: string): ResolvedWindowContent {
+  const el = mountedElements.get(instanceID) as (HTMLElement & { washContent?: () => unknown }) | undefined;
+  if (el?.washContent) {
+    try {
+      const content = el.washContent();
+      if (content !== undefined) return { source: 'app', content };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      if (savedStates.has(instanceID)) {
+        return { source: 'backing-store', content: savedStates.get(instanceID), error };
+      }
+      return { source: 'none', error };
+    }
+  }
+  if (savedStates.has(instanceID)) {
+    return { source: 'backing-store', content: savedStates.get(instanceID) };
+  }
+  return { source: 'none' };
+}
 
 // rawSubscribers maps an ORIGIN-SCOPED channel key → callback for
 // incoming raw bytes. Keyed by compoundChannelId(origin, channel) so a

@@ -1,6 +1,7 @@
 wash-router
 wash-login
 wash-session
+wash-session-summary
 wash-about
 wash-connect
 wash-imageview
@@ -24,6 +25,7 @@ wash-priv
 wash-vscode
 wash-netd
 wash-remote
+wash-inference
 wash-bulk
 wash-notify
 wash-audio

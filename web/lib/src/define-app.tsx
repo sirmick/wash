@@ -33,6 +33,13 @@ export interface WashAppProps {
    * owning host. Apps that only use app_msg can ignore it.
    */
   origin: string;
+  /**
+   * Replace this app's default session-state context with a richer, current
+   * representation. The provider is called synchronously only when another
+   * wash app explicitly asks for window context (for example Session Summary).
+   * Return undefined to fall back to the router-backed app state.
+   */
+  provideContent(provider: () => unknown): void;
 }
 
 export interface DefineWashAppOptions {
@@ -86,6 +93,12 @@ export function defineWashApp(
 
   class WashAppElement extends HTMLElement {
     private cleanup?: () => void;
+    private contentProvider?: () => unknown;
+
+    /** Shell-facing half of the Content API; apps register through props. */
+    washContent(): unknown {
+      return this.contentProvider?.();
+    }
 
     connectedCallback() {
       if (options.style) {
@@ -93,12 +106,18 @@ export function defineWashApp(
       }
       const instance = this.getAttribute('data-wash-instance') ?? '';
       const origin = this.getAttribute('data-wash-origin') || 'local';
-      this.cleanup = render(() => App({ instance, host: this, origin }), this);
+      this.cleanup = render(() => App({
+        instance,
+        host: this,
+        origin,
+        provideContent: (provider) => { this.contentProvider = provider; },
+      }), this);
     }
 
     disconnectedCallback() {
       this.cleanup?.();
       this.cleanup = undefined;
+      this.contentProvider = undefined;
     }
   }
 

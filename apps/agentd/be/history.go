@@ -237,11 +237,20 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// resumeSession spawns a terminal and tells it to run the resume command.
-// Two steps, because a normal spawn carries no argv: the router replies
-// with the new instance id (OnSpawnResult), and the terminal accepts an
-// exec'd tab only from this service (see wash-term's exec_tab handler).
+// resumeSession restores a stopped conversation through ACP and opens an
+// Agent controller for it. If it is already live, the operation instead
+// focuses (or reattaches) its existing controller.
 func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
+	// History is eventually consistent with the live roster: a browser can
+	// still show a Resume affordance for a moment after another click has
+	// successfully loaded the session. Treat Resume as an idempotent "take me
+	// to this conversation" action. ACP loadSession is not idempotent and a
+	// second load of the same Codex session fails with an opaque Internal error.
+	if h := hostedBySession(sessionID); h != nil {
+		log.Printf("agentd: resume session=%s already live key=%s — focusing", sessionID, h.key)
+		focusHosted(c, h.key)
+		return
+	}
 	s, ok := resolveResumeTarget(sessionID)
 	if !ok {
 		log.Printf("agentd: resume unknown session=%s", sessionID)
