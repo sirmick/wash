@@ -36,6 +36,8 @@ interface StationsOk {
   kind: 'stations_ok';
   base: string;
   stations: Station[];
+  /** a start-menu pick that arrived before this list did (be/recents.go) */
+  tune?: string;
 }
 interface Custom {
   name: string;
@@ -222,6 +224,10 @@ function RadioApp(props: WashAppProps) {
   let treeInitialized = false;
   let revealedLastName = '';
   let pendingRevealName = '';
+  // A station the start menu asked for before this FE had a list to find
+  // it in — a remount after reload gets the BE's `tune` ahead of its own
+  // stations_ok.
+  let pendingTuneName = '';
 
   const [stations, setStations] = createSignal<Station[]>([]);
   const [base, setBase] = createSignal('');
@@ -462,8 +468,25 @@ function RadioApp(props: WashAppProps) {
     sendCustom();
   }
 
-  const handleBE = (m: { kind?: string; title?: string; station?: number; info?: StreamInfo }) => {
-    if (m?.kind === 'now_playing') {
+  // tuneByName plays the station the start menu's Radio flyout picked.
+  // Stations are addressed by BE index, which is only meaningful against
+  // the list this FE holds, so a name that is not in it yet waits for the
+  // next stations_ok.
+  const tuneByName = (name: string) => {
+    if (!name) return;
+    const be = stations().findIndex((st) => st.name === name);
+    if (be < 0 || !base()) {
+      pendingTuneName = name;
+      return;
+    }
+    pendingTuneName = '';
+    tune(be);
+  };
+
+  const handleBE = (m: { kind?: string; title?: string; station?: number; info?: StreamInfo; name?: string }) => {
+    if (m?.kind === 'tune') {
+      tuneByName(String(m.name ?? ''));
+    } else if (m?.kind === 'now_playing') {
       if (m.station == null || m.station === index()) {
         setIcyTitle(m.title ?? '');
         audio?.report();
@@ -509,6 +532,13 @@ function RadioApp(props: WashAppProps) {
           audio?.register({ title: lastRow?.name ?? rows[0]?.name ?? '' });
         }
       }
+
+      const want = s.tune || pendingTuneName;
+      // One attempt per list: a name this list lacks is dropped rather
+      // than left to fire when some later edit happens to add it.
+      pendingTuneName = '';
+      if (want) tuneByName(want);
+      pendingTuneName = '';
     }
   };
   // wash:state (always fires on mount, null = first launch): restore

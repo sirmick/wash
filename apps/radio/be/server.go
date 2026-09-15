@@ -16,6 +16,7 @@ import (
 
 	"github.com/sirmick/wash/internal/audiorelay"
 	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // station is one entry. URL is the upstream stream (kept BE-side; the FE
@@ -61,6 +62,9 @@ type svc struct {
 	custom []station // user-pasted; replaced wholesale by set_custom
 	base   string
 	ready  chan struct{}
+	// tuner and notes are the start menu's two hooks (recents.go).
+	tuner tuner
+	notes *noteGate
 }
 
 // all returns the full station list (index space the FE addresses via
@@ -82,7 +86,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	bus := sdk.NewBus(c)
 	audiorelay.Register(bus)
 
-	s := &svc{ready: make(chan struct{})}
+	s := &svc{ready: make(chan struct{}), notes: newNoteGate()}
 	// Env test stations first, then the disk-backed user-configurable list.
 	s.fixed = append(envStations(), configuredStations()...)
 
@@ -100,7 +104,12 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 				Description: st.Description,
 			}
 		}
-		_ = conn.SendAppMsg(map[string]any{"kind": "stations_ok", "id": id, "base": base, "stations": pub})
+		msg := map[string]any{"kind": "stations_ok", "id": id, "base": base, "stations": pub}
+		if name := s.tuner.loaded(); name != "" {
+			msg["tune"] = name
+			log.Printf("wash-radio: tune name=%q delivered with station list", name)
+		}
+		_ = conn.SendAppMsg(msg)
 	}
 
 	// FE → BE: hand back the station list + ingress base.
@@ -127,6 +136,20 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		s.custom = cs
 		s.mu.Unlock()
 		go reply(conn, id)
+		return nil
+	})
+	// com.wash.session → BE: the start menu's Radio flyout picked a
+	// station. Only the desktop may ask; anything else could otherwise
+	// start audio playing from the background.
+	sdk.HandleFromVoid(bus, "play_station", func(conn *sdk.Conn, _ string, req playStationReq, from wire.Sender) error {
+		if from.AppID != sessionAppID || req.Name == "" {
+			return nil
+		}
+		if s.tuner.request(req.Name) {
+			log.Printf("wash-radio: tune name=%q forwarded", req.Name)
+			return conn.SendAppMsg(map[string]any{"kind": "tune", "name": req.Name})
+		}
+		log.Printf("wash-radio: tune name=%q held until the station list loads", req.Name)
 		return nil
 	})
 	// Persist the FE's small state blob (favorites + pasted stations +
@@ -165,7 +188,15 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 			http.NotFound(w, r)
 			return
 		}
-		proxyStream(w, r, all[i].URL, func(title string) { onTitle(i, title) }, func(info streamInfo) { onInfo(i, info) })
+		name := all[i].Name
+		proxyStream(w, r, all[i].URL, func(title string) { onTitle(i, title) }, func(info streamInfo) {
+			// The upstream answered, so this station really played: tell
+			// the start menu. A failed connect never reaches here.
+			if s.notes.allow(name, time.Now()) {
+				noteStation(c, name)
+			}
+			onInfo(i, info)
+		})
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
