@@ -2,28 +2,31 @@
 // 2026-09-08 sweep, "Transcript freezes after 60 s").
 //
 // agentd drops a transcript watcher it has not heard from within
-// WatcherTTL. wash-ai re-affirmed only on the agent_started / attach paths,
-// so a window that reached its session through the roster row — the path
-// a window opened from the start menu takes — went quiet after a minute:
-// the status line kept moving (the roster subscription is the
-// StateService's, kept alive by itself) while the transcript stopped at
-// the first event after the TTL. The keepalive now starts once per window
-// from onReady and re-affirms whatever key the window holds.
+// WatcherTTL. wash-ai used to re-affirm only on some of the paths that set
+// a window's session key, so a window that reached its session another
+// way went quiet after a minute: the status line kept moving (the roster
+// push has its own keepalive) while the transcript stopped at the first
+// event after the TTL. The keepalive now starts once per controller from
+// onReady and re-affirms whatever key the window holds.
+//
+// The window that exposed it — one that picked its session from a roster
+// inside itself — no longer exists: a session has exactly one controller,
+// opened by agentd and handed its key with `attach`. The property is the
+// same one, though, and it is the one a user feels: the controller keeps
+// receiving its own transcript long after the TTL, without re-subscribing.
 //
 // The TTL is shrunk through WASH_AGENT_WATCHER_TTL (one seam, read by
 // agentd and every host from internal/agentclient), so the test waits past
 // several TTLs in seconds rather than minutes.
 
-import { fileURLToPath } from 'node:url';
-import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
+import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
 const TTL_MS = 3_000;
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: {
       PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}`,
       WASH_AGENT_WATCHER_TTL: `${TTL_MS}ms`,
@@ -31,76 +34,51 @@ test.use({
   },
 });
 
-async function openAgentWindow(page: Page, nth: number) {
-  await page.locator('button[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agent', exact: true }).click();
-  const win = page.locator('wash-app-ai').nth(nth);
-  await expect(win).toBeVisible();
-  return win;
-}
-
-test('a window that picked its session from the roster keeps receiving the transcript past the TTL', async ({
-  page,
-  router,
-}) => {
+test('a session controller keeps receiving its transcript past the TTL', async ({ page, router }) => {
   test.setTimeout(90_000);
   await page.goto(router.url);
   await expect(page.locator('wash-app-session')).toBeVisible();
 
-  // Window A starts the session and gets its first reply.
-  const a = await openAgentWindow(page, 0);
-  await a.locator('select').selectOption('codex');
-  await a.getByRole('button', { name: 'Start session' }).click();
-  const composerA = a.locator('textarea');
-  await expect(composerA).toBeVisible({ timeout: 20_000 });
-  await composerA.fill('first prompt before the ttl');
-  await composerA.press('Enter');
-  await expect(a.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
-
-  // Window B is opened fresh from the start menu and reaches the SAME
-  // session through the roster row — the `select` path, which never
-  // started a keepalive.
-  const b = await openAgentWindow(page, 1);
-  const pane = b.locator('[data-testid="ai-roster-pane"]');
-  await expect(pane).toBeVisible({ timeout: 20_000 });
-  const row = pane.locator('[data-testid^="agents-row-"]').first();
-  await expect(row).toBeVisible({ timeout: 20_000 });
   const cursor = router.logCursor();
-  await row.click();
-  await expect(b.getByText('first prompt before the ttl')).toBeVisible({ timeout: 20_000 });
-  await expect(b.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+  const win = await startAgentSession(page, 'first prompt before the ttl');
+  await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
 
-  // B's instance, from the ready line of the second window: the BE
-  // assertions below are about THIS watcher, not A's.
-  const ready = [...router.log().matchAll(/wash-ai ready instance=(\S+)/g)].map((m) => m[1]);
-  expect(ready.length, 'two Agent windows announced themselves').toBeGreaterThanOrEqual(2);
-  const instB = ready[ready.length - 1];
+  // The controller's instance, from its ready line: the manager is a
+  // wash-ai process too, and the BE assertions below are about the
+  // controller's watcher, not anything the manager does.
+  const ready = [...router.log().slice(cursor).matchAll(/wash-ai ready instance=(\S+) manager=false/g)].map((m) => m[1]);
+  expect(ready, 'exactly one controller announced itself').toHaveLength(1);
+  const inst = ready[0];
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // The select subscribed B exactly once (with a replay).
-  await router.waitForLog(new RegExp(`transcript subscribed instance=${esc(instB)} key=\\S+ replay=true`), 10_000, cursor);
+  // agentd handed it the session and it subscribed, exactly once.
+  await router.waitForLog(new RegExp(`transcript subscribed instance=${esc(inst)} key=\\S+ replay=`), 10_000, cursor);
 
   // Idle past several TTLs. Nothing happens on screen; the question is
-  // whether agentd still counts B as a watcher afterwards.
+  // whether agentd still counts the controller as a watcher afterwards.
   await page.waitForTimeout(TTL_MS * 3);
 
-  // BE half: B's watcher was never expired, and its keepalives were
+  // BE half: the watcher was never expired, and its keepalives were
   // keepalives — a known instance re-affirming logs nothing and gets no
   // second snapshot. A re-subscribe AFTER an expiry would show as another
   // "subscribed" line; a dropped one as "expired".
   const since = router.log().slice(cursor);
-  expect(since).not.toMatch(new RegExp(`transcript watcher expired instance=${esc(instB)}`));
-  expect(since.match(new RegExp(`transcript subscribed instance=${esc(instB)} `, 'g'))?.length ?? 0).toBe(1);
+  expect(since).not.toMatch(new RegExp(`transcript watcher expired instance=${esc(inst)}`));
+  expect(since.match(new RegExp(`transcript subscribed instance=${esc(inst)} `, 'g'))?.length ?? 0).toBe(1);
 
-  // FE half: a new turn — sent from A, so B is a pure observer — still
-  // lands in B. Both the prompt line (wash's own record) and the reply.
-  await composerA.fill('second prompt after the ttl');
-  await composerA.press('Enter');
-  await expect(b.getByText('second prompt after the ttl')).toBeVisible({ timeout: 20_000 });
-  await expect(b.getByText('Hello from the fake agent.')).toHaveCount(2, { timeout: 20_000 });
+  // FE half: a new turn still lands. The reply is the decisive part — it
+  // exists only as agentd's transcript events, so it cannot be a local
+  // echo of what was typed.
+  const composer = win.locator('textarea');
+  await composer.fill('second prompt after the ttl');
+  await composer.press('Enter');
+  await expect(win.getByText('second prompt after the ttl')).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Hello from the fake agent.')).toHaveCount(2, { timeout: 20_000 });
 
   // The TTL is only enforced when agentd next pushes an event, so the
-  // decisive BE check is after the push: B was not expired on its way
-  // out. Without the keepalive this is where the log says
-  // "transcript watcher expired" for B and the FE half above goes red.
-  expect(router.log().slice(cursor)).not.toMatch(new RegExp(`transcript watcher expired instance=${esc(instB)}`));
+  // decisive BE check is after the push: the controller was not expired on
+  // its way out. Without the keepalive this is where the log says
+  // "transcript watcher expired" and the FE half above goes red.
+  const after = router.log().slice(cursor);
+  expect(after).not.toMatch(new RegExp(`transcript watcher expired instance=${esc(inst)}`));
+  expect(after.match(new RegExp(`transcript subscribed instance=${esc(inst)} `, 'g'))?.length ?? 0).toBe(1);
 });

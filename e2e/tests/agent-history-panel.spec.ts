@@ -7,16 +7,21 @@
 //
 // That round trip is FE → wash-ai → agentd → the stored transcripts on
 // disk → back. Every hop is somewhere the feature can quietly not work.
+//
+// History is no longer a modal a session window opens from its menubar:
+// it is a permanent pane of the Agents manager (com.wash.agents), and the
+// window that never saw the conversation is the manager itself — the
+// session ran in its own controller window. The pane answers from the
+// store as of the manager's mount, so each test looks through a reopened
+// manager (freshHistory) — the equivalent of opening the old modal.
 
-import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, freshHistory, openAgents, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -24,54 +29,39 @@ test.use({
 async function startAgent(page: Page, url: string, prompt: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page
-    .locator('[data-testid="start-menu"]')
-    .getByRole('button', { name: 'Agent', exact: true })
-    .click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-  await win.locator('select').selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-  const composer = win.locator('textarea');
-  await expect(composer).toBeVisible({ timeout: 20_000 });
-  await composer.fill(prompt);
-  await composer.press('Enter');
+  const win = await startAgentSession(page, prompt);
   await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
   return win;
-}
-
-async function openHistory(page: Page, win: ReturnType<Page['locator']>) {
-  await win.locator('[data-testid="ai-menubar-history"]').click();
-  await expect(page.locator('[data-testid="ai-menu-history"]')).toBeVisible();
-  await page.locator('[data-testid="ai-menu-history-browse"]').click();
-  const panel = page.locator('[data-testid="ai-history-panel"]');
-  await expect(panel).toBeVisible();
-  return panel;
 }
 
 test.describe('agent history panel', () => {
   test('is available before starting a new session', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
-    await page.locator('button[title="Apps"]').click();
-    await page
-      .locator('[data-testid="start-menu"]')
-      .getByRole('button', { name: 'Agent', exact: true })
-      .click();
+    const manager = await openAgents(page);
 
-    const win = page.locator('wash-app-ai').first();
-    await expect(win.getByRole('button', { name: 'Start session' })).toBeVisible();
-    const panel = await openHistory(page, win);
-    await expect(panel.locator('[data-testid="ai-history-search"]')).toBeFocused();
-    // Browsing did not create an adapter session behind the panel.
-    await expect(win.getByRole('button', { name: 'Start session' })).toBeVisible();
+    // Beside the launcher, not behind a menu: nothing has to be started
+    // (or even opened) to look at what ran before.
+    await expect(manager.getByRole('button', { name: 'Start session' })).toBeVisible();
+    const panel = manager.locator('[data-testid="agents-history-pane"] [data-testid="ai-history-panel"]');
+    await expect(panel).toBeVisible();
+    const search = panel.locator('[data-testid="ai-history-search"]');
+    await expect(search).toBeVisible();
+    await expect(panel.locator('[data-testid="ai-history-empty"]')).toBeVisible({ timeout: 15_000 });
+
+    // Browsing did not create an adapter session behind the panel: a
+    // search is a query, and no controller window appeared for it.
+    await search.fill('anything');
+    await expect(panel.locator('[data-testid="ai-history-empty"]')).toContainText('Nothing matches', { timeout: 15_000 });
+    await expect(manager.getByRole('button', { name: 'Start session' })).toBeVisible();
+    await expect(page.locator('wash-app-ai')).toHaveCount(0);
+    expect(router.log()).not.toMatch(/agentd: opening controller/);
   });
 
   test('lists the session that just ran, with its metadata', async ({ page, router }) => {
     test.setTimeout(60_000);
-    const win = await startAgent(page, router.url, 'the quokka protocol');
-    const panel = await openHistory(page, win);
+    await startAgent(page, router.url, 'the quokka protocol');
+    const panel = await freshHistory(page);
 
     const rows = panel.locator('[data-testid="ai-history-row"]');
     await expect(rows).toHaveCount(1, { timeout: 15_000 });
@@ -85,8 +75,8 @@ test.describe('agent history panel', () => {
 
   test('search finds a session by what was SAID in it', async ({ page, router }) => {
     test.setTimeout(60_000);
-    const win = await startAgent(page, router.url, 'the quokka protocol');
-    const panel = await openHistory(page, win);
+    await startAgent(page, router.url, 'the quokka protocol');
+    const panel = await freshHistory(page);
     const rows = panel.locator('[data-testid="ai-history-row"]');
     await expect(rows).toHaveCount(1, { timeout: 15_000 });
 
@@ -117,8 +107,8 @@ test.describe('agent history panel', () => {
     // list you opened to get somewhere is its own defect
     // (docs/AGENT_UX.md N1).
     test.setTimeout(60_000);
-    const win = await startAgent(page, router.url, 'resume me later');
-    const panel = await openHistory(page, win);
+    await startAgent(page, router.url, 'resume me later');
+    const panel = await freshHistory(page);
     const rows = panel.locator('[data-testid="ai-history-row"]');
     await expect(rows).toHaveCount(1, { timeout: 15_000 });
     // The row says which of the three it is, and it is not "resume".
@@ -127,12 +117,15 @@ test.describe('agent history panel', () => {
     const cursor = router.logCursor();
     await rows.first().click();
 
-    // The panel closes and agentd raises the window showing that session.
-    // Asserted on the router log because that is the hop the FE cannot
-    // fake — and specifically NOT on a resume, which would be the bug.
-    await expect(panel).toHaveCount(0);
-    await router.waitForLog(/agentd: focus key=acp:\d+ raising 1 window/, 20_000, cursor);
-    expect(router.log().slice(cursor)).not.toMatch(/acp session resumed/);
+    // agentd raises the one controller that session already has. Asserted
+    // on the router log because that is the hop the FE cannot fake — and
+    // specifically NOT on a resume, which would be the bug, nor on a
+    // second controller being opened for the same session.
+    await router.waitForLog(/agentd: focus key=acp:\d+ raising controller=\S+/, 20_000, cursor);
+    const since = router.log().slice(cursor);
+    expect(since).not.toMatch(/acp session resumed/);
+    expect(since).not.toMatch(/agentd: opening controller/);
+    await expect(page.locator('wash-app-ai')).toHaveCount(1);
   });
 });
 
@@ -141,8 +134,8 @@ test('search is words, all of them, in any order', async ({ page, router }) => {
   // matched if those words were adjacent in that order. A conversation is
   // the unit now: every word has to appear somewhere in it.
   test.setTimeout(60_000);
-  const win = await startAgent(page, router.url, 'the quokka protocol, and separately a wombat');
-  const panel = await openHistory(page, win);
+  await startAgent(page, router.url, 'the quokka protocol, and separately a wombat');
+  const panel = await freshHistory(page);
   const rows = panel.locator('[data-testid="ai-history-row"]');
   await expect(rows).toHaveCount(1, { timeout: 15_000 });
 

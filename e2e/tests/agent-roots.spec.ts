@@ -9,18 +9,16 @@
 // confinements read it, and the status bar names what was added — because
 // the hazard of widening a session is forgetting that you did.
 
-import { fileURLToPath } from 'node:url';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, openAgents, startAgentSession, windowOf } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -28,13 +26,21 @@ test.use({
 async function startAgentIn(page: Page, url: string, dir: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agent', exact: true }).click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
+  return startAgentSession(page, undefined, { cwd: dir });
+}
 
-  await win.getByRole('button', { name: 'Choose…' }).click();
-  const picker = page.locator('[data-testid="ai-folder-picker"]');
+// Widening a session is a roster verb, and the roster lives in the Agents
+// manager's Running pane — the controller window renders only the session.
+// So the verb is driven there, and its effect (the chip, the reads) is
+// asserted in the controller. The manager is raised first because the
+// controller agentd just opened may be sitting on top of it.
+async function addRoot(page: Page, dir: string): Promise<Locator> {
+  const manager = await openAgents(page);
+  const row = manager.locator('[data-testid="ai-roster-pane"] [data-testid^="agents-row-"]').first();
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  await row.locator('[data-testid="agents-verbs-btn"]').click();
+  await page.locator('[data-testid="agents-menu-add-root"]').click();
+  const picker = page.locator('[data-testid="ai-root-picker"]');
   await expect(picker).toBeVisible();
   const bar = picker.locator('[data-testid="fp-path"]');
   await bar.click();
@@ -42,11 +48,7 @@ async function startAgentIn(page: Page, url: string, dir: string) {
   await bar.press('Enter');
   await picker.locator('[data-testid="fp-confirm"]').click();
   await expect(picker).toBeHidden();
-
-  await win.locator('select').first().selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-  await expect(win.locator('textarea')).toBeVisible({ timeout: 20_000 });
-  return win;
+  return row;
 }
 
 const ask = async (win: ReturnType<Page['locator']>, text: string) => {
@@ -68,8 +70,6 @@ test.describe('per-session roots', () => {
     writeFileSync(shared, 'SIBLING-CONTENT\n');
 
     const win = await startAgentIn(page, router.url, work);
-    const row = win.locator('[data-testid="ai-roster-pane"] [data-testid^="agents-row-"]').first();
-    await expect(row).toBeVisible({ timeout: 15_000 });
 
     // Before: outside every root. With nobody having allowed it, the read
     // raises a question — which is the point: it used to fail silently.
@@ -79,17 +79,8 @@ test.describe('per-session roots', () => {
     await askRow.click();
     await expect(win.getByText(/READ<<REFUSED/)).toBeVisible({ timeout: 20_000 });
 
-    // Allow the sibling from the roster row's menu.
-    await row.locator('[data-testid="agents-verbs-btn"]').click();
-    await page.locator('[data-testid="agents-menu-add-root"]').click();
-    const picker = page.locator('[data-testid="ai-root-picker"]');
-    await expect(picker).toBeVisible();
-    const bar = picker.locator('[data-testid="fp-path"]');
-    await bar.click();
-    await bar.fill(sib);
-    await bar.press('Enter');
-    await picker.locator('[data-testid="fp-confirm"]').click();
-    await expect(picker).toBeHidden();
+    // Allow the sibling from the manager's roster row menu.
+    const row = await addRoot(page, sib);
 
     // Named in the status bar, not counted.
     const chip = win.locator('[data-testid="agent-root"]');
@@ -100,7 +91,12 @@ test.describe('per-session roots', () => {
     await ask(win, `readfile ${shared}`);
     await expect(win.getByText(/READ<<SIBLING-CONTENT/)).toBeVisible({ timeout: 20_000 });
 
-    // Taking it back closes the folder again.
+    // Taking it back closes the folder again — from the controller's own
+    // status bar. Activating the row raises the one controller rather than
+    // opening another; it is maximized because agentd opens it cascaded
+    // below the manager, which puts its status bar under the taskbar.
+    await row.click();
+    await windowOf(page, win).locator('[data-testid="window-maximize"]').click();
     await win.locator('[data-testid="agent-root-remove"]').click();
     await expect(win.locator('[data-testid="agent-root"]')).toHaveCount(0, { timeout: 15_000 });
     await ask(win, `readfile ${shared}`);
@@ -116,17 +112,8 @@ test.describe('per-session roots', () => {
     writeFileSync(join(sib, 'marker'), '');
 
     const win = await startAgentIn(page, router.url, work);
-    const row = win.locator('[data-testid="ai-roster-pane"] [data-testid^="agents-row-"]').first();
-    await expect(row).toBeVisible({ timeout: 15_000 });
 
-    await row.locator('[data-testid="agents-verbs-btn"]').click();
-    await page.locator('[data-testid="agents-menu-add-root"]').click();
-    const picker = page.locator('[data-testid="ai-root-picker"]');
-    const bar = picker.locator('[data-testid="fp-path"]');
-    await bar.click();
-    await bar.fill(sib);
-    await bar.press('Enter');
-    await picker.locator('[data-testid="fp-confirm"]').click();
+    await addRoot(page, sib);
     await expect(win.locator('[data-testid="agent-root"]')).toHaveCount(1, { timeout: 15_000 });
 
     // A folder an agent may read and may not run anything in is a

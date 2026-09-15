@@ -13,14 +13,12 @@
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { test, expect } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -34,20 +32,7 @@ test('a live session writes its transcript to disk as it happens', async ({ page
 
   await page.goto(router.url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page
-    .locator('[data-testid="start-menu"]')
-    .getByRole('button', { name: 'Agent', exact: true })
-    .click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-  await win.locator('select').selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-
-  const composer = win.locator('textarea');
-  await expect(composer).toBeVisible({ timeout: 20_000 });
-  await composer.fill('remember this line');
-  await composer.press('Enter');
+  const win = await startAgentSession(page, 'remember this line');
   await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
 
   // "Live" is the claim: the file exists while the session is still open,
@@ -98,19 +83,7 @@ test('the transcript outlives the session it came from', async ({ page, router }
 
   await page.goto(router.url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page
-    .locator('[data-testid="start-menu"]')
-    .getByRole('button', { name: 'Agent', exact: true })
-    .click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-  await win.locator('select').selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-  const composer = win.locator('textarea');
-  await expect(composer).toBeVisible({ timeout: 20_000 });
-  await composer.fill('outlive me');
-  await composer.press('Enter');
+  const win = await startAgentSession(page, 'outlive me');
   await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
 
   await expect
@@ -120,10 +93,11 @@ test('the transcript outlives the session it came from', async ({ page, router }
     .toBeGreaterThan(0);
   const before = readdirSync(transcriptsDir(router.xdgStateHome)).filter((f) => f.endsWith('.jsonl'));
 
-  // End the session from the Agent app's roster (it moved there in
-  // SIDEBAR.md M2c). retire() frees the in-memory transcript — which is
-  // only safe BECAUSE the file is the other copy.
-  const pane = win.locator('[data-testid="ai-roster-pane"]');
+  // End the session from the Agents manager's Running roster (the roster
+  // moved out of the session window into the manager). retire() frees the
+  // in-memory transcript — which is only safe BECAUSE the file is the
+  // other copy.
+  const pane = page.locator('wash-app-agents [data-testid="ai-roster-pane"]');
   const row = pane.locator('[data-testid^="agents-row-"]').first();
   await expect(row).toBeVisible({ timeout: 15_000 });
   const cursor = router.logCursor();

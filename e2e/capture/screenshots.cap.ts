@@ -11,6 +11,7 @@
 // are naturally not byte-stable; everything else is.)
 
 import { test, expect, displaySkipReason } from '../fixtures/router';
+import { closeButtonOf, openAgents, startAgentSession, windowOf } from '../fixtures/agents';
 import type { Page, Locator } from '@playwright/test';
 import { mkdirSync, writeFileSync, existsSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -144,8 +145,9 @@ mkdirSync(ROOT, { recursive: true });
 seedShowcase(ROOT);
 const PICS = join(ROOT, 'Pictures');
 
-// The Agent shots drive the real com.wash.ai window against the e2e fake
-// ACP adapter (staged on PATH as codex-acp), with its replies posed via the
+// The Agent shots start a session from the real Agents manager
+// (com.wash.agents) and pose the com.wash.ai controller window agentd opens
+// for it, against the e2e fake ACP adapter (staged on PATH as codex-acp), with its replies posed via the
 // ACP_FAKE_SCRIPT seam — the UI, transcript renderer, status bar and agentd
 // plumbing in the shot are all real; only the words are scripted.
 const FAKE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'out', 'e2e');
@@ -178,7 +180,7 @@ writeFileSync(AGENT_SCRIPT, JSON.stringify([
 const STAGE = ['session', 'about', 'test', 'notify',
   'fm', 'term', 'edit', 'washamp', 'music', 'audio', 'net', 'netd', 'settings', 'top',
   'services', 'packages', 'disks', 'journal', 'display',
-  'radio', 'imageview', 'connect', 'remote', 'ai', 'agentd'] as const;
+  'radio', 'imageview', 'connect', 'remote', 'agents', 'ai', 'agentd'] as const;
 
 // Theme each app shot with a different pack so the README grid shows the
 // range. The montage + a few apps stay on the default (Midnight) dark.
@@ -299,19 +301,23 @@ test.describe('screenshots', () => {
 
     // The Agent — wash's day-one AI seat — lower-left, mid-conversation
     // (the fake adapter on PATH answers with the posed MONTAGE_SCRIPT reply).
-    await openApp(page, 'com.wash.ai');
-    const ai = win(page, 'wash-app-ai');
-    await expect(ai).toBeVisible();
-    await ai.locator('select').first().selectOption('codex');
-    await ai.getByRole('button', { name: 'Start session' }).click();
-    const composer = ai.locator('textarea');
-    await expect(composer).toBeVisible({ timeout: 20_000 });
-    await composer.fill('Tidy my Downloads folder — archive anything older than a month.');
-    await composer.press('Enter');
+    // A session starts from the Agents manager, and what the shot poses is
+    // the controller window agentd opens for it; the manager is closed once
+    // it has done that, so the hero shows the conversation, not the launcher.
+    const aiApp = await startAgentSession(page,
+      'Tidy my Downloads folder — archive anything older than a month.');
+    const ai = windowOf(page, aiApp);
+    // Raised first: the controller agentd just opened sits over it.
+    const manager = await openAgents(page);
+    await closeButtonOf(page, manager).click();
+    await expect(manager).toHaveCount(0, { timeout: 10_000 });
     await expect(ai.getByText(/Want me to do this weekly\?/)).toBeVisible({ timeout: 20_000 });
     // Let the turn finish before posing it — a "working… / Stop" composer
     // in the hero shot reads as a hung agent.
     await expect(ai.locator('[data-testid="agent-stop"]')).toHaveCount(0, { timeout: 20_000 });
+    // Up to the top-left first: agentd opens the controller cascaded below
+    // the manager, where its resize grip is under the taskbar.
+    await moveWinTo(page, ai, 40, 40);
     await resizeWinTo(page, ai, 680, 340);
     await moveWinTo(page, ai, 40 + jit(24), 596 + jit(18));
 
@@ -594,7 +600,7 @@ test.describe('screenshots', () => {
   });
 });
 
-// --- the Agent window, in its own router -------------------------------------
+// --- the Agent controller window, in its own router --------------------------
 // Separate describe: this one must NOT be confined by WASH_FM_ROOT — the
 // folder picked in the launcher becomes the adapter's real working
 // directory, so it has to be a genuine host path.
@@ -607,7 +613,7 @@ test.describe('agent screenshot', () => {
     'package store\n\n// posed fixture for the screenshot\n');
 
   test.use({ routerOpts: {
-    apps: ['session', 'about', 'notify', 'ai', 'agentd'],
+    apps: ['session', 'about', 'notify', 'agents', 'ai', 'agentd'],
     extraEnv: {
       PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}`,
       ACP_FAKE_SCRIPT: AGENT_SCRIPT,
@@ -618,25 +624,18 @@ test.describe('agent screenshot', () => {
     test.setTimeout(60_000);
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
-    await page.locator('button[title="Apps"]').click();
-    await page.locator('[data-testid="start-menu-com.wash.ai"]').click();
-    const w = page.locator('.wash-window', { has: page.locator('wash-app-ai') });
-    await expect(w).toBeVisible();
 
-    // Point the session at the posed project folder, then start.
-    await w.getByRole('button', { name: 'Choose…' }).click();
-    const picker = page.locator('[data-testid="ai-folder-picker"]');
-    await expect(picker).toBeVisible();
-    const bar = picker.locator('[data-testid="fp-path"]');
-    await bar.click();
-    await bar.fill(PROJ);
-    await bar.press('Enter');
-    await picker.locator('[data-testid="fp-confirm"]').click();
-    await expect(picker).toBeHidden();
-    await w.locator('select').first().selectOption('codex');
-    await w.getByRole('button', { name: 'Start session' }).click();
+    // Point the manager's launcher at the posed project folder and start;
+    // the shot is of the controller window agentd opens for the session.
+    // The manager is closed so nothing can sit over the element screenshot.
+    const aiApp = await startAgentSession(page, undefined, { cwd: PROJ });
+    const w = windowOf(page, aiApp);
+    await expect(w).toBeVisible();
+    // Raised first: the controller agentd just opened sits over it.
+    const manager = await openAgents(page);
+    await closeButtonOf(page, manager).click();
+    await expect(manager).toHaveCount(0, { timeout: 10_000 });
     const composer = w.locator('textarea');
-    await expect(composer).toBeVisible({ timeout: 20_000 });
 
     // Two posed turns (AGENT_SCRIPT replies): diagnose, then fix + verify.
     await composer.fill('Why is the checkout test flaky?');
@@ -650,7 +649,16 @@ test.describe('agent screenshot', () => {
     await expect(w.locator('[data-testid="agent-stop"]')).toHaveCount(0, { timeout: 20_000 });
 
     // Size the window to the conversation: at the default height the
-    // transcript is half empty pane.
+    // transcript is half empty pane. Moved to the top-left first — agentd
+    // opens the controller cascaded below the manager, which puts its
+    // resize grip under the taskbar where a drag cannot reach it.
+    const tb = await w.locator('.wash-titlebar').boundingBox();
+    if (tb) {
+      await page.mouse.move(tb.x + 90, tb.y + tb.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(40 + 90, 40 + tb.height / 2, { steps: 16 });
+      await page.mouse.up();
+    }
     const grip = w.locator('[data-testid="window-resize"]');
     const g = await grip.boundingBox();
     const b = await w.boundingBox();

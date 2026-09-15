@@ -12,44 +12,27 @@
 // prompt it received — one entry per content block — so this spec sees
 // what actually reached the wire rather than what the UI claimed.
 
-import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
 
+// startAgentIn starts a session in `dir` from the Agents manager and
+// returns its controller. The folder matters here: the attach picker opens
+// on the session's own folder, which is where the fixture file is.
 async function startAgentIn(page: Page, url: string, dir: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agent', exact: true }).click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-
-  await win.getByRole('button', { name: 'Choose…' }).click();
-  const picker = page.locator('[data-testid="ai-folder-picker"]');
-  await expect(picker).toBeVisible();
-  const bar = picker.locator('[data-testid="fp-path"]');
-  await bar.click();
-  await bar.fill(dir);
-  await bar.press('Enter');
-  await picker.locator('[data-testid="fp-confirm"]').click();
-  await expect(picker).toBeHidden();
-
-  await win.locator('select').first().selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-  await expect(win.locator('textarea')).toBeVisible({ timeout: 20_000 });
-  return win;
+  return startAgentSession(page, undefined, { cwd: dir });
 }
 
 test.describe('agent prompt attachments', () => {

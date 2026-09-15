@@ -18,19 +18,23 @@
 // far as this side can see it: wash-ai's own log names the confined
 // directory it asked the router for, and a terminal window appears.
 // wash-term learning to START in that directory is the term track's half.
+//
+// "Open terminal here" is offered in two places — the session's row in the
+// Agents manager's Running pane, and the controller's own Session menu —
+// because the row naming a session and the window showing it are two views
+// of one thing. Both are driven here: they are separate windows of the
+// same binary, and either could lose the verb on its own.
 
-import { fileURLToPath } from 'node:url';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'term', 'test', 'notify'],
+    apps: [...AGENT_APPS, 'term', 'test'],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -38,34 +42,16 @@ test.use({
 async function startAgentIn(page: Page, url: string, dir: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agent', exact: true }).click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-
-  await win.getByRole('button', { name: 'Choose…' }).click();
-  const picker = page.locator('[data-testid="ai-folder-picker"]');
-  await expect(picker).toBeVisible();
-  const bar = picker.locator('[data-testid="fp-path"]');
-  await bar.click();
-  await bar.fill(dir);
-  await bar.press('Enter');
-  await picker.locator('[data-testid="fp-confirm"]').click();
-  await expect(picker).toBeHidden();
-
-  await win.locator('select').first().selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-  await expect(win.locator('textarea')).toBeVisible({ timeout: 20_000 });
-  return win;
+  return startAgentSession(page, undefined, { cwd: dir });
 }
 
 test.describe('agent handoff', () => {
   test.setTimeout(120_000);
 
-  test('Open terminal here spawns wash-term with the session directory', async ({ page, router }) => {
+  test('Open terminal here on the Running row spawns wash-term with the session directory', async ({ page, router }) => {
     const dir = mkdtempSync(join(tmpdir(), 'wash-agent-term-'));
-    const win = await startAgentIn(page, router.url, dir);
-    const row = win.locator('[data-testid="ai-roster-pane"] [data-testid^="agents-row-"]').first();
+    await startAgentIn(page, router.url, dir);
+    const row = page.locator('wash-app-agents [data-testid="agents-running-pane"] [data-testid^="agents-row-"]').first();
     await expect(row).toBeVisible({ timeout: 15_000 });
 
     const cursor = router.logCursor();
@@ -75,6 +61,22 @@ test.describe('agent handoff', () => {
     // The directory wash-ai asked the router to launch the terminal with,
     // confined before it was sent — the FE named the path, and a window
     // is not authority for one.
+    await router.waitForLog(new RegExp(`wash-ai: open terminal cwd=${dir}$`, 'm'), 15_000, cursor);
+    await expect(page.locator('wash-app-term').first()).toBeVisible({ timeout: 25_000 });
+  });
+
+  test("Open terminal here on the controller's Session menu does the same", async ({ page, router }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'wash-agent-term-menu-'));
+    const win = await startAgentIn(page, router.url, dir);
+
+    const cursor = router.logCursor();
+    await win.locator('[data-testid="ai-menubar-session"]').click();
+    // Enabled only once the controller has its row's cwd — a click on a
+    // disabled item would pass silently and fail on the log wait instead.
+    const item = page.locator('[data-testid="ai-menu-open-terminal"]');
+    await expect(item).toBeEnabled({ timeout: 15_000 });
+    await item.click();
+
     await router.waitForLog(new RegExp(`wash-ai: open terminal cwd=${dir}$`, 'm'), 15_000, cursor);
     await expect(page.locator('wash-app-term').first()).toBeVisible({ timeout: 25_000 });
   });

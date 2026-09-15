@@ -5,7 +5,7 @@ const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
 
 test.use({
   routerOpts: {
-	apps: ['session', 'agentd', 'agents', 'ai', 'notify'],
+    apps: ['session', 'agentd', 'agents', 'ai', 'notify'],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -44,8 +44,8 @@ test('manager is singleton and a session has one dedicated controller', async ({
   await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agents', exact: true }).click();
   await expect(page.locator('wash-app-agents')).toHaveCount(1);
   await manager.locator('[data-testid^="agents-row-"]').click();
-	await page.locator('button[title="Apps"]').click();
-	await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agents', exact: true }).click();
+  await page.locator('button[title="Apps"]').click();
+  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agents', exact: true }).click();
   await manager.locator('[data-testid^="agents-row-"]').click();
   await expect(page.locator('wash-app-ai')).toHaveCount(1);
 });

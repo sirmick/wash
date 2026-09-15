@@ -8,15 +8,13 @@
 // thing it wrote to stderr — and the session's questions and terminals
 // are released, while History keeps the entry to reopen.
 
-import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -24,17 +22,7 @@ test.use({
 async function openAgent(page: Page, url: string, prompt: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agent', exact: true }).click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-  await win.locator('select').selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-  const composer = win.locator('textarea');
-  await expect(composer).toBeVisible({ timeout: 20_000 });
-  await composer.fill(prompt);
-  await composer.press('Enter');
-  return win;
+  return startAgentSession(page, prompt);
 }
 
 test('an adapter that dies mid-turn fails the row and says so in the transcript', async ({ page, router }) => {
@@ -59,13 +47,16 @@ test('an adapter that dies mid-turn fails the row and says so in the transcript'
   await expect(win.locator('[data-testid="agent-stop"]')).toHaveCount(0);
 
   // The session is still in History to reopen — the exit did not eat
-  // the record.
-  await win.locator('[data-testid="ai-menubar-history"]').click();
-  await expect(page.locator('[data-testid="ai-menu-history"]')).toBeVisible();
+  // the record. History is the Agents manager's pane now, not a menu on
+  // this window; searched, because the pane's list was fetched when the
+  // manager mounted, before this session existed.
+  const history = page.locator('wash-app-agents [data-testid="agents-history-pane"]');
+  await history.locator('[data-testid="ai-history-search"]').fill('say something');
+  const histRow = history.locator('[data-testid="ai-history-row"]').filter({ hasText: 'Fake conversation' });
+  await expect(histRow).toBeVisible({ timeout: 15_000 });
   // ...and as something to RESUME, not "go to": the failed row is still
   // on the roster, but nothing is behind it.
-  await expect(page.locator('[data-testid="ai-menu-history"] [data-testid="ai-menu-resume"]').filter({ hasText: 'Fake conversation' })).toBeVisible();
-  await page.keyboard.press('Escape');
+  await expect(histRow).toHaveAttribute('data-action', 'resume');
 
   // A prompt into the dead session is told so, rather than vanishing.
   const c2 = router.logCursor();

@@ -13,6 +13,7 @@
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
+import { AGENT_APPS, closeButtonOf, startAgentSession } from '../fixtures/agents';
 
 // Resolved from this file, not from process.cwd(): playwright can be
 // invoked from the repo root or from e2e/, and a cwd-relative path
@@ -22,29 +23,18 @@ const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
 
-// openAgent opens the desktop and starts a session in a fresh Agent
-// window. The fake is the only adapter on this PATH, so "Start" starts it.
+// openAgent opens the desktop and starts a session from the Agents
+// manager, returning the controller window agentd opened for it. The fake
+// is the only adapter on this PATH, so "Start" starts it.
 async function openAgent(page: Page, url: string, prompt: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agent', exact: true }).click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-
-  await win.locator('select').selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-
-  const composer = win.locator('textarea');
-  await expect(composer).toBeVisible({ timeout: 20_000 });
-  await composer.fill(prompt);
-  await composer.press('Enter');
-  return win;
+  return startAgentSession(page, prompt);
 }
 
 test.describe('managed agent sessions', () => {
@@ -101,9 +91,9 @@ test.describe('managed agent sessions', () => {
     // Off by default — no badge.
     await expect(win.locator('[data-testid="agent-yolo-badge"]')).toHaveCount(0);
 
-    // The menubar by testid, not by accessible name: the roster pane's
-    // "New session" button is also a button whose name contains
-    // "Session", and a loose name match picks up both.
+    // The menubar by testid, not by accessible name: the Agents manager
+    // is open beside this window, and its "Start session" button is also
+    // a button whose name contains "Session".
     await win.locator('[data-testid="ai-menubar-session"]').click();
     await page.locator('[data-testid="ai-menu-yolo"]').click();
 
@@ -188,7 +178,7 @@ test.describe('managed agent sessions', () => {
     await expect(list).toBeHidden();
   });
 
-  test('the menus carry the settings, the transcript and the history', async ({ page, router }) => {
+  test('the menus carry the settings and the transcript; history is the manager\'s', async ({ page, router }) => {
     const win = await openAgent(page, router.url, 'say something');
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
 
@@ -204,10 +194,22 @@ test.describe('managed agent sessions', () => {
     await expect(page.locator('[data-testid="ai-menu-copy-all"]')).toBeVisible();
     await page.keyboard.press('Escape');
 
-    // History: earlier sessions live here now, not in the sidebar.
-    await win.locator('[data-testid="ai-menubar-history"]').click();
-    await expect(page.locator('[data-testid="ai-menu-history"]')).toBeVisible();
-    await page.keyboard.press('Escape');
+    // History is NOT on the controller any more: one window per session
+    // has no business listing every other session, and a History menu
+    // here would be a second launcher competing with the manager.
+    await expect(win.locator('[data-testid="ai-menubar-history"]')).toHaveCount(0);
+    await expect(win.locator('[data-testid="ai-prompt-open"]')).toHaveCount(0);
+
+    // It lives in the manager's always-visible History pane instead, and
+    // a running session there says "go to it" rather than offering to
+    // resume a second adapter onto the same conversation. Searched rather
+    // than read off the mount-time list, which predates this session.
+    const manager = page.locator('wash-app-agents');
+    const history = manager.locator('[data-testid="agents-history-pane"]');
+    await history.locator('[data-testid="ai-history-search"]').fill('say something');
+    const histRow = history.locator('[data-testid="ai-history-row"]').first();
+    await expect(histRow).toBeVisible({ timeout: 15_000 });
+    await expect(histRow).toHaveAttribute('data-action', 'focus');
 
     // The agent names its own session on session_info_update, and that
     // name becomes the WINDOW title — no extra model call, it arrives.
@@ -221,7 +223,7 @@ test.describe('managed agent sessions', () => {
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
 
     // The window's own close button, i.e. the path a user takes.
-    await page.locator('[data-testid="window-close"]').first().click();
+    await closeButtonOf(page, win).click();
 
     // Three outcomes, because dismissing must not silently pick a
     // destructive one.
@@ -243,7 +245,7 @@ test.describe('managed agent sessions', () => {
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
 
     const cursor = router.logCursor();
-    await page.locator('[data-testid="window-close"]').first().click();
+    await closeButtonOf(page, win).click();
     const dialog = page.locator('[data-testid="ai-close-confirm"]');
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     await dialog.getByRole('button', { name: 'Detach' }).click();
@@ -265,7 +267,7 @@ test.describe('managed agent sessions', () => {
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
 
     const cursor = router.logCursor();
-    await page.locator('[data-testid="window-close"]').first().click();
+    await closeButtonOf(page, win).click();
     const dialog = page.locator('[data-testid="ai-close-confirm"]');
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     await dialog.getByRole('button', { name: 'Terminate' }).click();

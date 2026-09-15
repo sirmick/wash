@@ -10,15 +10,13 @@
 // it. Both halves are asserted here: the rail/roster (FE) and agentd's
 // own log of what it closed (BE).
 
-import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -26,22 +24,19 @@ test.use({
 async function openAgent(page: Page, url: string, prompt: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agent', exact: true }).click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-  await win.locator('select').selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-  const composer = win.locator('textarea');
-  await expect(composer).toBeVisible({ timeout: 20_000 });
-  await composer.fill(prompt);
-  await composer.press('Enter');
-  return win;
+  return startAgentSession(page, prompt);
 }
 
-/** endSession drives the roster row's End verb (menu → confirm). */
-async function endSession(page: Page, win: ReturnType<Page['locator']>) {
-  const row = win.locator('[data-testid="ai-roster-pane"] [data-testid^="agents-row-"]').first();
+/** managerRows are the Agents manager's Running roster rows. */
+const managerRows = (page: Page) => page.locator('wash-app-agents [data-testid="ai-roster-pane"] [data-testid^="agents-row-"]');
+
+/**
+ * endSession drives the manager roster row's End verb (menu → confirm).
+ * The roster lives in the manager now; the session window itself has no
+ * list of sessions to act from.
+ */
+async function endSession(page: Page) {
+  const row = managerRows(page).first();
   await expect(row).toBeVisible({ timeout: 20_000 });
   await row.locator('[data-testid="agents-verbs-btn"]').click();
   const menu = page.locator('[data-testid="agents-row-actions"]');
@@ -62,7 +57,7 @@ test('ending a session closes the terminal its agent left running', async ({ pag
   const [, key, id] = created.match(/key=(acp:\d+) id=(\d+)/)!;
 
   const cursor = router.logCursor();
-  await endSession(page, win);
+  await endSession(page);
 
   // BE half: the session ended AND its terminal was closed with the
   // reason, and the pty child actually exited (its onClose fired).
@@ -71,22 +66,23 @@ test('ending a session closes the terminal its agent left running', async ({ pag
   await router.waitForLog(new RegExp(`agentd: terminal exited key=${key} ch=${id} reason=session ended`), 15_000, cursor);
 
   // FE half: no row left to act on.
-  await expect(win.locator('[data-testid="ai-roster-pane"] [data-testid^="agents-row-"]')).toHaveCount(0, { timeout: 15_000 });
+  await expect(managerRows(page)).toHaveCount(0, { timeout: 15_000 });
 });
 
 test('ending a session takes its pending question off every rail', async ({ page, router }) => {
   test.setTimeout(60_000);
   const win = await openAgent(page, router.url, 'please ask before running');
 
-  // The question is up: inline in the transcript and in the roster pane
-  // (and the desktop rail, which renders the same queue).
+  // The question is up: inline in the controller's transcript and in the
+  // manager's roster pane (and the desktop rail, which renders the same
+  // queue).
   await expect(win.getByText('echo hello > /tmp/wash-e2e-fake')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('[data-testid="agents-ask"]').first()).toBeVisible({ timeout: 10_000 });
   const before = await page.locator('[data-testid="agents-ask"]').count();
   expect(before).toBeGreaterThan(0);
 
   const cursor = router.logCursor();
-  await endSession(page, win);
+  await endSession(page);
 
   // BE half: the question was cancelled BECAUSE the session ended — not
   // answered, not expired — and the session ended.
@@ -96,6 +92,8 @@ test('ending a session takes its pending question off every rail', async ({ page
   // FE half: nothing left to answer, anywhere. A question surviving here
   // is one "Always allow" could still write a rule for.
   await expect(page.locator('[data-testid="agents-ask"]')).toHaveCount(0, { timeout: 15_000 });
-  await expect(win.getByRole('button', { name: /^Allow(\s|$)/ })).toHaveCount(0, { timeout: 15_000 });
-  await expect(win.locator('[data-testid="ai-roster-pane"] [data-testid^="agents-row-"]')).toHaveCount(0, { timeout: 15_000 });
+  // Page-wide rather than in the controller: that window may well be gone
+  // with its session, which would make a window-scoped check vacuous.
+  await expect(page.getByRole('button', { name: /^Allow(\s|$)/ })).toHaveCount(0, { timeout: 15_000 });
+  await expect(managerRows(page)).toHaveCount(0, { timeout: 15_000 });
 });
