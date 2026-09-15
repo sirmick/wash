@@ -165,7 +165,9 @@ var asks = map[string]*pending{}
 // answers exactly once — is unit-testable without a live StateService
 // (which needs a Bus, which needs a Conn).
 var (
-	stateSubscribers = func() int { return svc.SubscriberCount() + managerSubscriberCount() }
+	// A controller window is somebody watching its session's questions
+	// even though it no longer subscribes to the whole roster.
+	stateSubscribers = func() int { return svc.SubscriberCount() + managerSubscriberCount() + controllerCount() }
 	// mutateStateIf is the ONE state-write seam: fn returns false when
 	// nothing a subscriber can see moved, and no snapshot is sent. See
 	// StateService.MutateIf — a narrating agent hits this several times a

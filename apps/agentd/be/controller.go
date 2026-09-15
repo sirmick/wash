@@ -1,6 +1,8 @@
 package agentd
 
 import (
+	"bytes"
+	"encoding/json"
 	"log"
 	"sync"
 
@@ -124,10 +126,60 @@ func managerSubscriberCount() int {
 	return len(controllerState.managers)
 }
 
+func controllerCount() int {
+	controllerState.Lock()
+	defer controllerState.Unlock()
+	return len(controllerState.byKey)
+}
+
+// viewSent is the last view each window was sent, as encoded bytes. A
+// roster change on one session must not cost every other controller a
+// frame: that N-way copy is the fanout this split exists to remove.
+//
+// viewMu also serializes snapshot-then-send. Two mutators publishing
+// concurrently could otherwise each take a snapshot and deliver them in
+// the opposite order, leaving a window on the older state until the next
+// change happens to arrive.
+var (
+	viewMu   sync.Mutex
+	viewSent = map[string][]byte{}
+	viewSend = func(instance string, msg map[string]any) {
+		_ = controllerConn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, msg)
+	}
+)
+
+// sendViewLocked sends msg unless it is byte-identical to what instance
+// last received. force sends regardless (a fresh subscribe or claim is
+// asking for the current view, and its FE may have remounted).
+func sendViewLocked(instance string, msg map[string]any, force bool) {
+	b, err := json.Marshal(msg)
+	if err == nil && !force && bytes.Equal(viewSent[instance], b) {
+		return
+	}
+	if err == nil {
+		viewSent[instance] = b
+	}
+	viewSend(instance, msg)
+}
+
+func sendView(instance string, msg map[string]any) {
+	viewMu.Lock()
+	defer viewMu.Unlock()
+	sendViewLocked(instance, msg, true)
+}
+
+func forgetView(instance string) {
+	viewMu.Lock()
+	delete(viewSent, instance)
+	viewMu.Unlock()
+}
+
 func publishControllerViews() {
 	if svc == nil || controllerConn == nil {
 		return
 	}
+	viewMu.Lock()
+	defer viewMu.Unlock()
 	snap := svc.Snapshot()
 	controllerState.Lock()
 	targets := make(map[string]string, len(controllerState.byKey))
@@ -139,15 +191,16 @@ func publishControllerViews() {
 		managers = append(managers, instance)
 	}
 	controllerState.Unlock()
-	for _, instance := range managers {
-		_ = controllerConn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, map[string]any{
-			"kind": "manager_state", "state": managerView(snap),
-		})
+	if len(managers) > 0 {
+		msg := map[string]any{"kind": "manager_state", "state": managerView(snap)}
+		for _, instance := range managers {
+			sendViewLocked(instance, msg, false)
+		}
 	}
 	for key, instance := range targets {
-		_ = controllerConn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, map[string]any{
+		sendViewLocked(instance, map[string]any{
 			"kind": "session_state", "key": key, "state": sessionView(snap, key),
-		})
+		}, false)
 	}
 }
 
@@ -205,7 +258,8 @@ func registerControllerHandlers(bus *sdk.Bus) {
 		controllerState.Lock()
 		controllerState.managers[from.InstanceID] = struct{}{}
 		controllerState.Unlock()
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{"kind": "manager_state", "state": managerView(svc.Snapshot())})
+		sendView(from.InstanceID, map[string]any{"kind": "manager_state", "state": managerView(svc.Snapshot())})
+		return nil
 	})
 	sdk.HandleFromVoid(bus, "session_claim", func(conn *sdk.Conn, _ string, req transReq, from wire.Sender) error {
 		if from.AppID != aiAppID || lookupHosted(req.Key) == nil {
@@ -226,7 +280,7 @@ func registerControllerHandlers(bus *sdk.Bus) {
 			h.republish()
 		}
 		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{"kind": "session_claimed", "key": req.Key})
-		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{"kind": "session_state", "key": req.Key, "state": sessionView(svc.Snapshot(), req.Key)})
+		sendView(from.InstanceID, map[string]any{"kind": "session_state", "key": req.Key, "state": sessionView(svc.Snapshot(), req.Key)})
 		return nil
 	})
 }
@@ -235,6 +289,7 @@ func forgetManager(instance string) {
 	controllerState.Lock()
 	delete(controllerState.managers, instance)
 	controllerState.Unlock()
+	forgetView(instance)
 }
 
 func detachLostController(key string) {

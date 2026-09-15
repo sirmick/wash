@@ -58,7 +58,9 @@ func liveTranscriptPreview(key string, limit int) string {
 }
 
 func queuePreviewPatch(key string) {
-	if key == "" {
+	// Previews are for the manager alone; with none open, streaming must
+	// not keep a timer rebuilding them twice a second.
+	if key == "" || managerSubscriberCount() == 0 {
 		return
 	}
 	previewMu.Lock()

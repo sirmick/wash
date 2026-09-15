@@ -20,12 +20,17 @@ func TestLiveTranscriptPreviewUsesTwoRecentConversationLines(t *testing.T) {
 func TestPreviewPatchCoalescesToLatestBoundedValue(t *testing.T) {
 	resetTranscripts()
 	stopPreviewPatches()
+	resetControllersForTest()
+	controllerState.Lock()
+	controllerState.managers["manager"] = struct{}{}
+	controllerState.Unlock()
 	oldDelay, oldPublish := previewDelay, previewPublish
 	previewDelay = 5 * time.Millisecond
 	result := make(chan previewPatch, 1)
 	previewPublish = func(p previewPatch) { result <- p }
 	t.Cleanup(func() {
 		stopPreviewPatches()
+		resetControllersForTest()
 		previewDelay, previewPublish = oldDelay, oldPublish
 	})
 
@@ -41,5 +46,21 @@ func TestPreviewPatchCoalescesToLatestBoundedValue(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for preview patch")
+	}
+}
+
+// With no manager open nobody renders previews, so streaming must not
+// start the patch timer at all.
+func TestPreviewPatchIdleWithoutManager(t *testing.T) {
+	stopPreviewPatches()
+	resetControllersForTest()
+	t.Cleanup(stopPreviewPatches)
+
+	queuePreviewPatch("acp:preview")
+	previewMu.Lock()
+	armed := previewTimer != nil || len(previewPending) > 0
+	previewMu.Unlock()
+	if armed {
+		t.Fatal("preview patch queued with no manager subscribed")
 	}
 }

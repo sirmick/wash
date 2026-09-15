@@ -1,6 +1,10 @@
 package agentd
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sirmick/wash/pkg/sdk"
+)
 
 func resetControllersForTest() {
 	controllerState.Lock()
@@ -71,5 +75,57 @@ func TestSessionViewContainsOnlyRequestedSession(t *testing.T) {
 	}
 	if len(got.Recent) != 0 || len(got.Adapters) != 0 {
 		t.Fatalf("session view leaked manager data: %#v", got)
+	}
+}
+
+// A roster change on one session must not re-send every other controller
+// its unchanged view — that per-window copy is the fanout the split removes.
+func TestControllerViewsSendOnlyWhatChanged(t *testing.T) {
+	resetControllersForTest()
+	oldSend, oldSvc, oldConn := viewSend, svc, controllerConn
+	sent := map[string]int{}
+	viewSend = func(instance string, _ map[string]any) { sent[instance]++ }
+	viewMu.Lock()
+	viewSent = map[string][]byte{}
+	viewMu.Unlock()
+	t.Cleanup(func() {
+		resetControllersForTest()
+		viewSend, svc, controllerConn = oldSend, oldSvc, oldConn
+		viewMu.Lock()
+		viewSent = map[string][]byte{}
+		viewMu.Unlock()
+	})
+
+	// A zero service holds state without a bus; MutateIf returning false
+	// writes it without trying to publish.
+	svc = new(sdk.StateService[State])
+	svc.MutateIf(func(s *State) bool {
+		s.Rows = []Row{{Key: "k1", Title: "one"}, {Key: "k2", Title: "two"}}
+		return false
+	})
+	controllerConn = &sdk.Conn{}
+	claimController("k1", "i1")
+	claimController("k2", "i2")
+
+	publishControllerViews()
+	if sent["i1"] != 1 || sent["i2"] != 1 {
+		t.Fatalf("first publish sent %v, want one view each", sent)
+	}
+	publishControllerViews()
+	if sent["i1"] != 1 || sent["i2"] != 1 {
+		t.Fatalf("unchanged publish re-sent views: %v", sent)
+	}
+	svc.MutateIf(func(s *State) bool {
+		s.Rows = []Row{{Key: "k1", Title: "one"}, {Key: "k2", Title: "renamed"}}
+		return false
+	})
+	publishControllerViews()
+	if sent["i1"] != 1 || sent["i2"] != 2 {
+		t.Fatalf("a k2 change sent %v, want only i2 again", sent)
+	}
+	// A claim or subscribe is a request for the current view and always answers.
+	sendView("i1", map[string]any{"kind": "session_state", "key": "k1", "state": sessionView(svc.Snapshot(), "k1")})
+	if sent["i1"] != 2 {
+		t.Fatalf("forced view not sent: %v", sent)
 	}
 }

@@ -463,6 +463,7 @@ func (h *hosted) releaseOwned(why string) {
 // us once (docs/CORE_AUDIT.md).
 func stopAllHosted() {
 	stopUsagePatches()
+	stopPreviewPatches()
 	hostedMu.Lock()
 	all := make([]*hosted, 0, len(hostedAll))
 	for _, h := range hostedAll {
