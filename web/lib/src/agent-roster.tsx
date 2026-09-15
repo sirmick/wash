@@ -16,7 +16,7 @@
 // Pure renderer; subscription wiring lives in the consumer.
 
 import type { Component, JSX } from 'solid-js';
-import { For, Show, createSignal } from 'solid-js';
+import { For, Show, createMemo, createSignal } from 'solid-js';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { tokens } from './tokens';
 import { agentStateColor, agentStateLabel } from './agent-status';
@@ -183,6 +183,10 @@ export const AgentAsks: Component<{
 );
 
 export const AgentRoster: Component<AgentRosterProps> = (props) => {
+  const rowByKey = createMemo(() => new Map(props.rows().map((r) => [r.key, r] as const)));
+  const rowKeys = createMemo(() => props.rows().map((r) => r.key), undefined, {
+    equals: (a, b) => a.length === b.length && a.every((k, i) => k === b[i]),
+  });
   const empty = () => props.rows().length === 0;
   return (
     <div
@@ -206,23 +210,34 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
           no agents running
         </div>
       </Show>
-      <For each={props.rows()}>
-        {(r) => (
-          <AgentRowView
-            row={r}
-            elapsed={fmtElapsed(props.now() - props.startedAt(r.key))}
-            onActivate={() => props.onActivate(r)}
-            active={props.activeKey?.() === r.key}
-            onReattach={r.detached ? () => props.onReattach?.(r) : undefined}
-            detached={r.detached === true}
-            onDetach={props.onDetach ? () => props.onDetach?.(r) : undefined}
-            onCancel={props.onCancel ? () => props.onCancel?.(r) : undefined}
-            onStop={props.onStop ? () => props.onStop?.(r) : undefined}
-            onRename={props.onRename ? () => props.onRename?.(r) : undefined}
-            onAddRoot={props.onAddRoot ? () => props.onAddRoot?.(r) : undefined}
-            onOpenTerminal={props.onOpenTerminal ? () => props.onOpenTerminal?.(r) : undefined}
-          />
-        )}
+      {/* Keyed by session key, not by row object. Every roster push,
+          usage patch and preview patch hands this a NEW object for a row
+          whose identity has not changed; <For> keys by reference, so each
+          one tore that row down — and an open row menu went with it, a
+          beat after a turn ended, under the cursor. The row is read
+          through an accessor, so its fields still update in place. */}
+      <For each={rowKeys()}>
+        {(key) => {
+          const r = () => rowByKey().get(key)!;
+          return (
+            <Show when={rowByKey().has(key)}>
+              <AgentRowView
+                row={r()}
+                elapsed={fmtElapsed(props.now() - props.startedAt(key))}
+                onActivate={() => props.onActivate(r())}
+                active={props.activeKey?.() === key}
+                onReattach={r().detached ? () => props.onReattach?.(r()) : undefined}
+                detached={r().detached === true}
+                onDetach={props.onDetach ? () => props.onDetach?.(r()) : undefined}
+                onCancel={props.onCancel ? () => props.onCancel?.(r()) : undefined}
+                onStop={props.onStop ? () => props.onStop?.(r()) : undefined}
+                onRename={props.onRename ? () => props.onRename?.(r()) : undefined}
+                onAddRoot={props.onAddRoot ? () => props.onAddRoot?.(r()) : undefined}
+                onOpenTerminal={props.onOpenTerminal ? () => props.onOpenTerminal?.(r()) : undefined}
+              />
+            </Show>
+          );
+        }}
       </For>
       {/* Earlier sessions live in the Agent app's History menu now. The
           sidebar answers "what is running"; a list of things that are
@@ -431,8 +446,20 @@ const AgentRowView: Component<{
       // claimDetached is atomic and was always the real guard (see
       // TestClaimDetachedAllowsOnlyOneReattach), so the dblclick bought
       // nothing except a row that ignored the first click people gave it.
-      onClick={() => (props.detached ? props.onReattach?.() : props.onActivate())}
-      onContextMenu={(e) => hasVerbs() && openMenu(e)}
+      //
+      // The verbs Menu portals to document.body, but Solid delegates a
+      // portal's events through its owner — so picking "End session…"
+      // arrived HERE too and raised the controller window over the menu
+      // mid-confirm. Only a click inside the row's own DOM activates it.
+      onClick={(e) => {
+        if (!e.currentTarget.contains(e.target as Node)) return;
+        if (props.detached) props.onReattach?.();
+        else props.onActivate();
+      }}
+      onContextMenu={(e) => {
+        if (!e.currentTarget.contains(e.target as Node)) return;
+        if (hasVerbs()) openMenu(e);
+      }}
       // One title, chosen. There used to be two attributes here and JSX
       // kept the last, so the detached hint never rendered — a detached
       // row claimed clicking went "to its terminal", which is the one

@@ -483,3 +483,54 @@ test('verbs: Open terminal here needs a cwd, and hands the host the row', () => 
   openRowMenu(r2.getByTestId);
   expect(screen.getByTestId('agents-menu-open-terminal').hasAttribute('disabled')).toBe(true);
 });
+
+// A push that re-sends a row as a new object — a usage or preview patch, a
+// roster state flip — must not rebuild it. It used to, and an open verbs
+// menu on that row closed itself under the cursor a beat after each turn.
+test('a row survives being re-sent as a new object, and its open menu with it', async () => {
+  const { createSignal } = await import('solid-js');
+  const [rows, setRows] = createSignal<RosterRow[]>([row({ key: 'a', used: 1 })]);
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={rows} startedAt={at} now={() => 0} onActivate={noop} onDetach={noop} />
+  ));
+  const before = getByTestId('agents-row-a');
+  fireEvent.click(getByTestId('agents-verbs-btn'));
+  expect(screen.getByTestId('agents-menu-detach')).toBeTruthy();
+
+  setRows([row({ key: 'a', used: 2, preview: 'latest answer' })]);
+  expect(getByTestId('agents-row-a')).toBe(before);
+  expect(screen.queryByTestId('agents-menu-detach')).not.toBeNull();
+  expect(getByTestId('agents-preview').textContent).toContain('latest answer');
+
+  setRows([]);
+  expect(screen.queryByTestId('agents-row-a')).toBeNull();
+});
+
+// The verbs menu is portalled, but its clicks are delegated through the row
+// that owns it. Picking a verb must not also activate the row — for the
+// manager that raised the controller window over the menu mid-confirm.
+test('picking a verb from the row menu does not also activate the row', () => {
+  const activated: string[] = [];
+  const detached: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster
+      rows={() => [row({ key: 'a' })]}
+      startedAt={at}
+      now={() => 0}
+      onActivate={(r) => activated.push(r.key)}
+      onDetach={(r) => detached.push(r.key)}
+      onStop={noop}
+    />
+  ));
+  fireEvent.click(getByTestId('agents-verbs-btn'));
+  fireEvent.click(screen.getByTestId('agents-menu-detach'));
+  expect(detached).toEqual(['a']);
+  expect(activated).toEqual([]);
+  // End asks first: the clicked item is swapped for the confirm mid-click.
+  fireEvent.click(getByTestId('agents-verbs-btn'));
+  fireEvent.click(screen.getByTestId('agents-menu-end'));
+  expect(screen.getByTestId('agents-menu-end-confirm')).toBeTruthy();
+  expect(activated).toEqual([]);
+  fireEvent.click(getByTestId('agents-row-a'));
+  expect(activated).toEqual(['a']);
+});
