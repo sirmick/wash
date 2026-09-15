@@ -110,13 +110,9 @@ test('each manager pane scrolls its own content rather than growing the window',
   const l = await launcher.evaluate((el) => ({ view: el.clientHeight, content: el.scrollHeight }));
   expect(l.content, 'the launcher must overflow for this to mean anything').toBeGreaterThan(l.view);
 
-  // History keeps its list inside its own pane rather than pushing the
-  // manager taller.
-  const historyPane = manager.locator('[data-testid="agents-history-pane"]');
-  const historyList = manager.locator('[data-testid="ai-history-list"]');
-  const hPane = await historyPane.evaluate((el) => el.clientHeight);
-  const hList = await historyList.evaluate((el) => el.clientHeight);
-  expect(hList).toBeLessThanOrEqual(hPane + 1);
+  // (History's own containment is not asserted here: with one running
+  // session its list is empty, and an empty list fits any pane — the check
+  // would pass on nothing.)
 
   // Nothing outside the panes scrolls. An app that lets its layout outgrow
   // the window hands the frame the scrollbar — and then one scrollbar moves

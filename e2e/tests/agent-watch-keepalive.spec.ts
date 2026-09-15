@@ -82,3 +82,30 @@ test('a session controller keeps receiving its transcript past the TTL', async (
   expect(after).not.toMatch(new RegExp(`transcript watcher expired instance=${esc(inst)}`));
   expect(after.match(new RegExp(`transcript subscribed instance=${esc(inst)} `, 'g'))?.length ?? 0).toBe(1);
 });
+
+// The keepalive is not tied to the path that set the key. A browser reload
+// is the other way a controller comes to hold its session — the remounted
+// FE sends `restore`, not `attach` — and the watcher must outlive the TTL
+// from there too.
+test('a controller restored by a browser reload keeps receiving past the TTL', async ({ page, router }) => {
+  test.setTimeout(90_000);
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+  const win = await startAgentSession(page, 'before the reload');
+  await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+
+  const reload = router.logCursor();
+  await page.reload();
+  const restored = page.locator('wash-app-ai');
+  await expect(restored.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+  // The restore path's own subscription: a replay, with no new controller.
+  await router.waitForLog(/transcript subscribed instance=\S+ key=\S+ replay=true/, 10_000, reload);
+  expect(router.log().slice(reload)).not.toMatch(/wash-ai ready instance=\S+ manager=false/);
+
+  await page.waitForTimeout(TTL_MS * 3);
+  const composer = restored.locator('textarea');
+  await composer.fill('after the reload and the ttl');
+  await composer.press('Enter');
+  await expect(restored.getByText('Hello from the fake agent.')).toHaveCount(2, { timeout: 20_000 });
+  expect(router.log().slice(reload)).not.toMatch(/transcript watcher expired/);
+});

@@ -97,7 +97,12 @@ test.describe('agent focus-or-launch', () => {
     await openAgentDoor(page);
     await expect(manager).toBeVisible({ timeout: 20_000 });
     await router.waitForLog(managerReady, 15_000, relaunch);
+    // Bury it, so the second crossing has something observable to do:
+    // counting ready lines straight after a click samples before a
+    // duplicate launch could have logged. Its restore is the barrier.
+    await minimize(page, manager);
     await openAgentDoor(page);
+    await expect(manager).toBeVisible({ timeout: 15_000 });
     await expect(manager).toHaveCount(1);
     expect(router.log().slice(relaunch).match(managerReady)).toHaveLength(1);
   });

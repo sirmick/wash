@@ -13,7 +13,7 @@
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-import { AGENT_APPS, closeButtonOf, startAgentSession } from '../fixtures/agents';
+import { AGENT_APPS, closeButtonOf, startAgentSession, windowOf } from '../fixtures/agents';
 
 // Resolved from this file, not from process.cwd(): playwright can be
 // invoked from the repo root or from e2e/, and a cwd-relative path
@@ -213,9 +213,10 @@ test.describe('managed agent sessions', () => {
 
     // The agent names its own session on session_info_update, and that
     // name becomes the WINDOW title — no extra model call, it arrives.
-    // Asserted on the chrome rather than the sidebar, whose Agents
-    // section may be collapsed.
-    await expect(page.getByText('Fake conversation').first()).toBeVisible({ timeout: 15_000 });
+    // Asserted on THIS window's title bar: the manager beside it shows the
+    // same name in its Running and History rows, so a page-wide match
+    // would pass with no title on the controller at all.
+    await expect(windowOf(page, win).locator('.wash-titlebar')).toContainText('Fake conversation', { timeout: 15_000 });
   });
 
   test('closing a session window asks what to do with the agent', async ({ page, router }) => {

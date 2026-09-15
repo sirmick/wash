@@ -98,7 +98,13 @@ test('the Agents manager opened on a remote host shows THAT host\'s sessions', a
     await expect(bManager).not.toContainText('work happening on A');
 
     // The door is navigation: crossing it again raises B's one manager.
+    // Buried first, so its coming back is the barrier before counting —
+    // a count taken straight after the click would precede any duplicate.
+    const bId = Number(await bManager.getAttribute('data-wash-window'));
+    await page.evaluate((w) => window.wash.minimizeWindow(w, 'remoteB'), bId);
+    await expect(bManager).toBeHidden();
     await openDoorToB(page);
+    await expect(bManager).toBeVisible({ timeout: 15_000 });
     await expect(bManager).toHaveCount(1);
     expect(b.log().slice(bLaunch).match(/wash-router app com\.wash\.agents up/g)).toHaveLength(1);
   } finally {
