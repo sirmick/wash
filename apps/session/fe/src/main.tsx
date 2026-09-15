@@ -40,12 +40,17 @@ import {
   paletteEntries,
   pinnedRows,
   recentDir,
+  recentGroups,
   recentMatches,
   recentName,
   recentPathOf,
   stepSelection,
+  type AgentRecent,
+  type AgentRecentAction,
   type PaletteEntry,
   type RecentEntry,
+  type RecentGroup,
+  type RecentItem,
 } from './launcher';
 import { LinkWidget } from './sidebar/LinkWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
@@ -307,7 +312,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // App level (not inside StartMenu) so the start menu's outside-click
   // dismissal can be suppressed while it is up — the context menu is a
   // portal, so to the start menu a click on it looks like "outside".
-  const [recentMenu, setRecentMenu] = createSignal<{ x: number; y: number; path: string } | null>(null);
+  const [recentMenu, setRecentMenu] = createSignal<{ x: number; y: number; entry: RecentEntry } | null>(null);
   // Right-click on an APP row: {x, y, appID} while open. Same portal
   // caveat as recentMenu — the start menu must not dismiss under it.
   const [appMenu, setAppMenu] = createSignal<{ x: number; y: number; appID: string } | null>(null);
@@ -386,6 +391,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // roster push. An agent blocked on a human is the one thing in the
   // sidebar worth opening the section for on its own.
   const [agentAsks, setAgentAsks] = createSignal<RosterAsk[]>([]);
+  // agentd's session history (State.recent), newest first — the start
+  // menu's Agent flyout. Same push as the roster.
+  const [agentRecent, setAgentRecent] = createSignal<AgentRecent[]>([]);
 
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
   // master volume), forwarded by the session BE as audio.state.
@@ -618,11 +626,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- launcher memory (recent files / pins) ----
   // All mutations go through the session BE, which owns the state file and
   // pushes launcher.state back; the FE never edits its copy locally.
+  // openRecent carries the app that recorded the entry: a folder has no
+  // extension for the router to resolve, so the BE spawns that app on it.
   const openRecent = (path: string) => {
-    window.wash.sendAppMsg(props.instance, { kind: 'recent.open', path });
+    const appID = recent().find((r) => r.path === path)?.app_id ?? '';
+    window.wash.sendAppMsg(props.instance, { kind: 'recent.open', path, app_id: appID });
   };
-  const removeRecent = (path: string) => {
-    window.wash.sendAppMsg(props.instance, { kind: 'recent.remove', path });
+  const playRecent = (e: RecentEntry) => {
+    window.wash.sendAppMsg(props.instance, { kind: 'recent.play', app_id: e.app_id, name: e.name ?? '' });
+  };
+  const openAgentRecent = (s: AgentRecent, action: AgentRecentAction) => {
+    window.wash.sendAppMsg(props.instance, {
+      kind: 'agent_open',
+      action,
+      session_id: s.session_id,
+      row_key: s.row_key ?? '',
+    });
+  };
+  const removeRecent = (e: RecentEntry) => {
+    window.wash.sendAppMsg(props.instance, { kind: 'recent.remove', path: e.path, name: e.name ?? '', app_id: e.app_id });
   };
   const clearRecent = () => {
     window.wash.sendAppMsg(props.instance, { kind: 'recent.clear' });
@@ -1034,7 +1056,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           const state = data.state as unknown as {
             rows?: RosterRow[];
             asks?: RosterAsk[];
+            recent?: AgentRecent[];
           };
+          setAgentRecent(Array.isArray(state?.recent) ? state.recent : []);
           const next = (state?.rows ?? []) as RosterRow[];
           const asks = (state?.asks ?? []) as RosterAsk[];
           const hadAsks = agentAsks().length > 0;
@@ -1636,6 +1660,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           apps={catalog()}
           rootRows={rootEntries()}
           recent={recent()}
+          groups={recentGroups(recent(), agentRecent(), (id) => catalog().find((a) => a.id === id)?.name, agentRows())}
+          holdFlyout={recentMenu() !== null}
           version={sysInfo()?.router?.version}
           onDismiss={() => {
             // A click on a row context menu is "outside" the start menu
@@ -1651,12 +1677,18 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             setMenuOpen(false);
             openRecent(path);
           }}
+          onRecentItem={(item) => {
+            setMenuOpen(false);
+            if (item.kind === 'path') openRecent(item.entry.path);
+            else if (item.kind === 'station') playRecent(item.entry);
+            else openAgentRecent(item.session, item.action);
+          }}
           pinned={pinned()}
-          onRecentContextMenu={(ev, path) => {
+          onRecentContextMenu={(ev, entry) => {
             ev.preventDefault();
             ev.stopPropagation();
             setAppMenu(null);
-            setRecentMenu({ x: ev.clientX, y: ev.clientY, path });
+            setRecentMenu({ x: ev.clientX, y: ev.clientY, entry });
           }}
           onAppContextMenu={(ev, appID) => {
             ev.preventDefault();
@@ -1698,7 +1730,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               data-testid="start-menu-recent-remove"
               label="Remove"
               onClick={() => {
-                removeRecent(m().path);
+                removeRecent(m().entry);
                 setRecentMenu(null);
               }}
             />
@@ -2301,11 +2333,16 @@ const StartMenu: Component<{
   rootRows: CatalogApp[];
   /** recent files, newest first (session BE launcher.state) */
   recent: RecentEntry[];
+  /** the Recent rows and their flyout items (launcher.ts recentGroups) */
+  groups: RecentGroup[];
+  /** keep the flyout up while an App-level menu it opened is showing */
+  holdFlyout: boolean;
   /** pinned app ids, in pin order (session BE launcher.state) */
   pinned: string[];
   onPick: (id: string) => void;
   onOpenRecent: (path: string) => void;
-  onRecentContextMenu: (ev: MouseEvent, path: string) => void;
+  onRecentItem: (item: RecentItem) => void;
+  onRecentContextMenu: (ev: MouseEvent, entry: RecentEntry) => void;
   onAppContextMenu: (ev: MouseEvent, appID: string) => void;
   onDismiss: () => void;
   onLogout: () => void;
@@ -2339,16 +2376,83 @@ const StartMenu: Component<{
   // the Enter target throughout, because that is what it means.
   const [keyboardDriving, setKeyboardDriving] = createSignal(false);
   const pinnedApps = createMemo(() => appMatches(pinnedRows(items(), props.pinned), query()));
-  const recentHits = createMemo(() => recentMatches(props.recent, query()));
+  // Searching flattens Recent back into matching files: a query is a
+  // question about names, and making someone open four flyouts to find
+  // the answer would hide it. With no query, Recent is one row per app.
+  const searching = () => query().trim() !== '';
+  const recentHits = createMemo(() => (searching() ? recentMatches(props.recent, query()) : []));
+  const groups = createMemo(() => (searching() ? [] : props.groups));
   const appHits = createMemo(() => appMatches(items(), query()));
-  type Row = { run: () => void };
+
+  // ---- Recent flyouts ----
+  // A group row pops its items out to the right of the menu. The flyout is
+  // a second portal <Menu>, so to the start menu a click inside it is
+  // "outside"; downInFlyout, set by a capture listener registered before
+  // Menu's own, is what tells the two apart.
+  const [flyout, setFlyout] = createSignal<{ group: RecentGroup; x: number; y: number; kb: boolean } | null>(null);
+  const [flyoutSel, setFlyoutSel] = createSignal(0);
+  const groupEls = new Map<string, HTMLDivElement>();
+  let menuPanel: HTMLElement | null = null;
+  let downInFlyout = false;
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  onMount(() => {
+    const onDown = (ev: Event) => {
+      downInFlyout = !!(ev.target as Element | null)?.closest?.('[data-testid="start-menu-flyout"]');
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', onDown, true);
+      clearTimeout(hoverTimer);
+    });
+  });
+  const openFlyout = (group: RecentGroup, kb: boolean) => {
+    clearTimeout(hoverTimer);
+    const row = groupEls.get(group.id);
+    if (!row) return;
+    const panel = menuPanel ?? row.closest<HTMLElement>('[data-testid="start-menu"]');
+    const r = row.getBoundingClientRect();
+    // Beside the menu, its first item level with the row (the flyout's 4px
+    // top padding is why y sits 4px above the row).
+    const x = (panel?.getBoundingClientRect().right ?? r.right) + 2;
+    setFlyoutSel(0);
+    setFlyout({ group, x, y: r.top - 4, kb });
+  };
+  const closeFlyout = () => {
+    clearTimeout(hoverTimer);
+    setFlyout(null);
+  };
+  // Hover opens after a beat, so a pointer crossing the Recent rows on its
+  // way to the flyout does not swap the flyout under it.
+  const hoverGroup = (group: RecentGroup) => {
+    clearTimeout(hoverTimer);
+    if (flyout()?.group.id === group.id) return;
+    hoverTimer = setTimeout(() => openFlyout(group, false), flyout() ? 250 : 120);
+  };
+  const hoverOther = () => {
+    clearTimeout(hoverTimer);
+    if (flyout() && !flyout()!.kb) hoverTimer = setTimeout(closeFlyout, 250);
+  };
+  // The live group, not the one captured at open: a launcher.state push
+  // while the flyout is up must show in it.
+  const flyoutGroup = () => {
+    const f = flyout();
+    return f ? (props.groups.find((g) => g.id === f.group.id) ?? f.group) : null;
+  };
+  const runItem = (item: RecentItem) => {
+    closeFlyout();
+    props.onRecentItem(item);
+  };
+
+  type Row = { run: () => void; group?: RecentGroup };
   const rows = createMemo<Row[]>(() => [
     ...pinnedApps().map((a) => ({ run: () => props.onPick(a.id) })),
+    ...groups().map((g) => ({ run: () => openFlyout(g, true), group: g })),
     ...recentHits().map((r) => ({ run: () => props.onOpenRecent(r.path) })),
     ...appHits().map((a) => ({ run: () => props.onPick(a.id) })),
   ]);
   // Section offsets into that flat list, for the per-row selected mark.
-  const recentBase = createMemo(() => pinnedApps().length);
+  const groupBase = createMemo(() => pinnedApps().length);
+  const recentBase = createMemo(() => groupBase() + groups().length);
   const appBase = createMemo(() => recentBase() + recentHits().length);
   // A new query renumbers everything; start again at the top.
   createEffect(() => {
@@ -2362,13 +2466,37 @@ const StartMenu: Component<{
   });
   const selMark = (i: number) => (i === selected() ? 'true' : undefined);
   const onKey = (ev: KeyboardEvent) => {
+    // A keyboard-opened flyout takes the arrows until it is closed again;
+    // Escape and ArrowLeft close only it, the way a submenu does.
+    const f = flyout();
+    if (f?.kb) {
+      const items = flyoutGroup()?.items ?? [];
+      if (ev.key === 'Escape' || ev.key === 'ArrowLeft') {
+        ev.preventDefault();
+        closeFlyout();
+        return;
+      }
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        const item = items[flyoutSel()];
+        if (item) runItem(item);
+        return;
+      }
+      const next = stepSelection(ev.key, flyoutSel(), items.length);
+      if (next !== null) {
+        ev.preventDefault();
+        setFlyoutSel(next);
+      }
+      return;
+    }
     if (ev.key === 'Escape') {
       ev.preventDefault();
       props.onDismiss();
       return;
     }
-    if (ev.key === 'Enter') {
+    if (ev.key === 'Enter' || (ev.key === 'ArrowRight' && rows()[selected()]?.group)) {
       ev.preventDefault();
+      setKeyboardDriving(true);
       rows()[selected()]?.run();
       return;
     }
@@ -2386,12 +2514,16 @@ const StartMenu: Component<{
     setSelected(next);
   };
   return (
+    <>
     <Menu
       data-testid="start-menu"
       anchor="bottom-left"
       animation="slide-up"
       zIndex={tokens.zStartMenu}
-      onDismiss={props.onDismiss}
+      onDismiss={() => {
+        if (downInFlyout) return;
+        props.onDismiss();
+      }}
       // overflow:hidden clips the one-shot shimmer band to the menu
       // panel so the diagonal sweep can't escape past the rounded
       // corners. Pointer-events on the shimmer div are off so it
@@ -2407,7 +2539,7 @@ const StartMenu: Component<{
         background: `var(--wash-startmenu-bg, ${tokens.bgMenu})`,
       }}
     >
-      <div class="wash-shimmer-sweep" aria-hidden="true" />
+      <div class="wash-shimmer-sweep" aria-hidden="true" ref={(el) => queueMicrotask(() => (menuPanel = el.parentElement))} />
       {/* Brand header: the wash logo + "wash <version>" in a larger
           italic face, sitting above the launcher rows. */}
       <div
@@ -2466,7 +2598,7 @@ const StartMenu: Component<{
           font: tokens.type.text,
         }}
       />
-      <div style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }}>
+      <div style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }} onScroll={closeFlyout}>
       {/* Pinned: apps the person put here by hand (right-click → Pin to
           start), in pin order, above everything the machine decided. An
           uninstalled app's id simply drops out (pinnedRows). */}
@@ -2477,6 +2609,7 @@ const StartMenu: Component<{
             <div
               data-selected={selMark(i())}
               style={rowSelStyle(keyboardDriving() && i() === selected())}
+              onMouseEnter={hoverOther}
               onContextMenu={(ev) => props.onAppContextMenu(ev, app.id)}
             >
               <MenuItem
@@ -2496,20 +2629,58 @@ const StartMenu: Component<{
           )}
         </For>
       </Show>
-      {/* Recent: files the router routed to a handler, newest first. A row
+      {/* Recent: one row per app — Files, Edit, Agent, Radio, then any
+          other app with recent files — each popping out its last few
+          items (launcher.ts recentGroups). The named rows show even when
+          empty, so where to look is learnable before there is anything to
+          find; the flyout says there is nothing yet. */}
+      <Show when={groups().length > 0}>
+        <div data-testid="start-menu-recent" style={sectionHeaderStyle}>Recent</div>
+        <For each={groups()}>
+          {(group, i) => {
+            const app = () => props.apps.find((a) => a.id === group.id);
+            const open = () => flyout()?.group.id === group.id;
+            return (
+              <div
+                ref={(el) => groupEls.set(group.id, el)}
+                data-selected={selMark(groupBase() + i())}
+                data-open={open() ? 'true' : undefined}
+                style={rowSelStyle((keyboardDriving() && groupBase() + i() === selected()) || open())}
+                onMouseEnter={() => hoverGroup(group)}
+                onMouseLeave={() => clearTimeout(hoverTimer)}
+              >
+                <MenuItem
+                  data-testid={`start-menu-recent-group-${group.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+                  label={group.label}
+                  icon={
+                    <span style={{ color: app() ? accentFor(app()!) : tokens.fgMuted, display: 'inline-flex' }}>
+                      <SpriteIcon name={app()?.icon ?? groupIcon(group.id)} size={16} />
+                    </span>
+                  }
+                  // A submenu trigger, not a button: "Files" here opens
+                  // recent folders, while the "Files" button below is the
+                  // app, and the role is what tells the two apart.
+                  popup={{ expanded: open() }}
+                  trailing={<span aria-hidden="true" style={{ color: tokens.fgMuted }}>›</span>}
+                  onClick={() => (open() ? closeFlyout() : openFlyout(group, false))}
+                />
+              </div>
+            );
+          }}
+        </For>
+      </Show>
+      {/* Searching: matching recent files, flat, newest first. A row
           re-issues the open through the session BE (same ext → handler
           resolution as the original double-click); right-click offers
-          Remove / Clear recent. The section is absent, not empty, when
-          there is nothing to show — a "no recent files" line would only
-          push the app list down. */}
+          Remove / Clear recent. */}
       <Show when={recentHits().length > 0}>
-        <div data-testid="start-menu-recent" style={sectionHeaderStyle}>Recent</div>
+        <div data-testid="start-menu-recent-hits" style={sectionHeaderStyle}>Recent</div>
         <For each={recentHits()}>
           {(r, i) => (
             <div
               data-selected={selMark(recentBase() + i())}
               style={rowSelStyle(keyboardDriving() && recentBase() + i() === selected())}
-              onContextMenu={(ev) => props.onRecentContextMenu(ev, r.path)}
+              onContextMenu={(ev) => props.onRecentContextMenu(ev, r)}
             >
               <MenuItem
                 data-testid="start-menu-recent-item"
@@ -2540,7 +2711,7 @@ const StartMenu: Component<{
           )}
         </For>
       </Show>
-      <Show when={pinnedApps().length > 0 || recentHits().length > 0}>
+      <Show when={pinnedApps().length > 0 || groups().length > 0 || recentHits().length > 0}>
         <div data-testid="start-menu-apps" style={sectionHeaderStyle}>Apps</div>
       </Show>
       <Show
@@ -2573,6 +2744,7 @@ const StartMenu: Component<{
               <div
                 data-selected={selMark(appBase() + i())}
                 style={rowSelStyle(keyboardDriving() && appBase() + i() === selected())}
+                onMouseEnter={hoverOther}
                 onContextMenu={(ev) => props.onAppContextMenu(ev, app.id)}
               >
               <MenuItem
@@ -2617,8 +2789,97 @@ const StartMenu: Component<{
         onClick={() => props.onLogout()}
       />
     </Menu>
+    <Show when={flyoutGroup()}>
+      {(group) => (
+        <Menu
+          data-testid="start-menu-flyout"
+          x={flyout()!.x}
+          y={flyout()!.y}
+          zIndex={tokens.zStartMenu + 1}
+          style={{ 'min-width': '220px', 'max-width': '360px', padding: '4px' }}
+          onDismiss={() => {
+            // A click back on the start menu (another group, the search
+            // box) or on the Remove menu this flyout opened is not a reason
+            // to go; everything else outside is.
+            if (props.holdFlyout) return;
+            setTimeout(() => {
+              if (!downInFlyout && !menuPanel?.matches(':hover')) closeFlyout();
+            }, 0);
+          }}
+        >
+          <div data-group={group().id} onMouseEnter={() => clearTimeout(hoverTimer)}>
+            <Show
+              when={group().items.length > 0}
+              fallback={<MenuItem data-testid="start-menu-flyout-empty" label={group().empty} disabled onClick={() => {}} />}
+            >
+              <For each={group().items}>
+                {(item, i) => (
+                  <div
+                    data-kind={item.kind}
+                    data-action={item.kind === 'agent' ? item.action : undefined}
+                    data-selected={flyout()?.kb && i() === flyoutSel() ? 'true' : undefined}
+                    style={rowSelStyle(!!flyout()?.kb && i() === flyoutSel())}
+                    onContextMenu={(ev) => {
+                      // Agent sessions are history agentd owns; the Agents
+                      // app is where they are renamed and deleted.
+                      if (item.kind === 'agent') return;
+                      props.onRecentContextMenu(ev, item.entry);
+                    }}
+                  >
+                    <MenuItem
+                      data-testid="start-menu-flyout-item"
+                      label={item.label}
+                      icon={
+                        <span style={{ color: tokens.fgMuted, display: 'inline-flex' }}>
+                          <SpriteIcon name={item.icon} size={16} />
+                        </span>
+                      }
+                      trailing={
+                        item.kind !== 'station' && item.detail ? (
+                          <span
+                            title={item.kind === 'path' ? item.entry.path : item.session.cwd}
+                            style={{
+                              color: tokens.fgMuted,
+                              'font-size': tokens.fontSizeSm,
+                              'max-width': '160px',
+                              overflow: 'hidden',
+                              'text-overflow': 'ellipsis',
+                              'white-space': 'nowrap',
+                            }}
+                          >
+                            {item.detail}
+                          </span>
+                        ) : undefined
+                      }
+                      onClick={() => runItem(item)}
+                    />
+                  </div>
+                )}
+              </For>
+            </Show>
+          </div>
+        </Menu>
+      )}
+    </Show>
+    </>
   );
 };
+
+// groupIcon is a Recent row's icon when its app is not in the catalog (the
+// Agents app on a host without it, say).
+function groupIcon(appID: string): string {
+  switch (appID) {
+    case 'com.wash.fm':
+      return 'folder';
+    case 'com.wash.edit':
+      return 'file-pen';
+    case 'com.wash.agents':
+      return 'bot';
+    case 'com.wash.radio':
+      return 'radio';
+  }
+  return 'file-text';
+}
 
 const Palette: Component<{
   inputRef: (el: HTMLInputElement) => void;

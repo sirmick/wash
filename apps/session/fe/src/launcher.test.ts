@@ -9,6 +9,9 @@ import { strict as assert } from 'node:assert';
 
 import {
   RECENT_PREFIX,
+  RECENT_FLYOUT_CAP,
+  agentRecentAction,
+  agentRecentLabel,
   appMatches,
   paletteEntries,
   pinnedRows,
@@ -17,7 +20,10 @@ import {
   recentName,
   recentPathOf,
   recentRowID,
+  recentGroups,
   stepSelection,
+  withLiveRows,
+  type AgentRecent,
   type RecentEntry,
 } from './launcher.ts';
 
@@ -101,4 +107,86 @@ test('stepSelection wraps on arrows, jumps on Home/End, ignores other keys', () 
   assert.equal(stepSelection('End', 0, 3), 2);
   assert.equal(stepSelection('Enter', 0, 3), null);
   assert.equal(stepSelection('ArrowDown', 0, 0), null);
+});
+
+test('recentMatches and the palette never offer a name entry — a station has no path to open', () => {
+  const withStation: RecentEntry[] = [...recent, { path: '', name: 'Groove Salad', app_id: 'com.wash.radio', at: 9 }];
+  assert.equal(recentMatches(withStation, '').length, 3);
+  assert.equal(recentMatches(withStation, 'groove').length, 0);
+  assert.ok(paletteEntries(apps, withStation, '').every((e) => !e.recent || e.recent.path));
+});
+
+test('agentRecentAction agrees with the Agents history list: reattach, focus, skip, resume', () => {
+  assert.equal(agentRecentAction({ session_id: 's', detached: true, live: true, row_key: 'acp:1' }), 'reattach');
+  assert.equal(agentRecentAction({ session_id: 's', live: true, row_key: 'acp:1' }), 'focus');
+  assert.equal(agentRecentAction({ session_id: 's', live: true }), 'none');
+  assert.equal(agentRecentAction({ session_id: 's', detached: true }), 'resume');
+  assert.equal(agentRecentAction({ session_id: 's' }), 'resume');
+});
+
+test('agentRecentLabel prefers the session title, else agent and folder', () => {
+  assert.equal(agentRecentLabel({ session_id: 's', title: 'Fix the banner', agent: 'codex', dir: 'wash' }), 'Fix the banner');
+  assert.equal(agentRecentLabel({ session_id: 's', agent: 'codex', dir: 'wash' }), 'codex · wash');
+  assert.equal(agentRecentLabel({ session_id: 's' }), 'agent');
+});
+
+test('recentGroups: Files, Edit, Agent, Radio always, then other apps with files', () => {
+  const store: RecentEntry[] = [
+    ...recent,
+    { path: '', name: 'Groove Salad', app_id: 'com.wash.radio', at: 5 },
+    { path: '', name: 'Drone Zone', app_id: 'com.wash.radio', at: 6 },
+  ];
+  const agents: AgentRecent[] = [
+    { session_id: 'live-no-row', live: true },
+    { session_id: 'done', agent: 'codex', dir: 'wash' },
+  ];
+  const name = (id: string) => apps.find((a) => a.id === id)?.name;
+  const groups = recentGroups(store, agents, (id) => (id === 'com.wash.imageview' ? 'Image Viewer' : name(id)));
+  assert.deepEqual(groups.map((g) => g.label), ['Files', 'Edit', 'Agent', 'Radio', 'Image Viewer']);
+  const [files, edit, agent, radio, images] = groups;
+  assert.deepEqual(files.items.map((i) => i.label), ['srv']);
+  assert.deepEqual(edit.items.map((i) => i.label), ['notes.md']);
+  // A live session with no row cannot be opened from here: left out.
+  assert.deepEqual(agent.items.map((i) => i.key), ['a:done']);
+  assert.equal(agent.items[0].kind === 'agent' && agent.items[0].action, 'resume');
+  assert.deepEqual(radio.items.map((i) => i.label), ['Drone Zone', 'Groove Salad']);
+  assert.deepEqual(images.items.map((i) => i.label), ['photo.png']);
+});
+
+test('recentGroups: empty named groups still show, and each flyout is capped', () => {
+  const many: RecentEntry[] = Array.from({ length: RECENT_FLYOUT_CAP + 3 }, (_, i) => ({
+    path: `/f${i}`,
+    app_id: 'com.wash.edit',
+    at: i,
+  }));
+  const groups = recentGroups(many, [], () => undefined, []);
+  assert.deepEqual(groups.map((g) => g.id), ['com.wash.fm', 'com.wash.edit', 'com.wash.agents', 'com.wash.radio']);
+  assert.equal(groups[0].items.length, 0);
+  assert.equal(groups[0].empty, 'No recent folders');
+  assert.equal(groups[1].items.length, RECENT_FLYOUT_CAP);
+  assert.equal(groups[1].items[0].label, `f${RECENT_FLYOUT_CAP + 2}`, 'newest first');
+});
+
+test('withLiveRows: the roster, not the lagging history flags, picks the verb', () => {
+  // History still says "live with a window"; the roster row says detached.
+  const stale: AgentRecent[] = [
+    { session_id: 's1', live: true, row_key: 'acp:1' },
+    { session_id: 's2', live: true, row_key: 'acp:2' },
+    { session_id: 's3' },
+  ];
+  const rows = [
+    { key: 'acp:1', session_id: 's1', detached: true },
+    { key: 'acp:3', session_id: 's3' },
+  ];
+  const fixed = withLiveRows(stale, rows);
+  assert.equal(agentRecentAction(fixed[0]), 'reattach');
+  // No row: left as the history says.
+  assert.equal(agentRecentAction(fixed[1]), 'focus');
+  // A row the history did not know was live yet.
+  assert.equal(agentRecentAction(fixed[2]), 'focus');
+  const groups = recentGroups([], stale, () => undefined, rows);
+  assert.deepEqual(
+    groups[2].items.map((i) => (i.kind === 'agent' ? i.action : '')),
+    ['reattach', 'focus', 'focus'],
+  );
 });
