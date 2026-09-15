@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	creackpty "github.com/creack/pty"
 	"github.com/sirmick/wash/pkg/sdk"
@@ -70,7 +71,11 @@ type Session struct {
 	// so a waiter that wakes on it always sees the status. The reaper is
 	// the authority: it runs whether the process exited on its own or
 	// because Close killed it.
-	done     chan struct{}
+	done chan struct{}
+	// drained closes when the pty→channel copy has returned: every byte
+	// the child wrote has been read (and captured). Nil for a Session
+	// built without a pty (tests).
+	drained  chan struct{}
 	exitMu   sync.Mutex
 	exitCode int
 	exitSig  string
@@ -213,7 +218,47 @@ func (s *Session) Output() (text string, truncated bool) {
 	if s.cap == nil {
 		return "", false
 	}
+	s.awaitDrain()
 	return s.cap.snapshot()
+}
+
+// drainGrace bounds how long an exited child's output may take to finish
+// draining. A grandchild that keeps the pty open (`cmd &`) never lets the
+// copy see EOF, and must not hang Close or Output.
+var drainGrace = 2 * time.Second
+
+// awaitDrain waits, once the child has been reaped, for the pty→channel
+// copy to have read everything it wrote.
+//
+// The reaper and the copy are separate goroutines, and the reaper usually
+// wins: a caller woken by Done (ACP's wait_for_exit) that then asked for
+// the output got whatever the copy had reached — often nothing for a fast
+// `ls` — and a Close in that window closed the pty with the rest still in
+// the kernel buffer, so the transcript kept an empty result. A 2-core CI
+// runner lost `ls` output that way about one run in eight.
+//
+// A child still running is not waited for: its output is not finished,
+// and Output is also a live poll.
+func (s *Session) awaitDrain() {
+	if s.drained == nil || s.done == nil {
+		return
+	}
+	select {
+	case <-s.drained:
+		return
+	default:
+	}
+	select {
+	case <-s.done:
+	default:
+		return
+	}
+	t := time.NewTimer(drainGrace)
+	defer t.Stop()
+	select {
+	case <-s.drained:
+	case <-t.C:
+	}
 }
 
 // Done closes once the child has been reaped. A caller blocking on it —
@@ -490,6 +535,7 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 		cols:    cols,
 		rows:    rows,
 		onClose: onClose,
+		drained: make(chan struct{}),
 		done:    make(chan struct{}),
 	}
 	// Options run BEFORE the child starts: WithDir has to land on cmd.Dir
@@ -523,6 +569,9 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 			// without this line the session just goes dark.
 			log.Printf("pty: win=%d shell=%s pty→channel copy: %v", windowID, shellPath, copyErr)
 		}
+		// Before closeWithReason: a Close already waiting in awaitDrain
+		// holds closeOnce, and this is what releases it.
+		close(s.drained)
 		s.closeWithReason("pty eof")
 	}()
 	// channel → pty
@@ -580,6 +629,10 @@ func (s *Session) CloseWithReason(reason string) {
 
 func (s *Session) closeWithReason(reason string) {
 	s.closeOnce.Do(func() {
+		// A child that already exited has nothing left to kill, but may
+		// still have output in the pty buffer: let it drain before the fd
+		// closes under it (awaitDrain).
+		s.awaitDrain()
 		if s.cmd != nil && s.cmd.Process != nil {
 			_ = s.cmd.Process.Kill()
 		}

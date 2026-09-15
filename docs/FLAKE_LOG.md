@@ -16,6 +16,31 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-15 — agent-fs: a fast command's output lost between reap and drain (FIXED)
+
+**Seen during:** GitHub `ci` for 0.15.0 (e2e 677 passed / 2 failed).
+`agent-fs.spec.ts` "the command runs in the session folder": the transcript
+showed `$ sh -c ls — exit 0` and the fake agent's `RAN<<id=7 exit=0 out=>>`
+— the command ran, and its output never arrived. Same presentation as the
+2026-08-08 trio entry below, a different window.
+
+**Reproduced** with `taskset -c 0,1 --workers=2 --repeat-each=8` on the
+finished-command pair: 2/16 failed on the release tree, **1/16 on the
+pre-release baseline 5b29105e** — pre-existing, not the release.
+
+**Mechanism** (`internal/pty`). The reaper (`cmd.Wait` → `done`) and the
+pty→channel copy are separate goroutines, and the reaper usually wins. An
+agent woken by wait_for_exit asked terminal/output before the copy had read
+`ls`'s bytes (empty `out=`), then released the terminal; release's Close
+closed the pty fd with the output still in the kernel buffer, so the
+transcript's completion read an empty capture. **Fix:** once the child is
+reaped, `Output` and `Close` wait (bounded, 2s) for the copy to drain.
+Same squeeze afterwards: 32/32.
+
+The second red in that run, `agent-roster-pane` "each manager pane scrolls",
+was a guard doing its job: one running row came out exactly as tall as the
+shrunk pane on CI's fonts (98 = 98). The spec now runs two sessions.
+
 ## 2026-09-14 — edit-readonly: Save As copy not on disk within the poll
 
 **Seen during:** the second `make push` attempt for 0.15.0 (full `e2e-test`,
