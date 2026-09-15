@@ -40,14 +40,19 @@ import {
   paletteEntries,
   pinnedRows,
   recentDir,
+  aimingAt,
   recentGroups,
+  recordPointer,
   recentMatches,
   recentName,
   recentPathOf,
+  rectIsLaid,
+  sameKeys,
   stepSelection,
   type AgentRecent,
   type AgentRecentAction,
   type PaletteEntry,
+  type PointerSample,
   type RecentEntry,
   type RecentGroup,
   type RecentItem,
@@ -312,7 +317,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // App level (not inside StartMenu) so the start menu's outside-click
   // dismissal can be suppressed while it is up — the context menu is a
   // portal, so to the start menu a click on it looks like "outside".
-  const [recentMenu, setRecentMenu] = createSignal<{ x: number; y: number; entry: RecentEntry } | null>(null);
+  // `group` is set when the menu was opened from a flyout: Remove and Clear
+  // then act on that app's entries only.
+  const [recentMenu, setRecentMenu] = createSignal<{ x: number; y: number; entry: RecentEntry; group?: { id: string; label: string } } | null>(null);
   // Right-click on an APP row: {x, y, appID} while open. Same portal
   // caveat as recentMenu — the start menu must not dismiss under it.
   const [appMenu, setAppMenu] = createSignal<{ x: number; y: number; appID: string } | null>(null);
@@ -628,9 +635,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // pushes launcher.state back; the FE never edits its copy locally.
   // openRecent carries the app that recorded the entry: a folder has no
   // extension for the router to resolve, so the BE spawns that app on it.
-  const openRecent = (path: string) => {
-    const appID = recent().find((r) => r.path === path)?.app_id ?? '';
-    window.wash.sendAppMsg(props.instance, { kind: 'recent.open', path, app_id: appID });
+  // A flyout item names its app (the same path can be under Files and
+  // Terminal); a palette or search row is the path's newest entry.
+  const openRecent = (path: string, appID?: string) => {
+    const app = appID ?? recent().find((r) => r.path === path)?.app_id ?? '';
+    window.wash.sendAppMsg(props.instance, { kind: 'recent.open', path, app_id: app });
   };
   const playRecent = (e: RecentEntry) => {
     window.wash.sendAppMsg(props.instance, { kind: 'recent.play', app_id: e.app_id, name: e.name ?? '' });
@@ -643,12 +652,25 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       row_key: s.row_key ?? '',
     });
   };
-  const removeRecent = (e: RecentEntry) => {
-    window.wash.sendAppMsg(props.instance, { kind: 'recent.remove', path: e.path, name: e.name ?? '', app_id: e.app_id });
+  // Scoped to the entry's app from a flyout, which lists one app's entries.
+  // The flat search list shows a path once for every app that recorded it,
+  // so Remove there forgets the path everywhere (a path with no app_id), or
+  // an older twin would take the removed row's place. A name always belongs
+  // to its app.
+  const removeRecent = (e: RecentEntry, scoped: boolean) => {
+    const appID = scoped || !e.path ? e.app_id : '';
+    window.wash.sendAppMsg(props.instance, { kind: 'recent.remove', path: e.path, name: e.name ?? '', app_id: appID });
   };
-  const clearRecent = () => {
-    window.wash.sendAppMsg(props.instance, { kind: 'recent.clear' });
+  // No app id clears every app's entries.
+  const clearRecent = (appID?: string) => {
+    window.wash.sendAppMsg(props.instance, appID ? { kind: 'recent.clear', app_id: appID } : { kind: 'recent.clear' });
   };
+  // One memo, not an inline prop expression: a prop expression is re-run on
+  // every read, and the start menu reads its groups from rows, keyboard
+  // handlers and the flyout alike.
+  const menuGroups = createMemo(() =>
+    recentGroups(recent(), agentRecent(), (id) => catalog().find((a) => a.id === id)?.name, agentRows()),
+  );
   const setPin = (appID: string, on: boolean) => {
     window.wash.sendAppMsg(props.instance, { kind: 'launcher.pin', app_id: appID, on });
   };
@@ -1660,7 +1682,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           apps={catalog()}
           rootRows={rootEntries()}
           recent={recent()}
-          groups={recentGroups(recent(), agentRecent(), (id) => catalog().find((a) => a.id === id)?.name, agentRows())}
+          groups={menuGroups()}
           holdFlyout={recentMenu() !== null}
           version={sysInfo()?.router?.version}
           onDismiss={() => {
@@ -1679,16 +1701,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           }}
           onRecentItem={(item) => {
             setMenuOpen(false);
-            if (item.kind === 'path') openRecent(item.entry.path);
+            if (item.kind === 'path') openRecent(item.entry.path, item.entry.app_id);
             else if (item.kind === 'station') playRecent(item.entry);
             else openAgentRecent(item.session, item.action);
           }}
           pinned={pinned()}
-          onRecentContextMenu={(ev, entry) => {
+          onRecentContextMenu={(ev, entry, group) => {
             ev.preventDefault();
             ev.stopPropagation();
             setAppMenu(null);
-            setRecentMenu({ x: ev.clientX, y: ev.clientY, entry });
+            setRecentMenu({ x: ev.clientX, y: ev.clientY, entry, group });
           }}
           onAppContextMenu={(ev, appID) => {
             ev.preventDefault();
@@ -1730,18 +1752,38 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               data-testid="start-menu-recent-remove"
               label="Remove"
               onClick={() => {
-                removeRecent(m().entry);
+                removeRecent(m().entry, !!m().group);
                 setRecentMenu(null);
               }}
             />
-            <MenuItem
-              data-testid="start-menu-recent-clear"
-              label="Clear recent"
-              onClick={() => {
-                clearRecent();
-                setRecentMenu(null);
-              }}
-            />
+            {/* From a flyout, Clear is that app's: clearing the Edit row
+                must not also forget folders, stations and every other
+                app's files. The search list, which mixes apps, keeps the
+                clear-everything verb. */}
+            <Show
+              when={m().group}
+              fallback={
+                <MenuItem
+                  data-testid="start-menu-recent-clear"
+                  label="Clear recent"
+                  onClick={() => {
+                    clearRecent();
+                    setRecentMenu(null);
+                  }}
+                />
+              }
+            >
+              {(g) => (
+                <MenuItem
+                  data-testid="start-menu-recent-clear-group"
+                  label={`Clear ${g().label} history`}
+                  onClick={() => {
+                    clearRecent(g().id);
+                    setRecentMenu(null);
+                  }}
+                />
+              )}
+            </Show>
           </Menu>
         )}
       </Show>
@@ -2342,7 +2384,8 @@ const StartMenu: Component<{
   onPick: (id: string) => void;
   onOpenRecent: (path: string) => void;
   onRecentItem: (item: RecentItem) => void;
-  onRecentContextMenu: (ev: MouseEvent, entry: RecentEntry) => void;
+  /** `group` is the flyout the entry was right-clicked in, if any */
+  onRecentContextMenu: (ev: MouseEvent, entry: RecentEntry, group?: { id: string; label: string }) => void;
   onAppContextMenu: (ev: MouseEvent, appID: string) => void;
   onDismiss: () => void;
   onLogout: () => void;
@@ -2383,61 +2426,122 @@ const StartMenu: Component<{
   const recentHits = createMemo(() => (searching() ? recentMatches(props.recent, query()) : []));
   const groups = createMemo(() => (searching() ? [] : props.groups));
   const appHits = createMemo(() => appMatches(items(), query()));
+  // The rows are keyed by group id, not by object: every agentd push and
+  // launcher.state rebuilds the group objects, and a <For> over those tore
+  // down each row — and the flyout's items — under a pointer about to click.
+  const groupByID = createMemo(() => new Map(groups().map((g) => [g.id, g] as const)));
+  const groupIDs = createMemo(() => groups().map((g) => g.id), undefined, { equals: sameKeys });
+  // The flyout reads the unfiltered groups: it is closed while searching.
+  const liveGroupByID = createMemo(() => new Map(props.groups.map((g) => [g.id, g] as const)));
 
   // ---- Recent flyouts ----
   // A group row pops its items out to the right of the menu. The flyout is
   // a second portal <Menu>, so to the start menu a click inside it is
   // "outside"; downInFlyout, set by a capture listener registered before
   // Menu's own, is what tells the two apart.
-  const [flyout, setFlyout] = createSignal<{ group: RecentGroup; x: number; y: number; kb: boolean } | null>(null);
+  const [flyout, setFlyout] = createSignal<{ id: string; x: number; y: number; kb: boolean } | null>(null);
   const [flyoutSel, setFlyoutSel] = createSignal(0);
   const groupEls = new Map<string, HTMLDivElement>();
   let menuPanel: HTMLElement | null = null;
   let downInFlyout = false;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  // Recent pointer samples, for aim (see hoverGroup).
+  let trail: PointerSample[] = [];
   onMount(() => {
     const onDown = (ev: Event) => {
       downInFlyout = !!(ev.target as Element | null)?.closest?.('[data-testid="start-menu-flyout"]');
     };
+    const onMove = (ev: MouseEvent) => {
+      trail = recordPointer(trail, { x: ev.clientX, y: ev.clientY, t: performance.now() });
+    };
     document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('mousemove', onMove, true);
     onCleanup(() => {
       document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('mousemove', onMove, true);
       clearTimeout(hoverTimer);
     });
   });
-  const openFlyout = (group: RecentGroup, kb: boolean) => {
+  // Opening is idempotent: a click on a row the hover already opened must
+  // not close it again. A keyboard open of a pointer-opened flyout does
+  // hand it the arrows, from the top.
+  const openFlyout = (id: string, kb: boolean) => {
     clearTimeout(hoverTimer);
-    const row = groupEls.get(group.id);
-    if (!row) return;
-    const panel = menuPanel ?? row.closest<HTMLElement>('[data-testid="start-menu"]');
+    const cur = flyout();
+    if (cur?.id === id && cur.kb === kb) return;
+    const row = groupEls.get(id);
+    // A timer can outlive its row (a search, a push that dropped the group):
+    // a detached row measures all zeroes and would park the flyout in the
+    // corner of the screen.
+    if (!row || !row.isConnected) return;
     const r = row.getBoundingClientRect();
+    if (!rectIsLaid(r)) return;
+    const panel = menuPanel ?? row.closest<HTMLElement>('[data-testid="start-menu"]');
     // Beside the menu, its first item level with the row (the flyout's 4px
     // top padding is why y sits 4px above the row).
     const x = (panel?.getBoundingClientRect().right ?? r.right) + 2;
     setFlyoutSel(0);
-    setFlyout({ group, x, y: r.top - 4, kb });
+    setFlyout({ id, x, y: r.top - 4, kb });
   };
   const closeFlyout = () => {
     clearTimeout(hoverTimer);
     setFlyout(null);
   };
-  // Hover opens after a beat, so a pointer crossing the Recent rows on its
-  // way to the flyout does not swap the flyout under it.
-  const hoverGroup = (group: RecentGroup) => {
+  // Hover opens after a beat. A fixed beat alone was not enough: heading
+  // diagonally for an item low in the flyout crosses the rows below its
+  // own, and a pointer that takes longer than the beat to cross one swapped
+  // the flyout out from under itself. So while the pointer is still AIMING
+  // at the open flyout (launcher.ts aimingAt), the swap waits and is asked
+  // again; a pointer that stops on a row stops aiming, and gets its row.
+  const hoverGroup = (id: string) => {
     clearTimeout(hoverTimer);
-    if (flyout()?.group.id === group.id) return;
-    hoverTimer = setTimeout(() => openFlyout(group, false), flyout() ? 250 : 120);
+    if (flyout()?.id === id) return;
+    if (!flyout()) {
+      hoverTimer = setTimeout(() => openFlyout(id, false), 120);
+      return;
+    }
+    if (aimingAtFlyout()) {
+      hoverTimer = setTimeout(() => hoverGroup(id), 80);
+      return;
+    }
+    hoverTimer = setTimeout(() => openFlyout(id, false), 150);
+  };
+  // Leaving the Recent rows for anything else closes the flyout after a
+  // beat — unless the pointer is still aiming at it: the way to a low item
+  // can pass over the app rows below the Recent section.
+  //
+  // A pointer already inside the flyout's box counts as having arrived: its
+  // own padding is outside the element that cancels these timers, so a
+  // re-check landing there used to find "not aiming" and close the flyout
+  // the pointer had just reached.
+  const aimingAtFlyout = () => {
+    const target = document.querySelector('[data-testid="start-menu-flyout"]')?.getBoundingClientRect();
+    if (!target) return false;
+    const p = trail[trail.length - 1];
+    if (p && p.x >= target.left && p.x <= target.right && p.y >= target.top && p.y <= target.bottom) return true;
+    return aimingAt(trail, performance.now(), target);
   };
   const hoverOther = () => {
     clearTimeout(hoverTimer);
-    if (flyout() && !flyout()!.kb) hoverTimer = setTimeout(closeFlyout, 250);
+    if (!flyout() || flyout()!.kb) return;
+    hoverTimer = setTimeout(() => (aimingAtFlyout() ? hoverOther() : closeFlyout()), aimingAtFlyout() ? 80 : 250);
   };
   // The live group, not the one captured at open: a launcher.state push
   // while the flyout is up must show in it.
-  const flyoutGroup = () => {
+  const flyoutGroup = createMemo(() => {
     const f = flyout();
-    return f ? (props.groups.find((g) => g.id === f.group.id) ?? f.group) : null;
-  };
+    return f ? (liveGroupByID().get(f.id) ?? null) : null;
+  });
+  // A group can go while its flyout is up — the last Image Viewer entry
+  // removed, its file deleted. The flyout goes with it rather than keep
+  // offering the items it last showed.
+  createEffect(() => {
+    const f = flyout();
+    if (f && !liveGroupByID().has(f.id)) closeFlyout();
+  });
+  // Flyout items are keyed like the rows: by their stable key.
+  const flyoutItemByKey = createMemo(() => new Map((flyoutGroup()?.items ?? []).map((it) => [it.key, it] as const)));
+  const flyoutItemKeys = createMemo(() => (flyoutGroup()?.items ?? []).map((it) => it.key), undefined, { equals: sameKeys });
   const runItem = (item: RecentItem) => {
     closeFlyout();
     props.onRecentItem(item);
@@ -2446,7 +2550,7 @@ const StartMenu: Component<{
   type Row = { run: () => void; group?: RecentGroup };
   const rows = createMemo<Row[]>(() => [
     ...pinnedApps().map((a) => ({ run: () => props.onPick(a.id) })),
-    ...groups().map((g) => ({ run: () => openFlyout(g, true), group: g })),
+    ...groups().map((g) => ({ run: () => openFlyout(g.id, true), group: g })),
     ...recentHits().map((r) => ({ run: () => props.onOpenRecent(r.path) })),
     ...appHits().map((a) => ({ run: () => props.onPick(a.id) })),
   ]);
@@ -2454,10 +2558,15 @@ const StartMenu: Component<{
   const groupBase = createMemo(() => pinnedApps().length);
   const recentBase = createMemo(() => groupBase() + groups().length);
   const appBase = createMemo(() => recentBase() + recentHits().length);
-  // A new query renumbers everything; start again at the top.
+  // A new query renumbers everything; start again at the top. It also
+  // takes the Recent rows away, so any flyout goes too: a keyboard flyout
+  // left up would keep Enter and the arrows while the list below shows
+  // search hits, and Enter would run an item nobody was looking at. A hover
+  // timer armed on a row the search just removed must not fire either.
   createEffect(() => {
     query();
     setSelected(0);
+    closeFlyout();
   });
   // Typing in the filter is keyboard driving, so the cursor shows from the
   // first keystroke — which is also when it starts being useful.
@@ -2491,7 +2600,9 @@ const StartMenu: Component<{
     }
     if (ev.key === 'Escape') {
       ev.preventDefault();
-      props.onDismiss();
+      // Like a submenu: Escape closes the innermost level first.
+      if (flyout()) closeFlyout();
+      else props.onDismiss();
       return;
     }
     if (ev.key === 'Enter' || (ev.key === 'ArrowRight' && rows()[selected()]?.group)) {
@@ -2636,25 +2747,34 @@ const StartMenu: Component<{
           find; the flyout says there is nothing yet. */}
       <Show when={groups().length > 0}>
         <div data-testid="start-menu-recent" style={sectionHeaderStyle}>Recent</div>
-        <For each={groups()}>
-          {(group, i) => {
-            const app = () => props.apps.find((a) => a.id === group.id);
-            const open = () => flyout()?.group.id === group.id;
+        <For each={groupIDs()}>
+          {(id, i) => {
+            const group = () => groupByID().get(id);
+            const label = () => group()?.label ?? '';
+            const app = () => props.apps.find((a) => a.id === id);
+            const open = () => flyout()?.id === id;
+            let rowEl: HTMLDivElement | undefined;
+            onCleanup(() => {
+              if (rowEl && groupEls.get(id) === rowEl) groupEls.delete(id);
+            });
             return (
               <div
-                ref={(el) => groupEls.set(group.id, el)}
+                ref={(el) => {
+                  rowEl = el;
+                  groupEls.set(id, el);
+                }}
                 data-selected={selMark(groupBase() + i())}
                 data-open={open() ? 'true' : undefined}
                 style={rowSelStyle((keyboardDriving() && groupBase() + i() === selected()) || open())}
-                onMouseEnter={() => hoverGroup(group)}
+                onMouseEnter={() => hoverGroup(id)}
                 onMouseLeave={() => clearTimeout(hoverTimer)}
               >
                 <MenuItem
-                  data-testid={`start-menu-recent-group-${group.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
-                  label={group.label}
+                  data-testid={`start-menu-recent-group-${label().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+                  label={label()}
                   icon={
                     <span style={{ color: app() ? accentFor(app()!) : tokens.fgMuted, display: 'inline-flex' }}>
-                      <SpriteIcon name={app()?.icon ?? groupIcon(group.id)} size={16} />
+                      <SpriteIcon name={app()?.icon ?? groupIcon(id)} size={16} />
                     </span>
                   }
                   // A submenu trigger, not a button: "Files" here opens
@@ -2662,7 +2782,10 @@ const StartMenu: Component<{
                   // app, and the role is what tells the two apart.
                   popup={{ expanded: open() }}
                   trailing={<span aria-hidden="true" style={{ color: tokens.fgMuted }}>›</span>}
-                  onClick={() => (open() ? closeFlyout() : openFlyout(group, false))}
+                  // Opens, never toggles: the hover has usually opened it
+                  // by the time the click lands, and a toggle closed it
+                  // again. Escape or a click elsewhere closes it.
+                  onClick={() => openFlyout(id, false)}
                 />
               </div>
             );
@@ -2812,49 +2935,75 @@ const StartMenu: Component<{
               when={group().items.length > 0}
               fallback={<MenuItem data-testid="start-menu-flyout-empty" label={group().empty} disabled onClick={() => {}} />}
             >
-              <For each={group().items}>
-                {(item, i) => (
-                  <div
-                    data-kind={item.kind}
-                    data-action={item.kind === 'agent' ? item.action : undefined}
-                    data-selected={flyout()?.kb && i() === flyoutSel() ? 'true' : undefined}
-                    style={rowSelStyle(!!flyout()?.kb && i() === flyoutSel())}
-                    onContextMenu={(ev) => {
-                      // Agent sessions are history agentd owns; the Agents
-                      // app is where they are renamed and deleted.
-                      if (item.kind === 'agent') return;
-                      props.onRecentContextMenu(ev, item.entry);
-                    }}
-                  >
-                    <MenuItem
-                      data-testid="start-menu-flyout-item"
-                      label={item.label}
-                      icon={
-                        <span style={{ color: tokens.fgMuted, display: 'inline-flex' }}>
-                          <SpriteIcon name={item.icon} size={16} />
-                        </span>
-                      }
-                      trailing={
-                        item.kind !== 'station' && item.detail ? (
-                          <span
-                            title={item.kind === 'path' ? item.entry.path : item.session.cwd}
-                            style={{
-                              color: tokens.fgMuted,
-                              'font-size': tokens.fontSizeSm,
-                              'max-width': '160px',
-                              overflow: 'hidden',
-                              'text-overflow': 'ellipsis',
-                              'white-space': 'nowrap',
-                            }}
-                          >
-                            {item.detail}
-                          </span>
-                        ) : undefined
-                      }
-                      onClick={() => runItem(item)}
-                    />
-                  </div>
-                )}
+              <For each={flyoutItemKeys()}>
+                {(key, i) => {
+                  // Read through the map so a push that rebuilds the item
+                  // (a new verb, a new title) updates this row in place.
+                  const item = () => flyoutItemByKey().get(key);
+                  const action = () => {
+                    const it = item();
+                    return it?.kind === 'agent' ? it.action : undefined;
+                  };
+                  const detail = () => {
+                    const it = item();
+                    return it && it.kind !== 'station' ? it.detail : '';
+                  };
+                  const detailTitle = () => {
+                    const it = item();
+                    return it?.kind === 'path' ? it.entry.path : it?.kind === 'agent' ? it.session.cwd : undefined;
+                  };
+                  const sel = () => !!flyout()?.kb && i() === flyoutSel();
+                  return (
+                    <Show when={item()}>
+                      {(it) => (
+                        <div
+                          data-kind={it().kind}
+                          data-action={action()}
+                          data-selected={sel() ? 'true' : undefined}
+                          style={rowSelStyle(sel())}
+                          onContextMenu={(ev) => {
+                            const cur = it();
+                            // Agent sessions are history agentd owns; the
+                            // Agents app is where they are renamed and deleted.
+                            if (cur.kind === 'agent') return;
+                            props.onRecentContextMenu(ev, cur.entry, { id: group().id, label: group().label });
+                          }}
+                        >
+                          <MenuItem
+                            data-testid="start-menu-flyout-item"
+                            label={it().label}
+                            icon={
+                              <span style={{ color: tokens.fgMuted, display: 'inline-flex' }}>
+                                <SpriteIcon name={it().icon} size={16} />
+                              </span>
+                            }
+                            trailing={
+                              detail() ? (
+                                <span
+                                  title={detailTitle()}
+                                  style={{
+                                    color: tokens.fgMuted,
+                                    'font-size': tokens.fontSizeSm,
+                                    // Narrow screens give the name the room:
+                                    // a 160px path left "note-0.md" wrapping.
+                                    'max-width': 'min(160px, 25vw)',
+                                    'min-width': 0,
+                                    overflow: 'hidden',
+                                    'text-overflow': 'ellipsis',
+                                    'white-space': 'nowrap',
+                                  }}
+                                >
+                                  {detail()}
+                                </span>
+                              ) : undefined
+                            }
+                            onClick={() => runItem(it())}
+                          />
+                        </div>
+                      )}
+                    </Show>
+                  );
+                }}
               </For>
             </Show>
           </div>

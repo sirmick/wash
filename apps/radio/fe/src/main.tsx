@@ -23,6 +23,7 @@ import {
 } from '@wash/ui';
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { ChevronDown, ChevronRight, Info, Plus, Radio, Star } from 'lucide-solid';
+import { decideTune } from './tune';
 
 interface Station {
   name: string;
@@ -226,7 +227,8 @@ function RadioApp(props: WashAppProps) {
   let pendingRevealName = '';
   // A station the start menu asked for before this FE had a list to find
   // it in — a remount after reload gets the BE's `tune` ahead of its own
-  // stations_ok.
+  // stations_ok. Looked up against that one list, then forgotten
+  // (tune.ts decideTune).
   let pendingTuneName = '';
 
   const [stations, setStations] = createSignal<Station[]>([]);
@@ -469,18 +471,12 @@ function RadioApp(props: WashAppProps) {
   }
 
   // tuneByName plays the station the start menu's Radio flyout picked.
-  // Stations are addressed by BE index, which is only meaningful against
-  // the list this FE holds, so a name that is not in it yet waits for the
-  // next stations_ok.
+  // Only an FE with no list yet holds the name; one whose list lacks it
+  // drops it (decideTune says why).
   const tuneByName = (name: string) => {
-    if (!name) return;
-    const be = stations().findIndex((st) => st.name === name);
-    if (be < 0 || !base()) {
-      pendingTuneName = name;
-      return;
-    }
-    pendingTuneName = '';
-    tune(be);
+    const d = decideTune(name, stations().map((st) => st.name), !!base());
+    pendingTuneName = d.kind === 'hold' ? name : '';
+    if (d.kind === 'play') tune(d.be);
   };
 
   const handleBE = (m: { kind?: string; title?: string; station?: number; info?: StreamInfo; name?: string }) => {

@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
@@ -32,8 +33,11 @@ const FmAppID = "com.wash.fm"
 //	                               spawned on the app that recorded it.
 //	recent.play {app_id, name}   — FE clicked a Radio row: raise or start
 //	                               Radio, then tell that instance to tune.
-//	recent.remove {path|name}    — FE context menu "Remove".
-//	recent.clear                 — FE context menu "Clear recent".
+//	recent.remove {path|name, app_id?}
+//	                             — FE context menu "Remove": within app_id
+//	                               when given, else that path under every app.
+//	recent.clear {app_id?}       — FE context menu: a flyout clears its own
+//	                               app; no app_id (the search list) clears all.
 //	launcher.pin {app_id, on}    — FE context menu Pin / Unpin.
 //
 // Every mutation pushes the full launcher.state back so the FE re-renders
@@ -99,8 +103,9 @@ func registerLauncher(bus *sdk.Bus, store *launcherStore) {
 		sendLauncherState(c, store)
 		return nil
 	})
-	sdk.HandleVoid(bus, "recent.clear", func(c *sdk.Conn, _ string, _ struct{}) error {
-		store.Clear()
+	sdk.HandleVoid(bus, "recent.clear", func(c *sdk.Conn, _ string, req recentClearReq) error {
+		store.Clear(req.AppID)
+		log.Printf("wash-session: recent cleared app=%q", req.AppID)
 		sendLauncherState(c, store)
 		return nil
 	})
@@ -144,6 +149,10 @@ type recentPathReq struct {
 	AppID string `json:"app_id"`
 }
 
+type recentClearReq struct {
+	AppID string `json:"app_id"`
+}
+
 type recentNoteReq struct {
 	Path string `json:"path"`
 	Name string `json:"name"`
@@ -157,25 +166,45 @@ func isDir(path string) bool {
 // pendingPlay holds the station a recent.play asked for until the router
 // answers the spawn with the Radio instance to send it to. Latest click
 // wins: two quick clicks tune to the second station, not both in turn.
-var pendingPlay = &playQueue{names: map[string]string{}}
+var pendingPlay = newPlayQueue(time.Now)
+
+// playExpiry bounds how long a click waits for its spawn answer. A reply
+// that never comes (a router restart, a dropped message) must not leave the
+// name behind for the next, unrelated Radio spawn to start playing.
+const playExpiry = 30 * time.Second
+
+type pendingName struct {
+	name string
+	at   time.Time
+}
 
 type playQueue struct {
 	mu    sync.Mutex
-	names map[string]string
+	names map[string]pendingName
+	now   func() time.Time
+}
+
+func newPlayQueue(now func() time.Time) *playQueue {
+	return &playQueue{names: map[string]pendingName{}, now: now}
 }
 
 func (q *playQueue) set(appID, name string) {
 	q.mu.Lock()
-	q.names[appID] = name
+	q.names[appID] = pendingName{name: name, at: q.now()}
 	q.mu.Unlock()
 }
 
+// take hands back appID's pending name once, or "" when there is none or it
+// has outlived playExpiry.
 func (q *playQueue) take(appID string) string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	name := q.names[appID]
+	p, ok := q.names[appID]
 	delete(q.names, appID)
-	return name
+	if !ok || q.now().Sub(p.at) > playExpiry {
+		return ""
+	}
+	return p.name
 }
 
 // onSpawnResult finishes a recent.play: the router has raised or started

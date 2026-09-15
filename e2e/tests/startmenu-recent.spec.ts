@@ -12,8 +12,8 @@
 // the state file on disk).
 
 import { test, expect } from '../fixtures/router';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Page } from '@playwright/test';
 import type { RouterHandle } from '../fixtures/router';
 
@@ -103,7 +103,7 @@ test.describe('start menu: recent files', () => {
     await expect(page.locator('wash-app-edit').last().locator('.cm-content')).toContainText('hello from the editor', { timeout: 15_000 });
   });
 
-  test('newest first, deduped by path; Remove and Clear recent via right-click', async ({ page, router }) => {
+  test('newest first, deduped by path; Remove and Clear this app via right-click', async ({ page, router }) => {
     await openFm(page, router);
     await openViaFm(page, router, 'notes.md', 'hello from the editor');
     await openViaFm(page, router, 'todo.txt', 'buy milk');
@@ -129,14 +129,111 @@ test.describe('start menu: recent files', () => {
     await expect(rows.nth(0)).toContainText('notes.md');
     await expect.poll(() => (JSON.parse(readFileSync(stateFile(router), 'utf8')) as { recent: unknown[] }).recent.length).toBe(1);
 
-    // Clear the rest: the row stays (it is where recent files will be) and
-    // its flyout says there are none.
+    // Clear the rest: from a flyout, Clear is that app's alone (the
+    // clear-everything verb lives on the search list, which mixes apps).
+    // The row stays (it is where recent files will be) and its flyout says
+    // there are none.
     await rows.nth(0).click({ button: 'right' });
     await expect(ctx).toBeVisible();
-    await ctx.locator('[data-testid="start-menu-recent-clear"]').click();
+    await expect(ctx.locator('[data-testid="start-menu-recent-clear"]')).toHaveCount(0);
+    const clearEdit = ctx.locator('[data-testid="start-menu-recent-clear-group"]');
+    await expect(clearEdit).toHaveText('Clear Edit history');
+    await clearEdit.click();
     await expect(rows).toHaveCount(0);
     await expect(flyout.locator('[data-testid="start-menu-flyout-empty"]')).toHaveText('No recent files');
+    await expect
+      .poll(() => (JSON.parse(readFileSync(stateFile(router), 'utf8')) as { recent: { app_id: string }[] }).recent.filter((r) => r.app_id === 'com.wash.edit').length)
+      .toBe(0);
+  });
+
+  test('the search list keeps the clear-everything verb', async ({ page, router }) => {
+    await openFm(page, router);
+    await openViaFm(page, router, 'todo.txt', 'buy milk');
+
+    await page.locator('button[title="Apps"]').click();
+    const menu = page.locator('[data-testid="start-menu"]');
+    await menu.locator('[data-testid="start-menu-search"]').fill('todo');
+    const hit = menu.locator('[data-testid="start-menu-recent-item"]');
+    await expect(hit).toHaveCount(1);
+    await hit.click({ button: 'right' });
+    const ctx = page.locator('[data-testid="start-menu-recent-menu"]');
+    await expect(ctx.locator('[data-testid="start-menu-recent-clear-group"]')).toHaveCount(0);
+    await ctx.locator('[data-testid="start-menu-recent-clear"]').click();
+    await expect(hit).toHaveCount(0);
     await expect.poll(() => (JSON.parse(readFileSync(stateFile(router), 'utf8')) as { recent: unknown[] }).recent.length).toBe(0);
+  });
+
+  test('a click on a row the hover already opened keeps its flyout open', async ({ page, router }) => {
+    await openFm(page, router);
+    await openViaFm(page, router, 'notes.md', 'hello from the editor');
+
+    await page.locator('button[title="Apps"]').click();
+    const menu = page.locator('[data-testid="start-menu"]');
+    const edit = menu.locator('[data-testid="start-menu-recent-group-edit"]');
+    await edit.hover();
+    const flyout = page.locator('[data-testid="start-menu-flyout"]');
+    await expect(flyout).toBeVisible();
+    await edit.click();
+    // Give a toggle every chance to have closed it.
+    await page.waitForTimeout(300);
+    await expect(flyout).toBeVisible();
+    await expect(flyout.locator('[data-testid="start-menu-flyout-item"]')).toContainText('notes.md');
+    // Escape closes the flyout, then the menu.
+    await page.keyboard.press('Escape');
+    await expect(flyout).toHaveCount(0);
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+  });
+
+  test('heading diagonally for a low flyout item does not swap in the rows it crosses', async ({ page, router }) => {
+    // A real pointer's path, not a click: open Edit's flyout, then travel
+    // to its LAST item across the Agent and Radio rows below. A fixed hover
+    // delay swapped the flyout to whichever row took longer than the delay
+    // to cross; aim (launcher.ts aimingAt) holds it while the pointer is
+    // still heading for the flyout.
+    const files = ['a.md', 'b.md', 'c.md', 'd.md', 'e.md', 'f.md'];
+    const at = Date.now();
+    mkdirSync(dirname(stateFile(router)), { recursive: true });
+    writeFileSync(stateFile(router), JSON.stringify({
+      recent: files.map((f, i) => {
+        writeFileSync(join(router.fmRoot, f), f);
+        return { path: join(router.fmRoot, f), app_id: 'com.wash.edit', at: new Date(at - i * 1000).toISOString() };
+      }),
+      pinned: [],
+    }));
+    await page.goto(router.url);
+    await page.locator('button[title="Apps"]').click();
+    const menu = page.locator('[data-testid="start-menu"]');
+    await expect(menu.locator('[data-testid="start-menu-recent-group-edit"]')).toBeVisible();
+    // The menu slides up as it opens; a pointer resting on a row mid-slide
+    // has the rows below slide under it, which is hovering them. Measure
+    // and move once it has settled.
+    await page.waitForTimeout(400);
+    const edit = (await menu.locator('[data-testid="start-menu-recent-group-edit"]').boundingBox())!;
+    const from = { x: edit.x + 30, y: edit.y + edit.height / 2 };
+    await page.mouse.move(from.x, from.y, { steps: 3 });
+    const flyout = page.locator('[data-testid="start-menu-flyout"]');
+    await expect(flyout.locator('[data-group="com.wash.edit"]')).toBeVisible();
+    await expect(flyout.locator('[data-testid="start-menu-flyout-item"]')).toHaveCount(files.length);
+
+    const last = (await flyout.locator('[data-testid="start-menu-flyout-item"]').last().boundingBox())!;
+    const to = { x: last.x + 40, y: last.y + last.height / 2 };
+    const radio = (await menu.locator('[data-testid="start-menu-recent-group-radio"]').boundingBox())!;
+    expect(to.y, 'the path must cross the rows below Edit for this to mean anything').toBeGreaterThan(radio.y);
+    // ~20ms per step: a hand's pace, slow enough that each crossed row is
+    // hovered for longer than the old fixed delay.
+    for (let k = 1; k <= 24; k++) {
+      await page.mouse.move(from.x + ((to.x - from.x) * k) / 24, from.y + ((to.y - from.y) * k) / 24);
+      await page.waitForTimeout(20);
+    }
+    await page.waitForTimeout(400);
+    await expect(flyout.locator('[data-group="com.wash.edit"]')).toBeVisible();
+
+    // And a pointer that STOPS on another row gets that row.
+    const agent = (await menu.locator('[data-testid="start-menu-recent-group-agent"]').boundingBox())!;
+    await page.mouse.move(agent.x + 30, agent.y + agent.height / 2, { steps: 4 });
+    await expect(flyout.locator('[data-group="com.wash.agents"]')).toBeVisible({ timeout: 2_000 });
   });
 
   test('Ctrl+Space search matches recent paths and opens them', async ({ page, router }) => {
@@ -227,5 +324,31 @@ test.describe('start menu: recent files', () => {
     await page.keyboard.press('Enter');
     await expect(menu).toHaveCount(0);
     await router.waitForLog(/open\.request: path="[^"]*\/todo\.txt" handler=com\.wash\.edit from=com\.wash\.session/, 10_000, from);
+  });
+
+  test('typing while a keyboard flyout is up closes it; Enter runs the search hit', async ({ page, router }) => {
+    await openFm(page, router);
+    await openViaFm(page, router, 'notes.md', 'hello from the editor');
+    await openViaFm(page, router, 'todo.txt', 'buy milk');
+
+    await page.locator('button[title="Apps"]').click();
+    const menu = page.locator('[data-testid="start-menu"]');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowRight');
+    const flyout = page.locator('[data-testid="start-menu-flyout"]');
+    await expect(flyout).toBeVisible();
+    // The flyout's cursor on notes.md …
+    await page.keyboard.press('ArrowDown');
+    await expect(flyout.locator('[data-selected="true"]')).toContainText('notes.md');
+    // … then a search for the other file. The flyout goes with the rows.
+    await page.keyboard.type('todo');
+    await expect(flyout).toHaveCount(0);
+    await expect(menu.locator('[data-testid="start-menu-recent-item"]')).toContainText('todo.txt');
+    const from = router.logCursor();
+    await page.keyboard.press('Enter');
+    await expect(menu).toHaveCount(0);
+    await router.waitForLog(/open\.request: path="[^"]*\/todo\.txt" handler=com\.wash\.edit from=com\.wash\.session/, 10_000, from);
+    expect(router.log().slice(from)).not.toMatch(/open\.request: path="[^"]*\/notes\.md"/);
   });
 });

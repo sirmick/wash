@@ -11,6 +11,7 @@ import {
   RECENT_PREFIX,
   RECENT_FLYOUT_CAP,
   agentRecentAction,
+  aimingAt,
   agentRecentLabel,
   appMatches,
   paletteEntries,
@@ -20,7 +21,10 @@ import {
   recentName,
   recentPathOf,
   recentRowID,
+  recordPointer,
   recentGroups,
+  rectIsLaid,
+  sameKeys,
   stepSelection,
   withLiveRows,
   type AgentRecent,
@@ -120,8 +124,31 @@ test('agentRecentAction agrees with the Agents history list: reattach, focus, sk
   assert.equal(agentRecentAction({ session_id: 's', detached: true, live: true, row_key: 'acp:1' }), 'reattach');
   assert.equal(agentRecentAction({ session_id: 's', live: true, row_key: 'acp:1' }), 'focus');
   assert.equal(agentRecentAction({ session_id: 's', live: true }), 'none');
-  assert.equal(agentRecentAction({ session_id: 's', detached: true }), 'resume');
-  assert.equal(agentRecentAction({ session_id: 's' }), 'resume');
+  assert.equal(agentRecentAction({ session_id: 's', agent: 'codex', detached: true }), 'resume');
+  assert.equal(agentRecentAction({ session_id: 's', agent: 'codex' }), 'resume');
+  // History says "restart" for a session that lost its agent; the start
+  // menu has no such verb, so it offers nothing rather than a doomed resume.
+  assert.equal(agentRecentAction({ session_id: 's' }), 'none');
+  // A running one is still reachable without it.
+  assert.equal(agentRecentAction({ session_id: 's', live: true, row_key: 'acp:1' }), 'focus');
+  const groups = recentGroups([], [{ session_id: 'lost' }, { session_id: 'kept', agent: 'codex' }], () => undefined);
+  assert.deepEqual(groups[2].items.map((i) => i.key), ['a:kept']);
+});
+
+test('recentMatches lists a path once, as its newest entry, whichever apps recorded it', () => {
+  const twice: RecentEntry[] = [
+    { path: '/proj', app_id: 'com.wash.fm', at: 1 },
+    { path: '/proj', app_id: 'com.wash.term', at: 5 },
+    { path: '/proj/a.md', app_id: 'com.wash.edit', at: 3 },
+  ];
+  assert.deepEqual(
+    recentMatches(twice, 'proj').map((r) => `${r.path} ${r.app_id}`),
+    ['/proj com.wash.term', '/proj/a.md com.wash.edit'],
+  );
+  // The per-app rows keep both.
+  const groups = recentGroups(twice, [], () => 'Terminal');
+  assert.deepEqual(groups[0].items.map((i) => i.key), ['p:/proj']);
+  assert.deepEqual(groups.find((g) => g.id === 'com.wash.term')?.items.map((i) => i.key), ['p:/proj']);
 });
 
 test('agentRecentLabel prefers the session title, else agent and folder', () => {
@@ -189,4 +216,62 @@ test('withLiveRows: the roster, not the lagging history flags, picks the verb', 
     groups[2].items.map((i) => (i.kind === 'agent' ? i.action : '')),
     ['reattach', 'focus', 'focus'],
   );
+});
+
+test('withLiveRows: an exited adapter\'s lingering row is not a running session', () => {
+  const hist: AgentRecent[] = [
+    // History published while the adapter was up.
+    { session_id: 'crashed', agent: 'codex', live: true, row_key: 'acp:1' },
+    { session_id: 'restarted', agent: 'codex' },
+  ];
+  const rows = [
+    { key: 'acp:1', session_id: 'crashed', state: 'failed', reason: 'exited' },
+    // An old dead row and a new live one for the same session: the live one wins.
+    { key: 'acp:2', session_id: 'restarted', state: 'failed', reason: 'exited' },
+    { key: 'acp:3', session_id: 'restarted', state: 'working' },
+  ];
+  const fixed = withLiveRows(hist, rows);
+  assert.equal(agentRecentAction(fixed[0]), 'resume');
+  assert.equal(fixed[0].row_key, undefined);
+  assert.equal(agentRecentAction(fixed[1]), 'focus');
+  assert.equal(fixed[1].row_key, 'acp:3');
+  // A failed row for another reason still has a session behind it.
+  const other = withLiveRows([{ session_id: 's', agent: 'codex' }], [{ key: 'acp:9', session_id: 's', state: 'failed', reason: 'auth' }]);
+  assert.equal(agentRecentAction(other[0]), 'focus');
+});
+
+test('sameKeys compares id lists by value, in order', () => {
+  assert.equal(sameKeys(['a', 'b'], ['a', 'b']), true);
+  assert.equal(sameKeys(['a', 'b'], ['b', 'a']), false);
+  assert.equal(sameKeys(['a'], ['a', 'b']), false);
+  assert.equal(sameKeys([], []), true);
+});
+
+test('rectIsLaid: a detached row measures all zeroes', () => {
+  assert.equal(rectIsLaid({ width: 0, height: 0 }), false);
+  assert.equal(rectIsLaid({ width: 240, height: 28 }), true);
+});
+
+test('aimingAt: travelling toward the flyout aims; resting or heading away does not', () => {
+  const rect = { left: 260, top: 520, bottom: 760 };
+  const t = 1000;
+  // From the Files row (y≈530) diagonally down toward a low flyout item.
+  const toward = [{ x: 40, y: 530, t: t - 120 }, { x: 80, y: 545, t: t - 60 }, { x: 120, y: 560, t }];
+  assert.equal(aimingAt(toward, t, rect), true);
+  // The same position, but the pointer has been still for a while.
+  assert.equal(aimingAt(toward, t + 300, rect), false);
+  // Straight down the menu, away from the flyout's edge.
+  const down = [{ x: 120, y: 480, t: t - 120 }, { x: 121, y: 520, t: t - 60 }, { x: 121, y: 560, t }];
+  assert.equal(aimingAt(down, t, { left: 260, top: 400, bottom: 440 }), false);
+  // Already over the flyout: that is not travel toward it.
+  assert.equal(aimingAt([{ x: 200, y: 530, t: t - 120 }, { x: 270, y: 540, t }], t, rect), false);
+  // One sample cannot say where it came from.
+  assert.equal(aimingAt([{ x: 120, y: 560, t }], t, rect), false);
+});
+
+test('recordPointer keeps only the latest samples', () => {
+  let trail: { x: number; y: number; t: number }[] = [];
+  for (let i = 0; i < 12; i++) trail = recordPointer(trail, { x: i, y: i, t: i });
+  assert.equal(trail.length, 8);
+  assert.equal(trail[0].x, 4);
 });

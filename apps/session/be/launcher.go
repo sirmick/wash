@@ -26,14 +26,20 @@ import (
 // (launcher_bus.go): fm the folder it was showing when it closed, Radio
 // the station it played — things no open request ever describes.
 //
-// Newest first. Path entries dedupe by path; name entries (a station has
-// no path) by app and name. The cap is per app, so a morning of radio
-// cannot push yesterday's documents out. Entries whose file is gone are
+// Newest first. Entries dedupe by app and path, or app and name (a station
+// has no path): the start menu shows recents per app, so a folder fm was
+// showing must not move to the Terminal row the moment a terminal is
+// spawned there. The cap is per app, so a morning of radio cannot push
+// yesterday's documents out. Entries whose file is gone are
 // dropped at READ time (not at write time) — a file on a mount that comes
 // and goes should reappear when the mount does, so nothing is forgotten
 // until the person removes it or it ages out of the cap.
 
-const maxRecentPerApp = 10
+// maxRecentPerApp is what the store keeps, not what a flyout shows (the FE
+// shows the last few). It matches the old global cap of 30 so the first save
+// after the per-app split does not trim a list the palette and search still
+// reach.
+const maxRecentPerApp = 30
 
 type recentEntry struct {
 	Path string `json:"path,omitempty"`
@@ -44,11 +50,11 @@ type recentEntry struct {
 	At    time.Time `json:"at"`
 }
 
-// key is the dedupe identity: the path for a file or folder, the app and
-// name for anything else.
+// key is the dedupe identity: the app and the path for a file or folder,
+// the app and name for anything else.
 func (e recentEntry) key() string {
 	if e.Path != "" {
-		return "p\x00" + e.Path
+		return "p\x00" + e.AppID + "\x00" + e.Path
 	}
 	return "n\x00" + e.AppID + "\x00" + e.Name
 }
@@ -150,30 +156,49 @@ func (s *launcherStore) note(e recentEntry) {
 	s.saveLocked()
 }
 
-// Remove forgets one entry: by path, or by name within appID when path is
-// empty.
+// Remove forgets one entry: a path within appID, or a name within appID
+// when path is empty. A path with no appID forgets that path under every
+// app — the flat search list shows a path once, whichever app it was under,
+// so removing it there must not leave an older twin to take its place.
 func (s *launcherStore) Remove(path, name, appID string) {
 	target := recentEntry{Path: path, Name: name, AppID: appID}
 	if path == "" && name == "" {
 		return
 	}
+	anyApp := path != "" && appID == ""
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	kept := s.st.Recent[:0]
 	for _, e := range s.st.Recent {
-		if e.key() != target.key() {
-			kept = append(kept, e)
+		if anyApp && e.Path == path {
+			continue
 		}
+		if !anyApp && e.key() == target.key() {
+			continue
+		}
+		kept = append(kept, e)
 	}
 	s.st.Recent = kept
 	s.saveLocked()
 }
 
-// Clear forgets every recent path (pins are untouched).
-func (s *launcherStore) Clear() {
+// Clear forgets appID's recent entries, or every app's when appID is empty
+// (pins are untouched either way). A flyout's menu clears its own app: one
+// row's housekeeping must not wipe what every other row remembers.
+func (s *launcherStore) Clear(appID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.st.Recent = nil
+	if appID == "" {
+		s.st.Recent = nil
+	} else {
+		kept := s.st.Recent[:0]
+		for _, e := range s.st.Recent {
+			if e.AppID != appID {
+				kept = append(kept, e)
+			}
+		}
+		s.st.Recent = kept
+	}
 	s.saveLocked()
 }
 

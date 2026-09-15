@@ -14,13 +14,10 @@ func TestLauncherStore_NoteDedupesNewestFirstAndCaps(t *testing.T) {
 	s.exists = func(string) bool { return true }
 	s.Note("/a", "com.wash.edit")
 	s.Note("/b", "com.wash.edit")
-	s.Note("/a", "com.wash.imageview") // re-open moves /a to the top, one entry
+	s.Note("/a", "com.wash.edit") // re-open moves /a to the top, one entry
 	snap := s.Snapshot()
 	if len(snap.Recent) != 2 || snap.Recent[0].Path != "/a" || snap.Recent[1].Path != "/b" {
 		t.Fatalf("recent = %+v", snap.Recent)
-	}
-	if snap.Recent[0].AppID != "com.wash.imageview" {
-		t.Errorf("re-open should carry the latest handler, got %s", snap.Recent[0].AppID)
 	}
 	for i := 0; i < maxRecentPerApp+10; i++ {
 		s.Note(fmt.Sprintf("/f%d", i), "x")
@@ -37,8 +34,89 @@ func TestLauncherStore_NoteDedupesNewestFirstAndCaps(t *testing.T) {
 		t.Errorf("newest first: got %s", snap.Recent[0].Path)
 	}
 	// The cap is per app: a flood from one app keeps every other app's.
-	if count["com.wash.edit"] != 1 || count["com.wash.imageview"] != 1 {
+	if count["com.wash.edit"] != 2 {
 		t.Errorf("per-app cap evicted another app's entries: %v", count)
+	}
+}
+
+// The same path under two apps is two entries: the start menu lists recents
+// per app, and a folder fm was showing must stay on the Files row when a
+// terminal is later spawned in it.
+func TestLauncherStore_PathDedupesPerApp(t *testing.T) {
+	s := newLauncherStore("")
+	s.exists = func(string) bool { return true }
+	s.Note("/proj", FmAppID)
+	s.Note("/proj", "com.wash.term")
+	s.Note("/proj", FmAppID) // same app again: moves up, still one
+	snap := s.Snapshot()
+	if len(snap.Recent) != 2 || snap.Recent[0].AppID != FmAppID || snap.Recent[1].AppID != "com.wash.term" {
+		t.Fatalf("recent = %+v, want fm then term, both /proj", snap.Recent)
+	}
+	// Remove with an app forgets only that app's entry.
+	s.Remove("/proj", "", "com.wash.term")
+	if got := s.Snapshot().Recent; len(got) != 1 || got[0].AppID != FmAppID {
+		t.Fatalf("scoped remove = %+v", got)
+	}
+	// Remove without one (the flat search list, or an older FE) forgets the
+	// path under every app.
+	s.Note("/proj", "com.wash.term")
+	s.Remove("/proj", "", "")
+	if got := s.Snapshot().Recent; len(got) != 0 {
+		t.Errorf("unscoped remove left %+v", got)
+	}
+}
+
+// A file written before per-app dedupe (one entry per path, up to 30 in
+// all) loads unchanged and survives the next save: the per-app cap must not
+// trim a list the palette and search still reach.
+func TestLauncherStore_OldFileKeepsItsEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recent.json")
+	now := time.Now()
+	old := launcherState{Pinned: []string{}}
+	for i := 0; i < 30; i++ {
+		old.Recent = append(old.Recent, recentEntry{Path: fmt.Sprintf("/doc%d", i), AppID: "com.wash.edit", At: now.Add(-time.Duration(i) * time.Minute)})
+	}
+	raw, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newLauncherStore(path)
+	s.exists = func(string) bool { return true }
+	s.NoteName("Groove Salad", RadioAppID) // any save
+	got := newLauncherStore(path)
+	got.exists = func(string) bool { return true }
+	count := map[string]int{}
+	for _, e := range got.Snapshot().Recent {
+		count[e.AppID]++
+	}
+	if count["com.wash.edit"] != 30 || count[RadioAppID] != 1 {
+		t.Errorf("after upgrade save: %v, want all 30 edit entries kept", count)
+	}
+}
+
+// A flyout clears its own app's entries; no app id clears everyone's.
+func TestLauncherStore_ClearOneApp(t *testing.T) {
+	s := newLauncherStore("")
+	s.exists = func(string) bool { return true }
+	s.Note("/a.md", "com.wash.edit")
+	s.Note("/pics", FmAppID)
+	s.NoteName("Drone Zone", RadioAppID)
+	s.Clear("com.wash.edit")
+	snap := s.Snapshot()
+	if len(snap.Recent) != 2 {
+		t.Fatalf("clear edit = %+v, want fm and radio kept", snap.Recent)
+	}
+	for _, e := range snap.Recent {
+		if e.AppID == "com.wash.edit" {
+			t.Errorf("clear edit kept %+v", e)
+		}
+	}
+	s.Clear("")
+	if got := s.Snapshot().Recent; len(got) != 0 {
+		t.Errorf("clear all left %+v", got)
 	}
 }
 
@@ -122,7 +200,7 @@ func TestLauncherStore_RemoveClearAndPins(t *testing.T) {
 	s.SetPinned("com.wash.term", true)
 	s.SetPinned("com.wash.fm", true)
 	s.SetPinned("com.wash.term", true) // idempotent, keeps slot
-	s.Clear()
+	s.Clear("")
 	snap := s.Snapshot()
 	if len(snap.Recent) != 0 {
 		t.Errorf("clear left %d recent", len(snap.Recent))
@@ -145,7 +223,7 @@ func TestLauncherStore_ClearWritesEmptyArraysNotNull(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "recent.json")
 	s := newLauncherStore(path)
 	s.Note("/a", "e")
-	s.Clear()
+	s.Clear("")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +280,7 @@ func TestLauncherStatePath(t *testing.T) {
 // Two quick Radio clicks before the router answers tune to the second
 // station, once — not both in turn.
 func TestPlayQueueLatestWinsAndTakesOnce(t *testing.T) {
-	q := &playQueue{names: map[string]string{}}
+	q := newPlayQueue(time.Now)
 	q.set(RadioAppID, "one")
 	q.set(RadioAppID, "two")
 	if got := q.take(RadioAppID); got != "two" {
@@ -210,5 +288,26 @@ func TestPlayQueueLatestWinsAndTakesOnce(t *testing.T) {
 	}
 	if got := q.take(RadioAppID); got != "" {
 		t.Errorf("second take = %q, want empty (an unrelated spawn result must not replay it)", got)
+	}
+}
+
+// A click whose spawn answer never came must not play on the next,
+// unrelated Radio spawn — and a pending play is only ever taken by the app
+// it was for.
+func TestPlayQueueExpiresAndMatchesApp(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	q := newPlayQueue(func() time.Time { return now })
+	q.set(RadioAppID, "stale")
+	now = now.Add(playExpiry + time.Second)
+	if got := q.take(RadioAppID); got != "" {
+		t.Errorf("take after expiry = %q, want nothing", got)
+	}
+	q.set(RadioAppID, "fresh")
+	if got := q.take("com.wash.fm"); got != "" {
+		t.Errorf("another app's spawn took %q", got)
+	}
+	now = now.Add(playExpiry - time.Second)
+	if got := q.take(RadioAppID); got != "fresh" {
+		t.Errorf("take inside the window = %q, want fresh", got)
 	}
 }

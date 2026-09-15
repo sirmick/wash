@@ -51,10 +51,20 @@ export function recentDir(path: string): string {
 
 /** recentMatches filters recent FILE entries by a lowercase query against
  * the full path (so "notes", "home/u" and "md" all hit). Empty query → all.
- * Name entries (stations) have no path to open and are never matched. */
+ * Name entries (stations) have no path to open and are never matched.
+ *
+ * The store keeps a path once PER APP (a folder under Files and under
+ * Terminal), but these flat lists are about paths: each is listed once, as
+ * its newest entry, so a search does not show two identical rows. */
 export function recentMatches(recent: ReadonlyArray<RecentEntry>, query: string): RecentEntry[] {
   const q = query.trim().toLowerCase();
-  const files = recent.filter((r) => r.path);
+  const seen = new Set<string>();
+  const files: RecentEntry[] = [];
+  for (const r of [...recent].sort((a, b) => b.at - a.at)) {
+    if (!r.path || seen.has(r.path)) continue;
+    seen.add(r.path);
+    files.push(r);
+  }
   if (!q) return files;
   return files.filter((r) => r.path.toLowerCase().includes(q));
 }
@@ -163,17 +173,32 @@ export interface AgentLiveRow {
   key: string;
   session_id?: string;
   detached?: boolean;
+  state?: string;
+  reason?: string;
+}
+
+/** A row whose adapter exited lingers on the roster (failed/exited, until
+ * agentd's sweep drops it) so the failure is visible, but nothing is
+ * running behind it. agentd's rosterIndex (apps/agentd/be/history.go)
+ * skips these; so must the start menu, or it offers to focus a corpse. */
+export function rowIsDead(r: AgentLiveRow): boolean {
+  return r.state === 'failed' && r.reason === 'exited';
 }
 
 /** withLiveRows corrects each history entry's running state from the
  * roster rows in the same push. agentd recomputes the history list when
  * the history changes, not when a window detaches, so its live/detached
  * flags can trail the rows by a whole session — and the difference picks
- * the verb. A session with no row is left as the history describes it. */
+ * the verb. A session with no row is left as the history describes it; one
+ * whose only rows are dead is not running, whatever the history last said
+ * (it was published while the adapter was still up). */
 export function withLiveRows(agents: ReadonlyArray<AgentRecent>, rows: ReadonlyArray<AgentLiveRow>): AgentRecent[] {
   return agents.map((s) => {
-    const row = rows.find((r) => r.session_id && r.session_id === s.session_id);
-    return row ? { ...s, live: true, row_key: row.key, detached: !!row.detached } : s;
+    const mine = rows.filter((r) => r.session_id && r.session_id === s.session_id);
+    const row = mine.find((r) => !rowIsDead(r));
+    if (row) return { ...s, live: true, row_key: row.key, detached: !!row.detached };
+    if (mine.length > 0) return { ...s, live: false, detached: false, row_key: undefined };
+    return s;
   });
 }
 
@@ -182,11 +207,15 @@ export function withLiveRows(agents: ReadonlyArray<AgentRecent>, rows: ReadonlyA
  * by row key, a live one with a window is focused, only a finished one is
  * resumed. Resuming either of the first two would start a second adapter
  * on a conversation that is already running. Live with no row is not
- * reachable from here at all. */
+ * reachable from here at all. A finished session that no longer knows its
+ * agent is 'restart' there — a fresh session in its folder, a choice the
+ * History panel explains and this menu has no verb for — so it is left out
+ * here rather than sent to a resume that cannot work. */
 export function agentRecentAction(s: AgentRecent): AgentRecentAction {
   if (s.detached && s.row_key) return 'reattach';
   if (s.live && s.row_key) return 'focus';
   if (s.live) return 'none';
+  if (!s.agent) return 'none';
   return 'resume';
 }
 
@@ -201,6 +230,20 @@ export type RecentItem =
   | { kind: 'path'; key: string; label: string; detail: string; icon: string; entry: RecentEntry }
   | { kind: 'station'; key: string; label: string; icon: string; entry: RecentEntry }
   | { kind: 'agent'; key: string; label: string; detail: string; icon: string; session: AgentRecent; action: AgentRecentAction };
+
+/** sameKeys is the equality for a keyed list's id memo: a push that
+ * rebuilds every object but keeps the ids must not re-run the <For> over
+ * them, or each row is torn down and rebuilt under the pointer. */
+export function sameKeys(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
+  return a.length === b.length && a.every((k, i) => k === b[i]);
+}
+
+/** rectIsLaid says an element has a layout box to measure. A row that has
+ * left the DOM, or is not laid out, measures all zeroes — a flyout placed
+ * from that sits in the screen's top-left corner. */
+export function rectIsLaid(r: { width: number; height: number }): boolean {
+  return r.width > 0 || r.height > 0;
+}
 
 export interface RecentGroup {
   /** stable id: the app id the group stands for */
@@ -290,4 +333,60 @@ export function recentGroups(
     });
   }
   return groups;
+}
+
+// ---- flyout aim ----
+//
+// A pointer on its way to an open flyout crosses other rows. aimingAt says
+// whether it is still heading for the flyout — the classic submenu "safe
+// triangle": the pointer is inside the triangle from where it was a moment
+// ago to the flyout's near edge. A pointer that has stopped makes no
+// triangle, so it is not aiming, and the row under it wins.
+
+export interface PointerSample {
+  x: number;
+  y: number;
+  /** ms, performance.now() */
+  t: number;
+}
+
+export interface FlyoutRect {
+  left: number;
+  top: number;
+  bottom: number;
+}
+
+/** How far back aim looks for "where the pointer was". */
+export const AIM_LOOKBACK_MS = 100;
+
+/** recordPointer appends a sample and keeps only the last few. */
+export function recordPointer(trail: ReadonlyArray<PointerSample>, s: PointerSample, keep = 8): PointerSample[] {
+  const out = [...trail, s];
+  return out.length > keep ? out.slice(out.length - keep) : out;
+}
+
+/** aimingAt: is the latest pointer sample inside the triangle from the
+ * sample ~AIM_LOOKBACK_MS earlier to the flyout's left edge (padded)? */
+export function aimingAt(trail: ReadonlyArray<PointerSample>, now: number, rect: FlyoutRect, pad = 8): boolean {
+  if (trail.length < 2) return false;
+  const p = trail[trail.length - 1];
+  // A pointer that has not moved lately is resting, not travelling.
+  if (now - p.t > AIM_LOOKBACK_MS) return false;
+  let a = trail[0];
+  for (const s of trail) {
+    if (p.t - s.t >= AIM_LOOKBACK_MS) a = s;
+  }
+  if (p.x >= rect.left || a.x >= rect.left) return false;
+  const b = { x: rect.left, y: rect.top - pad };
+  const c = { x: rect.left, y: rect.bottom + pad };
+  const cross = (o: { x: number; y: number }, u: { x: number; y: number }, v: { x: number; y: number }) =>
+    (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x);
+  const area = cross(a, b, c);
+  if (Math.abs(area) < 1) return false;
+  const d1 = cross(a, b, p);
+  const d2 = cross(b, c, p);
+  const d3 = cross(c, a, p);
+  const neg = d1 < 0 || d2 < 0 || d3 < 0;
+  const pos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(neg && pos);
 }

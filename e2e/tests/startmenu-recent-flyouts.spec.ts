@@ -56,6 +56,9 @@ test.describe('Files ›: the folder fm closed on', () => {
     {
       const { flyout } = await openFlyout(page, 'files');
       await expect(flyout.locator('[data-testid="start-menu-flyout-empty"]')).toHaveText('No recent folders');
+      // Escape closes the flyout first, then the menu, like a submenu.
+      await page.keyboard.press('Escape');
+      await expect(flyout).toHaveCount(0);
       await page.keyboard.press('Escape');
       await expect(page.locator('[data-testid="start-menu"]')).toHaveCount(0);
     }
