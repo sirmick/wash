@@ -40,6 +40,36 @@ func TestLaunchWithHonoursAConfiguredCommand(t *testing.T) {
 	}
 }
 
+func TestCodexFallbackUsesTheInstalledCodex(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"npx", "codex"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	a := adapters[0]
+	cfg := agentpolicy.AgentConfig{}
+	cmd, args, note, ok := a.launchWith(cfg)
+	if !ok || cmd != filepath.Join(dir, "npx") || note != "via npx @agentclientprotocol/codex-acp" {
+		t.Fatalf("launch: cmd=%q args=%v note=%q ok=%v", cmd, args, note, ok)
+	}
+	want := []string{"CODEX_PATH=" + filepath.Join(dir, "codex")}
+	if got := a.builtinEnv(cfg); !reflect.DeepEqual(got, want) {
+		t.Fatalf("builtin env = %v, want %v", got, want)
+	}
+
+	// A configured adapter may be a wrapper with different semantics. Do not
+	// inject an implementation detail from the built-in codex-acp path.
+	if got := a.builtinEnv(agentpolicy.AgentConfig{Command: filepath.Join(dir, "codex")}); got != nil {
+		t.Fatalf("configured adapter inherited built-in env: %v", got)
+	}
+	t.Setenv("CODEX_PATH", "/chosen/codex")
+	if got := a.builtinEnv(agentpolicy.AgentConfig{}); got != nil {
+		t.Fatalf("inherited CODEX_PATH was overridden: %v", got)
+	}
+}
+
 // wash's config shape (env as a map, because a person writes it) becomes
 // ACP's (name/value objects), in a stable order.
 func TestACPMCPServersConversion(t *testing.T) {

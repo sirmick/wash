@@ -360,3 +360,28 @@ func TestResumeResolvesFromTheStoreWhenHistoryMisses(t *testing.T) {
 		t.Errorf("transcript did not fill incomplete history: ok=%v got=%+v", ok, got)
 	}
 }
+
+func TestResumeFlightsCoalesceBySession(t *testing.T) {
+	resumeMu.Lock()
+	resumeFlights = map[string]bool{}
+	resumeMu.Unlock()
+	t.Cleanup(func() {
+		resumeMu.Lock()
+		resumeFlights = map[string]bool{}
+		resumeMu.Unlock()
+	})
+
+	if !beginResume("session-a") {
+		t.Fatal("first resume was rejected")
+	}
+	if beginResume("session-a") {
+		t.Fatal("duplicate in-flight resume was accepted")
+	}
+	if !beginResume("session-b") {
+		t.Fatal("an unrelated session was blocked")
+	}
+	finishResume("session-a")
+	if !beginResume("session-a") {
+		t.Fatal("session could not retry after its flight finished")
+	}
+}

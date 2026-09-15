@@ -83,6 +83,31 @@ var adapters = []Adapter{
 	},
 }
 
+// npx installs and launches through one shared cache. Two cold launches can
+// otherwise observe each other's half-populated dependency tree: one of the
+// failures seen in practice found @openai/codex but not its native optional
+// package, while another found codex-acp but not @openai/codex at all. Hold the
+// lock only through adapter initialization; live sessions remain concurrent.
+var npxLaunchMu sync.Mutex
+
+// builtinEnv points codex-acp at the Codex the user already installed. Without
+// this it resolves its bundled @openai/codex dependency from npx's transient
+// cache, needlessly depending on a second copy and its platform package.
+// User-configured adapters keep complete control of their own environment.
+func (a Adapter) builtinEnv(cfg agentpolicy.AgentConfig) []string {
+	if a.ID != "codex" || cfg.Command != "" {
+		return nil
+	}
+	if os.Getenv("CODEX_PATH") != "" {
+		return nil
+	}
+	p, err := exec.LookPath("codex")
+	if err != nil {
+		return nil
+	}
+	return []string{"CODEX_PATH=" + p}
+}
+
 // launch resolves how to actually start an adapter: its own binary if
 // installed, else npx with the package. Returns ok=false when neither is
 // possible, with a note a human can act on.
@@ -205,11 +230,19 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	// editing the file takes effect on the next session rather than the
 	// next router restart.
 	pol := hostedPolicy()
-	bin, args, note, ok := a.launchWith(pol.AgentFor(agentID))
+	cfg := pol.AgentFor(agentID)
+	bin, args, note, ok := a.launchWith(cfg)
 	if !ok {
 		return nil, fmt.Errorf("agent %q is not installed here: %s", agentID, note)
 	}
+	if strings.HasPrefix(note, "via npx ") {
+		npxLaunchMu.Lock()
+		defer npxLaunchMu.Unlock()
+	}
 	run := pol.Merge(agentID, agentpolicy.Launch{Command: bin, Args: args})
+	// Built-ins come first so an explicit agents.json environment entry is
+	// appended later and retains the documented user-wins precedence.
+	run.Env = append(a.builtinEnv(cfg), run.Env...)
 	cmd := exec.Command(run.Command, run.Args...)
 	cmd.Dir = cwd
 	// Added to the inherited environment, not substituted for it: an

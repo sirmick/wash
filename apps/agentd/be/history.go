@@ -237,6 +237,27 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+var (
+	resumeMu      sync.Mutex
+	resumeFlights = map[string]bool{}
+)
+
+func beginResume(sessionID string) bool {
+	resumeMu.Lock()
+	defer resumeMu.Unlock()
+	if resumeFlights[sessionID] {
+		return false
+	}
+	resumeFlights[sessionID] = true
+	return true
+}
+
+func finishResume(sessionID string) {
+	resumeMu.Lock()
+	delete(resumeFlights, sessionID)
+	resumeMu.Unlock()
+}
+
 // resumeSession restores a stopped conversation through ACP and opens an
 // Agent controller for it. If it is already live, the operation instead
 // focuses (or reattaches) its existing controller.
@@ -260,11 +281,20 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 		return
 	}
 	agent, cwd, sid := s.Agent, s.Cwd, s.SessionID
+	// The live-session check above closes the eventual-consistency window after
+	// registration. This closes the earlier window: repeated clicks while the
+	// adapter is still starting must share the first loadSession rather than
+	// issuing another non-idempotent load for the same native session.
+	if !beginResume(sid) {
+		log.Printf("agentd: resume session=%s already in flight — coalescing", sid)
+		return
+	}
 
 	// Reopen on our own goroutine: session/load replays the whole
 	// conversation before it answers, which can take a while on a long
 	// history, and the service must keep dispatching meanwhile.
 	go func() {
+		defer finishResume(sid)
 		hs, err := resumeHosted(agent, cwd, sid, c)
 		if err != nil {
 			log.Printf("agentd: resume session=%s: %v", sid, err)
