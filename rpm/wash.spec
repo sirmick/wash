@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.15.0
+Version:        0.16.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,14 @@ fi
 exit 0
 
 %changelog
+* Wed Sep 16 2026 sirmick <sirmick@gmail.com> - 0.16.0-1
+- Optional AI provider service (com.wash.inference): OpenAI-compatible,
+  Codex CLI and Claude CLI adapters behind one contract, credentials kept
+  in the service, callers allowlisted, every request guarded and audited.
+- Session Summary (experimental): an explicit, bounded capture of the open
+  windows reduced into one briefing, with a Content API apps can implement.
+- Agent resume is idempotent, npx adapter launches no longer race, and a
+  dying adapter's reason reaches the transcript.
 * Mon Sep 14 2026 sirmick <sirmick@gmail.com> - 0.15.0-1
 - Agents split into a single Agents manager (New, History, Running) and one
   leased window per live session; per-window views and coalesced usage and

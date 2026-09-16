@@ -1,3 +1,32 @@
+wash (0.16.0-1) unstable; urgency=low
+
+  * An optional AI provider service (com.wash.inference) holds the
+    connection to whatever model a person chooses — an OpenAI-compatible
+    endpoint, the Codex CLI or the Claude Code CLI — behind one contract.
+    Credentials stay in the service (0600 on disk, never echoed back to a
+    window), only apps shipped for the feature may spend provider quota or
+    read which providers exist, and every request carries the service's own
+    instruction to treat captured material as data rather than as
+    directions. The service logs who asked, what for and which host it went
+    to, and never the content itself. Configure it in Settings.
+  * Session Summary (experimental) answers "what am I doing?" across the
+    open windows: each window is reduced on its own, then the summaries are
+    reduced into one briefing. Nothing is captured or sent until Summarize
+    session is clicked, and what leaves is bounded — 64 windows, 64 KiB
+    each, 1 MiB in total. Apps can offer a richer snapshot of themselves
+    through a new Content API; the windows that do not fall back to the view
+    state they already persist.
+  * Agent sessions resume idempotently: clicking Resume on a conversation
+    that is already open now goes to it instead of asking the agent to load
+    the same session twice, and repeated clicks while it is starting share
+    one load. npx-launched adapters no longer race each other through a
+    shared install cache, and codex-acp uses the Codex already installed.
+  * An adapter that dies now says why: agentd waits for its last stderr
+    line before reporting the exit, so the transcript carries the reason
+    ("token expired") rather than only the fact.
+
+ -- sirmick <sirmick@gmail.com>  Wed, 16 Sep 2026 00:20:00 -0700
+
 wash (0.15.0-1) unstable; urgency=low
 
   * Agents are a manager and one window per session. The Agents app (new,
