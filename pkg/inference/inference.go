@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
@@ -75,9 +76,20 @@ type pendingResult struct {
 // Client multiplexes asynchronous inference results over an existing sdk.Bus.
 // Construct exactly once for a bus.
 type Client struct {
-	bus     *sdk.Bus
+	bus *sdk.Bus
+	// emit is the send seam: the service is a separate process, so a test
+	// of what happens when it never answers has nothing else to stand in.
+	emit    func(kind string, payload any) error
 	mu      sync.Mutex
 	pending map[string]chan pendingResult
+}
+
+// send emits to the service, through the seam when a test installed one.
+func (c *Client) send(kind string, payload any) error {
+	if c.emit != nil {
+		return c.emit(kind, payload)
+	}
+	return c.bus.EmitToBulk(wire.Recipient{AppID: ServiceAppID}, kind, payload)
 }
 
 func NewClient(bus *sdk.Bus) *Client {
@@ -91,7 +103,20 @@ func NewClient(bus *sdk.Bus) *Client {
 	return c
 }
 
+// defaultDeadline bounds a Generate whose caller passed none. The service
+// times a job out at 90s, but a service that is not installed, is disabled
+// in the registry, or dies mid-job sends no terminal event at all — the
+// router drops a message to a missing recipient and says so only in its
+// log. Without this a caller waits for ever: Session Summary sat on
+// "Summarizing…" with no way back but Cancel.
+const defaultDeadline = 120 * time.Second
+
 func (c *Client) Generate(ctx context.Context, req Request) (Result, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultDeadline)
+		defer cancel()
+	}
 	id, err := requestID()
 	if err != nil {
 		return Result{}, err
@@ -104,14 +129,16 @@ func (c *Client) Generate(ctx context.Context, req Request) (Result, error) {
 	// EmitToBulk supplies the {kind:"inference.start", ...} envelope. Sending
 	// startWire directly through Conn would omit kind, so the service bus would
 	// (correctly) ignore the otherwise well-formed payload.
-	if err := c.bus.EmitToBulk(wire.Recipient{AppID: ServiceAppID}, "inference.start", startWire{ID: id, Request: req}); err != nil {
+	if err := c.send("inference.start", startWire{ID: id, Request: req}); err != nil {
 		return Result{}, err
 	}
 	select {
 	case got := <-ch:
 		return got.result, got.err
 	case <-ctx.Done():
-		_ = c.bus.Conn().SendAppMsgTo(wire.Recipient{AppID: ServiceAppID}, map[string]any{"kind": "inference.cancel", "id": id})
+		if c.bus != nil {
+			_ = c.bus.Conn().SendAppMsgTo(wire.Recipient{AppID: ServiceAppID}, map[string]any{"kind": "inference.cancel", "id": id})
+		}
 		return Result{}, ctx.Err()
 	}
 }
