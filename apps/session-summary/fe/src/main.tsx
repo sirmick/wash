@@ -90,11 +90,12 @@ const App: Component<WashAppProps> = (props) => {
   return (
     <main style={{ display: 'flex', 'flex-direction': 'column', gap: '12px', height: '100%', padding: '16px', 'box-sizing': 'border-box', color: tokens.fg, background: tokens.bgWindow }}>
       <div style={{ display: 'flex', gap: '8px', 'align-items': 'center' }}>
-        <Button onClick={busy() ? cancel : start}>{busy() ? 'Cancel' : 'Summarize session'}</Button>
-        <span style={{ color: tokens.fgMuted, font: tokens.type.textSm }}>{status()}</span>
+        <Button data-testid="summary-run" onClick={busy() ? cancel : start}>{busy() ? 'Cancel' : 'Summarize session'}</Button>
+        <span data-testid="summary-status" style={{ color: tokens.fgMuted, font: tokens.type.textSm }}>{status()}</span>
       </div>
       <textarea
         readOnly
+        data-testid="summary-output"
         aria-label="Session summary"
         value={output()}
         style={{ flex: '1', width: '100%', resize: 'none', 'box-sizing': 'border-box', padding: '12px', color: tokens.fg, background: tokens.bgInset, border: `1px solid ${tokens.borderMenu}`, 'border-radius': tokens.radiusSm, font: tokens.type.textMd, 'line-height': '1.5' }}

@@ -129,9 +129,13 @@ func startSummary(c *sdk.Conn, client *inference.Client, req summarizeReq) {
 	}()
 }
 
-func summarize(ctx context.Context, c *sdk.Conn, client *inference.Client, windows []windowContext) error {
+// prepareWindows applies the bounds on what may be sent: how many windows,
+// how much of each, and how much in total. Every byte here leaves the
+// machine, so the caps are the contract rather than a detail — and a
+// truncated window is marked as truncated rather than quietly shortened.
+func prepareWindows(windows []windowContext) ([]windowContext, error) {
 	if len(windows) == 0 {
-		return sdk.Err{Code: sdk.ErrBadRequest, Msg: "there are no other windows to summarize"}
+		return nil, sdk.Err{Code: sdk.ErrBadRequest, Msg: "there are no other windows to summarize"}
 	}
 	if len(windows) > maxWindows {
 		windows = windows[:maxWindows]
@@ -144,8 +148,16 @@ func summarize(ctx context.Context, c *sdk.Conn, client *inference.Client, windo
 		}
 		total += len(windows[i].Content)
 		if total > maxCombinedBytes {
-			return sdk.Err{Code: "too_large", Msg: "combined window context exceeds 1 MiB"}
+			return nil, sdk.Err{Code: "too_large", Msg: "combined window context exceeds 1 MiB"}
 		}
+	}
+	return windows, nil
+}
+
+func summarize(ctx context.Context, c *sdk.Conn, client *inference.Client, windows []windowContext) error {
+	windows, err := prepareWindows(windows)
+	if err != nil {
+		return err
 	}
 	_ = c.SendAppMsg(map[string]any{"kind": "summary.started", "total": len(windows)})
 
