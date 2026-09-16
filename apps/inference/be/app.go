@@ -8,6 +8,7 @@ import (
 	"embed"
 	"io/fs"
 	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -83,12 +84,15 @@ type job struct {
 }
 
 type server struct {
-	conn           *sdk.Conn
-	bus            *sdk.Bus
-	states         *sdk.StateService[state]
-	mu             sync.Mutex
-	cfg            config
-	jobs           map[string]*job
+	conn   *sdk.Conn
+	bus    *sdk.Bus
+	states *sdk.StateService[state]
+	mu     sync.Mutex
+	cfg    config
+	jobs   map[string]*job
+	// emitFn is the reply seam: tests exercise the caller gates and the
+	// bounds without standing up a bus.
+	emitFn         func(from wire.Sender, kind, id string, payload map[string]any, bulk bool)
 	activeBySource map[string]bool
 	queue          chan *job
 }
@@ -107,9 +111,21 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	}
 	b := sdk.NewBus(c)
 	s := &server{conn: c, bus: b, cfg: cfg, jobs: map[string]*job{}, activeBySource: map[string]bool{}, queue: make(chan *job, 16)}
-	s.states = sdk.NewStateService(b, s.publicState())
+	// Who may see where prompts go: the same apps that may send them, and
+	// Settings, which configures them. The state names each connection's
+	// base URL, model and whether a credential is set — a roster of the
+	// user's providers, which an app with no business calling inference
+	// has no business reading either.
+	s.states = sdk.NewStateService(b, s.publicState(), sdk.WithSubscribeGate(func(from wire.Sender) bool {
+		return allowedCallers[from.AppID]
+	}))
 	s.register()
 	service = s
+	// Child-spawning service: the CLI adapters fork codex/claude, and a
+	// job ctx of its own would outlive a router restart with the prompt
+	// still in the child. The SDK fires this on SIGTERM AND on connection
+	// close; cancelling every job kills its process group (providers.go).
+	sdk.OnTerminate(s.stopAll)
 	for i := 0; i < 2; i++ {
 		go s.worker()
 	}
@@ -140,6 +156,10 @@ func (s *server) publish()                      { st := s.publicState(); s.state
 func recipient(from wire.Sender) wire.Recipient { return wire.Recipient{InstanceID: from.InstanceID} }
 func (s *server) emit(from wire.Sender, kind, id string, payload map[string]any, bulk bool) {
 	payload["id"] = id
+	if s.emitFn != nil {
+		s.emitFn(from, kind, id, payload, bulk)
+		return
+	}
 	if bulk {
 		_ = s.bus.EmitToBulk(recipient(from), kind, payload)
 	} else {
@@ -152,6 +172,7 @@ func (s *server) fail(from wire.Sender, id, code, msg string) {
 
 func (s *server) start(id string, req shared.Request, from wire.Sender) error {
 	if !allowedCallers[from.AppID] {
+		log.Printf("wash-inference: refused id=%s from=%s reason=not_allowed", id, from.AppID)
 		s.fail(from, id, "forbidden", "app is not allowed to use inference")
 		return nil
 	}
@@ -163,7 +184,7 @@ func (s *server) start(id string, req shared.Request, from wire.Sender) error {
 		s.fail(from, id, "bad_request", "max_output_tokens must be between 0 and 8192")
 		return nil
 	}
-	n := 0
+	n := len(req.Instructions)
 	for _, p := range req.Input {
 		if p.Type != "text" {
 			s.fail(from, id, "bad_request", "only text input parts are supported")
@@ -209,6 +230,12 @@ func (s *server) start(id string, req shared.Request, from wire.Sender) error {
 		s.jobs[key] = j
 		s.activeBySource[from.InstanceID] = true
 		s.mu.Unlock()
+		// The audit line: who asked, what for, and where it is going —
+		// never the prompt itself. Without it a provider re-pointed in
+		// Settings sends someone's terminal buffer to a new host with
+		// nothing on the machine recording that it happened.
+		log.Printf("wash-inference: start id=%s from=%s purpose=%s provider=%s adapter=%s dest=%s bytes=%d",
+			id, from.AppID, req.Purpose, selected.ID, selected.Adapter, destination(selected), n)
 		s.emit(from, "inference.start_ok", id, map[string]any{}, false)
 	default:
 		s.mu.Unlock()
@@ -234,9 +261,12 @@ func (s *server) worker() {
 			if v, ok := err.(providerError); ok {
 				pe = v
 			}
+			log.Printf("wash-inference: failed id=%s from=%s provider=%s code=%s", j.id, j.from.AppID, j.conn.ID, pe.code)
 			s.fail(j.from, j.id, pe.code, pe.msg)
 			continue
 		}
+		log.Printf("wash-inference: done id=%s from=%s provider=%s elapsed_ms=%d in=%d out=%d",
+			j.id, j.from.AppID, j.conn.ID, r.ElapsedMS, r.Usage.InputTokens, r.Usage.OutputTokens)
 		s.emit(j.from, "inference.result", j.id, map[string]any{"text": r.Text, "provider": r.Provider, "model": r.Model, "elapsed_ms": r.ElapsedMS, "usage": r.Usage}, true)
 	}
 }
@@ -354,4 +384,33 @@ func onInstanceGone(_ *sdk.Conn, _ string, instanceID string) {
 	for _, j := range jobs {
 		j.cancel()
 	}
+}
+
+// stopAll cancels every job, which group-kills any CLI child it started.
+func (s *server) stopAll() {
+	s.mu.Lock()
+	jobs := make([]*job, 0, len(s.jobs))
+	for _, j := range s.jobs {
+		jobs = append(jobs, j)
+	}
+	s.mu.Unlock()
+	for _, j := range jobs {
+		j.cancel()
+	}
+	if len(jobs) > 0 {
+		log.Printf("wash-inference: cancelled %d job(s) on shutdown", len(jobs))
+	}
+}
+
+// destination is the host an HTTP provider sends to, for the audit line. A
+// CLI adapter runs locally and says so.
+func destination(c connection) string {
+	if c.Adapter != "openai" {
+		return "local-cli"
+	}
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || u.Host == "" {
+		return "invalid"
+	}
+	return u.Host
 }

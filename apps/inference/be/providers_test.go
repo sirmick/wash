@@ -14,18 +14,28 @@ import (
 )
 
 func TestOpenAICompatibleChatCompletions(t *testing.T) {
-	var path, auth, content string
+	var path, auth, content, system string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path, auth = r.URL.Path, r.Header.Get("Authorization")
 		var body struct {
 			Messages []struct {
+				Role    string `json:"role"`
 				Content string `json:"content"`
 			} `json:"messages"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		content = body.Messages[0].Content
+		// The service's own guard rides as the system message, and the
+		// caller's instructions plus the fenced source as the user one.
+		for _, m := range body.Messages {
+			switch m.Role {
+			case "system":
+				system = m.Content
+			case "user":
+				content = m.Content
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"summary"}}],"usage":{"prompt_tokens":8,"completion_tokens":2}}`))
 	}))
@@ -37,7 +47,11 @@ func TestOpenAICompatibleChatCompletions(t *testing.T) {
 	if path != "/v1/chat/completions" || auth != "Bearer k" {
 		t.Fatalf("path=%q auth=%q", path, auth)
 	}
-	if content != "Be short\n\nhello" {
+	if system != systemInstruction {
+		t.Fatalf("system=%q", system)
+	}
+	if !strings.Contains(content, "Be short") || !strings.Contains(content, "hello") ||
+		!strings.Contains(content, "BEGIN SOURCE") {
 		t.Fatalf("content=%q", content)
 	}
 	if r.Text != "summary" || r.Usage.InputTokens != 8 || r.Usage.OutputTokens != 2 {
