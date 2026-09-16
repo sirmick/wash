@@ -380,3 +380,29 @@ func TestStateServicePublishBulkUsesBulkClass(t *testing.T) {
 		t.Fatalf("message=%#v, want recipient i-sub", evt)
 	}
 }
+
+// A service whose state says where prompts and credentials go must not
+// answer every app that asks: the subscriber roster follows the same gate
+// as the callers it would serve.
+func TestStateServiceSubscribeGateRefusesOtherApps(t *testing.T) {
+	bus, router, cleanup := busTestConn(t)
+	defer cleanup()
+
+	NewStateService(bus, jobsState{}, WithSubscribeGate(func(from wire.Sender) bool {
+		return from.AppID == "com.wash.allowed"
+	}))
+	go func() { _ = bus.conn.Run(context.Background()) }()
+
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{AppID: "com.wash.nosy", InstanceID: "i-nosy"}))
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{AppID: "com.wash.allowed", InstanceID: "i-ok"}))
+
+	// The allowed subscriber's snapshot is the FIRST state message on the
+	// wire: a refused subscribe answers nothing at all.
+	if got := readStateMsgToInstance(t, router, "i-ok"); got == nil {
+		t.Fatal("allowed subscriber got no snapshot")
+	}
+}

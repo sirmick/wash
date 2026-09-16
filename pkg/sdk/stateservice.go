@@ -28,6 +28,7 @@
 package sdk
 
 import (
+	"log"
 	"sync"
 
 	"github.com/sirmick/wash/pkg/wire"
@@ -52,6 +53,25 @@ type StateService[S any] struct {
 	// is idempotent (a subscriber that double-subscribes after losing
 	// track is one entry, not two).
 	subs map[string]struct{}
+	// allow, when set, decides which senders may subscribe. Nil means
+	// every app may (the default: most services publish state that is
+	// public to the desktop). A service whose state describes something
+	// privileged — where prompts and credentials go, say — passes
+	// WithSubscribeGate so the roster of subscribers matches the roster
+	// of callers it would answer.
+	allow func(wire.Sender) bool
+}
+
+// StateServiceOption configures NewStateService.
+type StateServiceOption func(*stateServiceOpts)
+
+type stateServiceOpts struct{ allow func(wire.Sender) bool }
+
+// WithSubscribeGate restricts who may subscribe (and so who receives
+// every later push). A refused subscribe is answered with nothing, the
+// same as an unknown kind.
+func WithSubscribeGate(allow func(wire.Sender) bool) StateServiceOption {
+	return func(o *stateServiceOpts) { o.allow = allow }
 }
 
 // NewStateService installs subscribe/unsubscribe handlers on bus and
@@ -61,15 +81,24 @@ type StateService[S any] struct {
 //
 // Panics if "subscribe" or "unsubscribe" is already registered on bus
 // — programmer error to double-install StateService for one Bus.
-func NewStateService[S any](bus *Bus, initial S) *StateService[S] {
+func NewStateService[S any](bus *Bus, initial S, opts ...StateServiceOption) *StateService[S] {
+	var o stateServiceOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
 	s := &StateService[S]{
 		bus:   bus,
 		state: initial,
 		subs:  map[string]struct{}{},
+		allow: o.allow,
 	}
 	HandleFromVoid(bus, StateServiceKindSubscribe, func(c *Conn, _ string, _ struct{}, from wire.Sender) error {
 		if from.InstanceID == "" {
 			return nil // router never delivers cross-app msgs without InstanceID; defensive
+		}
+		if s.allow != nil && !s.allow(from) {
+			log.Printf("sdk: %s subscribe refused from=%s", bus.appID(), from.AppID)
+			return nil
 		}
 		s.mu.Lock()
 		s.subs[from.InstanceID] = struct{}{}
