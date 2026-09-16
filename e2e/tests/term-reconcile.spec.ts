@@ -28,10 +28,13 @@ test.describe('terminal reconcile', () => {
     await expect(term).toBeVisible();
     await expect(term).toContainText(/\$|#|>/, { timeout: 10_000 });
 
-    // Second tab. (Each tab button carries child term-tab-badge-/term-tab-close-
-    // spans that share the term-tab- prefix, so both are excluded to count buttons.)
+    // Second tab. A tab is a BUTTON: its own children (badge, bell, the
+    // activity dot, the rename input) share the term-tab- prefix, and an
+    // earlier selector that excluded only close/badge counted the activity
+    // dot as a third tab whenever the backgrounded tab printed something —
+    // 6 runs in 10 on two cores, and three CI reds.
     await page.locator('[data-testid="term-new-tab"]').click();
-    await expect(page.locator('[data-testid^="term-tab-"]:not([data-testid*="close"]):not([data-testid*="badge"])')).toHaveCount(2, {
+    await expect(page.locator('button[data-testid^="term-tab-"]:not([data-testid^="term-tab-close-"])')).toHaveCount(2, {
       timeout: 10_000,
     });
     // The new tab is auto-activated; wait for its prompt then replace
@@ -51,7 +54,7 @@ test.describe('terminal reconcile', () => {
     await page.goto(router.url);
     const term2 = page.locator('wash-app-term');
     await expect(term2).toBeVisible();
-    await expect(page.locator('[data-testid^="term-tab-"]:not([data-testid*="close"]):not([data-testid*="badge"])')).toHaveCount(1, {
+    await expect(page.locator('button[data-testid^="term-tab-"]:not([data-testid^="term-tab-close-"])')).toHaveCount(1, {
       timeout: 10_000,
     });
 

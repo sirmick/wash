@@ -16,6 +16,27 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-15 — term-reconcile: the activity dot counted as a third tab (FIXED)
+
+**Seen during:** three GitHub `ci` runs in a row (main, PR #25, and the
+v0.15.0 tag), always `term-reconcile.spec.ts:22`:
+
+```
+Expected: 2   Received: 3    (tabs, right after clicking New Tab)
+```
+
+**Reproduced** at 6/10 with `taskset -c 0,1 --workers=2 --repeat-each=10`.
+
+**Mechanism — the spec's own selector.** A tab is a `<button>` whose
+children share its `term-tab-` prefix: the badge, the bell, the rename
+input, and the activity dot (`term-tab-activity-<id>`, apps/term/fe/src/
+main.tsx). The selector excluded only `close` and `badge`, so the moment
+the backgrounded first tab printed anything — which is exactly what a busy
+runner makes likely — its activity dot matched and the count read 3.
+Nothing was wrong with the terminal. Fixed by counting `button[data-testid^=
+"term-tab-"]`, the form term.spec.ts and term-menubar.spec.ts already use.
+20/20 afterwards.
+
 ## 2026-09-15 — agent-fs: a fast command's output lost between reap and drain (FIXED)
 
 **Seen during:** GitHub `ci` for 0.15.0 (e2e 677 passed / 2 failed).
