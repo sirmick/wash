@@ -46,6 +46,7 @@ const APP_BINS = {
   connect: ['wash-connect'], remote: ['wash-remote'],
   imageview: ['wash-imageview'],
   agentd: ['wash-agentd'], agents: ['wash-agents'], ai: ['wash-ai'], hostgw: ['wash-hostgw'],
+  inference: ['wash-inference'], 'session-summary': ['wash-session-summary'],
   vscode: ['wash-vscode', 'wash-vscode-workbench'],
   display: ['wash-display'],
 } satisfies Record<string, readonly string[]>;
