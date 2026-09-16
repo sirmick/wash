@@ -16,6 +16,26 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-16 — agent-adapter-exit: the crash reason arrived after the exit (FIXED)
+
+**Seen during:** the v0.15.0 tag run, where main's run of the SAME commit
+was green (the tag/main split this file has recorded before).
+
+```
+timed out waiting for /agentd: acp adapter exited .*stderr=".*simulated crash/
+agentd: acp adapter exited key=acp:1 … err=EOF stderr=""
+agentd: adapter codex stderr: acp-fake: fatal: simulated crash (token expired)
+```
+
+**Mechanism — not a test artefact.** `watchExit` wakes on `client.Done()`,
+which is the adapter's STDOUT closing, and read the stderr tail straight
+away; the stderr reader is a separate goroutine and the last line — the one
+that says why the agent died — lands a moment later. So the exit log AND
+the transcript note ("Its last output:") could both omit the reason. Same
+shape as the pty drain entry above. **Fix:** the exit path waits for the
+stderr reader, bounded at 2s so a leftover child holding stderr open cannot
+hold the exit. 8/8 squeezed afterwards.
+
 ## 2026-09-15 — term-reconcile: the activity dot counted as a third tab (FIXED)
 
 **Seen during:** three GitHub `ci` runs in a row (main, PR #25, and the

@@ -244,7 +244,7 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{key: key, agent: a.ID, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers)}
+	h := &hosted{key: key, agent: a.ID, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
 
 	// The adapter's own diagnostics. Without this, "needs authentication"
 	// is indistinguishable from "hung". The tail is also kept on the
@@ -252,6 +252,7 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	// the one line that explains why — and it belongs in the transcript,
 	// not only in a log the person watching the window never sees.
 	go func() {
+		defer close(h.stderrDone)
 		b, _ := io.ReadAll(io.TeeReader(stderr, h.stderrTail()))
 		if len(b) > 0 {
 			log.Printf("agentd: adapter %s stderr: %s", a.ID, truncate(b, 2000))

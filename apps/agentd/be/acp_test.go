@@ -1051,3 +1051,30 @@ func waitIdle(t *testing.T, h *hosted) {
 		t.Fatal("the turn goroutine never returned")
 	}
 }
+
+// An adapter's last words arrive on stderr, which routinely loses the race
+// with its stdout closing. The exit path waits for them, and is bounded so
+// a leftover child holding stderr open cannot hold the exit.
+func TestAwaitStderrWaitsForTheLastWordsButNotForEver(t *testing.T) {
+	h := &hosted{stderrDone: make(chan struct{})}
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		h.tailMu.Lock()
+		h.tail = []byte("fatal: token expired")
+		h.tailMu.Unlock()
+		close(h.stderrDone)
+	}()
+	h.awaitStderr()
+	if got := h.stderrText(); got != "fatal: token expired" {
+		t.Fatalf("stderr tail = %q, want the reason the adapter died", got)
+	}
+
+	old := stderrGrace
+	stderrGrace = 20 * time.Millisecond
+	t.Cleanup(func() { stderrGrace = old })
+	start := time.Now()
+	(&hosted{stderrDone: make(chan struct{})}).awaitStderr()
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("waited %s for stderr that never ended", waited)
+	}
+}

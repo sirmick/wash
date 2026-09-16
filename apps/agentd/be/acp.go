@@ -120,8 +120,12 @@ type hosted struct {
 	// killed, so the exit watcher can tell "we ended it" from "it died".
 	closing atomic.Bool
 	// tail is the adapter's last stderr bytes (see stderrTail).
-	tailMu sync.Mutex
-	tail   []byte
+	// stderrDone closes when the adapter's stderr reader has drained. The
+	// exit watcher wakes on stdout closing, which routinely beats the last
+	// stderr line — the crash reason — through the pipe.
+	stderrDone chan struct{}
+	tailMu     sync.Mutex
+	tail       []byte
 	// exited is closed when watchExit has finished its cleanup, and idle
 	// receives one value each time the turn goroutine returns. Both nil in
 	// production (nothing waits); tests set them so they can wait for the
@@ -368,6 +372,27 @@ func (w *tailWriter) Write(p []byte) (int, error) {
 }
 
 // stderrText is the kept tail, trimmed for a transcript note.
+// stderrGrace bounds the wait for a dying adapter's last words. Short: an
+// adapter whose stderr is held open by a child it left behind must not
+// hold the exit — the row still turns red, only the reason is missing.
+var stderrGrace = 2 * time.Second
+
+// awaitStderr waits for the stderr reader to finish, so the tail read after
+// it holds the line that explains the exit. Without it agentd logged
+// stderr="" and the transcript note said only "the agent exited", while the
+// adapter's "fatal: token expired" arrived a moment later.
+func (h *hosted) awaitStderr() {
+	if h.stderrDone == nil {
+		return
+	}
+	t := time.NewTimer(stderrGrace)
+	defer t.Stop()
+	select {
+	case <-h.stderrDone:
+	case <-t.C:
+	}
+}
+
 func (h *hosted) stderrText() string {
 	h.tailMu.Lock()
 	defer h.tailMu.Unlock()
@@ -409,6 +434,7 @@ func (h *hosted) watchExit() {
 	}
 	h.closing.Store(true)
 	err := h.client.Err()
+	h.awaitStderr()
 	tail := h.stderrText()
 	log.Printf("agentd: acp adapter exited key=%s agent=%s session=%s err=%v stderr=%q",
 		h.key, h.agent, h.sessionID, err, truncate([]byte(tail), 300))
