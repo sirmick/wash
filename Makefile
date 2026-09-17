@@ -68,7 +68,7 @@ FE_PANEL_APPS := vscode netd remote inference
 # priv left SVC_APPS in docs/SIDEBAR.md M4: it is still a service (autoboots,
 # no launcher entry) but now ships an FE for its session-modal approval queue,
 # so it needs the web/embed rules the FE apps get.
-SVC_APPS := bulk notify audio fswatch agentd hostgw
+SVC_APPS := bulk notify audio fswatch agentd hostgw commander
 
 # Every app that embeds an FE asset bundle (windowed + panel). Drives the
 # embed-stamp / vendor-sync / multicall-stamp derivations. The gated `test` app

@@ -1,6 +1,19 @@
 # Mission Commander — activity journal, observation, and summaries
 
-Status: design (2026-09-16); **§9 step 1 (journal + Timeline) built
+Status: design (2026-09-16); **§9 step 3a (the commander service:
+automatic briefs on a cadence, batched, deduplicated) built 2026-09-17** —
+`apps/commander/be` (scheduler with revision/content/brief dedup, per-hour
+budget, idle backoff to 4×, `commander.json`), router `observe.roster`,
+`inference.info` + the on-box rule, hostgw republishes its state as service
+`commander`, the session BE gateway `commander_set`/`commander_run`, briefs
+as `kind: brief` journal rows. Rollups and the Resume card (§5.4) are step
+3b. **§9 step 2 (observe + briefs on request)
+built 2026-09-17** — `pkg/wire/observe.go`, `internal/router/observe.go`
+(export → pty tail → state blob → none; `ChannelKindPty`; 250 ms export
+grace; `permanentNone`), `internal/observe` (tail rendering + redaction),
+`pkg/inference/activity` (the brief), `sdk.HandleObserve` / `sdk.Conn.Observe`
+(`CapObserve`), `window.wash.observe`, Session Summary re-based on it.
+**§9 step 1 (journal + Timeline) built
 2026-09-16** — `internal/activity`, `internal/router/activity.go`,
 `pkg/wire/activity.go`, `web/shell/src/activity.ts`, the session sidebar's
 Timeline, notes from agentd/priv/bulk, `e2e/tests/activity-journal.spec.ts`.
@@ -157,16 +170,23 @@ reads.
 `observe {instance_id}` (control channel, and attested app-to-router) →
 
 ```json
-{"source":"export|pty-tail|app-state|none","revision":"…",
- "content_type":"text/plain|application/json","content":"…",
+{"source":"export|pty-tail|app-state|provider|dom|none","eligible":true,
+ "revision":"…","content_type":"text/plain|application/json","content":"…",
  "truncated":false,"captured_at":1789603200123,
  "window":{"app":"…","title":"…","state":"normal","focused":true}}
 ```
 
-Resolution order: an app export if the app has one and it is fresh; else the
-pty tail for an instance that owns a pty channel; else the state blob; else
-`none`. The response names which, so a consumer can say "from the terminal's
-own report" versus "from what was on screen".
+Resolution order, router side: an app export if the app has one and it is
+fresh; else the pty tail for an instance that owns a pty channel; else the
+state blob; else `none`. **Auto means auto**: a `none` for an eligible app
+(`eligible: true`) is not the end — the shell's `window.wash.observe`
+falls through to the app's FE Content-API provider (`provider`, or
+`app-state` from the shell's mirror of the blob) and then to the window's
+rendered text (`dom`, `element.innerText` normalised), bounded and redacted
+with the same shapes the router uses. Only an ineligible app (`eligible`
+absent) answers `none` and stays `none`. The response names which, so a
+consumer can say "from the terminal's own report" versus "from what was on
+screen".
 
 ### 4.2 pty tail (automatic)
 

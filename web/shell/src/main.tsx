@@ -83,6 +83,7 @@ import {
   deliverResync,
   deliverToInstance,
   forgetVideoChannel,
+  mountedElement,
   replaceSavedStates,
   resolveWindowContent,
   setSavedState,
@@ -102,6 +103,10 @@ import {
   type ActivityEntry, type ActivityQuery, type ActivityPage, type ActivityStats,
 } from './activity';
 import { origins as activityOrigins, LOCAL_ORIGIN as ACTIVITY_LOCAL } from './clients';
+import {
+  observe as observeOn, handleObserveOK, handleObserveErr, rejectPendingFor as rejectObserveFor,
+  fallback as observeFallback, type Observation,
+} from './observe';
 import {
   HOSTGW_APP_ID,
   dropHostgwOrigin,
@@ -319,6 +324,9 @@ export interface ShellActivityQueryErr { t: 'activity.query.err'; req_id: number
 export interface ShellActivityEntryMsg { t: 'activity.entry'; entry: ActivityEntry }
 export interface ShellActivityStatsOK { t: 'activity.stats.ok'; req_id: number; stats: ActivityStats }
 export interface ShellActivityClearOK { t: 'activity.clear.ok'; req_id: number }
+// Observe replies (docs/COMMANDER.md §4; pkg/wire/observe.go).
+export interface ShellObserveOK { t: 'observe.ok'; req_id: number; observation: Omit<Observation, 'host'> }
+export interface ShellObserveErr { t: 'observe.err'; req_id: number; code: string; msg?: string }
 
 // ShellCtrlMsg is the discriminated union of every control-plane message
 // the shell dispatches on (the `t` field; WIRE.md §8). makeHandlers'
@@ -350,6 +358,8 @@ type ShellCtrlMsg =
   | ShellActivityEntryMsg
   | ShellActivityStatsOK
   | ShellActivityClearOK
+  | ShellObserveOK
+  | ShellObserveErr
   | RawLinkStatsMsg;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
@@ -754,6 +764,13 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       case 'activity.clear.ok':
         handleActivityClearOK(msg);
         break;
+      // Observe (docs/COMMANDER.md §4): per origin, like the journal.
+      case 'observe.ok':
+        handleObserveOK(client.origin, msg);
+        break;
+      case 'observe.err':
+        handleObserveErr(msg);
+        break;
       // asset.read / panel.read are the shell fetching its OWN assets +
       // settings panels from its router — a local-only concern.
       case 'asset.read.ok':
@@ -1135,6 +1152,7 @@ function detachClient(origin: Origin): void {
   sentDisplayMetrics.delete(origin);
   unregisterClient(origin);
   rejectActivityFor(origin);
+  rejectObserveFor(origin);
 }
 
 {
@@ -1941,6 +1959,13 @@ declare global {
       activityStats(origin?: Origin): Promise<ActivityStats>;
       activityClear(origin?: Origin): Promise<void>;
       onActivity(cb: (e: ActivityEntry) => void): () => void;
+      // Observe (docs/COMMANDER.md §4): one look at one instance, from what
+      // its router holds — an app export, a terminal's scrollback tail, or
+      // the saved state blob — and, for an eligible app the router holds
+      // nothing for, the app's FE provider or the window's rendered text.
+      // instanceID is the WindowInfo id (origin-tagged) or the bare id;
+      // origin, when given, names whose instance it is.
+      observe(origin: Origin | undefined, instanceID: string, maxBytes?: number): Promise<Observation>;
       // Host-awareness state, merged across origins (docs/SIDEBAR.md M1):
       // origin → service → that service's latest snapshot, fed by each
       // host's com.wash.hostgw. Read-only by design — the rail routes
@@ -2222,6 +2247,22 @@ window.wash = {
   activityClear: (origin) => {
     const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
     return activityClearOn((m) => c.conn.sendCtrl(m), c.origin);
+  },
+  observe: async (origin, instanceID, maxBytes) => {
+    // instanceID may be the app-facing (origin-tagged) id a WindowInfo
+    // carries or the bare id; the router gets the bare id, the shell's
+    // own holdings are keyed by the tagged one.
+    const parsed = parseInstanceId(instanceID);
+    const c = clientForOrigin(origin ?? parsed.origin ?? ACTIVITY_LOCAL) ?? local;
+    const cid = compoundInstanceId(c.origin, parsed.bare);
+    const o = await observeOn((m) => c.conn.sendCtrl(m), c.origin, parsed.bare, maxBytes);
+    // Auto means auto (docs/COMMANDER.md §4.1): when the router holds
+    // nothing for an eligible app, the app's FE provider or saved state,
+    // then the window's rendered text.
+    return observeFallback(o, {
+      provider: () => resolveWindowContent(cid),
+      text: () => mountedElement(cid)?.innerText,
+    }, maxBytes);
   },
   onActivity: (cb) => {
     const first = !activityTailWanted();

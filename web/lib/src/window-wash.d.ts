@@ -131,6 +131,25 @@ interface WashActivityPage {
   cursor?: string;
 }
 
+/** One look at one instance (docs/COMMANDER.md §4). */
+interface WashObservation {
+  /** which holding answered: the router's (export, pty-tail, app-state) or
+   *  the shell's fallbacks for an eligible app it held nothing for
+   *  (provider = the app's Content API, dom = the window's rendered text) */
+  source: 'export' | 'pty-tail' | 'app-state' | 'provider' | 'dom' | 'none';
+  /** the app may be observed at all (its manifest is auto or export) */
+  eligible?: boolean;
+  /** moves whenever content would; opaque */
+  revision?: string;
+  content_type?: string;
+  content?: string;
+  truncated?: boolean;
+  captured_at: number;
+  window?: { app: string; instance_id: string; window_id?: number; title?: string; state?: string; focused?: boolean };
+  /** the origin it came from ('local' for the seat's own host) */
+  host: string;
+}
+
 type WashLogLevel = 'error' | 'warn' | 'info' | 'debug';
 
 // Link-health telemetry (docs/QOS.md). The router pushes per-class
@@ -271,6 +290,12 @@ interface WashGlobals {
   activityStats(origin?: string): Promise<WashActivityStats>;
   activityClear(origin?: string): Promise<void>;
   onActivity(cb: (e: WashActivityEntry) => void): () => void;
+  /** Observe one instance (docs/COMMANDER.md §4): an app export, a
+   *  terminal's scrollback tail, or its saved state, redacted by its
+   *  router; else the app's FE provider or the window's text. instanceID
+   *  is a WashWindowInfo id (origin-tagged) or the bare id; origin names
+   *  whose instance it is (undefined = local, or taken from the id). */
+  observe(origin: string | undefined, instanceID: string, maxBytes?: number): Promise<WashObservation>;
   // Host-awareness state, merged across hosts (docs/SIDEBAR.md M1): every
   // router runs com.wash.hostgw, which republishes its own host's
   // background-service snapshots; the shell tags each by the origin it

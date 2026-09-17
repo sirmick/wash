@@ -151,6 +151,12 @@ const pendingRawBytes = new Map<string, number>();
 // subscribe.
 const PENDING_RAW_CAP_BYTES = 1 << 20; // 1 MiB per channel
 
+/** mountedElement is the app element for an (origin-tagged) instance id,
+ *  or undefined before it mounts / after it unmounts. */
+export function mountedElement(instanceID: string): HTMLElement | undefined {
+  return mountedElements.get(instanceID);
+}
+
 export function registerMountedElement(instanceID: string, el: HTMLElement): void {
   mountedElements.set(instanceID, el);
   // Deliver the latest saved state first — apps initialize by listening

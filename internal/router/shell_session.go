@@ -518,6 +518,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleActivityStats(m)
 	case wire.ShellActivityClear:
 		return s.handleActivityClear(m)
+	case wire.ShellObserve:
+		return s.handleObserve(m)
 	case wire.ShellAssetRead:
 		return s.handleAssetRead(m)
 	case wire.ShellPanelRead:

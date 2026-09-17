@@ -190,6 +190,8 @@ type Router struct {
 	// decremented on disconnect — "has anyone ever been here" is a
 	// different question from "is anyone here now".
 	shellsSeen atomic.Uint64
+	// nextObserveReq mints observe.request ids (observe.go).
+	nextObserveReq atomic.Uint64
 
 	nextWindow   atomic.Uint32
 	nextInstance atomic.Uint64
@@ -699,6 +701,16 @@ type channelBinding struct {
 	shellMu sync.Mutex
 	shell   *ShellSession
 	buf     *ringBuffer
+
+	// pty marks a generic channel the app opened as ChannelKindPty: the
+	// bytes are a terminal's, so an observation (observe.go) may read
+	// the ring as text. seen counts every byte the app has written on it
+	// and wroteAt is when the last one landed — the observation's
+	// revision, and how the busiest of an instance's channels is chosen.
+	// Guarded by shellMu.
+	pty     bool
+	seen    uint64
+	wroteAt int64
 
 	// behind marks a terminal channel whose FE has stopped keeping up:
 	// a non-blocking forward (docs/PTY_ROBUST.md, Fix B) found neither

@@ -225,6 +225,33 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 			return err
 		}
 		c.pendingClipboardGet.resolve(m.ReqID, clipboardResult{mime: m.Mime, data: m.Data})
+	case wire.TEvtObserveRequest:
+		var m wire.EvtObserveRequest
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.answerObserve(m)
+	case wire.TEvtObserveResult:
+		var m wire.EvtObserveResult
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.pendingObserve.resolve(m.ReqID, observeResult{obs: m.Observation})
+	case wire.TEvtObserveGetErr:
+		var m wire.EvtObserveGetErr
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		// One error shape answers both observe.get and observe.roster.
+		if !c.pendingObserve.resolve(m.ReqID, observeResult{err: Err{Code: m.Code, Msg: m.Msg}}) {
+			c.pendingRoster.resolve(m.ReqID, rosterResult{err: Err{Code: m.Code, Msg: m.Msg}})
+		}
+	case wire.TEvtObserveRosterResult:
+		var m wire.EvtObserveRosterResult
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.pendingRoster.resolve(m.ReqID, rosterResult{roster: Roster{Shells: m.Shells, Instances: m.Instances}})
 	case wire.TEvtClipboardChanged:
 		var m wire.EvtClipboardChanged
 		if err := json.Unmarshal(payload, &m); err != nil {

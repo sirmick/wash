@@ -79,9 +79,10 @@ type Client struct {
 	bus *sdk.Bus
 	// emit is the send seam: the service is a separate process, so a test
 	// of what happens when it never answers has nothing else to stand in.
-	emit    func(kind string, payload any) error
-	mu      sync.Mutex
-	pending map[string]chan pendingResult
+	emit         func(kind string, payload any) error
+	mu           sync.Mutex
+	pending      map[string]chan pendingResult
+	pendingInfos map[string]chan pendingInfo
 }
 
 // send emits to the service, through the seam when a test installed one.
@@ -96,6 +97,7 @@ func NewClient(bus *sdk.Bus) *Client {
 	c := &Client{bus: bus, pending: make(map[string]chan pendingResult)}
 	sdk.HandleFromVoid(bus, "inference.result", c.onResult)
 	sdk.HandleFromVoid(bus, "inference.error", c.onError)
+	sdk.HandleFromVoid(bus, "inference.info_ok", c.onInfo)
 	// The acceptance acknowledgement is intentionally not exposed: Generate
 	// waits for the terminal event, while the service remains cancellable.
 	sdk.HandleFromVoid[terminalWire](bus, "inference.start_ok", func(*sdk.Conn, string, terminalWire, wire.Sender) error { return nil })
@@ -174,4 +176,79 @@ func requestID() (string, error) {
 		return "", err
 	}
 	return "inf-" + hex.EncodeToString(b[:]), nil
+}
+
+// ProviderInfo is what the service says about the selected connection
+// (inference.info): enough for a caller to apply an on-box rule without
+// seeing the roster of providers.
+type ProviderInfo struct {
+	ID         string `json:"id"`
+	Connection string `json:"connection"`
+	Adapter    string `json:"adapter"`
+	Model      string `json:"model,omitempty"`
+	// Local: the connection runs on this box (a CLI adapter, or an
+	// OpenAI-compatible endpoint on loopback such as Ollama).
+	Local     bool   `json:"local"`
+	Available bool   `json:"available"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// Info asks the service which connection would answer a Generate now.
+func (c *Client) Info(ctx context.Context) (ProviderInfo, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+	}
+	id, err := requestID()
+	if err != nil {
+		return ProviderInfo{}, err
+	}
+	ch := make(chan pendingInfo, 1)
+	c.mu.Lock()
+	if c.pendingInfos == nil {
+		c.pendingInfos = map[string]chan pendingInfo{}
+	}
+	c.pendingInfos[id] = ch
+	c.mu.Unlock()
+	defer func() { c.mu.Lock(); delete(c.pendingInfos, id); c.mu.Unlock() }()
+	if err := c.send("inference.info", cancelWire{ID: id}); err != nil {
+		return ProviderInfo{}, err
+	}
+	select {
+	case got := <-ch:
+		return got.info, got.err
+	case <-ctx.Done():
+		return ProviderInfo{}, ctx.Err()
+	}
+}
+
+type pendingInfo struct {
+	info ProviderInfo
+	err  error
+}
+
+func (c *Client) onInfo(_ *sdk.Conn, _ string, msg struct {
+	ProviderInfo
+	Code string `json:"code,omitempty"`
+	Msg  string `json:"msg,omitempty"`
+}, from wire.Sender) error {
+	if from.AppID != ServiceAppID {
+		return errors.New("info from unexpected app")
+	}
+	c.mu.Lock()
+	ch := c.pendingInfos[msg.ID]
+	c.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	r := pendingInfo{info: msg.ProviderInfo}
+	if msg.Code != "" {
+		r.err = Error{Code: msg.Code, Msg: msg.Msg}
+	}
+	select {
+	case ch <- r:
+	default:
+	}
+	return nil
 }

@@ -24,8 +24,12 @@ type windowSession struct {
 	// (the human looked) and by the app withdrawing the request.
 	attnWanted map[uint32]bool
 	appState   map[string]json.RawMessage // by instance_id; opaque to router
-	nextZ      uint32
-	nextOffset int32
+	// appStateVer counts the sets per instance_id: an observation's
+	// revision for the blob (observe.go), never reset while the instance
+	// lives.
+	appStateVer map[string]uint64
+	nextZ       uint32
+	nextOffset  int32
 }
 
 // snapshot returns a stable, lock-released copy of the windows
@@ -56,12 +60,37 @@ func (s *windowSession) setAppState(instanceID string, state json.RawMessage) []
 	if s.appState == nil {
 		s.appState = make(map[string]json.RawMessage)
 	}
+	if s.appStateVer == nil {
+		s.appStateVer = make(map[string]uint64)
+	}
 	if state == nil {
 		delete(s.appState, instanceID)
 	} else {
 		s.appState[instanceID] = state
 	}
+	s.appStateVer[instanceID]++
 	return []wire.SessionPatch{{Op: wire.SessionPatchAppState, InstanceID: instanceID, State: state}}
+}
+
+// appStateFor returns an instance's saved blob and its version, for an
+// observation. ok is false when nothing is saved.
+func (s *windowSession) appStateFor(instanceID string) (state json.RawMessage, version uint64, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok = s.appState[instanceID]
+	return state, s.appStateVer[instanceID], ok
+}
+
+// window returns a copy of one window's record, for an observation's
+// metadata.
+func (s *windowSession) window(windowID uint32) (wire.SessionWindow, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := s.windows[windowID]
+	if w == nil {
+		return wire.SessionWindow{}, false
+	}
+	return *w, true
 }
 
 // dropAppState removes the state for instance_id. Called when the
@@ -71,6 +100,7 @@ func (s *windowSession) dropAppState(instanceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.appState, instanceID)
+	delete(s.appStateVer, instanceID)
 }
 
 // focusedWindowID returns the id of the focused window, or 0 if none.
