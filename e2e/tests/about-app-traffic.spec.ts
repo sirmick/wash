@@ -44,13 +44,16 @@ test.describe('about: per-app traffic', () => {
 
     // The terminal's own bytes, not somebody else's: 4000 lines is
     // comfortably over a kilobyte, and the row reports a size not a dash.
+    // Polled, not read once: the row appears on the FIRST ~1/s stats push
+    // that counted any terminal bytes, which on a slow runner is a few
+    // hundred of them ("674 B" on CI) — the kilobytes land on the next.
     await expect(termRow).not.toContainText('— —');
-    const cells = await termRow.locator('td').allInnerTexts();
-    const total = cells[cells.length - 1];
-    expect(total).toMatch(/[0-9.]+ (KB|MB)/);
+    const total = termRow.locator('td').last();
+    await expect(total).toHaveText(/[0-9.]+ (KB|MB)/, { timeout: 15_000 });
     // And in the right CLASS: pty output rides Bulk, so the split has to
     // land there rather than lumping an app's whole share into one number.
     // Columns are App, then the four classes, then Total.
+    const cells = await termRow.locator('td').allInnerTexts();
     const [, , bulk] = cells;
     expect(bulk).toMatch(/[0-9.]+ (KB|MB)/);
 
