@@ -163,16 +163,23 @@ reads.
 `observe {instance_id}` (control channel, and attested app-to-router) →
 
 ```json
-{"source":"export|pty-tail|app-state|none","revision":"…",
- "content_type":"text/plain|application/json","content":"…",
+{"source":"export|pty-tail|app-state|provider|dom|none","eligible":true,
+ "revision":"…","content_type":"text/plain|application/json","content":"…",
  "truncated":false,"captured_at":1789603200123,
  "window":{"app":"…","title":"…","state":"normal","focused":true}}
 ```
 
-Resolution order: an app export if the app has one and it is fresh; else the
-pty tail for an instance that owns a pty channel; else the state blob; else
-`none`. The response names which, so a consumer can say "from the terminal's
-own report" versus "from what was on screen".
+Resolution order, router side: an app export if the app has one and it is
+fresh; else the pty tail for an instance that owns a pty channel; else the
+state blob; else `none`. **Auto means auto**: a `none` for an eligible app
+(`eligible: true`) is not the end — the shell's `window.wash.observe`
+falls through to the app's FE Content-API provider (`provider`, or
+`app-state` from the shell's mirror of the blob) and then to the window's
+rendered text (`dom`, `element.innerText` normalised), bounded and redacted
+with the same shapes the router uses. Only an ineligible app (`eligible`
+absent) answers `none` and stays `none`. The response names which, so a
+consumer can say "from the terminal's own report" versus "from what was on
+screen".
 
 ### 4.2 pty tail (automatic)
 

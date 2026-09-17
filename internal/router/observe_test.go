@@ -127,7 +127,8 @@ func TestObserveFallsBackToStateBlobThenNone(t *testing.T) {
 	inst, far := observeInstance(t, r, "i-edit", aboutManifest())
 	drainFrames(far)
 
-	if o := r.observe(context.Background(), inst, 0); o.Source != wire.ObserveSourceNone || o.CapturedAt == 0 {
+	// Nothing held, but the app is auto: the shell is told to keep looking.
+	if o := r.observe(context.Background(), inst, 0); o.Source != wire.ObserveSourceNone || o.CapturedAt == 0 || !o.Eligible {
 		t.Fatalf("empty instance observed as %+v", o)
 	}
 	r.winSession.setAppState("i-edit", json.RawMessage(`{"tabs":[{"path":"/tmp/a.go","password":"hunter2"}]}`))
@@ -148,7 +149,7 @@ func TestObserveFallsBackToStateBlobThenNone(t *testing.T) {
 	}
 
 	inst.Manifest.Observation = ObservationNone
-	if o := r.observe(context.Background(), inst, 0); o.Source != wire.ObserveSourceNone || o.Content != "" {
+	if o := r.observe(context.Background(), inst, 0); o.Source != wire.ObserveSourceNone || o.Content != "" || o.Eligible {
 		t.Fatalf("a none app was observed: %+v", o)
 	}
 }

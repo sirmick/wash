@@ -133,8 +133,12 @@ interface WashActivityPage {
 
 /** One look at one instance (docs/COMMANDER.md §4). */
 interface WashObservation {
-  /** which of the router's holdings answered */
-  source: 'export' | 'pty-tail' | 'app-state' | 'none';
+  /** which holding answered: the router's (export, pty-tail, app-state) or
+   *  the shell's fallbacks for an eligible app it held nothing for
+   *  (provider = the app's Content API, dom = the window's rendered text) */
+  source: 'export' | 'pty-tail' | 'app-state' | 'provider' | 'dom' | 'none';
+  /** the app may be observed at all (its manifest is auto or export) */
+  eligible?: boolean;
   /** moves whenever content would; opaque */
   revision?: string;
   content_type?: string;
@@ -288,7 +292,9 @@ interface WashGlobals {
   onActivity(cb: (e: WashActivityEntry) => void): () => void;
   /** Observe one instance (docs/COMMANDER.md §4): an app export, a
    *  terminal's scrollback tail, or its saved state, redacted by its
-   *  router. origin names whose instance it is (undefined = local). */
+   *  router; else the app's FE provider or the window's text. instanceID
+   *  is a WashWindowInfo id (origin-tagged) or the bare id; origin names
+   *  whose instance it is (undefined = local, or taken from the id). */
   observe(origin: string | undefined, instanceID: string, maxBytes?: number): Promise<WashObservation>;
   // Host-awareness state, merged across hosts (docs/SIDEBAR.md M1): every
   // router runs com.wash.hostgw, which republishes its own host's

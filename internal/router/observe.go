@@ -64,6 +64,9 @@ func (r *Router) observe(ctx context.Context, inst *AppInstance, maxBytes int) w
 	if mode == ObservationNone {
 		return o
 	}
+	// Auto means auto: with nothing held here the shell goes on to the
+	// app's FE provider and the window's own text (§4.1).
+	o.Eligible = true
 	if mode == ObservationExport {
 		if reply, ok := inst.requestObservation(ctx, maxBytes); ok && reply.Content != "" {
 			o.Source = wire.ObserveSourceExport

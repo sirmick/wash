@@ -34,7 +34,8 @@ type Source struct {
 	AppID string `json:"app_id"`
 	Title string `json:"title"`
 	Host  string `json:"host,omitempty"`
-	// Kind names the observation's origin: export | pty-tail | app-state.
+	// Kind names the observation's origin: export | pty-tail | app-state |
+	// provider | dom (wire.ObserveSource*).
 	Kind        string `json:"kind"`
 	ContentType string `json:"content_type"`
 	Content     string `json:"content"`

@@ -16,11 +16,23 @@ const (
 	ObserveSourceAppState = "app-state"
 	// ObserveSourceNone: nothing to observe, or the app is not eligible.
 	ObserveSourceNone = "none"
+
+	// The shell's fallbacks for an eligible instance the router holds
+	// nothing for (Eligible with Source none): the app's FE Content-API
+	// provider, then the window's rendered text. Produced in the shell,
+	// named here so every consumer reads one set.
+	ObserveSourceProvider = "provider"
+	ObserveSourceDOM      = "dom"
 )
 
 // Observation is one look at one instance.
 type Observation struct {
 	Source string `json:"source"`
+	// Eligible says the app may be observed (its manifest is auto or
+	// export). With Source none it tells the shell to keep looking —
+	// the FE provider, then the DOM — rather than give up; false means
+	// the app is none and nothing may be read.
+	Eligible bool `json:"eligible,omitempty"`
 	// Revision changes whenever the content would: the pty ring's bytes-
 	// seen counter, the state blob's version, an export's own stamp. Cheap
 	// change detection for a scheduler; opaque otherwise.

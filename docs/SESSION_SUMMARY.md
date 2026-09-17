@@ -17,12 +17,16 @@ from what it already holds, in this order:
 2. the tail of the terminal's scrollback ring, stripped of control sequences
    (an instance that owns a pty channel);
 3. the instance's saved `app_state` blob;
-4. nothing (`none`) — the app is not observable (third-party apps by default;
-   priv, settings, inference and login always).
+4. — the router holds nothing, but the app is eligible, so the shell keeps
+   looking: the app's FE Content-API provider (`provider`), then
+5. the window's rendered text (`dom`);
+6. nothing (`none`) — the app is not observable (third-party apps by default;
+   priv, settings, inference and login always), or it has shown nothing yet.
 
-Every observation is redacted by the router before it leaves it (bearer
-tokens, `key=`/`password:` assignments, vendor key prefixes), and names its
-source, which the window shows beside the briefing. HTML is never read.
+Every observation is redacted before it leaves the router (bearer tokens,
+`key=`/`password:` assignments, vendor key prefixes; the shell's two
+fallbacks apply the same shapes), and names its source, which the window
+shows beside the briefing.
 
 ## Reduction flow
 

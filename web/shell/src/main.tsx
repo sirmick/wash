@@ -83,6 +83,7 @@ import {
   deliverResync,
   deliverToInstance,
   forgetVideoChannel,
+  mountedElement,
   replaceSavedStates,
   resolveWindowContent,
   setSavedState,
@@ -104,7 +105,7 @@ import {
 import { origins as activityOrigins, LOCAL_ORIGIN as ACTIVITY_LOCAL } from './clients';
 import {
   observe as observeOn, handleObserveOK, handleObserveErr, rejectPendingFor as rejectObserveFor,
-  type Observation,
+  fallback as observeFallback, type Observation,
 } from './observe';
 import {
   HOSTGW_APP_ID,
@@ -1960,8 +1961,10 @@ declare global {
       onActivity(cb: (e: ActivityEntry) => void): () => void;
       // Observe (docs/COMMANDER.md §4): one look at one instance, from what
       // its router holds — an app export, a terminal's scrollback tail, or
-      // the saved state blob. Window ids and instance ids are per-router,
-      // so the origin names whose instance it is.
+      // the saved state blob — and, for an eligible app the router holds
+      // nothing for, the app's FE provider or the window's rendered text.
+      // instanceID is the WindowInfo id (origin-tagged) or the bare id;
+      // origin, when given, names whose instance it is.
       observe(origin: Origin | undefined, instanceID: string, maxBytes?: number): Promise<Observation>;
       // Host-awareness state, merged across origins (docs/SIDEBAR.md M1):
       // origin → service → that service's latest snapshot, fed by each
@@ -2245,9 +2248,21 @@ window.wash = {
     const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
     return activityClearOn((m) => c.conn.sendCtrl(m), c.origin);
   },
-  observe: (origin, instanceID, maxBytes) => {
-    const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
-    return observeOn((m) => c.conn.sendCtrl(m), c.origin, instanceID, maxBytes);
+  observe: async (origin, instanceID, maxBytes) => {
+    // instanceID may be the app-facing (origin-tagged) id a WindowInfo
+    // carries or the bare id; the router gets the bare id, the shell's
+    // own holdings are keyed by the tagged one.
+    const parsed = parseInstanceId(instanceID);
+    const c = clientForOrigin(origin ?? parsed.origin ?? ACTIVITY_LOCAL) ?? local;
+    const cid = compoundInstanceId(c.origin, parsed.bare);
+    const o = await observeOn((m) => c.conn.sendCtrl(m), c.origin, parsed.bare, maxBytes);
+    // Auto means auto (docs/COMMANDER.md §4.1): when the router holds
+    // nothing for an eligible app, the app's FE provider or saved state,
+    // then the window's rendered text.
+    return observeFallback(o, {
+      provider: () => resolveWindowContent(cid),
+      text: () => mountedElement(cid)?.innerText,
+    }, maxBytes);
   },
   onActivity: (cb) => {
     const first = !activityTailWanted();
