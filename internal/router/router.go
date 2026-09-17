@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"github.com/sirmick/wash/internal/activity"
 	"net"
 	"net/http"
 	"os"
@@ -99,6 +100,15 @@ type Config struct {
 	// reaping for it. Runner default is 24 hours when ListenUnix is set,
 	// and an app holding an idle-inhibit suspends it entirely — so the
 	// timer only ever collects sessions with nothing in flight.
+	// NoActivity turns the activity journal off (kiosk, CI); the shell
+	// verbs then answer empty. ActivityDir is where day files live
+	// (ActivityDir()); ActivityRetention / ActivityMaxBytes bound it
+	// (docs/COMMANDER.md §3.4; zero = the store's defaults).
+	NoActivity        bool
+	ActivityDir       string
+	ActivityRetention time.Duration
+	ActivityMaxBytes  int64
+
 	IdleTimeout time.Duration
 	// IdleTimeoutUnattached is the same period for a router no shell has
 	// ever reached. It wants to be short — this is the population the
@@ -190,7 +200,9 @@ type Router struct {
 	// panel's MB figures and the About screen survive WS reconnects;
 	// connectCount is the number of shell connections served; started
 	// stamps session (router process) start for the uptime readout.
-	linkTotals   *LinkStats
+	linkTotals *LinkStats
+	// journal is the activity journal (activity.go); nil when off.
+	journal      *activity.Store
 	connectCount atomic.Uint64
 	started      time.Time
 	// shellID is a per-router-run identity included in session snapshots.
@@ -323,6 +335,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		ingress:           newIngressRegistry(log),
 		peers:             make(map[string]peerTarget),
 		linkTotals:        &LinkStats{},
+		journal:           openJournal(cfg, log),
 		started:           now,
 		shellID:           fmt.Sprintf("%x", now.UnixNano()),
 	}
@@ -834,6 +847,9 @@ func (r *Router) bringUp(ctx context.Context, inst *AppInstance) {
 	// The one "this instance exists" line — without it the registered
 	// set can't be reconstructed from the log.
 	r.log("app %s up instance=%s win=%d", inst.AppID, inst.InstanceID, inst.WindowID)
+	if inst.WindowID != 0 {
+		r.noteWindow("window.open", inst, inst.WindowID, inst.Manifest.Name, inst.Manifest.Name, nil)
+	}
 	if err := r.declareAppToAllShells(ctx, inst); err != nil {
 		r.log("declare %s instance=%s: %v", inst.AppID, inst.InstanceID, err)
 	}
@@ -884,6 +900,7 @@ func (r *Router) tearDown(inst *AppInstance) {
 	r.ingress.dropInstance(inst.InstanceID)
 	r.winSession.dropAppState(inst.InstanceID)
 	if inst.WindowID != 0 {
+		r.noteWindowClose(inst, inst.WindowID, inst.expectedExit.Load())
 		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
 	}
 	// Multi-window: tell shells about every window created via
@@ -897,8 +914,30 @@ func (r *Router) tearDown(inst *AppInstance) {
 	inst.extraWins = nil
 	inst.winMu.Unlock()
 	for _, w := range extra {
+		r.noteWindowClose(inst, w, true)
 		r.broadcastPatches(r.winSession.destroyWindow(w))
 	}
+}
+
+// noteWindowClose journals a window going away, once: approveWindowClose
+// and tearDown both end here, and destroyWindow's record is the guard —
+// a window already deleted is a close already noted.
+func (r *Router) noteWindowClose(inst *AppInstance, win uint32, orderly bool) {
+	if r.journal == nil {
+		return
+	}
+	title, ok := r.winSession.info(win)
+	if !ok {
+		return
+	}
+	line := "closed"
+	if !orderly {
+		line = "exited unexpectedly"
+	}
+	r.journal.Append(activity.Entry{
+		Kind: "window.close", App: inst.AppID, Instance: inst.InstanceID, Window: win, Title: title, Line: line,
+		Intent: &wire.ActivityIntent{Kind: "open", AppID: inst.AppID},
+	})
 }
 
 // broadcastInstanceGone lets long-lived services clean subscription sets

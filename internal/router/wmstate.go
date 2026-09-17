@@ -148,6 +148,25 @@ func (s *windowSession) destroyWindow(windowID uint32) []wire.SessionPatch {
 	return []wire.SessionPatch{{Op: wire.SessionPatchWindowDelete, WindowID: windowID}}
 }
 
+// info reports a window's current title and whether it exists. Read
+// before destroyWindow by the journal, which wants the title a window
+// closed with.
+func (s *windowSession) info(windowID uint32) (title string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := s.windows[windowID]
+	if w == nil {
+		return "", false
+	}
+	return w.Title, true
+}
+
+// title is info without the existence bit.
+func (s *windowSession) title(windowID uint32) string {
+	t, _ := s.info(windowID)
+	return t
+}
+
 // setTitle updates a window's title and returns the upsert patch.
 func (s *windowSession) setTitle(windowID uint32, title string) []wire.SessionPatch {
 	s.mu.Lock()

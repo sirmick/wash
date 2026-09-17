@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/activity"
 	"path"
 	"strings"
 	"sync"
@@ -21,6 +22,10 @@ type ShellSession struct {
 
 	router  *Router
 	writeMu sync.Mutex
+
+	// tailStop ends this connection's activity tail (activity.go).
+	tailMu   sync.Mutex
+	tailStop func()
 
 	// patches collapses successive session patches for the same window
 	// while the writer is behind, so a drag does not deliver a backlog
@@ -156,8 +161,10 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	sess.lastReadAtNanos.Store(time.Now().UnixNano())
 	connStart := time.Now()
 	r.log("shell: connect conn=%d", sess.connID)
+	r.note(activity.Entry{Kind: "session.attach", Line: "browser connected", Ref: map[string]any{"conn": sess.connID}})
 	sess.installStallLog()
 	defer func() {
+		sess.stopActivityTail()
 		// Stop the drainer first so it doesn't try to write to a
 		// closing transport, then wait for it to exit.
 		sess.scheduler.Close()
@@ -175,6 +182,8 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 			sess.connID, time.Since(connStart).Round(time.Millisecond),
 			snap.RxFrames, sumU64(snap.TxFrames[:]),
 			time.Since(time.Unix(0, sess.lastReadAtNanos.Load())).Round(time.Millisecond))
+		r.note(activity.Entry{Kind: "session.detach", Line: "browser disconnected after " + time.Since(connStart).Round(time.Second).String(),
+			Ref: map[string]any{"conn": sess.connID}})
 	}()
 	go sess.drainLoop(ctx)
 	go sess.readIdleLoop(ctx)
@@ -501,6 +510,14 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:
 		return s.handleChannelCredit(m)
+	case wire.ShellActivityQuery:
+		return s.handleActivityQuery(m)
+	case wire.ShellActivityTail:
+		return s.handleActivityTail(m)
+	case wire.ShellActivityStats:
+		return s.handleActivityStats(m)
+	case wire.ShellActivityClear:
+		return s.handleActivityClear(m)
 	case wire.ShellAssetRead:
 		return s.handleAssetRead(m)
 	case wire.ShellPanelRead:
@@ -724,7 +741,8 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 func (r *Router) approveWindowClose(inst *AppInstance, win uint32) {
 	// Tell shells the window is gone now. The app's loop teardown will
 	// also call destroyWindow when it exits; the second call is a no-op
-	// (already deleted).
+	// (already deleted) — and so is its journal note.
+	r.noteWindowClose(inst, win, true)
 	r.broadcastPatches(r.winSession.destroyWindow(win))
 	// expectedExit suppresses the crash-broadcast in the cleanup
 	// goroutine — a close the app confirmed is an orderly exit, not a
@@ -782,6 +800,7 @@ func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
 	// switcher / focus e2e, and the trail for "which window had focus
 	// when X happened" in a log excerpt.
 	s.router.log("focus: win=%d app=%s instance=%s", m.WindowID, inst.AppID, inst.InstanceID)
+	s.router.noteWindow("window.focus", inst, m.WindowID, "", "focused", nil)
 	return inst.WriteEvt(wire.NewEvtWindowFocus(m.WindowID))
 }
 
@@ -817,6 +836,7 @@ func (s *ShellSession) handleWindowState(m wire.ShellWindowState) error {
 	if inst == nil {
 		return nil
 	}
+	s.router.noteWindow("window.state", inst, m.WindowID, "", m.State, nil)
 	return inst.WriteEvt(wire.NewEvtWindowState(m.WindowID, m.State))
 }
 

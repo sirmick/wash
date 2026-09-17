@@ -1019,6 +1019,9 @@ func DecodeEvt(data []byte) (any, error) {
 	case TEvtSpawnRequest:
 		var m EvtSpawnRequest
 		return m, json.Unmarshal(data, &m)
+	case TEvtActivityNote:
+		var m EvtActivityNote
+		return m, json.Unmarshal(data, &m)
 	case TEvtOpenRequest:
 		var m EvtOpenRequest
 		return m, json.Unmarshal(data, &m)

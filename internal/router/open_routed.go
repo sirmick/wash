@@ -3,7 +3,9 @@ package router
 import (
 	"bytes"
 	"fmt"
+	"github.com/sirmick/wash/internal/activity"
 	"os"
+	"path/filepath"
 
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -50,6 +52,8 @@ func (r *Router) noteOpenRouted(path, appID, via string) {
 		return
 	}
 	r.log("open.routed: path=%q app=%s via=%s", path, appID, via)
+	r.note(activity.Entry{Kind: "open.routed", App: appID, Title: filepath.Base(path), Line: path,
+		Intent: &wire.ActivityIntent{Kind: "open", AppID: appID, Path: path}})
 	sess := r.sessionInstance()
 	if sess == nil {
 		return

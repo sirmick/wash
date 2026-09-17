@@ -26,6 +26,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // MaxLine bounds Entry.Line. Long enough for "turn 12 done: edited
@@ -33,41 +35,14 @@ import (
 // chatty source cannot turn the journal into a transcript.
 const MaxLine = 200
 
-// Intent is the way back to what an entry describes — exactly the shapes
-// the start menu's Recent pop-outs and the agent verbs already accept, so
-// a consumer needs no new plumbing to act on a row.
-type Intent struct {
-	// Kind is focus | resume | open.
-	Kind string `json:"kind"`
-	// Origin names the host for focus; empty means the entry's own.
-	Origin     string `json:"origin,omitempty"`
-	AppID      string `json:"app_id,omitempty"`
-	InstanceID string `json:"instance_id,omitempty"`
-	WindowID   uint32 `json:"window_id,omitempty"`
-	SessionID  string `json:"session_id,omitempty"`
-	RowKey     string `json:"row_key,omitempty"`
-	Path       string `json:"path,omitempty"`
-}
-
-// Entry is one journal row. (Host, Seq) is its identity.
-type Entry struct {
-	TS   int64  `json:"ts"`
-	Seq  uint64 `json:"seq"`
-	Host string `json:"host"`
-	// Kind is dotted and namespaced by source: window.open, open.routed,
-	// session.attach, agent.turn, priv.escalate, brief, rollup …
-	Kind     string `json:"kind"`
-	App      string `json:"app,omitempty"`
-	Instance string `json:"instance,omitempty"`
-	Window   uint32 `json:"window,omitempty"`
-	Title    string `json:"title,omitempty"`
-	// Line is plain text, at most MaxLine bytes; Truncated says the store
-	// cut it. Ref is source-defined (a transcript seq, a path) and small.
-	Line      string         `json:"line"`
-	Truncated bool           `json:"truncated,omitempty"`
-	Ref       map[string]any `json:"ref,omitempty"`
-	Intent    *Intent        `json:"intent,omitempty"`
-}
+// Intent, Entry and Stats are the wire shapes (pkg/wire/activity.go): what
+// an app notes, what the store keeps and what a Timeline row renders are
+// one struct.
+type (
+	Intent = wire.ActivityIntent
+	Entry  = wire.ActivityEntry
+	Stats  = wire.ActivityStats
+)
 
 // Options configure a Store. Zero values take the defaults below.
 type Options struct {
@@ -372,18 +347,6 @@ func matchExact(v string, set []string) bool {
 		}
 	}
 	return false
-}
-
-// Stats is what About shows: what is stored, and what was dropped.
-type Stats struct {
-	Days    int              `json:"days"`
-	Bytes   int64            `json:"bytes"`
-	Dropped uint64           `json:"dropped"`
-	Today   map[string]int   `json:"today"` // entries by kind, today
-	Seq     uint64           `json:"seq"`
-	Path    string           `json:"path"`
-	Enabled bool             `json:"enabled"`
-	Kinds   map[string]int64 `json:"-"`
 }
 
 // Stats reports the store's footprint.

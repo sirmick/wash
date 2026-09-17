@@ -596,3 +596,15 @@ func (c *Conn) RestartApp(ctx context.Context, appID string) (string, error) {
 		return r.instanceID, r.err
 	}
 }
+
+// Note records a fact about this app in the router's activity journal
+// (docs/COMMANDER.md §3): one bounded line, an optional pointer, and the
+// way back. The router stamps who said it; an app can only ever speak for
+// itself. Requires the "activity_note" capability; a note the router
+// refuses is logged there, never an error here.
+//
+//	c.Note(wire.EvtActivityNote{Kind: "agent.turn", Line: "turn 12 done", Intent: &wire.ActivityIntent{Kind: "resume", SessionID: id}})
+func (c *Conn) Note(n wire.EvtActivityNote) error {
+	n.T = wire.TEvtActivityNote
+	return c.writeEvt(n)
+}

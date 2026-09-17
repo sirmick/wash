@@ -235,6 +235,13 @@ const (
 	// session out of a port scan — and it is dropped when the instance
 	// goes away, so a crashed app cannot pin a session forever.
 	CapIdleInhibit = "idle_inhibit"
+
+	// CapActivityNote lets an app backend record facts about itself in
+	// the router's activity journal (activity.note, docs/COMMANDER.md
+	// §3.3). The router stamps the sender; an app can only ever speak
+	// for itself. Gated so a journal is never written to by an app that
+	// did not declare it would.
+	CapActivityNote = "activity_note"
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.

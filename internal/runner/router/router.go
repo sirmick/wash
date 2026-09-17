@@ -211,6 +211,9 @@ func Run(args []string) int {
 	peerIngress := fs.String("peer-ingress", "", `register a peer's forwarded ingress socket at startup: "<origin>=<unix-socket-path>". Dev/test seam mirroring what com.wash.remote registers via EvtPeerRegister — locally-unknown /app/<token>/ requests are resolved against (and proxied to) this peer. The e2e remote harness uses it in place of the ssh supervisor.`)
 	loginEnv := fs.String("login-env", "auto", `source the user's login-shell environment into the router at startup: "on", "off", or "auto". The router runs the user's shell once with -l and adopts the env it exports (~/.profile PATH edits et al), so wash-term/wash-edit shells and every spawned app see the user's real PATH instead of the spawner's. "auto" enables it only for --listen-unix routers — the wash-login-spawned sessions whose inherited env is systemd's minimal one — and honors WASH_LOGIN_ENV=off as a kill-switch (tests). Identity/session vars (HOME, USER, XDG_RUNTIME_DIR, WASH_*, …) are never overridden; failures log and fall back to the inherited env.`)
 	logFile := fs.String("log-file", "", "redirect stdout+stderr to this file (created mode 0640, parent dir made on demand). Used by wash-login for per-session router logs: the router runs as the target user, so the log is owned by them and readable without privilege. Empty leaves stdout/stderr inherited from the parent.")
+	noActivity := fs.Bool("no-activity", false, "turn the activity journal off (kiosk, CI): nothing is recorded and the Timeline is empty")
+	activityRetention := fs.Duration("activity-retention", 0, "how long the activity journal keeps a day (default 30 days)")
+	activityMaxBytes := fs.Int64("activity-max-bytes", 0, "cap on the activity journal's directory, oldest day first (default 64 MiB)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		// flag already printed the message.
@@ -402,6 +405,10 @@ func Run(args []string) int {
 		AllowUID:              allowUIDVal,
 		AuthToken:             authTokenVal,
 		AllowCrossOrigin:      *allowCrossOrigin,
+		NoActivity:            *noActivity || os.Getenv("WASH_NO_ACTIVITY") != "",
+		ActivityDir:           router.ActivityDir(),
+		ActivityRetention:     *activityRetention,
+		ActivityMaxBytes:      *activityMaxBytes,
 	}
 
 	logger := log.New(os.Stderr, "wash-router ", log.LstdFlags|log.Lmsgprefix)
@@ -498,6 +505,7 @@ func Run(args []string) int {
 	}
 
 	r := router.NewRouter(cfg, reg, logf)
+	defer r.CloseJournal()
 	// Make the embedded shell asset FS available for TShellAssetRead
 	// regardless of transport. NewHTTPServer also calls SetAssets
 	// (redundant when transport=ws, but the ws branch may be skipped

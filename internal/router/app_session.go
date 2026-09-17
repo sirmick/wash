@@ -101,7 +101,9 @@ type AppInstance struct {
 	// (wash-display maps each Wayland/X11 toplevel to a window) owns
 	// its toplevels here; ordinary single-window apps leave it nil.
 	// See docs/DISPLAY.md §4.
-	winMu     sync.Mutex
+	winMu sync.Mutex
+	// notes bounds this instance's activity.note rate (activity.go).
+	notes     noteLimiter
 	extraWins map[uint32]bool
 }
 
@@ -435,6 +437,12 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return inst.relayAppMsgCrossInstance(m, class)
 		}
 		return inst.relayAppMsgToShell(m, class)
+	case wire.TEvtActivityNote:
+		var m wire.EvtActivityNote
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleActivityNote(m)
 	case wire.TEvtWindowSetTitle:
 		var m wire.EvtWindowSetTitle
 		if err := json.Unmarshal(payload, &m); err != nil {
@@ -767,7 +775,13 @@ func (inst *AppInstance) relayWindowTitle(m wire.EvtWindowSetTitle) error {
 	if !inst.ownsWindow(m.Win) {
 		return nil
 	}
-	inst.router.broadcastPatches(inst.router.winSession.setTitle(m.Win, m.Title))
+	patches := inst.router.winSession.setTitle(m.Win, m.Title)
+	if len(patches) > 0 {
+		// A title that did not change is not a fact; a new one names the
+		// document, session or command the window is about now.
+		inst.router.noteWindow("window.title", inst, m.Win, m.Title, m.Title, nil)
+	}
+	inst.router.broadcastPatches(patches)
 	return nil
 }
 

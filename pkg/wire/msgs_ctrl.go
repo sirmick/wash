@@ -393,6 +393,33 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellAppCrashed:
 		var m ShellAppCrashed
 		return m, json.Unmarshal(data, &m)
+	case TShellActivityQuery:
+		var m ShellActivityQuery
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityQueryOK:
+		var m ShellActivityQueryOK
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityQueryErr:
+		var m ShellActivityQueryErr
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityTail:
+		var m ShellActivityTail
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityEntry:
+		var m ShellActivityEntry
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityStats:
+		var m ShellActivityStats
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityStatsOK:
+		var m ShellActivityStatsOK
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityClear:
+		var m ShellActivityClear
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityClearOK:
+		var m ShellActivityClearOK
+		return m, json.Unmarshal(data, &m)
 	case TShellAssetRead:
 		var m ShellAssetRead
 		return m, json.Unmarshal(data, &m)
