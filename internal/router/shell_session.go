@@ -800,7 +800,13 @@ func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
 	// switcher / focus e2e, and the trail for "which window had focus
 	// when X happened" in a log excerpt.
 	s.router.log("focus: win=%d app=%s instance=%s", m.WindowID, inst.AppID, inst.InstanceID)
-	s.router.noteWindow("window.focus", inst, m.WindowID, "", "focused", nil)
+	// A fact only when focus MOVED: a click on the already-focused window
+	// re-raises it (patches) but is not a switch, and a Timeline of
+	// "switched to X" three times in a row says nothing.
+	if prev != m.WindowID {
+		title := s.router.winSession.title(m.WindowID)
+		s.router.noteWindow("window.focus", inst, m.WindowID, title, title, nil)
+	}
 	return inst.WriteEvt(wire.NewEvtWindowFocus(m.WindowID))
 }
 

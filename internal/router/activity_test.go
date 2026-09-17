@@ -210,3 +210,51 @@ func TestNoteLimiterRefills(t *testing.T) {
 		t.Fatal("did not refill after a second")
 	}
 }
+
+// Focus is journaled when it moves, not on every click: re-raising the
+// window that already has focus is not a switch.
+func TestJournalNotesFocusOnlyWhenItMoves(t *testing.T) {
+	r, _, shell, cleanup := journalRouter(t, Config{})
+	defer cleanup()
+	a := noteInstance(r)
+	b := &AppInstance{AppID: "com.wash.term", InstanceID: "i-10", WindowID: 5, Manifest: aboutManifest(), router: r}
+	for _, inst := range []*AppInstance{a, b} {
+		// The router relays focus/unfocus to the app; give each a transport
+		// whose far end is drained, so the relay never blocks the shell.
+		pipe := wiretest.NewPipePair()
+		inst.Transport = pipe.EndA()
+		go func(t wire.FrameTransport) {
+			for {
+				if _, err := t.ReadFrame(); err != nil {
+					return
+				}
+			}
+		}(pipe.EndB())
+		defer pipe.Close()
+		r.registerApp(inst)
+		r.winSession.createWindow(inst.WindowID, inst.InstanceID, "x", "", "", inst.AppID, 0, 0, 0, 0, 0, 0, false, false)
+	}
+	writeCtrl(t, shell, wire.ShellWindowFocus{T: wire.TShellWindowFocus, WindowID: a.WindowID})
+	writeCtrl(t, shell, wire.ShellWindowFocus{T: wire.TShellWindowFocus, WindowID: a.WindowID})
+	writeCtrl(t, shell, wire.ShellWindowFocus{T: wire.TShellWindowFocus, WindowID: b.WindowID})
+	writeCtrl(t, shell, wire.ShellWindowFocus{T: wire.TShellWindowFocus, WindowID: a.WindowID})
+
+	var got []activity.Entry
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got = r.journal.Query(activity.Query{Kinds: []string{"window.focus"}}).Entries
+		if len(got) >= 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(got) != 3 {
+		t.Fatalf("journaled %d focus rows for a→a→b→a, want 3", len(got))
+	}
+	if got[0].Window != a.WindowID || got[1].Window != b.WindowID || got[2].Window != a.WindowID {
+		t.Fatalf("focus rows in the wrong order: %+v", got)
+	}
+	if got[0].Line != got[0].Title || got[0].Line == "" {
+		t.Fatalf("a focus row's line is its title: %+v", got[0])
+	}
+}
