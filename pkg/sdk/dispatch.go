@@ -242,7 +242,16 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 		if err := json.Unmarshal(payload, &m); err != nil {
 			return err
 		}
-		c.pendingObserve.resolve(m.ReqID, observeResult{err: Err{Code: m.Code, Msg: m.Msg}})
+		// One error shape answers both observe.get and observe.roster.
+		if !c.pendingObserve.resolve(m.ReqID, observeResult{err: Err{Code: m.Code, Msg: m.Msg}}) {
+			c.pendingRoster.resolve(m.ReqID, rosterResult{err: Err{Code: m.Code, Msg: m.Msg}})
+		}
+	case wire.TEvtObserveRosterResult:
+		var m wire.EvtObserveRosterResult
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		c.pendingRoster.resolve(m.ReqID, rosterResult{roster: Roster{Shells: m.Shells, Instances: m.Instances}})
 	case wire.TEvtClipboardChanged:
 		var m wire.EvtClipboardChanged
 		if err := json.Unmarshal(payload, &m); err != nil {

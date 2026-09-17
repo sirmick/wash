@@ -1037,6 +1037,12 @@ func DecodeEvt(data []byte) (any, error) {
 	case TEvtObserveGetErr:
 		var m EvtObserveGetErr
 		return m, json.Unmarshal(data, &m)
+	case TEvtObserveRoster:
+		var m EvtObserveRoster
+		return m, json.Unmarshal(data, &m)
+	case TEvtObserveRosterResult:
+		var m EvtObserveRosterResult
+		return m, json.Unmarshal(data, &m)
 	case TEvtOpenRequest:
 		var m EvtOpenRequest
 		return m, json.Unmarshal(data, &m)

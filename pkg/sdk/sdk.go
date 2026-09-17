@@ -135,6 +135,7 @@ type Conn struct {
 	// goroutine; observeFn answers the router's observe.request when the
 	// app installed an export with HandleObserve (observe.go).
 	pendingObserve *pendingCalls[uint64, observeResult]
+	pendingRoster  *pendingCalls[uint64, rosterResult]
 	observeMu      sync.Mutex
 	observeFn      func() Observation
 
@@ -371,6 +372,7 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 		pendingOpens:        newPendingCalls[uint64, openResult](),
 		pendingClipboardGet: newPendingCalls[uint64, clipboardResult](),
 		pendingObserve:      newPendingCalls[uint64, observeResult](),
+		pendingRoster:       newPendingCalls[uint64, rosterResult](),
 		pendingIngress:      newPendingCalls[uint64, ingressResult](),
 		pendingRestart:      newPendingCalls[uint64, restartResult](),
 		pendingWindowCreate: newPendingCalls[uint64, windowCreateResult](),

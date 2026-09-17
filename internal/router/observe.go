@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -218,4 +219,45 @@ func (s *ShellSession) handleObserve(m wire.ShellObserve) error {
 		_ = s.WriteCtrl(wire.NewShellObserveOK(m.ReqID, o))
 	}()
 	return nil
+}
+
+// handleObserveRoster answers the live roster for an app that may observe:
+// every windowed instance, whether it is eligible, and how many shells are
+// attached. Nothing is read here — a roster is what the shell already
+// shows in its taskbar.
+func (inst *AppInstance) handleObserveRoster(m wire.EvtObserveRoster) error {
+	r := inst.router
+	if !inst.Manifest.HasCapability(CapObserve) {
+		r.log("observe: roster refused app=%s instance=%s: lacks CapObserve", inst.AppID, inst.InstanceID)
+		return inst.WriteEvt(wire.NewEvtObserveGetErr(m.ReqID, wire.ErrCodeForbidden, "observe requires the observe capability"))
+	}
+	shells, entries := r.observeRoster()
+	return inst.WriteEvt(wire.NewEvtObserveRosterResult(m.ReqID, shells, entries))
+}
+
+// observeRoster lists windowed instances by window id, with eligibility.
+func (r *Router) observeRoster() (shells int, entries []wire.ObserveRosterEntry) {
+	r.mu.Lock()
+	shells = len(r.shells)
+	insts := make([]*AppInstance, 0, len(r.apps))
+	for _, a := range r.apps {
+		insts = append(insts, a)
+	}
+	r.mu.Unlock()
+	for _, a := range insts {
+		if a.WindowID == 0 {
+			continue
+		}
+		w, ok := r.winSession.window(a.WindowID)
+		if !ok {
+			continue
+		}
+		entries = append(entries, wire.ObserveRosterEntry{
+			App: a.AppID, InstanceID: a.InstanceID, WindowID: a.WindowID,
+			Title: w.Title, State: w.State, Focused: w.Focused,
+			Eligible: observationMode(a.Manifest) != ObservationNone,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].WindowID < entries[j].WindowID })
+	return shells, entries
 }

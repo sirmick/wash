@@ -263,3 +263,45 @@ func TestAppObserveGetIsGated(t *testing.T) {
 	}
 	_ = target
 }
+
+// The roster is every windowed instance with whether observe would look,
+// plus how many shells are attached; it needs the capability too.
+func TestObserveRosterListsWindowedInstances(t *testing.T) {
+	r, lc, _, cleanup := journalRouter(t, Config{NoActivity: true})
+	lcOf := func(*Router) *logCapture { return lc }
+	defer cleanup()
+	term := aboutManifest()
+	term.ID = "com.wash.term"
+	priv := aboutManifest()
+	priv.ID = "com.wash.priv"
+	a, af := observeInstance(t, r, "i-a", term)
+	drainFrames(af)
+	b, bf := observeInstance(t, r, "i-b", priv)
+	drainFrames(bf)
+	b.WindowID = 9
+	r.winSession.createWindow(a.WindowID, "i-a", "wash-app-term", "", "", "~/wash", 0, 0, 0, 0, 0, 0, false, false)
+	r.winSession.createWindow(9, "i-b", "wash-app-priv", "", "", "priv", 0, 0, 0, 0, 0, 0, false, false)
+	bg := aboutManifest()
+	bg.ID = "com.wash.commander"
+	bg.Capabilities = []string{CapObserve}
+	cmd, cf := observeInstance(t, r, "i-cmd", bg)
+	cmd.WindowID = 0
+
+	_ = cmd.handleObserveRoster(wire.NewEvtObserveRoster(3))
+	res, ok := readEvt(t, cf).(wire.EvtObserveRosterResult)
+	if !ok || res.ReqID != 3 || res.Shells != 1 || len(res.Instances) != 2 {
+		t.Fatalf("roster=%+v ok=%v", res, ok)
+	}
+	if res.Instances[0].InstanceID != "i-a" || !res.Instances[0].Eligible || res.Instances[0].Title != "~/wash" {
+		t.Fatalf("term entry=%+v", res.Instances[0])
+	}
+	if res.Instances[1].InstanceID != "i-b" || res.Instances[1].Eligible {
+		t.Fatalf("priv entry=%+v", res.Instances[1])
+	}
+
+	// Without the capability: refused and logged.
+	_ = a.handleObserveRoster(wire.NewEvtObserveRoster(4))
+	if !lcOf(r).contains("roster refused app=com.wash.term") {
+		t.Fatal("roster without the capability was not refused")
+	}
+}

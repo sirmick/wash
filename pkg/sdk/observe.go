@@ -78,3 +78,34 @@ func (c *Conn) Observe(ctx context.Context, instanceID string, maxBytes int) (wi
 		return r.obs, r.err
 	}
 }
+
+// Roster is what ObserveRoster answers: the windowed instances the router
+// has, with eligibility, and how many shells are attached.
+type Roster struct {
+	Shells    int
+	Instances []wire.ObserveRosterEntry
+}
+
+type rosterResult struct {
+	roster Roster
+	err    error
+}
+
+// ObserveRoster asks the router for the live roster (docs/COMMANDER.md
+// §5.3). Requires the "observe" capability. Same caveat as Observe: not
+// from a dispatch callback.
+func (c *Conn) ObserveRoster(ctx context.Context) (Roster, error) {
+	reqID := c.nextReqID.Add(1)
+	wait := c.pendingRoster.register(reqID)
+	if err := c.writeEvt(wire.NewEvtObserveRoster(reqID)); err != nil {
+		c.pendingRoster.cancel(reqID)
+		return Roster{}, err
+	}
+	select {
+	case <-ctx.Done():
+		c.pendingRoster.cancel(reqID)
+		return Roster{}, ctx.Err()
+	case r := <-wait:
+		return r.roster, r.err
+	}
+}

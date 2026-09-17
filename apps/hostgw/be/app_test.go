@@ -289,6 +289,7 @@ func TestServiceName(t *testing.T) {
 		NetdAppID:          "net",
 		AudioAppID:         "audio",
 		AgentdAppID:        "agent",
+		CommanderAppID:     "commander",
 		"com.wash.remote":  "", // already host-aware; not ours to republish
 		"com.wash.unknown": "",
 	}

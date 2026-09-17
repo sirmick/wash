@@ -100,7 +100,7 @@ type server struct {
 var allowedCallers = map[string]bool{
 	"com.wash.settings": true, "com.wash.session": true, "com.wash.ai": true, "com.wash.agents": true,
 	"com.wash.agentd": true, "com.wash.term": true, "com.wash.edit": true,
-	"com.wash.session-summary": true,
+	"com.wash.session-summary": true, "com.wash.commander": true,
 }
 
 func onReady(c *sdk.Conn, _ string, _ uint32) {
@@ -141,6 +141,47 @@ func (s *server) register() {
 		return s.selectDefault(id, req, from)
 	})
 	sdk.HandleFromVoid[testReq](s.bus, "provider.test", func(_ *sdk.Conn, id string, req testReq, from wire.Sender) error { return s.test(id, req, from) })
+	sdk.HandleFromVoid[cancelReq](s.bus, "inference.info", func(_ *sdk.Conn, _ string, req cancelReq, from wire.Sender) error { return s.info(req.ID, from) })
+}
+
+// info answers which connection a Generate would use and whether it is
+// on this box (docs/COMMANDER.md §5.3): the commander's automatic mode
+// stays local unless told otherwise. Gated like Generate — the answer
+// names a provider.
+func (s *server) info(id string, from wire.Sender) error {
+	if !allowedCallers[from.AppID] {
+		s.fail(from, id, "forbidden", "caller not allowed")
+		return nil
+	}
+	s.mu.Lock()
+	c, ok := s.cfg.connection(s.cfg.Default)
+	s.mu.Unlock()
+	if !ok {
+		s.emit(from, "inference.info_ok", id, map[string]any{"available": false, "detail": "no connection selected"}, false)
+		return nil
+	}
+	avail, detail := executableStatus(c)
+	s.emit(from, "inference.info_ok", id, map[string]any{
+		"connection": c.ID, "adapter": c.Adapter, "model": c.Model,
+		"local": isLocal(c), "available": avail, "detail": detail,
+	}, false)
+	return nil
+}
+
+// isLocal says the connection runs on this box: a CLI adapter (the
+// codex/claude binaries run here, whatever they talk to — the person
+// chose them), or an OpenAI-compatible endpoint on loopback (Ollama).
+func isLocal(c connection) bool {
+	switch c.Adapter {
+	case "codex", "claude":
+		return true
+	}
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || u.Host == "" {
+		return u != nil && u.Scheme == "unix"
+	}
+	h := u.Hostname()
+	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.")
 }
 
 func (s *server) publicStateLocked() state {

@@ -125,6 +125,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerNotifyGateway(bus)
 	registerPrivGateway(bus)
 	registerNetGateway(bus)
+	registerCommanderGateway(bus)
 	registerAudioGateway(bus)
 	registerRemoteGateway(bus)
 	// The agent gateway is down to subscribe/unsubscribe + answer: the
@@ -182,13 +183,14 @@ func registerPrivPassthrough(bus *sdk.Bus, kind string) {
 // dependency on the service packages; the contract is the app-id
 // string, which is the same trust boundary either way.
 const (
-	NotifyAppID = "com.wash.notify"
-	BulkAppID   = "com.wash.bulk"
-	PrivAppID   = "com.wash.priv"
-	NetdAppID   = "com.wash.netd"
-	AudioAppID  = "com.wash.audio"
-	RemoteAppID = "com.wash.remote"
-	AgentdAppID = "com.wash.agentd"
+	NotifyAppID    = "com.wash.notify"
+	BulkAppID      = "com.wash.bulk"
+	PrivAppID      = "com.wash.priv"
+	NetdAppID      = "com.wash.netd"
+	AudioAppID     = "com.wash.audio"
+	CommanderAppID = "com.wash.commander"
+	RemoteAppID    = "com.wash.remote"
+	AgentdAppID    = "com.wash.agentd"
 )
 
 // serviceFEKind maps a service app id to the FE-side kind we
@@ -217,6 +219,26 @@ func serviceFEKind(appID string) string {
 // pushes return as {kind:"state"} and are re-branded to "net.state" by the
 // shared state forwarder (serviceFEKind). The sidebar widget's "configure"
 // click launches com.wash.net via the existing launcher path, not here.
+// registerCommanderGateway forwards the rail's Mission Commander controls
+// (docs/COMMANDER.md §5.3) to com.wash.commander as attested sends from
+// this BE — the service accepts settings only from the session app and
+// Settings, never from a FE directly. The payload is the service's own
+// partial-update shape; this BE adds nothing and checks nothing.
+func registerCommanderGateway(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "commander_set", func(conn *sdk.Conn, _ string, req map[string]any) error {
+		msg := map[string]any{"kind": "commander.set"}
+		for _, k := range []string{"automatic", "hosted", "interval_sec", "budget_per_hour", "batch_max"} {
+			if v, ok := req[k]; ok {
+				msg[k] = v
+			}
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: CommanderAppID}, msg)
+	})
+	sdk.HandleVoid(bus, "commander_run", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: CommanderAppID}, map[string]any{"kind": "commander.run"})
+	})
+}
+
 func registerNetGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "net_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: NetdAppID}, map[string]any{"kind": "subscribe"})

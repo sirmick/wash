@@ -75,3 +75,33 @@ func TestParseValidates(t *testing.T) {
 		t.Fatalf("b=%+v err=%v", b, err)
 	}
 }
+
+func TestGenerateBatchIndexesAndRepairs(t *testing.T) {
+	srcs := []Source{src, {AppID: "com.wash.edit", Title: "a.go", Kind: "app-state", Content: "{}"}, {AppID: "com.wash.about", Kind: "dom", Content: "About"}}
+	f := &fake{answers: []string{"```json\n[{\"index\":2,\"goal\":\"read about\",\"state\":\"idle\"},{\"index\":0,\"goal\":\"fix tests\",\"state\":\"active\"}]\n```"}}
+	out, meta, err := GenerateBatch(context.Background(), f, srcs)
+	if err != nil || len(out) != 3 || out[1] != nil || out[0].Goal != "fix tests" || out[2].State != "idle" {
+		t.Fatalf("out=%+v meta=%+v err=%v", out, meta, err)
+	}
+	if len(f.calls) != 1 || f.calls[0].Purpose != batchPromptVersion || !strings.Contains(f.calls[0].Input[0].Text, `"index":1`) {
+		t.Fatalf("request=%+v", f.calls)
+	}
+	// One source is a plain Generate.
+	g := &fake{answers: []string{`{"goal":"x","state":"done"}`}}
+	one, _, err := GenerateBatch(context.Background(), g, srcs[:1])
+	if err != nil || len(one) != 1 || one[0].State != "done" || g.calls[0].Purpose != promptVersion {
+		t.Fatalf("one=%+v err=%v", one, err)
+	}
+	// A bad answer is repaired once; twice bad is ErrBadResponse.
+	h := &fake{answers: []string{"nope", `[{"index":0,"goal":"a"},{"index":1,"goal":"b"},{"index":2,"goal":"c"}]`}}
+	out, meta, err = GenerateBatch(context.Background(), h, srcs)
+	if err != nil || !meta.Repaired || out[1].Goal != "b" {
+		t.Fatalf("repair: out=%+v meta=%+v err=%v", out, meta, err)
+	}
+	k := &fake{answers: []string{`[{"index":7,"goal":"a"}]`, `[{"index":0,"goal":"a"},{"index":0,"goal":"b"}]`}}
+	_, _, err = GenerateBatch(context.Background(), k, srcs)
+	var bad *ErrBadResponse
+	if !errors.As(err, &bad) {
+		t.Fatalf("err=%v", err)
+	}
+}

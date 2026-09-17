@@ -116,3 +116,13 @@ func saveConfig(cfg config) error {
 	}
 	return os.Rename(tmp, p)
 }
+
+// connection finds a connection by id.
+func (c config) connection(id string) (connection, bool) {
+	for _, v := range c.Connections {
+		if v.ID == id {
+			return v, true
+		}
+	}
+	return connection{}, false
+}

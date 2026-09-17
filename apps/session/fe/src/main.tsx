@@ -678,6 +678,21 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'launcher.pin', app_id: appID, on });
   };
 
+  // Mission Commander's switch (docs/COMMANDER.md §5.3): the local host's
+  // commander publishes its settings and stats through hostgw; the toggle
+  // goes to our own BE, which forwards it attested.
+  const commanderAuto = (): { on: boolean; detail: string } | null => {
+    const st = stateFor(hostgw(), LOCAL_ORIGIN, 'commander') as
+      { settings?: { automatic?: boolean }; stats?: { running?: boolean; reason?: string; briefs?: number; provider?: string } } | undefined;
+    if (!st?.settings) return null;
+    const on = !!st.settings.automatic;
+    const stats = st.stats ?? {};
+    const detail = !on ? 'Automatic briefs are off'
+      : stats.running ? `Briefing via ${stats.provider ?? 'provider'} · ${stats.briefs ?? 0} so far`
+        : `Not running: ${stats.reason ?? 'waiting'}`;
+    return { on, detail };
+  };
+
   // ---- activity timeline (docs/COMMANDER.md §6) ----
   // The journal is per host; the widget shows every connected host's,
   // merged newest first. Loaded on mount and whenever the section opens,
@@ -1477,6 +1492,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             onLoadMore={() => void loadTimeline(true)}
             onClear={() => void clearTimeline()}
             hostColor={(h) => hostHue(h)}
+            auto={commanderAuto}
+            onAuto={(on) => window.wash.sendAppMsg(props.instance, { kind: 'commander_set', automatic: on })}
+            onBriefNow={() => window.wash.sendAppMsg(props.instance, { kind: 'commander_run' })}
           />
         </Section>
         <Section

@@ -472,6 +472,12 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return err
 		}
 		return inst.handleObserveGet(m)
+	case wire.TEvtObserveRoster:
+		var m wire.EvtObserveRoster
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleObserveRoster(m)
 	case wire.TEvtWindowSetTitle:
 		var m wire.EvtWindowSetTitle
 		if err := json.Unmarshal(payload, &m); err != nil {

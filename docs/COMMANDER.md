@@ -1,6 +1,13 @@
 # Mission Commander — activity journal, observation, and summaries
 
-Status: design (2026-09-16); **§9 step 2 (observe + briefs on request)
+Status: design (2026-09-16); **§9 step 3a (the commander service:
+automatic briefs on a cadence, batched, deduplicated) built 2026-09-17** —
+`apps/commander/be` (scheduler with revision/content/brief dedup, per-hour
+budget, idle backoff to 4×, `commander.json`), router `observe.roster`,
+`inference.info` + the on-box rule, hostgw republishes its state as service
+`commander`, the session BE gateway `commander_set`/`commander_run`, briefs
+as `kind: brief` journal rows. Rollups and the Resume card (§5.4) are step
+3b. **§9 step 2 (observe + briefs on request)
 built 2026-09-17** — `pkg/wire/observe.go`, `internal/router/observe.go`
 (export → pty tail → state blob → none; `ChannelKindPty`; 250 ms export
 grace; `permanentNone`), `internal/observe` (tail rendering + redaction),

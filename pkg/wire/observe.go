@@ -179,3 +179,51 @@ type ShellObserveErr struct {
 func NewShellObserveErr(reqID uint64, code, msg string) ShellObserveErr {
 	return ShellObserveErr{T: TShellObserveErr, ReqID: reqID, Code: code, Msg: msg}
 }
+
+// --- app → router: the live roster (attested; CapObserve) ---
+
+// TEvtObserveRoster asks for every windowed instance the router has and
+// whether each may be observed, plus how many shells are attached — what
+// a scheduler needs to decide whom to look at and whether anyone is
+// there. Answered by TEvtObserveRosterResult, or TEvtObserveGetErr.
+const (
+	TEvtObserveRoster       = "observe.roster"
+	TEvtObserveRosterResult = "observe.roster.result"
+)
+
+type EvtObserveRoster struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+}
+
+func NewEvtObserveRoster(reqID uint64) EvtObserveRoster {
+	return EvtObserveRoster{T: TEvtObserveRoster, ReqID: reqID}
+}
+
+// ObserveRosterEntry is one windowed instance as the router sees it.
+type ObserveRosterEntry struct {
+	App        string `json:"app"`
+	InstanceID string `json:"instance_id"`
+	WindowID   uint32 `json:"window_id"`
+	Title      string `json:"title,omitempty"`
+	State      string `json:"state,omitempty"`
+	Focused    bool   `json:"focused,omitempty"`
+	// Eligible: observe would look (the manifest is auto or export).
+	Eligible bool `json:"eligible,omitempty"`
+}
+
+type EvtObserveRosterResult struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	// Shells is how many browsers are attached: zero means nobody is
+	// looking, and an automatic observer should not be either.
+	Shells    int                  `json:"shells"`
+	Instances []ObserveRosterEntry `json:"instances"`
+}
+
+func NewEvtObserveRosterResult(reqID uint64, shells int, instances []ObserveRosterEntry) EvtObserveRosterResult {
+	if instances == nil {
+		instances = []ObserveRosterEntry{}
+	}
+	return EvtObserveRosterResult{T: TEvtObserveRosterResult, ReqID: reqID, Shells: shells, Instances: instances}
+}

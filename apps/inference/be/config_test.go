@@ -56,3 +56,23 @@ func TestLoadMissingConfigDefaultsOff(t *testing.T) {
 		t.Fatalf("connections=%d, want 4", len(cfg.Connections))
 	}
 }
+
+// The on-box rule the commander's automatic mode relies on: CLI adapters
+// and loopback endpoints are local, anything else is hosted.
+func TestIsLocal(t *testing.T) {
+	cases := map[connection]bool{
+		{Adapter: "codex"}: true,
+		{Adapter: "claude", BaseURL: "https://api.anthropic.com"}:  true,
+		{Adapter: "openai", BaseURL: "http://127.0.0.1:11434/v1"}:  true,
+		{Adapter: "openai", BaseURL: "http://localhost:8080/v1"}:   true,
+		{Adapter: "openai", BaseURL: "http://[::1]:8080/v1"}:       true,
+		{Adapter: "openai", BaseURL: "https://api.openai.com/v1"}:  false,
+		{Adapter: "openai", BaseURL: "http://ollama.lan:11434/v1"}: false,
+		{Adapter: "openai", BaseURL: ""}:                           false,
+	}
+	for c, want := range cases {
+		if got := isLocal(c); got != want {
+			t.Errorf("isLocal(%+v) = %v, want %v", c, got, want)
+		}
+	}
+}

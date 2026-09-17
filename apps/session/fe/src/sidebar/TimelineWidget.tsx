@@ -22,6 +22,11 @@ export interface TimelineWidgetProps {
   onLoadMore: () => void;
   onClear: () => void;
   hostColor: (host: string) => string;
+  /** Mission Commander's automatic briefs (docs/COMMANDER.md §5.3), as the
+   *  local host's commander reports them; null while unknown. */
+  auto?: () => { on: boolean; detail: string } | null;
+  onAuto?: (on: boolean) => void;
+  onBriefNow?: () => void;
 }
 
 // Icon draws one glyph from the shell's sprite, the way Section does.
@@ -172,6 +177,21 @@ export const TimelineWidget: Component<TimelineWidgetProps> = (props) => {
             style={{ font: tokens.type.textSm, background: 'transparent', border: 'none', color: tokens.fgMuted, cursor: 'pointer', padding: '2px 4px' }}>
             earlier…
           </button>
+        </Show>
+        <Show when={props.auto?.()}>
+          {(a) => (
+            <label data-wash-hit data-testid="timeline-auto" title={a().detail}
+              style={{ display: 'inline-flex', 'align-items': 'center', gap: '4px', font: tokens.type.textSm, color: tokens.fgMuted, cursor: 'pointer' }}>
+              <input type="checkbox" data-testid="timeline-auto-toggle" checked={a().on} onChange={(e) => props.onAuto?.(e.currentTarget.checked)} />
+              auto briefs
+              <Show when={a().on}>
+                <button type="button" data-wash-hit data-testid="timeline-brief-now" onClick={() => props.onBriefNow?.()}
+                  style={{ font: tokens.type.textSm, background: 'transparent', border: 'none', color: tokens.fgMuted, cursor: 'pointer', padding: '0 2px' }}>
+                  · now
+                </button>
+              </Show>
+            </label>
+          )}
         </Show>
         <Show when={!props.off() && props.entries().length > 0}>
           <button type="button" data-wash-hit data-testid="timeline-clear" onClick={props.onClear}
