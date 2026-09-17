@@ -31,6 +31,8 @@ import { Section, type SectionState } from './sidebar/Section';
 import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
+import { TimelineWidget } from './sidebar/TimelineWidget';
+import { mergeNewestFirst, prependLive, type TimelineEntry } from './timeline';
 
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
@@ -346,6 +348,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     viewport: 'expanded',
     about: 'collapsed',
     notify: 'collapsed',
+    timeline: 'collapsed',
     bulk: 'collapsed',
     priv: 'collapsed',
     net: 'collapsed',
@@ -673,6 +676,95 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   );
   const setPin = (appID: string, on: boolean) => {
     window.wash.sendAppMsg(props.instance, { kind: 'launcher.pin', app_id: appID, on });
+  };
+
+  // ---- activity timeline (docs/COMMANDER.md §6) ----
+  // The journal is per host; the widget shows every connected host's,
+  // merged newest first. Loaded on mount and whenever the section opens,
+  // kept live by the routers' tails while the section is expanded, so a
+  // collapsed Timeline costs nothing but the query it made on mount.
+  const [timeline, setTimeline] = createSignal<TimelineEntry[]>([]);
+  const [timelineCursors, setTimelineCursors] = createSignal<Record<string, string>>({});
+  const [timelineLoading, setTimelineLoading] = createSignal(false);
+  const [timelineOff, setTimelineOff] = createSignal(false);
+  const loadTimeline = async (more = false) => {
+    setTimelineLoading(true);
+    try {
+      const cursors = timelineCursors();
+      const pages = more
+        ? await Promise.all(Object.entries(cursors).map(([host, cursor]) =>
+            window.wash.activityQuery(host === 'local' ? undefined : host, { limit: 100, cursor })
+              .catch(() => ({ host, entries: [] as TimelineEntry[] }))))
+        : await window.wash.activityQueryAll({ limit: 100 });
+      const next: Record<string, string> = more ? {} : {};
+      for (const p of pages) if (p.cursor) next[p.host] = p.cursor;
+      setTimelineCursors(next);
+      setTimeline((prev) => mergeNewestFirst(more ? [{ entries: prev }, ...pages] : pages, more ? 2000 : 500));
+      // Every host refusing is the journal being off, not a quiet day.
+      setTimelineOff(!more && pages.length > 0 && pages.every((p) => p.entries.length === 0) && await allJournalsOff());
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
+  const allJournalsOff = async () => {
+    try {
+      const st = await window.wash.activityStats(undefined);
+      return !st.enabled;
+    } catch {
+      return true;
+    }
+  };
+  let timelineTailOff: (() => void) | null = null;
+  createEffect(() => {
+    const open = (sectionStates().timeline ?? 'collapsed') === 'expanded';
+    if (open && !timelineTailOff) {
+      void loadTimeline();
+      timelineTailOff = window.wash.onActivity((e) => setTimeline((prev) => prependLive(prev, e)));
+    } else if (!open && timelineTailOff) {
+      timelineTailOff();
+      timelineTailOff = null;
+    }
+  });
+  onCleanup(() => { timelineTailOff?.(); });
+  // jumpTimeline acts on a row's intent through the paths the desktop
+  // already has: a window is focused (restored first) on its host, a
+  // session goes through agent_open, a path through recent.open.
+  const jumpTimeline = (e: TimelineEntry) => {
+    const i = e.intent;
+    if (!i) return;
+    const origin = e.host === 'local' ? 'local' : e.host;
+    switch (i.kind) {
+      case 'focus': {
+        const w = i.window_id ? windows().find((x) => x.origin === origin && x.windowID === i.window_id) : undefined;
+        if (w) {
+          // Restore first when buried, then focus: a restore alone brings
+          // the window back where it was in the stack, not to the front.
+          if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+          window.wash.focusWindow(w.windowID, w.origin);
+        } else if (i.app_id) {
+          window.wash.focusOrLaunch(origin, i.app_id);
+        }
+        return;
+      }
+      case 'resume': {
+        const live = i.row_key ? agentRows().some((r) => r.key === i.row_key) : false;
+        window.wash.sendAppMsg(props.instance, {
+          kind: 'agent_open', action: live ? 'focus' : 'resume', session_id: i.session_id ?? '', row_key: live ? i.row_key : '',
+        });
+        return;
+      }
+      case 'open':
+        if (i.path) openRecent(i.path, i.app_id);
+        else if (i.app_id) window.wash.focusOrLaunch(origin, i.app_id);
+        return;
+    }
+  };
+  const clearTimeline = async () => {
+    await Promise.all(window.wash.windows().map((w) => w.origin).filter((o, k, a) => a.indexOf(o) === k)
+      .map((o) => window.wash.activityClear(o === 'local' ? undefined : o).catch(() => undefined)));
+    await window.wash.activityClear(undefined).catch(() => undefined);
+    setTimeline([]);
+    setTimelineCursors({});
   };
 
   // ---- remote hosts (sidebar) ----
@@ -1365,6 +1457,26 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             section="notify"
             rows={() => hostRows(SERVICE_NOTIFY, countBadge(unreadNotifications), notifySummary)}
             {...groupProps}
+          />
+        </Section>
+        <Section
+          id="timeline"
+          title="Timeline"
+          icon="activity"
+          iconColor={tokens.accentViolet}
+          state={sectionStates().timeline ?? 'collapsed'}
+          onToggle={() => toggleSection('timeline')}
+          badge={timeline().length > 0 && (sectionStates().timeline ?? 'collapsed') === 'collapsed' ? String(Math.min(timeline().length, 99)) : ''}
+        >
+          <TimelineWidget
+            entries={timeline}
+            more={() => Object.keys(timelineCursors()).length > 0}
+            loading={timelineLoading}
+            off={timelineOff}
+            onJump={jumpTimeline}
+            onLoadMore={() => void loadTimeline(true)}
+            onClear={() => void clearTimeline()}
+            hostColor={(h) => hostHue(h)}
           />
         </Section>
         <Section

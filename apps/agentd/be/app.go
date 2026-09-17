@@ -185,7 +185,7 @@ func init() {
 			// which is true of a desktop and false of an agent — an agent
 			// matters most exactly when nobody is watching. This service
 			// is the only thing on the box that knows the difference.
-			Capabilities: []string{sdk.CapSpawn, sdk.CapIdleInhibit},
+			Capabilities: []string{sdk.CapSpawn, sdk.CapIdleInhibit, sdk.CapActivityNote},
 		},
 		OnReady:        onReady,
 		OnInstanceGone: onInstanceGone,

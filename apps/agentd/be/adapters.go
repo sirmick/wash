@@ -513,6 +513,7 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	// The replay has landed by the time LoadSession answers, so this is
 	// the moment the stored and replayed records can be settled.
 	reconcileResume(h.key, sessionID, agentID, h.cwd, time.Now())
+	h.journal("agent.resume", "session resumed")
 	// Logged like the started path, so "resumed with settings" and
 	// "resumed without" are visible rather than inferred. A started
 	// session reported mode=default modes=6 and a resumed one reported

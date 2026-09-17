@@ -98,6 +98,7 @@ func init() {
 			ProtocolVersion: sdk.ProtocolVersion,
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,
+			Capabilities:    []string{sdk.CapActivityNote},
 		},
 		OnReady: onReady,
 	}
@@ -192,10 +193,11 @@ func registerHandlers(b *sdk.Bus) {
 	// job_report: upsert an externally-driven job (fm uploads). The
 	// reporting app does the work + streams progress; we mirror it into
 	// state. Fire-and-forget; the fan-out is the acknowledgement.
-	sdk.HandleVoid(b, "job_report", func(_ *sdk.Conn, _ string, req jobReportReq) error {
+	sdk.HandleVoid(b, "job_report", func(c *sdk.Conn, _ string, req jobReportReq) error {
 		if req.JobID == "" {
 			return nil
 		}
+		journalJob(c, req.Op, req.Status, req.Done, req.Total, req.Dest, req.Error)
 		// Same "bulk-ops job=" prefix the worker jobs log under, so e2e
 		// waitForLog assertions observe upload transitions identically.
 		log.Printf("bulk-ops job=%s op=%s status=%s done=%d total=%d err=%q",
@@ -318,6 +320,7 @@ func jobUpdateHandler(c *sdk.Conn) func(bulkops.Job) {
 	return func(j bulkops.Job) {
 		log.Printf("bulk-ops job=%s op=%s status=%s done=%d total=%d err=%q",
 			j.ID, j.Op, j.Status, j.Done, j.Total, j.Error)
+		journalJob(c, string(j.Op), string(j.Status), j.Done, j.Total, j.Dest, j.Error)
 		publishJobs()
 		// Terminal-state cleanup: release any pending conflict
 		// channel so a still-blocked worker (e.g. after a user-cancel)
@@ -401,4 +404,37 @@ func jobsToViews(jobs []bulkops.Job) []JobView {
 		})
 	}
 	return out
+}
+
+// journalJob notes a job's end in the router's activity journal
+// (docs/COMMANDER.md §3.2): what was done to how many things, where, and
+// whether it worked. Only terminal states are facts worth a row; progress
+// is the strip's business. The destination folder is the way back.
+func journalJob(c *sdk.Conn, op, status string, done, total int, dest, errMsg string) {
+	if c == nil {
+		return
+	}
+	var kind, line string
+	switch status {
+	case "done":
+		kind, line = "bulk.done", op+" "+itoaCount(done, total)
+	case "failed":
+		kind, line = "bulk.fail", op+" failed: "+errMsg
+	case "cancelled":
+		kind, line = "bulk.fail", op+" cancelled after "+itoaCount(done, total)
+	default:
+		return
+	}
+	n := wire.EvtActivityNote{Kind: kind, Title: dest, Line: line}
+	if dest != "" {
+		n.Intent = &wire.ActivityIntent{Kind: "open", AppID: "com.wash.fm", Path: dest}
+	}
+	_ = c.Note(n)
+}
+
+func itoaCount(done, total int) string {
+	if total > 0 && done != total {
+		return fmt.Sprintf("%d of %d items", done, total)
+	}
+	return fmt.Sprintf("%d item(s)", done)
 }

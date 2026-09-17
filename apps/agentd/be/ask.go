@@ -363,6 +363,9 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 	// unanswered ask many times over a closed lid, and a toast per
 	// extension would be a machine nagging about its own patience.
 	notifyAsk(queued)
+	if h := lookupHosted(spec.RowKey); h != nil {
+		h.journal("agent.ask", spec.Tool+": "+spec.Subject)
+	}
 	return true
 }
 

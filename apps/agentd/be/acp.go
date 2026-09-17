@@ -243,8 +243,19 @@ func (h *hosted) endTurn(state, reason string) (next turn) {
 	dropped := h.pending
 	h.pending = nil
 	h.queued.Store(0)
+	wasLive := h.turnLive
 	h.turnLive = false
 	h.setState(state, reason)
+	if wasLive {
+		switch {
+		case state == "done":
+			h.journal("agent.turn", "turn done")
+		case reason == "cancelled":
+			h.journal("agent.turn", "turn stopped")
+		case state == "failed":
+			h.journal("agent.turn", "turn failed: "+reason)
+		}
+	}
 	if len(dropped) > 0 {
 		why := "the error"
 		if reason == "cancelled" {
@@ -310,6 +321,29 @@ func (h *hosted) register() {
 	hostedAll[h.key] = h
 	hostedMu.Unlock()
 	h.setState("running", "")
+	h.journal("agent.start", h.agent+" started in "+dirLabel(h.cwd))
+}
+
+// journal notes a fact about this session in the router's activity
+// journal (docs/COMMANDER.md §3.2): one line and the way back — resume by
+// session id, or focus by roster key while it runs. A note the router
+// refuses is its concern; here it is fire-and-forget.
+func (h *hosted) journal(kind, line string) {
+	if h.conn == nil {
+		return
+	}
+	// shownTitle takes hostedMu itself: read the id under the lock, the
+	// title outside it. (Holding it across the call deadlocked agentd on
+	// its first session — no controller ever opened.)
+	hostedMu.Lock()
+	sid := h.sessionID
+	hostedMu.Unlock()
+	title := h.shownTitle()
+	_ = h.conn.Note(wire.EvtActivityNote{
+		Kind: kind, Title: title, Line: line,
+		Ref:    map[string]any{"session_id": sid, "row_key": h.key},
+		Intent: &wire.ActivityIntent{Kind: "resume", SessionID: sid, RowKey: h.key},
+	})
 }
 
 // retire ends a session: off the roster, out of the registry, adapter
@@ -336,6 +370,7 @@ func (h *hosted) retire() {
 		return
 	}
 	h.closing.Store(true)
+	h.journal("agent.end", "session ended")
 	h.releaseOwned(ReasonSessionEnded)
 	forgetTranscriptWatchers(h.key)
 	// Seal the history entry before the events are freed: the count comes
@@ -700,6 +735,9 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		h.narrated()
 		if h.toolMayChangeCheckout(n.Update) {
 			refreshGitAfterTool(h.cwd)
+		}
+		if n.Update.Title != "" && (n.Update.Status == acp.ToolStatusCompleted || n.Update.Status == acp.ToolStatusFailed) {
+			h.journal("agent.tool", n.Update.Title+" — "+string(n.Update.Status))
 		}
 	case acp.UpdateUsage:
 		if n.Update.Size > 0 || n.Update.Used > 0 {

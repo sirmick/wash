@@ -95,6 +95,14 @@ import { virtioConsoleFactory } from './virtio';
 import { bootStep, bootFinish } from './boot';
 import { ingestLinkStats, linkHealth, onLinkHealth, noteConnState, type RawLinkStatsMsg, type LinkHealth } from './linkstats';
 import {
+  activityQuery as activityQueryOn, activityStats as activityStatsOn, activityClear as activityClearOn,
+  onActivity as onActivityEntry, tailWanted as activityTailWanted,
+  handleActivityQueryOK, handleActivityQueryErr, handleActivityStatsOK, handleActivityClearOK, handleActivityEntry,
+  rejectPendingFor as rejectActivityFor,
+  type ActivityEntry, type ActivityQuery, type ActivityPage, type ActivityStats,
+} from './activity';
+import { origins as activityOrigins, LOCAL_ORIGIN as ACTIVITY_LOCAL } from './clients';
+import {
   HOSTGW_APP_ID,
   dropHostgwOrigin,
   hostgwState,
@@ -305,6 +313,13 @@ export interface ShellAppCrashed {
   log: string;
 }
 
+// Activity journal replies (docs/COMMANDER.md §3.5; pkg/wire/activity.go).
+export interface ShellActivityQueryOK { t: 'activity.query.ok'; req_id: number; entries: ActivityEntry[]; cursor?: string }
+export interface ShellActivityQueryErr { t: 'activity.query.err'; req_id: number; code: string; msg?: string }
+export interface ShellActivityEntryMsg { t: 'activity.entry'; entry: ActivityEntry }
+export interface ShellActivityStatsOK { t: 'activity.stats.ok'; req_id: number; stats: ActivityStats }
+export interface ShellActivityClearOK { t: 'activity.clear.ok'; req_id: number }
+
 // ShellCtrlMsg is the discriminated union of every control-plane message
 // the shell dispatches on (the `t` field; WIRE.md §8). makeHandlers'
 // onCtrl narrows on `msg.t`, so each case sees a fully-typed shape and
@@ -330,6 +345,11 @@ type ShellCtrlMsg =
   | ShellClipboardChanged
   | ShellPeerError
   | ShellSuperseded
+  | ShellActivityQueryOK
+  | ShellActivityQueryErr
+  | ShellActivityEntryMsg
+  | ShellActivityStatsOK
+  | ShellActivityClearOK
   | RawLinkStatsMsg;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
@@ -591,6 +611,9 @@ function makeHandlers(client: RouterClient): ClientHandlers {
   onCtrl: (msg: ShellCtrlMsg) => {
     switch (msg.t) {
       case 'catalog': {
+        // A catalog is the first thing a (re)connected router sends, and a
+        // tail is per connection: re-arm it if anyone is listening.
+        if (activityTailWanted()) conn.sendCtrl({ t: 'activity.tail', on: true });
         // The local catalog drives the launcher + settings panels. A
         // remote host's catalog is stored per-origin so wash-connect can
         // list "apps you can launch on B" (docs/REMOTE.md §6.1).
@@ -713,6 +736,23 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       // it via window.wash.onLinkStats.
       case 'link.stats':
         if (isLocal) ingestLinkStats(msg, conn.bufferedAmount());
+        break;
+      // Activity journal (docs/COMMANDER.md): every host journals itself,
+      // so these are NOT local-only — the Timeline merges every origin.
+      case 'activity.query.ok':
+        handleActivityQueryOK(client.origin, msg);
+        break;
+      case 'activity.query.err':
+        handleActivityQueryErr(msg);
+        break;
+      case 'activity.entry':
+        handleActivityEntry(client.origin, msg);
+        break;
+      case 'activity.stats.ok':
+        handleActivityStatsOK(client.origin, msg);
+        break;
+      case 'activity.clear.ok':
+        handleActivityClearOK(msg);
         break;
       // asset.read / panel.read are the shell fetching its OWN assets +
       // settings panels from its router — a local-only concern.
@@ -1094,6 +1134,7 @@ function detachClient(origin: Origin): void {
   forgetModalsFor(origin);
   sentDisplayMetrics.delete(origin);
   unregisterClient(origin);
+  rejectActivityFor(origin);
 }
 
 {
@@ -1892,6 +1933,14 @@ declare global {
       // About screen render it. null until the first link.stats arrives.
       linkStats(): LinkHealth | null;
       onLinkStats(cb: (h: LinkHealth) => void): () => void;
+      // Activity journal (docs/COMMANDER.md §3): one page of one host's
+      // journal, or a page from every connected host; live entries from all
+      // of them while anyone listens; stats and clear per host.
+      activityQuery(origin: Origin | undefined, q?: ActivityQuery): Promise<ActivityPage>;
+      activityQueryAll(q?: ActivityQuery): Promise<ActivityPage[]>;
+      activityStats(origin?: Origin): Promise<ActivityStats>;
+      activityClear(origin?: Origin): Promise<void>;
+      onActivity(cb: (e: ActivityEntry) => void): () => void;
       // Host-awareness state, merged across origins (docs/SIDEBAR.md M1):
       // origin → service → that service's latest snapshot, fed by each
       // host's com.wash.hostgw. Read-only by design — the rail routes
@@ -2160,6 +2209,31 @@ window.wash = {
   onScreenSize: (cb) => screenSub.on(cb),
   linkStats: () => linkHealth(),
   onLinkStats: (cb) => onLinkHealth(cb),
+  activityQuery: (origin, q) => {
+    const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
+    return activityQueryOn((m) => c.conn.sendCtrl(m), c.origin, q ?? {});
+  },
+  activityQueryAll: (q) => Promise.all(activityOrigins().map((o) =>
+    window.wash.activityQuery(o, q).catch(() => ({ host: o === ACTIVITY_LOCAL ? 'local' : o, entries: [] } as ActivityPage)))),
+  activityStats: (origin) => {
+    const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
+    return activityStatsOn((m) => c.conn.sendCtrl(m), c.origin);
+  },
+  activityClear: (origin) => {
+    const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
+    return activityClearOn((m) => c.conn.sendCtrl(m), c.origin);
+  },
+  onActivity: (cb) => {
+    const first = !activityTailWanted();
+    const off = onActivityEntry(cb);
+    // The routers push only while a tail is on; turn it on for every host
+    // with the first listener and off again with the last.
+    if (first) for (const o of activityOrigins()) (clientForOrigin(o) ?? local).conn.sendCtrl({ t: 'activity.tail', on: true });
+    return () => {
+      off();
+      if (!activityTailWanted()) for (const o of activityOrigins()) (clientForOrigin(o) ?? local).conn.sendCtrl({ t: 'activity.tail', on: false });
+    };
+  },
   hostgwState: () => hostgwState(),
   onHostgwState: (cb) => onHostgwState(cb),
   log(level, source, msg, stack) {

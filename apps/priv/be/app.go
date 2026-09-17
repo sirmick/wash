@@ -85,7 +85,7 @@ func init() {
 			Element:         "wash-app-priv",
 			Surface:         sdk.SurfaceModal,
 			Instancing:      sdk.InstancingSingleton,
-			Capabilities:    []string{sdk.CapPrepareSpawn},
+			Capabilities:    []string{sdk.CapPrepareSpawn, sdk.CapActivityNote},
 		},
 		Assets:               sub,
 		OnReady:              onReady,

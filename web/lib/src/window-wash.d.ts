@@ -79,6 +79,58 @@ interface WashWindowContext extends WashWindowInfo {
   contentError?: string;
 }
 
+interface WashActivityIntent {
+  kind: 'focus' | 'resume' | 'open' | string;
+  origin?: string;
+  app_id?: string;
+  instance_id?: string;
+  window_id?: number;
+  session_id?: string;
+  row_key?: string;
+  path?: string;
+}
+
+interface WashActivityEntry {
+  ts: number;
+  seq: number;
+  host: string;
+  kind: string;
+  app?: string;
+  instance?: string;
+  window?: number;
+  title?: string;
+  line: string;
+  truncated?: boolean;
+  ref?: Record<string, unknown>;
+  intent?: WashActivityIntent;
+}
+
+interface WashActivityStats {
+  enabled: boolean;
+  days: number;
+  bytes: number;
+  dropped: number;
+  today: Record<string, number>;
+  seq: number;
+  path?: string;
+}
+
+interface WashActivityQuery {
+  from?: number;
+  to?: number;
+  kinds?: string[];
+  apps?: string[];
+  text?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+interface WashActivityPage {
+  host: string;
+  entries: WashActivityEntry[];
+  cursor?: string;
+}
+
 type WashLogLevel = 'error' | 'warn' | 'info' | 'debug';
 
 // Link-health telemetry (docs/QOS.md). The router pushes per-class
@@ -212,6 +264,13 @@ interface WashGlobals {
   // About screen render it. null until the first link.stats arrives.
   linkStats(): WashLinkHealth | null;
   onLinkStats(cb: (h: WashLinkHealth) => void): () => void;
+  /** Activity journal (docs/COMMANDER.md §3). Every host journals itself;
+   *  entries carry the origin they came from as `host`. */
+  activityQuery(origin: string | undefined, q?: WashActivityQuery): Promise<WashActivityPage>;
+  activityQueryAll(q?: WashActivityQuery): Promise<WashActivityPage[]>;
+  activityStats(origin?: string): Promise<WashActivityStats>;
+  activityClear(origin?: string): Promise<void>;
+  onActivity(cb: (e: WashActivityEntry) => void): () => void;
   // Host-awareness state, merged across hosts (docs/SIDEBAR.md M1): every
   // router runs com.wash.hostgw, which republishes its own host's
   // background-service snapshots; the shell tags each by the origin it
