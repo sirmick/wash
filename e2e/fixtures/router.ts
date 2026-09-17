@@ -449,8 +449,14 @@ export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandl
   // caught by exitPromise or by the test's own timeout; a slow one should
   // not be turned into a leak.
   try {
+    // BOTH readiness lines. The control socket is listened on from a
+    // goroutine started AFTER the shell "listening on" line (runner/router
+    // .go), so a test whose first act is a controlRequest could dial a
+    // socket that did not exist yet — fm-be's outside_root failed on CI
+    // with `connect ENOENT …/control.sock` for exactly that.
     await Promise.race([
-      waitForRegex(() => logBuf, /listening on /, 20_000),
+      waitForRegex(() => logBuf, /listening on /, 20_000)
+        .then(() => waitForRegex(() => logBuf, /control socket listening on /, 20_000)),
       exitPromise.then((r) => {
         throw new Error(`wash-router exited before listening: code=${r.code} signal=${r.signal}\n${logBuf}`);
       }),

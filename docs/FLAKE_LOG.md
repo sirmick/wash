@@ -16,6 +16,24 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-16 — fm-be `connect ENOENT control.sock`: the fixture was ready before the socket (FIXED)
+
+**Seen during:** the v0.16.0 tag run (677 passed / 3 failed). fm-be's
+outside_root test died on its first control request: the socket file did
+not exist.
+
+**Mechanism — harness readiness.** `startRouter` waited for the shell's
+"listening on" line, but the router starts its control listener from a
+goroutine AFTER printing it (internal/runner/router/router.go), and logs
+"control socket listening on" only then. A test whose first act is a
+`controlRequest` could dial a socket not yet created. **Fix:** the fixture
+waits for both lines. 15/15 of fm-be afterwards.
+
+Same run, `about-app-traffic` "674 B": the About row appears on the first
+~1/s stats push that counted any terminal bytes and the spec read it once;
+it now polls for the kilobytes. `agent-roots` sibling-read timed out once;
+24/24 on a two-core squeeze — CI-only so far, watch for a repeat.
+
 ## 2026-09-16 — agent-adapter-exit: the crash reason arrived after the exit (FIXED)
 
 **Seen during:** the v0.15.0 tag run, where main's run of the SAME commit
