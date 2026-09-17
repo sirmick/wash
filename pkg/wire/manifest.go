@@ -242,6 +242,25 @@ const (
 	// for itself. Gated so a journal is never written to by an app that
 	// did not declare it would.
 	CapActivityNote = "activity_note"
+
+	// CapObserve lets an app backend ask the router to observe another
+	// instance (observe.get, docs/COMMANDER.md §4.1) — what the commander
+	// service does on a schedule. Gated because an observation is window
+	// content; the router logs every one against the attested requester.
+	CapObserve = "observe"
+)
+
+// Observation values (docs/COMMANDER.md §4.4): what the router may read
+// of an instance when asked to observe it.
+const (
+	// ObservationAuto: the pty tail or the state blob, whichever the
+	// router holds. The default for wash's own apps (com.wash.*).
+	ObservationAuto = "auto"
+	// ObservationExport: the app answers observe.request itself; the
+	// router falls back to auto when it does not answer in time.
+	ObservationExport = "export"
+	// ObservationNone: never observed. The default for every other app.
+	ObservationNone = "none"
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.
@@ -287,6 +306,12 @@ type Manifest struct {
 	// still spawnable (by --initial-app, or by another app's
 	// spawn.request) — useful for test/utility apps.
 	Hidden bool `json:"hidden,omitempty"`
+
+	// Observation says what the router may read of this app's instances
+	// for a summary (auto | export | none, docs/COMMANDER.md §4.4). Empty
+	// means auto for com.wash.* apps and none for anyone else; a few apps
+	// are none whatever they declare (the router's permanentNone set).
+	Observation string `json:"observation,omitempty"`
 
 	// AutostartAtBoot makes a surface=background app spawn at router
 	// startup, not lazily on the first shell connect. Reserved for
@@ -419,6 +444,11 @@ func ValidateManifest(m *Manifest) error {
 	case InstancingMulti, InstancingSingle, InstancingSingleton:
 	default:
 		return fmt.Errorf("invalid instancing %q", m.Instancing)
+	}
+	switch m.Observation {
+	case "", ObservationAuto, ObservationExport, ObservationNone:
+	default:
+		return fmt.Errorf("invalid observation %q", m.Observation)
 	}
 	// A modal never reaches the launcher, so an icon would have nowhere
 	// to render — same reasoning that exempts background. It still needs

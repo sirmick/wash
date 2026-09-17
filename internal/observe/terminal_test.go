@@ -61,8 +61,9 @@ func TestTerminalDropsControlsButKeepsUTF8(t *testing.T) {
 func TestRedactScrubsCredentialShapes(t *testing.T) {
 	cases := map[string]string{
 		"export OPENAI_API_KEY=sk-proj-abcdefgh12345678":       "export OPENAI_API_KEY=[redacted]",
-		"curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9'": "curl -H 'Authorization: Bearer [redacted]",
+		"curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9'": "curl -H 'Authorization: Bearer [redacted]'",
 		"password: hunter2 and more":                           "password: [redacted] and more",
+		`{"path":"/tmp/a.go","password":"hunter2","n":1}`:      `{"path":"/tmp/a.go","password":"[redacted]","n":1}`,
 		"aws AKIAIOSFODNN7EXAMPLE used":                        "aws [redacted] used",
 		"ghp_abcdefghijklmnop123456 pushed":                    "[redacted] pushed",
 		"nothing secret here":                                  "nothing secret here",

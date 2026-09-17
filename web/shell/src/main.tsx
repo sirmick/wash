@@ -103,6 +103,10 @@ import {
 } from './activity';
 import { origins as activityOrigins, LOCAL_ORIGIN as ACTIVITY_LOCAL } from './clients';
 import {
+  observe as observeOn, handleObserveOK, handleObserveErr, rejectPendingFor as rejectObserveFor,
+  type Observation,
+} from './observe';
+import {
   HOSTGW_APP_ID,
   dropHostgwOrigin,
   hostgwState,
@@ -319,6 +323,9 @@ export interface ShellActivityQueryErr { t: 'activity.query.err'; req_id: number
 export interface ShellActivityEntryMsg { t: 'activity.entry'; entry: ActivityEntry }
 export interface ShellActivityStatsOK { t: 'activity.stats.ok'; req_id: number; stats: ActivityStats }
 export interface ShellActivityClearOK { t: 'activity.clear.ok'; req_id: number }
+// Observe replies (docs/COMMANDER.md §4; pkg/wire/observe.go).
+export interface ShellObserveOK { t: 'observe.ok'; req_id: number; observation: Omit<Observation, 'host'> }
+export interface ShellObserveErr { t: 'observe.err'; req_id: number; code: string; msg?: string }
 
 // ShellCtrlMsg is the discriminated union of every control-plane message
 // the shell dispatches on (the `t` field; WIRE.md §8). makeHandlers'
@@ -350,6 +357,8 @@ type ShellCtrlMsg =
   | ShellActivityEntryMsg
   | ShellActivityStatsOK
   | ShellActivityClearOK
+  | ShellObserveOK
+  | ShellObserveErr
   | RawLinkStatsMsg;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
@@ -754,6 +763,13 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       case 'activity.clear.ok':
         handleActivityClearOK(msg);
         break;
+      // Observe (docs/COMMANDER.md §4): per origin, like the journal.
+      case 'observe.ok':
+        handleObserveOK(client.origin, msg);
+        break;
+      case 'observe.err':
+        handleObserveErr(msg);
+        break;
       // asset.read / panel.read are the shell fetching its OWN assets +
       // settings panels from its router — a local-only concern.
       case 'asset.read.ok':
@@ -1135,6 +1151,7 @@ function detachClient(origin: Origin): void {
   sentDisplayMetrics.delete(origin);
   unregisterClient(origin);
   rejectActivityFor(origin);
+  rejectObserveFor(origin);
 }
 
 {
@@ -1941,6 +1958,11 @@ declare global {
       activityStats(origin?: Origin): Promise<ActivityStats>;
       activityClear(origin?: Origin): Promise<void>;
       onActivity(cb: (e: ActivityEntry) => void): () => void;
+      // Observe (docs/COMMANDER.md §4): one look at one instance, from what
+      // its router holds — an app export, a terminal's scrollback tail, or
+      // the saved state blob. Window ids and instance ids are per-router,
+      // so the origin names whose instance it is.
+      observe(origin: Origin | undefined, instanceID: string, maxBytes?: number): Promise<Observation>;
       // Host-awareness state, merged across origins (docs/SIDEBAR.md M1):
       // origin → service → that service's latest snapshot, fed by each
       // host's com.wash.hostgw. Read-only by design — the rail routes
@@ -2222,6 +2244,10 @@ window.wash = {
   activityClear: (origin) => {
     const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
     return activityClearOn((m) => c.conn.sendCtrl(m), c.origin);
+  },
+  observe: (origin, instanceID, maxBytes) => {
+    const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
+    return observeOn((m) => c.conn.sendCtrl(m), c.origin, instanceID, maxBytes);
   },
   onActivity: (cb) => {
     const first = !activityTailWanted();

@@ -24,6 +24,11 @@ const (
 	CapOpen         = wire.CapOpen
 	CapIdleInhibit  = wire.CapIdleInhibit
 	CapActivityNote = wire.CapActivityNote
+	CapObserve      = wire.CapObserve
+
+	ObservationAuto   = wire.ObservationAuto
+	ObservationExport = wire.ObservationExport
+	ObservationNone   = wire.ObservationNone
 )
 
 // Manifest / WindowHints / RootVariant alias the canonical wire

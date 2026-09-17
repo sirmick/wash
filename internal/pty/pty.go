@@ -508,7 +508,7 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 	// Bulk class (docs/QOS.md): terminal output rides the credit / behind /
 	// resync path and yields to interactive traffic, instead of sharing the
 	// Interactive queue with window ops and other apps (REVIEW-DATAPATH F1).
-	ch, err := conn.OpenChannelBulk(ctx, windowID)
+	ch, err := conn.OpenChannelPty(ctx, windowID)
 	if err != nil {
 		return nil, err
 	}

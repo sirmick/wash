@@ -131,6 +131,13 @@ type Conn struct {
 	// waiting goroutine in ClipboardGet.
 	pendingClipboardGet *pendingCalls[uint64, clipboardResult]
 
+	// pendingObserve correlates Observe req_id with the waiting
+	// goroutine; observeFn answers the router's observe.request when the
+	// app installed an export with HandleObserve (observe.go).
+	pendingObserve *pendingCalls[uint64, observeResult]
+	observeMu      sync.Mutex
+	observeFn      func() Observation
+
 	// pendingIngress correlates PublishIngress req_id with the waiting
 	// goroutine. Resolved by dispatch on ingress.published / ingress.err.
 	pendingIngress *pendingCalls[uint64, ingressResult]
@@ -363,6 +370,7 @@ func ConnectWith(t wire.FrameTransport, def *AppDef) (*Conn, error) {
 		channels:            make(map[uint32]*RawChannel),
 		pendingOpens:        newPendingCalls[uint64, openResult](),
 		pendingClipboardGet: newPendingCalls[uint64, clipboardResult](),
+		pendingObserve:      newPendingCalls[uint64, observeResult](),
 		pendingIngress:      newPendingCalls[uint64, ingressResult](),
 		pendingRestart:      newPendingCalls[uint64, restartResult](),
 		pendingWindowCreate: newPendingCalls[uint64, windowCreateResult](),

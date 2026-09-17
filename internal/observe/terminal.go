@@ -198,7 +198,9 @@ func splitLines(b []byte) []string {
 // same shapes wash-inference scrubs from CLI diagnostics.
 var (
 	// labelled: keep the label (and a "Bearer" scheme word), drop the value.
-	labelled = regexp.MustCompile(`(?i)((?:api[_-]?key|token|secret|password|passwd|authorization)\s*[:=]\s*(?:bearer\s+)?|bearer\s+)(\S+)`)
+	// The label may be quoted (a JSON state blob: "password":"…") and the
+	// value stops at a quote, so what surrounds it survives.
+	labelled = regexp.MustCompile(`(?i)((?:api[_-]?key|token|secret|password|passwd|authorization)["']?\s*[:=]\s*["']?(?:bearer\s+)?|bearer\s+)([^\s"']+)`)
 	// bare: vendor key prefixes and AWS access keys, wherever they sit.
 	bare = regexp.MustCompile(`\b(?:sk|sk-ant|sk-proj|ghp|gho|xox[abp])[-_][A-Za-z0-9_\-]{8,}|\bAKIA[0-9A-Z]{16}\b`)
 )

@@ -131,6 +131,21 @@ interface WashActivityPage {
   cursor?: string;
 }
 
+/** One look at one instance (docs/COMMANDER.md §4). */
+interface WashObservation {
+  /** which of the router's holdings answered */
+  source: 'export' | 'pty-tail' | 'app-state' | 'none';
+  /** moves whenever content would; opaque */
+  revision?: string;
+  content_type?: string;
+  content?: string;
+  truncated?: boolean;
+  captured_at: number;
+  window?: { app: string; instance_id: string; window_id?: number; title?: string; state?: string; focused?: boolean };
+  /** the origin it came from ('local' for the seat's own host) */
+  host: string;
+}
+
 type WashLogLevel = 'error' | 'warn' | 'info' | 'debug';
 
 // Link-health telemetry (docs/QOS.md). The router pushes per-class
@@ -271,6 +286,10 @@ interface WashGlobals {
   activityStats(origin?: string): Promise<WashActivityStats>;
   activityClear(origin?: string): Promise<void>;
   onActivity(cb: (e: WashActivityEntry) => void): () => void;
+  /** Observe one instance (docs/COMMANDER.md §4): an app export, a
+   *  terminal's scrollback tail, or its saved state, redacted by its
+   *  router. origin names whose instance it is (undefined = local). */
+  observe(origin: string | undefined, instanceID: string, maxBytes?: number): Promise<WashObservation>;
   // Host-awareness state, merged across hosts (docs/SIDEBAR.md M1): every
   // router runs com.wash.hostgw, which republishes its own host's
   // background-service snapshots; the shell tags each by the origin it

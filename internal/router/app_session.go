@@ -105,6 +105,11 @@ type AppInstance struct {
 	// notes bounds this instance's activity.note rate (activity.go).
 	notes     noteLimiter
 	extraWins map[uint32]bool
+
+	// observeMu guards observeWaits: observe.request req_id → the
+	// observation waiting for the app's observe.reply (observe.go).
+	observeMu    sync.Mutex
+	observeWaits map[uint64]chan wire.EvtObserveReply
 }
 
 // maxWindowsPerInstance caps how many windows one instance may create
@@ -306,6 +311,10 @@ func (inst *AppInstance) dispatchFrame(f wire.Frame) error {
 			}
 			b.buf.Write(f.Payload)
 		}
+		if b.pty {
+			b.seen += uint64(len(f.Payload))
+			b.wroteAt = time.Now().UnixNano()
+		}
 		b.shellMu.Unlock()
 		if sh == nil {
 			// Shell detached — bytes already captured in the buffer;
@@ -396,12 +405,19 @@ func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
 		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeInternal, "no shell attached"))
 	}
 	id := inst.router.allocChannelID()
+	// A pty channel is a generic channel that says what it carries. The
+	// shell and every forward path see generic; only observe.go asks.
+	kind, pty := m.Kind, false
+	if kind == wire.ChannelKindPty {
+		kind, pty = wire.ChannelKindGeneric, true
+	}
 	b := &channelBinding{
 		channelID: id,
 		app:       inst,
 		shell:     shell,
 		windowID:  m.WindowID,
-		kind:      m.Kind,
+		kind:      kind,
+		pty:       pty,
 		buf:       newRingBuffer(ChannelScrollbackBytes),
 		// A "file" channel (fm download) skips the credit ledger so its
 		// Bulk frames take the LOSSLESS forward path — the credit-gated
@@ -411,7 +427,7 @@ func (inst *AppInstance) handleChannelOpen(m wire.ChannelOpen) error {
 		noCredit: m.Kind == wire.ChannelKindFile,
 	}
 	inst.router.registerChannel(b)
-	if err := shell.WriteCtrl(wire.NewShellChannelBind(id, m.WindowID, m.Kind)); err != nil {
+	if err := shell.WriteCtrl(wire.NewShellChannelBind(id, m.WindowID, kind)); err != nil {
 		inst.router.closeChannel(id, "shell bind failed")
 		return inst.writeCtrl(wire.NewChannelOpenErr(m.ReqID, wire.ErrCodeInternal, err.Error()))
 	}
@@ -443,6 +459,19 @@ func (inst *AppInstance) handleEvt(payload []byte, class wire.Class) error {
 			return err
 		}
 		return inst.handleActivityNote(m)
+	case wire.TEvtObserveReply:
+		var m wire.EvtObserveReply
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		inst.deliverObserveReply(m)
+		return nil
+	case wire.TEvtObserveGet:
+		var m wire.EvtObserveGet
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		return inst.handleObserveGet(m)
 	case wire.TEvtWindowSetTitle:
 		var m wire.EvtWindowSetTitle
 		if err := json.Unmarshal(payload, &m); err != nil {

@@ -1,6 +1,12 @@
 # Mission Commander — activity journal, observation, and summaries
 
-Status: design (2026-09-16); **§9 step 1 (journal + Timeline) built
+Status: design (2026-09-16); **§9 step 2 (observe + briefs on request)
+built 2026-09-17** — `pkg/wire/observe.go`, `internal/router/observe.go`
+(export → pty tail → state blob → none; `ChannelKindPty`; 250 ms export
+grace; `permanentNone`), `internal/observe` (tail rendering + redaction),
+`pkg/inference/activity` (the brief), `sdk.HandleObserve` / `sdk.Conn.Observe`
+(`CapObserve`), `window.wash.observe`, Session Summary re-based on it.
+**§9 step 1 (journal + Timeline) built
 2026-09-16** — `internal/activity`, `internal/router/activity.go`,
 `pkg/wire/activity.go`, `web/shell/src/activity.ts`, the session sidebar's
 Timeline, notes from agentd/priv/bulk, `e2e/tests/activity-journal.spec.ts`.
