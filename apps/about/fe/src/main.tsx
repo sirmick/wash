@@ -163,6 +163,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [sortDesc, setSortDesc] = createSignal(true);
   // Link-health telemetry (docs/QOS.md): the full bag, pushed ~1/s.
   const [link, setLink] = createSignal<WashLinkHealth | null>(window.wash.linkStats?.() ?? null);
+  // The activity journal's footprint (docs/COMMANDER.md §3.4): what is
+  // stored and what was dropped, so a person can see the cost of the
+  // Timeline and knows the clear button in it is theirs.
+  const [journal, setJournal] = createSignal<WashActivityStats | null>(null);
+  const readJournal = () => {
+    window.wash.activityStats?.(undefined).then(setJournal, () => setJournal(null));
+  };
 
   const handleBE = (m: any) => {
     if (m?.kind === 'about.info') setInfo(m as AboutInfo);
@@ -176,6 +183,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const onResize = () => setBrowser(readBrowser());
     window.addEventListener('resize', onResize);
     setCatalog(window.wash.catalog() ?? []);
+    readJournal();
     const offCatalog = window.wash.onCatalog((apps) => setCatalog(apps ?? []));
     const offLink = window.wash.onLinkStats?.(setLink);
     onCleanup(() => {
@@ -187,6 +195,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const refresh = () => {
     setBrowser(readBrowser());
+    readJournal();
     send({ kind: 'refresh', id: `r-${Date.now()}` });
   };
 
@@ -229,6 +238,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <LinkStatsPanel h={link()!} />
           </Section>
         </Show>
+        <Show when={journal()}>
+          <Section title="Activity journal">
+            <JournalPanel st={journal()!} />
+          </Section>
+        </Show>
         <Section title="Browser">
           <BrowserPanel browser={browser()} />
         </Section>
@@ -239,6 +253,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           </div>
         </Section>
       </div>
+    </div>
+  );
+};
+
+// ----- activity journal -----
+
+const JournalPanel: Component<{ st: WashActivityStats }> = (props) => {
+  const today = () => Object.values(props.st.today ?? {}).reduce((a, b) => a + b, 0);
+  return (
+    <div data-testid="about-journal" style={paraStyle}>
+      <Show when={props.st.enabled} fallback={<span data-testid="about-journal-off">off (--no-activity)</span>}>
+        <span data-testid="about-journal-today">{today()} entries today</span>
+        {' · '}{props.st.days} day{props.st.days === 1 ? '' : 's'} on disk
+        {' · '}{fmtBytes(props.st.bytes)}
+        <Show when={props.st.dropped > 0}>
+          {' · '}<span data-testid="about-journal-dropped">{props.st.dropped} dropped</span>
+        </Show>
+      </Show>
     </div>
   );
 };

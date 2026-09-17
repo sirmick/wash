@@ -339,12 +339,16 @@ func (h *hosted) journal(kind, line string) {
 	sid := h.sessionID
 	hostedMu.Unlock()
 	title := h.shownTitle()
-	_ = h.conn.Note(wire.EvtActivityNote{
+	_ = noteActivity(h.conn, wire.EvtActivityNote{
 		Kind: kind, Title: title, Line: line,
 		Ref:    map[string]any{"session_id": sid, "row_key": h.key},
 		Intent: &wire.ActivityIntent{Kind: "resume", SessionID: sid, RowKey: h.key},
 	})
 }
+
+// noteActivity is the journal seam: the test that guards journal's lock
+// discipline captures notes here instead of needing a live connection.
+var noteActivity = func(c *sdk.Conn, n wire.EvtActivityNote) error { return c.Note(n) }
 
 // retire ends a session: off the roster, out of the registry, adapter
 // stopped. Safe to call twice.

@@ -14,6 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirmick/wash/pkg/sdk"
+
+	"github.com/sirmick/wash/pkg/wire"
+
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
 )
@@ -1076,5 +1080,31 @@ func TestAwaitStderrWaitsForTheLastWordsButNotForEver(t *testing.T) {
 	(&hosted{stderrDone: make(chan struct{})}).awaitStderr()
 	if waited := time.Since(start); waited > time.Second {
 		t.Fatalf("waited %s for stderr that never ended", waited)
+	}
+}
+
+// journal reads the title through shownTitle, which takes hostedMu; the
+// first version held that lock across the call and deadlocked agentd on
+// its first session. This must return, and must say what it noted.
+func TestJournalDoesNotHoldHostedMuAcrossShownTitle(t *testing.T) {
+	old := noteActivity
+	var got []wire.EvtActivityNote
+	noteActivity = func(_ *sdk.Conn, n wire.EvtActivityNote) error { got = append(got, n); return nil }
+	t.Cleanup(func() { noteActivity = old })
+
+	h := &hosted{key: "acp:9", agent: "codex", cwd: "/work", sessionID: "s-1", title: "Fix it", conn: &sdk.Conn{}}
+	done := make(chan struct{})
+	go func() {
+		h.journal("agent.turn", "turn done")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("journal deadlocked")
+	}
+	if len(got) != 1 || got[0].Kind != "agent.turn" || got[0].Title != "Fix it" ||
+		got[0].Intent == nil || got[0].Intent.SessionID != "s-1" || got[0].Intent.RowKey != "acp:9" {
+		t.Fatalf("noted %+v", got)
 	}
 }

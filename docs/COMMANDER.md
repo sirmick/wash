@@ -1,8 +1,12 @@
 # Mission Commander — activity journal, observation, and summaries
 
-Status: design (2026-09-16). Supersedes the observation and Mission Commander
-sections of `AI_PROVIDER.md` (§7–9) where they differ; the provider service,
-its request contract and its security rules stand as shipped in 0.16.0.
+Status: design (2026-09-16); **§9 step 1 (journal + Timeline) built
+2026-09-16** — `internal/activity`, `internal/router/activity.go`,
+`pkg/wire/activity.go`, `web/shell/src/activity.ts`, the session sidebar's
+Timeline, notes from agentd/priv/bulk, `e2e/tests/activity-journal.spec.ts`.
+Supersedes the observation and Mission Commander sections of
+`AI_PROVIDER.md` (§7–9) where they differ; the provider service, its request
+contract and its security rules stand as shipped in 0.16.0.
 
 ## 1. What it is for
 

@@ -71,7 +71,7 @@ async function openTerminal(page: Page) {
 test.describe('activity journal', () => {
   test.use({
     routerOpts: {
-      apps: ['session', 'term', 'fm', 'edit'],
+      apps: ['session', 'term', 'fm', 'edit', 'about'],
       fmRoot: true,
       fmSeed: (root: string) => writeFileSync(join(root, 'notes.md'), '# notes\n'),
     },
@@ -113,6 +113,14 @@ test.describe('activity journal', () => {
     expect(diskOpen).toMatchObject({ kind: 'window.open', app: 'com.wash.term', window: winID });
     expect(JSON.stringify(diskOpen).length).toBeLessThan(600);
     expect(disk.map((r) => r.seq)).toEqual([...disk.map((r) => r.seq)].sort((a, b) => a - b));
+
+    // About shows the footprint: the same count the file holds, nothing
+    // dropped.
+    await page.locator('button[title="Apps"]').click();
+    await page.getByRole('button', { name: /About wash/ }).click();
+    const about = page.locator('wash-app-about');
+    await expect(about.locator('[data-testid="about-journal-today"]')).toContainText(/\d+ entries today/, { timeout: 10_000 });
+    await expect(about.locator('[data-testid="about-journal-dropped"]')).toHaveCount(0);
   });
 
   test('an open the router routes is journaled with its path, and a jump reopens it', async ({ page, router }) => {
@@ -136,7 +144,7 @@ test.describe('activity journal', () => {
 });
 
 test.describe('activity journal off', () => {
-  test.use({ routerOpts: { apps: ['session', 'term'], extraArgs: ['--no-activity'] } });
+  test.use({ routerOpts: { apps: ['session', 'term', 'about'], extraArgs: ['--no-activity'] } });
 
   test('nothing is written and the shell is told', async ({ page, router }) => {
     await page.goto(router.url);
@@ -149,6 +157,9 @@ test.describe('activity journal off', () => {
 
     await openTimeline(page);
     await expect(page.locator('[data-testid="timeline-off"]')).toBeVisible();
+    await page.locator('button[title="Apps"]').click();
+    await page.getByRole('button', { name: /About wash/ }).click();
+    await expect(page.locator('wash-app-about [data-testid="about-journal-off"]')).toBeVisible({ timeout: 10_000 });
   });
 });
 
