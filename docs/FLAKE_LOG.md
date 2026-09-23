@@ -16,6 +16,32 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-23 — sidebar notify badge: CI-only, on a runner 4x slower than the dev box
+
+**Seen during:** the GitHub Actions `ci` run for the PR #26 head
+(`b0e7ddf0`): 701 passed / 1 failed / 23 skipped. `sidebar.spec.ts:90`
+waited 15s for `[data-testid="sidebar-section-badge-notify"]` to read
+`1` and the element never appeared.
+
+**Not the branch.** Nothing in PR #26 touches the sidebar notify widget,
+and the same commit's full suite was green locally. 15/15 locally with
+`--repeat-each=3`, each run taking ~0.5s against the 15s budget.
+
+**Mechanism — runner speed, most likely.** That CI suite took 14.9m for
+what runs in 4.0m here, so the whole tier is ~4x slower under contention.
+A spec whose local margin is 30x can still lose it there. Not pinned
+down; the badge depends on a notify push reaching the session FE, so the
+thing to measure on a repeat is whether the notification was delivered at
+all or just late.
+
+**Did not recur.** The very next CI run (`18510dcc`, the merge of the
+same work) was green on both `unit` and `e2e`, so 1 in 2 CI runs so far
+and 0 in 4 local full-suite runs.
+
+**Verdict:** watch. Same class as the cli-open entry below — both are
+load-sensitive margins rather than anything the suite proves wrong. If
+either recurs, instrument the wait instead of raising the timeout.
+
 ## 2026-09-23 — cli-open `xdg-open`: the shim banner missed a 10s poll under full-suite load
 
 **Seen during:** the `make push` gate on the PR #26 merge (718 passed / 1
