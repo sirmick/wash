@@ -16,6 +16,28 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-23 — cli-open `xdg-open`: the shim banner missed a 10s poll under full-suite load
+
+**Seen during:** the `make push` gate on the PR #26 merge (718 passed / 1
+failed / 9 skipped). `cli-open.spec.ts:105` polls the terminal buffer for
+`wash open: ….md → wash-edit` for 10s after running `xdg-open` in a wash
+terminal, and never saw it.
+
+**Not the branch.** Two full `make e2e-test` runs on the same merged tree
+were green (719 passed, 0 flaky), and the spec is nowhere near the
+workspace/start-menu changes. No orphan accumulation either: 1 chrome,
+44/128 inotify instances at the time of the failure.
+
+**Frequency:** 1 in 3 full-suite runs so far; 15/15 standalone with
+`--repeat-each=3`, each in ~1.3s against a 10s budget. So the shim, the
+PATH and the routing are all fine — the spec loses its margin only when
+the whole suite is competing for the box.
+
+**Verdict:** load-sensitive margin, mechanism not yet pinned down. Watch
+for a repeat; if it recurs, find out what the terminal is waiting on
+(shim exec vs. the router's open routing vs. the buffer read) rather than
+just raising the timeout.
+
 ## 2026-09-16 — fm-be `connect ENOENT control.sock`: the fixture was ready before the socket (FIXED)
 
 **Seen during:** the v0.16.0 tag run (677 passed / 3 failed). fm-be's
