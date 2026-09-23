@@ -3071,11 +3071,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <Button
           variant="ghost"
           data-testid="fm-open-terminal"
-          title="Open terminal here"
+          title={`Open terminal in this folder: ${viewDir()}`}
+          aria-label="Open terminal in this folder"
+          disabled={!viewDir()}
           style={{ padding: '4px 8px', 'min-width': '30px' }}
           onClick={() => openTerminalHere(viewDir())}
         >
           <Terminal size={14} />
+        </Button>
+        <Button
+          variant="ghost"
+          data-testid="fm-open-text-editor"
+          title={`Open text editor in this folder: ${viewDir()}`}
+          aria-label="Open text editor in this folder"
+          disabled={!viewDir()}
+          style={{ padding: '4px 8px', 'min-width': '30px' }}
+          onClick={() => openWith('com.wash.edit', viewDir())}
+        >
+          <FileText size={14} />
         </Button>
         <Button variant="ghost" data-testid="fm-sort" title="Sort" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={openSortMenu}>
           <ArrowUpDown size={14} />
@@ -3391,6 +3404,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             const m = menu() as { left: number; top: number; path: string };
             void openOpenWithMenu(m.path, m.left, m.top);
           }}
+          onOpenTextEditor={() => openWith('com.wash.edit', (menu() as { path: string }).path)}
           onDuplicate={() => {
             const m = menu() as { path: string };
             closeMenu();
@@ -3977,6 +3991,7 @@ const ContextMenu: Component<{
   onOpen: () => void;
   onOpenWith: () => void;
   onOpenTerminal: () => void;
+  onOpenTextEditor: () => void;
   onDuplicate: () => void;
   // Archives: Extract here shows only for a container fm can unpack;
   // Compress always does (any selection can become one).
@@ -4005,7 +4020,8 @@ const ContextMenu: Component<{
       <Show when={!isDirLike(props.entry)}>
         <MenuItem data-testid="fm-ctx-open-with" label="Open with…" onClick={props.onOpenWith} />
       </Show>
-      <MenuItem data-testid="fm-ctx-open-terminal" label="Open terminal here" onClick={props.onOpenTerminal} />
+      <MenuItem data-testid="fm-ctx-open-terminal" label="Open terminal in this folder" icon={<Terminal size={14} />} title={isDirLike(props.entry) ? props.path : parentPath(props.path)} onClick={props.onOpenTerminal} />
+      <MenuItem data-testid="fm-ctx-open-text-editor" label={isDirLike(props.entry) ? 'Open text editor in this folder' : 'Open in text editor'} icon={<FileText size={14} />} title={props.path} onClick={props.onOpenTextEditor} />
       <MenuSeparator />
       <MenuItem data-testid="fm-ctx-cut" label="Cut" onClick={props.onCut} />
       <MenuItem data-testid="fm-ctx-copy" label="Copy" onClick={props.onFileCopy} />

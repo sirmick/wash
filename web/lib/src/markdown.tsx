@@ -33,7 +33,7 @@ type Block =
   | { t: 'h'; level: number; text: string }
   | { t: 'code'; lang: string; lines: string[] }
   | { t: 'quote'; lines: string[] }
-  | { t: 'list'; ordered: boolean; items: string[] }
+  | { t: 'list'; ordered: boolean; start: number; items: string[] }
   | { t: 'table'; head: string[]; rows: string[][]; align: Align[] };
 
 /** Column alignment, from the separator row's colons. */
@@ -156,14 +156,21 @@ export function parseBlocks(src: string): Block[] {
     if (isUL || isOL) {
       flushPara(para);
       const items: string[] = [];
+      const start = isOL ? Number(line.trim().match(/^\d+/)![0]) : 1;
       const re = isUL ? UL_RE : OL_RE;
       while (i < lines.length) {
         const m = re.exec(lines[i]);
-        if (!m) break;
+        if (!m) {
+          // Blank lines between items make a loose list, not a new list.
+          let next = i;
+          while (next < lines.length && lines[next].trim() === '') next++;
+          if (next > i && next < lines.length && re.test(lines[next])) { i = next; continue; }
+          break;
+        }
         items.push(m[1]);
         i++;
       }
-      out.push({ t: 'list', ordered: isOL, items });
+      out.push({ t: 'list', ordered: isOL, start, items });
       continue;
     }
 
@@ -460,7 +467,7 @@ export const Markdown: Component<MarkdownProps> = (props) => (
                 {(item, idx) => (
                   <div style={{ display: 'flex', gap: `${tokens.spaceMd}px` }}>
                     <span style={{ color: tokens.fgDim, flex: 'none', 'min-width': '1.2em' }}>
-                      {(b as { ordered: boolean }).ordered ? `${idx() + 1}.` : '•'}
+                      {(b as { ordered: boolean }).ordered ? `${idx() + (b as { start: number }).start}.` : '•'}
                     </span>
                     <span style={{ 'overflow-wrap': 'anywhere' }}>
                       <Inline text={item} />

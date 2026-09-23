@@ -4,7 +4,7 @@
 //
 // Two directions, two mechanisms:
 //
-//   out — "Open terminal here" spawns wash-term with the session's
+//   out — "Open terminal in project folder" spawns wash-term with the session's
 //         working directory, because where the agent is working is
 //         exactly where a person wants a shell;
 //   in  — an `agent_draft` app message puts text in the composer. Any app
@@ -19,13 +19,13 @@
 // directory it asked the router for, and a terminal window appears.
 // wash-term learning to START in that directory is the term track's half.
 //
-// "Open terminal here" is offered in two places — the session's row in the
+// "Open terminal in project folder" is offered in two places — the session's row in the
 // Agents manager's Running pane, and the controller's own Session menu —
 // because the row naming a session and the window showing it are two views
 // of one thing. Both are driven here: they are separate windows of the
 // same binary, and either could lose the verb on its own.
 
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
@@ -34,7 +34,7 @@ import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: [...AGENT_APPS, 'term', 'test'],
+    apps: [...AGENT_APPS, 'term', 'fm', 'edit', 'test'],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -48,7 +48,7 @@ async function startAgentIn(page: Page, url: string, dir: string) {
 test.describe('agent handoff', () => {
   test.setTimeout(120_000);
 
-  test('Open terminal here on the Running row spawns wash-term with the session directory', async ({ page, router }) => {
+  test('Open terminal in project folder on the Running row spawns wash-term with the session directory', async ({ page, router }) => {
     const dir = mkdtempSync(join(tmpdir(), 'wash-agent-term-'));
     await startAgentIn(page, router.url, dir);
     const row = page.locator('wash-app-agents [data-testid="agents-running-pane"] [data-testid^="agents-row-"]').first();
@@ -65,7 +65,7 @@ test.describe('agent handoff', () => {
     await expect(page.locator('wash-app-term').first()).toBeVisible({ timeout: 25_000 });
   });
 
-  test("Open terminal here on the controller's Session menu does the same", async ({ page, router }) => {
+  test("Open terminal in project folder on the controller's Session menu does the same", async ({ page, router }) => {
     const dir = mkdtempSync(join(tmpdir(), 'wash-agent-term-menu-'));
     const win = await startAgentIn(page, router.url, dir);
 
@@ -80,6 +80,30 @@ test.describe('agent handoff', () => {
     await router.waitForLog(new RegExp(`wash-ai: open terminal cwd=${dir}$`, 'm'), 15_000, cursor);
     await expect(page.locator('wash-app-term').first()).toBeVisible({ timeout: 25_000 });
   });
+
+  for (const surface of ['controller', 'manager'] as const) {
+    for (const target of ['file-manager', 'text-editor'] as const) {
+      test(`${surface} opens ${target} in the agent project folder`, async ({ page, router }) => {
+        const dir = mkdtempSync(join(tmpdir(), 'wash-agent-project-'));
+        writeFileSync(join(dir, 'project-note.txt'), 'Project shortcut fixture.');
+        const win = await startAgentIn(page, router.url, dir);
+        if (surface === 'controller') await win.getByTestId('ai-menubar-session').click();
+        else await page.locator('wash-app-agents [data-testid="agents-running-pane"] [data-testid="agents-verbs-btn"]').first().click();
+        const action = page.getByTestId(`${surface === 'controller' ? 'ai' : 'agents'}-menu-open-${target}`);
+        await expect(action).toBeEnabled();
+        await action.click();
+        if (target === 'file-manager') {
+          const files = page.locator('wash-app-fm');
+          await expect(files.getByTestId('fm-path')).toHaveValue(dir);
+          await expect(files.getByText('project-note.txt', { exact: true })).toBeVisible();
+        } else {
+          const editor = page.locator('wash-app-edit');
+          await expect(editor.getByTestId('edit-sidebar')).toContainText(dir);
+          await expect(editor.getByTestId('edit-sidebar').getByText('project-note.txt', { exact: true })).toBeVisible();
+        }
+      });
+    }
+  }
 
   test('an agent_draft message from another app lands in the composer, unsent', async ({ page, router }) => {
     const dir = mkdtempSync(join(tmpdir(), 'wash-agent-draft-'));

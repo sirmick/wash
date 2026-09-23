@@ -59,6 +59,9 @@ const reasonAskOff = "ask_desktop off"
 
 // hosted is one ACP session this process owns.
 type hosted struct {
+	// Immutable for the lifetime of this provider connection.
+	capability  string
+	sessionMeta map[string]any
 	// conn is the service connection, used to push transcript events to
 	// the windows watching this session.
 	conn *sdk.Conn
@@ -118,7 +121,8 @@ type hosted struct {
 	detached bool
 	// closing is set the moment retire starts, before the adapter is
 	// killed, so the exit watcher can tell "we ended it" from "it died".
-	closing atomic.Bool
+	closing      atomic.Bool
+	sessionReady atomic.Bool
 	// tail is the adapter's last stderr bytes (see stderrTail).
 	// stderrDone closes when the adapter's stderr reader has drained. The
 	// exit watcher wakes on stdout closing, which routinely beats the last
@@ -151,6 +155,11 @@ type hosted struct {
 	// no longer claim the agent is busy.
 	turnMu   sync.Mutex
 	turnLive bool
+	// Transient activity is guarded by turnMu and never inferred from a saved
+	// transcript. Concurrent tools stay active until each reports completion.
+	activityPhase string
+	activityTools map[string]string
+	activityAsks  int
 	// pending are prompts typed while a turn was open, in order. They run
 	// one after another when the turn ends — messenger semantics — rather
 	// than as concurrent session/prompt calls, which the protocol does not
@@ -175,8 +184,11 @@ type hosted struct {
 // splitting it into two turns would make the agent answer the first
 // without the second.
 type turn struct {
-	text   string
-	blocks []acp.ContentBlock
+	origin      string
+	displayText string
+	mailID      string
+	text        string
+	blocks      []acp.ContentBlock
 }
 
 // empty reports a turn with nothing in it, which is what the queue drain
@@ -216,6 +228,8 @@ func (h *hosted) beginTurn() {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
 	h.turnLive = true
+	h.activityPhase = "working"
+	h.activityTools = map[string]string{}
 	h.setState("working", "")
 }
 
@@ -374,6 +388,9 @@ func (h *hosted) retire() {
 		return
 	}
 	h.closing.Store(true)
+	if workspaces != nil {
+		workspaces.retired(h)
+	}
 	h.journal("agent.end", "session ended")
 	h.releaseOwned(ReasonSessionEnded)
 	forgetTranscriptWatchers(h.key)
@@ -480,6 +497,10 @@ func (h *hosted) watchExit() {
 
 	// The row first, so the status line changes colour before the note
 	// lands; then the note, which is what explains the colour.
+	if workspaces != nil {
+		_ = workspaces.store.TurnEnded(h.sessionID, "", true)
+		workspaces.signal()
+	}
 	h.endTurn("failed", "exited")
 	text := "The agent exited unexpectedly"
 	if err != nil && err != acp.ErrClosed {
@@ -717,6 +738,7 @@ func sameRow(a, b Row) bool {
 // consumes the same notifications in M4; this milestone renders none of
 // them, which is what makes it testable without a frontend.
 func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
+	h.observeWorkspaceActivity(n.Update)
 	// The transcript first: it is what the app renders, and it must record
 	// what the agent said even for variants the roster ignores.
 	if h.conn != nil {
@@ -849,6 +871,12 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	pol := hostedPolicy()
 	preq := toolRequest(req.ToolCall, h.cwd)
 	res := agentpolicy.Evaluate(pol, preq)
+	if h.capability == "reviewer" {
+		if res.Decision == agentpolicy.DecisionDeny || !h.reviewerPermission(req.ToolCall) {
+			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+		}
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+	}
 
 	switch res.Decision {
 	case agentpolicy.DecisionAllow:
@@ -918,6 +946,10 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 // (roots.go). Returns the verdict rather than an ACP response, because
 // the two callers answer their agents in different protocols.
 func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
+	h.turnMu.Lock()
+	h.activityAsks++
+	h.turnMu.Unlock()
+	defer func() { h.turnMu.Lock(); h.activityAsks--; h.turnMu.Unlock() }()
 	h.setState("needs-input", "permission")
 	// Back to working once answered — but through the turn gate, so an
 	// answer that lands after the turn already ended cannot resurrect it.
@@ -1348,7 +1380,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// agent_set_mode: switch the session's approval preset.
 	sdk.HandleFromVoid(bus, "agent_set_mode", func(_ *sdk.Conn, _ string, req modeReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
-		if h == nil || req.Mode == "" {
+		if h == nil || req.Mode == "" || h.capability == "reviewer" {
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1371,7 +1403,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// reasoning effort, plan mode, …).
 	sdk.HandleFromVoid(bus, "agent_set_config", func(_ *sdk.Conn, _ string, req configReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
-		if h == nil || req.ID == "" {
+		if h == nil || req.ID == "" || h.capability == "reviewer" && req.ID == "mode" {
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -1395,6 +1427,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		h := lookupHosted(req.Key)
 		if h == nil {
 			return nil
+		}
+		if workspaces != nil {
+			_ = workspaces.store.TurnEnded(h.sessionID, "", true)
 		}
 		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
 		// A question the turn was blocked on goes with the turn: the

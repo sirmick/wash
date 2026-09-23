@@ -100,6 +100,7 @@ export interface AgentStatus {
   agent?: string;
   model?: string;
   dir?: string;
+  cwd?: string;
   branch?: string;
   dirty?: boolean;
   /** One of AgentState (see agent-status.ts): running | working |
@@ -188,6 +189,8 @@ export interface AgentSessionProps {
   /** Rendered above the transcript; the launcher uses it for its form. */
   header?: JSX.Element;
   placeholder?: string;
+  /** Omit the composer for transcript previews with a separate inbox input. */
+  hideComposer?: boolean;
 }
 
 // fmtTokens renders a context count the way a status bar wants it: two
@@ -893,6 +896,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               fallback={<Show when={e.kind === 'tool'}><ToolRow e={e} onOpen={props.onOpenTool} /></Show>}
             >
               <div
+                data-testid={e.kind === 'user' ? 'agent-human-message' : undefined}
                 style={{
                   font: tokens.type.textMd,
                   color: e.kind === 'thought' ? tokens.fgMuted : tokens.fg,
@@ -904,9 +908,13 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                   // where your turn ended and the agent's began.
                   ...(e.kind === 'user'
                     ? {
-                        'border-left': `2px solid ${tokens.borderFocus}`,
-                        'padding-left': `${tokens.spaceMd}px`,
-                        color: tokens.fgMuted,
+                        'border-left': `3px solid ${tokens.accentBlue}`,
+                        padding: `${tokens.spaceMd}px ${tokens.spaceLg}px`,
+                        'border-radius': tokens.radiusMd,
+                        background: tokens.bgInfo,
+                        color: tokens.fgInfo,
+                        'font-family': tokens.fontSans,
+                        'font-weight': 600,
                       }
                     : {}),
                 }}
@@ -955,6 +963,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
         </Show>
       </div>
 
+      <Show when={!props.hideComposer}>
       <div
         data-testid="agent-composer-drop"
         onDragOver={onDragOver}
@@ -1144,6 +1153,10 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             'border-radius': tokens.radiusMd,
             padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
             font: tokens.type.textMd,
+            'font-weight': 500,
+            // fg, not fgInfo: fgInfo is the pair for bgInfo (the sent
+            // message below), and on bgInset it is a blue-on-grey that
+            // no other wash text field types in.
             color: tokens.fg,
             outline: 'none',
             'box-sizing': 'border-box',
@@ -1182,10 +1195,17 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
         </div>
       </div>
 
+      </Show>
+
       <div
+        data-testid="agent-status-bar"
         style={{
           flex: 'none',
           height: '22px',
+          'min-width': 0,
+          'white-space': 'nowrap',
+          'overflow-x': 'auto',
+          'scrollbar-width': 'none',
           display: 'flex',
           'align-items': 'center',
           gap: `${tokens.spaceMd}px`,
@@ -1209,30 +1229,31 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           when={st().state === 'working'}
           fallback={
             <Show when={st().state}>
-              <Dot color={agentStateColor(st().state)} />
-              <span style={{ color: agentStateColor(st().state) }}>
+              <span title={`Session: ${agentStateLabel(st().state, st().reason)}`} style={{ display: 'inline-flex', 'align-items': 'center', gap: `${tokens.spaceSm}px`, 'flex-shrink': 0, color: agentStateColor(st().state) }}>
+                <Dot color={agentStateColor(st().state)} />
                 {agentStateLabel(st().state, st().reason)}
               </span>
             </Show>
           }
         >
-          <Spinner size={9} color={tokens.accentBlue} />
+          <span title="Session: Working" aria-label="Working" style={{ display: 'inline-flex', 'flex-shrink': 0 }}><Spinner size={9} color={tokens.accentBlue} /></span>
         </Show>
         <Show when={(st().queued ?? 0) > 0}>
           <span
             data-testid="agent-queued"
-            title="Messages waiting for the current turn to end; they are sent in order"
-            style={{ color: tokens.accentBlue }}
+            title={`${st().queued} queued messages; sent in order after the current turn`}
+            aria-label={`${st().queued} queued messages`}
+            style={{ color: tokens.accentBlue, 'flex-shrink': 0 }}
           >
-            {st().queued} queued
+            {st().queued}
           </span>
         </Show>
         <Show when={st().agent}>
-          <span>{st().agent}</span>
+          <span title={`Provider: ${st().agent}`}>{st().agent}</span>
         </Show>
         <Show when={st().dir}>
           <span style={{ color: tokens.fgDim }}>·</span>
-          <span>{st().dir}</span>
+          <span title={`Working folder: ${st().cwd || st().dir}`}>{st().dir}</span>
         </Show>
         {/* Folders allowed BEYOND the cwd. Named, not counted: "+2
             folders" tells you that you widened the session and not what
@@ -1264,6 +1285,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                   data-wash-hit
                   data-testid="agent-root-remove"
                   aria-label={`Stop allowing ${root}`}
+                  title={`Stop allowing ${root}`}
                   onClick={() => props.onRemoveRoot?.(root)}
                   style={{
                     background: 'transparent',
@@ -1291,7 +1313,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               <select
                 data-testid={`agent-config-${cfg.id}`}
                 value={cfg.current ?? ''}
-                title={cfg.description || cfg.name}
+                title={`${cfg.name}: ${cfg.values?.find((v) => v.value === cfg.current)?.name || cfg.current || "Not reported"}${cfg.description ? ` — ${cfg.description}` : ""}`}
                 onChange={(e) => props.onSetConfig?.(cfg.id, e.currentTarget.value)}
                 style={{
                   background: 'transparent',
@@ -1360,7 +1382,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               `selected` per option is order-proof. */}
           <select
             data-testid="agent-mode"
-            title={st().modes?.find((m) => m.id === st().mode)?.description ?? 'Approval mode'}
+            title={`Approval mode: ${st().modes?.find((m) => m.id === st().mode)?.name ?? st().mode ?? 'Not reported'}${st().modes?.find((m) => m.id === st().mode)?.description ? ` — ${st().modes?.find((m) => m.id === st().mode)?.description}` : ''}`}
             onChange={(e) => props.onSetMode?.(e.currentTarget.value)}
             style={{
               background: 'transparent',
@@ -1385,11 +1407,11 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
 
         <Show when={st().used && st().size}>
           <span style={{ color: tokens.fgDim }}>·</span>
-          <span title="context used / window">{fmtTokens(st().used!)}/{fmtTokens(st().size!)}</span>
+          <span title={`Context: ${st().used?.toLocaleString()} / ${st().size?.toLocaleString()} tokens`}>{fmtTokens(st().used!)}/{fmtTokens(st().size!)}</span>
         </Show>
         <Show when={st().branch}>
           <span style={{ color: tokens.fgDim }}>·</span>
-          <span>
+          <span title={`Git branch: ${st().branch}${st().dirty ? ' — uncommitted changes' : ' — clean'}`}>
             {st().branch}
             {st().dirty ? ' *' : ''}
           </span>

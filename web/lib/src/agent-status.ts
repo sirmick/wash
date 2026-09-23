@@ -134,3 +134,41 @@ export function isWorking(state: string): boolean {
 export function isOver(state: string): boolean {
   return state === 'done' || state === 'failed';
 }
+
+
+/** Detailed workspace activity, separate from session lifecycle. */
+export function agentActivityLabel(activity: string): string {
+  switch (activity) {
+    case 'thinking': return 'Thinking';
+    case 'tool': return 'Using tools';
+    case 'responding': return 'Responding';
+    case 'waiting-message': return 'Awaiting message';
+    case 'needs-input': return 'Needs you';
+    case 'working': return 'Working';
+    // A reserved member that workspace_configure has committed but not yet
+    // launched reports its member state verbatim, so 'pending' reaches here.
+    case 'pending': return 'Queued to start';
+    case 'starting': return 'Starting';
+    case 'idle': return 'Idle';
+    case 'paused': return 'Paused';
+    case 'failed': return 'Failed';
+    case 'ended': return 'Ended';
+    case 'offline': return 'Not connected';
+    default: return activity;
+  }
+}
+export function agentActivityColor(activity: string): string {
+  switch (activity) {
+    case 'thinking': return tokens.accentViolet;
+    case 'tool': return tokens.accentCyan;
+    case 'responding': return tokens.accentGreen;
+    case 'waiting-message': return tokens.fgInfo;
+    case 'needs-input': return agentStateColor('needs-input');
+    case 'failed': return agentStateColor('failed');
+    case 'working': case 'starting': return agentStateColor('working');
+    default: return tokens.fgMuted;
+  }
+}
+export function agentActivityPulses(activity: string): boolean {
+  return ['thinking', 'tool', 'responding', 'working', 'starting', 'needs-input'].includes(activity);
+}

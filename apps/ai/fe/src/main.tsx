@@ -4,6 +4,9 @@
 // stores.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
+import { WorkspaceLayout } from './WorkspaceLayout';
+import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
 import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
 import { isStaleTranscript } from './transcript-guard.ts';
@@ -75,6 +78,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     isManagerElement(props.host.tagName) ? 'manager' : 'session',
   );
   const [events, setEvents] = createSignal<AgentEvent[]>([]);
+  const [workspaceFrame, setWorkspaceFrame] = createSignal<WorkspaceFrame>({ workspace: null });
+  const [workspaceResult, setWorkspaceResult] = createSignal<WorkspaceResult>();
   // One replay request in flight at a time; the snapshot clears it.
   let resyncPending = false;
   const [sessionKey, setSessionKey] = createSignal('');
@@ -200,6 +205,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
+      case 'workspace_state':
+        if (!staleTranscript(m)) setWorkspaceFrame(m as unknown as WorkspaceFrame);
+        break;
+      case 'workspace_patch':
+        if (!staleTranscript(m)) {
+          const next = applyWorkspacePatch(workspaceFrame(), m as unknown as WorkspacePatch);
+          if (next) setWorkspaceFrame(next);
+          else send({ kind: 'workspace_refresh' });
+        }
+        break;
+      case 'workspace_result':
+        if (!staleTranscript(m)) setWorkspaceResult(m as unknown as WorkspaceResult);
+        break;
       case 'role':
         setRole(m.role === 'manager' ? 'manager' : 'session');
         break;
@@ -431,6 +449,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return {
       agent: r?.agent ?? agent(),
       dir: r?.dir,
+      cwd: r?.cwd,
       branch: r?.branch,
       dirty: r?.dirty,
       state: r?.state,
@@ -689,10 +708,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   the window showing a session and the row naming it are
                   two views of one thing. */}
               <MenuItem
-                label="Open terminal here"
+                label="Open terminal in project folder"
                 disabled={!row()?.cwd}
                 onClick={() => { close(); send({ kind: 'open_terminal', cwd: row()?.cwd ?? '' }); }}
                 data-testid="ai-menu-open-terminal"
+              />
+              <MenuItem
+                label="Open file manager in project folder"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_file_manager', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-file-manager"
+              />
+              <MenuItem
+                label="Open text editor in project folder"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_text_editor', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-text-editor"
               />
               <MenuSeparator />
               <Show when={configs().length === 0}>
@@ -762,6 +793,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onRename={(r) => openRename({ key: r.key, session_id: r.session_id, title: r.title })}
           onAddRoot={(r) => openAddRoot(r.key, r.cwd ?? '')}
           onOpenTerminal={(r) => send({ kind: 'open_terminal', cwd: r.cwd ?? '' })}
+          onOpenFileManager={(r) => send({ kind: 'open_file_manager', cwd: r.cwd ?? '' })}
+          onOpenTextEditor={(r) => send({ kind: 'open_text_editor', cwd: r.cwd ?? '' })}
           onAnswer={(a, decision, remember) => send({
             kind: 'answer',
             id: a.id,
@@ -1108,7 +1141,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           overflow: 'hidden',
         }}
       >
-        <div style={{ flex: 1, 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column' }}>
+        <WorkspaceLayout onAnswer={(id, decision, rule) => send({kind:'answer', id, decision, rule:rule ?? ''})} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
+          onAction={(name, args) => send({ kind: 'workspace_action', name, arguments: args })}>
           <Show
             when={sessionKey()}
             fallback={
@@ -1158,7 +1192,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               }}
             />
           </Show>
-        </div>
+        </WorkspaceLayout>
       </div>
     </div>
     </>

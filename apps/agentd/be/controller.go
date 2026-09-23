@@ -340,6 +340,9 @@ func registerControllerHandlers(bus *sdk.Bus) {
 			h.republish()
 		}
 		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{"kind": "session_claimed", "key": req.Key})
+		if workspaces != nil {
+			go workspaces.publish(true)
+		}
 		sendView(from.InstanceID, "session_state", req.Key, func(s State) State { return sessionView(s, req.Key) })
 		return nil
 	})

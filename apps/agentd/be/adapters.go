@@ -177,14 +177,17 @@ func adapterByID(id string) (Adapter, bool) {
 // adapter is a stray child that outlives the desktop, which is the bug
 // class the child-process audit already cost us once.
 func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	h, err := dialAdapter(agentID, cwd, svcConn)
+	return startHostedCapability(agentID, cwd, svcConn, "")
+}
+func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, capability string) (*hosted, error) {
+	h, err := dialAdapterCapability(agentID, cwd, svcConn, capability)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
 	defer cancel()
 
-	res2, err := h.client.NewSession(ctx, h.cwd, h.mcp)
+	res2, err := h.client.NewSession(ctx, h.cwd, h.mcp, h.sessionMeta)
 	if err != nil {
 		h.stop()
 		if len(h.authMethods) > 0 {
@@ -199,6 +202,9 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	bindTranscript(h.key, h.sessionID, agentID, h.cwd, time.Now())
 	h.applyModes(res2.Modes)
 	h.register()
+	if workspaces != nil {
+		workspaces.bindSession(h)
+	}
 	go h.watchExit()
 	// The settings block arrives with the session, not only on later
 	// updates — without this the controls were empty until the agent
@@ -208,6 +214,7 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	// the LAST summary, so a session the router outlives still says what
 	// it was running rather than only cleanly-retired ones.
 	h.noteSession("", time.Now())
+	h.sessionReady.Store(true)
 	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d mcp=%d",
 		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes), len(h.mcp))
 	return h, nil
@@ -216,6 +223,12 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 // dialAdapter launches an adapter and completes the handshake. Shared by
 // start and resume, which differ only in session/new vs session/load.
 func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
+	return dialAdapterCapability(agentID, cwd, svcConn, "")
+}
+func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, capability string) (*hosted, error) {
+	if capability != "" && (capability != "reviewer" || agentID != "claude") {
+		return nil, fmt.Errorf("capability %q unsupported by %s; no session started", capability, agentID)
+	}
 	a, ok := adapterByID(agentID)
 	if !ok {
 		return nil, fmt.Errorf("unknown agent %q", agentID)
@@ -277,7 +290,12 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{key: key, agent: a.ID, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
+	h := &hosted{capability: capability, key: key, agent: a.ID, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
+
+	// Only the injected coordination server is available to restricted reviewers.
+	if capability == "reviewer" {
+		h.mcp = nil
+	}
 
 	// The adapter's own diagnostics. Without this, "needs authentication"
 	// is indistinguishable from "hung". The tail is also kept on the
@@ -304,6 +322,14 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	}
 
 	h.stop = stop
+	if workspaces != nil {
+		if err := workspaces.inject(h); err != nil {
+			h.stop()
+			return nil, err
+		}
+		originalStop := h.stop
+		h.stop = func() { workspaces.revoke(h); originalStop() }
+	}
 	h.client = acp.NewClient(stdout, stdin, h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
@@ -325,13 +351,20 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		Terminal: true,
 	}, acp.Implementation{Name: "wash", Title: "wash", Version: version.Version})
 	if err != nil {
-		stop()
+		h.stop()
 		return nil, fmt.Errorf("initialize %s: %w", a.ID, err)
 	}
 	// The adapter's auth methods are kept for the error message the
 	// caller may need: authMethods advertises what is AVAILABLE, not what
 	// is required, so it is only meaningful once a session call fails.
 	h.authMethods = res.AuthMethods
+	if capability != "" {
+		h.sessionMeta, err = reviewerMetadata(agentID, res.AgentInfo)
+		if err != nil {
+			h.stop()
+			return nil, err
+		}
+	}
 	return h, nil
 }
 
@@ -342,7 +375,16 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 // is already claimed (tests).
 func promptHosted(h *hosted, t turn) (next turn) {
 	text := t.text
-	if h.conn != nil {
+	if t.origin != "" {
+		body := t.displayText
+		if body == "" {
+			body = text
+		}
+		e := appendEvent(h.key, Event{Kind: "collaboration", Text: t.origin + "\n\n" + body}, time.Now())
+		if h.conn != nil {
+			pushEvent(h.conn, h.key, e)
+		}
+	} else if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
 		queuePreviewPatch(h.key)
 	} else {
@@ -358,6 +400,13 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	}
 	blocks = append(blocks, t.blocks...)
 	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
+	if workspaces != nil {
+		workspaces.captureUsage(h)
+		if e := workspaces.store.TurnEnded(h.sessionID, t.mailID, err != nil || res.StopReason == acp.StopCancelled); e != nil {
+			log.Printf("agentd: workspace turn outcome: %v", e)
+		}
+		defer workspaces.signal()
+	}
 	switch {
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
@@ -482,7 +531,10 @@ func resolveCwd(cwd string) (string, error) {
 // the same handler that fills it live. The history comes back on screen,
 // rather than as a terminal scrolled to wherever it happened to be.
 func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
-	h, err := dialAdapter(agentID, cwd, svcConn)
+	return resumeHostedCapability(agentID, cwd, sessionID, svcConn, savedWorkspaceCapability(sessionID))
+}
+func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, capability string) (*hosted, error) {
+	h, err := dialAdapterCapability(agentID, cwd, svcConn, capability)
 	if err != nil {
 		return nil, err
 	}
@@ -497,8 +549,11 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	// Register BEFORE loading: the replay arrives as notifications, and
 	// they need a roster row and a transcript to land in.
 	h.register()
+	if workspaces != nil {
+		workspaces.bindSession(h)
+	}
 	go h.watchExit()
-	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, h.mcp)
+	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, h.mcp, h.sessionMeta)
 	if err != nil {
 		h.retire()
 		return nil, fmt.Errorf("reopen %s: %w", sessionID, err)
@@ -521,6 +576,7 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	log.Printf("agentd: acp session resumed key=%s agent=%s session=%s cwd=%s mode=%s modes=%d configs=%d",
 		h.key, agentID, sessionID, h.cwd, res.Modes.CurrentModeID, len(res.Modes.AvailableModes), len(res.ConfigOptions))
 	h.setState("done", "resumed")
+	h.sessionReady.Store(true)
 	return h, nil
 }
 

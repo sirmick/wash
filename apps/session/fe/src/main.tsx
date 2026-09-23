@@ -2676,11 +2676,26 @@ const StartMenu: Component<{
     closeFlyout();
     props.onRecentItem(item);
   };
+  // A Recent row is the app it names first and a submenu second. It used
+  // to be only the second, which made the four most-used rows in the menu
+  // the one place where clicking a row named "Files" did not start Files.
+  // The recents are still one hover — or one ArrowRight — away.
+  const runGroup = (id: string) => {
+    const app = props.apps.find((a) => a.id === id && !a.disabled);
+    // A group left behind by an app that is gone (or disabled) has nothing
+    // to start, so for it the click stays the submenu open it always was.
+    if (!app) {
+      openFlyout(id, false);
+      return;
+    }
+    closeFlyout();
+    props.onPick(app.id);
+  };
 
   type Row = { run: () => void; group?: RecentGroup };
   const rows = createMemo<Row[]>(() => [
     ...pinnedApps().map((a) => ({ run: () => props.onPick(a.id) })),
-    ...groups().map((g) => ({ run: () => openFlyout(g.id, true), group: g })),
+    ...groups().map((g) => ({ run: () => runGroup(g.id), group: g })),
     ...recentHits().map((r) => ({ run: () => props.onOpenRecent(r.path) })),
     ...appHits().map((a) => ({ run: () => props.onPick(a.id) })),
   ]);
@@ -2735,7 +2750,16 @@ const StartMenu: Component<{
       else props.onDismiss();
       return;
     }
-    if (ev.key === 'Enter' || (ev.key === 'ArrowRight' && rows()[selected()]?.group)) {
+    // ArrowRight is the submenu, Enter is the row: on a Recent row those
+    // are now two different things — the recents, and the app it names.
+    const group = rows()[selected()]?.group;
+    if (ev.key === 'ArrowRight' && group) {
+      ev.preventDefault();
+      setKeyboardDriving(true);
+      openFlyout(group.id, true);
+      return;
+    }
+    if (ev.key === 'Enter') {
       ev.preventDefault();
       setKeyboardDriving(true);
       rows()[selected()]?.run();
@@ -2902,20 +2926,26 @@ const StartMenu: Component<{
                 <MenuItem
                   data-testid={`start-menu-recent-group-${label().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
                   label={label()}
+                  title={app() ? `Open ${label()} — its recent items are in the submenu` : undefined}
                   icon={
                     <span style={{ color: app() ? accentFor(app()!) : tokens.fgMuted, display: 'inline-flex' }}>
                       <SpriteIcon name={app()?.icon ?? groupIcon(id)} size={16} />
                     </span>
                   }
-                  // A submenu trigger, not a button: "Files" here opens
-                  // recent folders, while the "Files" button below is the
-                  // app, and the role is what tells the two apart.
+                  // Both a launcher and a submenu trigger. "Files" was
+                  // only ever the second, which made the most-used rows in
+                  // the menu the one place a click did not start the app
+                  // it names. Hovering (or ArrowRight) still pops the
+                  // recents out to the side; the chevron says so.
                   popup={{ expanded: open() }}
                   trailing={<span aria-hidden="true" style={{ color: tokens.fgMuted }}>›</span>}
-                  // Opens, never toggles: the hover has usually opened it
-                  // by the time the click lands, and a toggle closed it
-                  // again. Escape or a click elsewhere closes it.
-                  onClick={() => openFlyout(id, false)}
+                  // A group whose app is not installed — a recent file
+                  // left behind by one that was removed — has nothing to
+                  // launch, so for it the click still opens the flyout.
+                  // That open is idempotent: the hover has usually opened
+                  // it by the time the click lands, and a toggle would
+                  // close it again.
+                  onClick={() => runGroup(id)}
                 />
               </div>
             );

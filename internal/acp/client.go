@@ -108,12 +108,16 @@ func (c *Client) Authenticate(ctx context.Context, methodID string) error {
 // NewSession opens a session rooted at an absolute cwd. The response
 // carries what the agent will let you change later (modes, models), which
 // is why the whole thing is returned rather than just the id.
-func (c *Client) NewSession(ctx context.Context, cwd string, mcp []McpServer) (NewSessionResponse, error) {
+func (c *Client) NewSession(ctx context.Context, cwd string, mcp []McpServer, meta ...map[string]any) (NewSessionResponse, error) {
 	if mcp == nil {
 		mcp = []McpServer{}
 	}
 	var res NewSessionResponse
-	err := c.conn.Call(ctx, MethodSessionNew, NewSessionRequest{Cwd: cwd, McpServers: mcp}, &res)
+	var metadata map[string]any
+	if len(meta) > 0 {
+		metadata = meta[0]
+	}
+	err := c.conn.Call(ctx, MethodSessionNew, NewSessionRequest{Meta: metadata, Cwd: cwd, McpServers: mcp}, &res)
 	return res, err
 }
 
@@ -143,8 +147,12 @@ func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value
 // whole conversation as session/update notifications *before* answering,
 // so the handler sees the history arrive first — which is exactly what a
 // transcript wants, and why this call can take a while.
-func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string, mcp []McpServer) (LoadSessionResponse, error) {
+func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string, mcp []McpServer, meta ...map[string]any) (LoadSessionResponse, error) {
 	var res LoadSessionResponse
+	var metadata map[string]any
+	if len(meta) > 0 {
+		metadata = meta[0]
+	}
 	if !c.init.AgentCapabilities.LoadSession {
 		return res, fmt.Errorf("acp: agent %q cannot load sessions", c.init.AgentInfo.Name)
 	}
@@ -154,7 +162,7 @@ func (c *Client) LoadSession(ctx context.Context, sessionID, cwd string, mcp []M
 	// The response destination used to be nil, which threw away the
 	// settings block a resumed session needs. An adapter that sends
 	// nothing leaves res zero, so this is strictly additive.
-	err := c.conn.Call(ctx, MethodSessionLoad, LoadSessionRequest{SessionID: sessionID, Cwd: cwd, McpServers: mcp}, &res)
+	err := c.conn.Call(ctx, MethodSessionLoad, LoadSessionRequest{Meta: metadata, SessionID: sessionID, Cwd: cwd, McpServers: mcp}, &res)
 	return res, err
 }
 

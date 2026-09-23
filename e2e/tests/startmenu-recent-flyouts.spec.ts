@@ -15,11 +15,13 @@ import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
 
+// Hover, not click: a click on a Recent row starts the app it names (see
+// startmenu-recent.spec.ts). The flyout is what hovering the row gives you.
 async function openFlyout(page: Page, group: string) {
   await page.locator('button[title="Apps"]').click();
   const menu = page.locator('[data-testid="start-menu"]');
   await expect(menu).toBeVisible();
-  await menu.locator(`[data-testid="start-menu-recent-group-${group}"]`).click();
+  await menu.locator(`[data-testid="start-menu-recent-group-${group}"]`).hover();
   const flyout = page.locator('[data-testid="start-menu-flyout"]');
   await expect(flyout).toBeVisible();
   return { menu, flyout, items: flyout.locator('[data-testid="start-menu-flyout-item"]') };

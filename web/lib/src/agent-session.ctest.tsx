@@ -56,7 +56,10 @@ test('the composer stays open mid-turn and the status line counts the queue', as
   expect(composer.placeholder).toMatch(/sent when this turn ends/);
 
   const queued = container.querySelector('[data-testid="agent-queued"]');
-  expect(queued?.textContent).toBe('2 queued');
+  expect(queued?.textContent).toBe('2');
+  expect(queued?.getAttribute('title')).toContain('2 queued messages');
+  expect(queued?.getAttribute('aria-label')).toBe('2 queued messages');
+  expect((container.querySelector('[data-testid="agent-status-bar"]') as HTMLElement).style.whiteSpace).toBe('nowrap');
 
   // Sending while working still sends — the BE decides to queue it.
   composer.value = 'follow-up while it talks';

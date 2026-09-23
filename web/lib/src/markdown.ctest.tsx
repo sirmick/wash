@@ -61,3 +61,12 @@ test('a fence with a known language is coloured; an unknown one is left plain', 
   expect(pres[0].querySelectorAll('span').length).toBeGreaterThan(0);
   expect(pres[1].querySelectorAll('span')).toHaveLength(0);
 });
+
+test('loose ordered lists retain numbering across blank lines and explicit starts', () => {
+ const {container}=render(()=><Markdown text={'1. First\n\n2. Second\n\n3. Third\n\nA paragraph.\n\n7. Seventh\n8. Eighth'}/>);
+ expect(container.textContent).toBe('1.First2.Second3.ThirdA paragraph.7.Seventh8.Eighth');
+});
+test('Markdown lists numbered with repeated ones count forward while streaming', () => {
+ const {container}=render(()=><Markdown text={'1. First\n\n1. Second\n\n1. Third\n\n'}/>);
+ expect(container.textContent).toBe('1.First2.Second3.Third');
+});
