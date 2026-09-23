@@ -449,6 +449,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return {
       agent: r?.agent ?? agent(),
       dir: r?.dir,
+      cwd: r?.cwd,
       branch: r?.branch,
       dirty: r?.dirty,
       state: r?.state,
