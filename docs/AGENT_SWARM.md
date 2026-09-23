@@ -186,7 +186,8 @@ One service in agentd implements the operations. The GUI calls the same service
 through Wash app messages. A bundled stdio MCP bridge exposes it to hosted agents.
 Do not add a separate workflow daemon or make MCP bridge processes own the swarm.
 
-Proposed operations:
+Current implemented operations (v1). The agreed bulk replacement is recorded in
+[the bulk MCP contract](AGENT_SWARM_BULK.md); it is not implemented yet.
 
 | Tools | Inputs/purpose |
 | --- | --- |
