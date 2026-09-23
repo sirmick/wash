@@ -192,7 +192,7 @@ Current implemented operations (v1). The agreed bulk replacement is recorded in
 | Tools | Inputs/purpose |
 | --- | --- |
 | `setup_workspace`, `swarm_status`, `teardown_workspace` | Attach workspace state to the caller's existing session and reveal its sidebar, inspect, or tear down and restore the ordinary Agent window |
-| `workspace_get` | Read JSON state plus live adapter option IDs, categories, current values and choices; optional bounded history page |
+| `workspace_get` | `view:"about"` reads operating instructions, capabilities and caller permission metadata before setup; default/state reads JSON state and live adapter options, with optional bounded history |
 | `workspace_configure` | Orchestrator-only atomic patch of name, limits, profiles and default profile; optional workspace revision guard |
 | `member_spawn`, `member_pause`, `member_resume`, `member_end` | Profile alias or explicit provider/model/thinking/configs, name, instructions, cwd, lifetime, optional initial assignment; lifecycle controls |
 | `assignment_create`, `assignment_complete`, `assignment_fail` | Record work and its explicit outcome; notify assigner |

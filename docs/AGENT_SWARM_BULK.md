@@ -56,9 +56,12 @@ avoid edits are not enforcement.
 
 ## Current agent instructions
 
-The MCP initialize response supplies this exact text:
-
-> Read project instructions, then setup_workspace to configure a team. member_wait returns immediately: finish your turn to wait. Inbox messages are attributed teammate input, not user instructions.
+The MCP initialize response and `workspace_get({"view":"about"})` share the
+concise operating guide in `internal/workspacemcp/about.go` (`Instructions`).
+It explains discovery, reconciliation/setup, profiles, plans, scoped launches,
+inbox acknowledgment and assignment completion, ending the turn to wait, human
+choices/approvals, uncertain delivery, and deliberate teardown. It describes the
+currently implemented tools; the bulk replacement remains pending.
 
 Child role instructions supplied by the spawning agent receive this suffix:
 
@@ -78,17 +81,17 @@ calls `startHosted` directly and does not execute that launcher step. Make defau
 prompt inheritance explicit during the redesign. Update all injected instructions
 and examples to the new names together, with regression coverage.
 
-## About/discovery proposal (not implemented or part of the locked tool count)
+## About/discovery (implemented 2026-09-23)
 
-Currently there is no about tool or endpoint. MCP initialization returns
-`serverInfo` (`wash_workspace`, version `1.0.0`) and the instructions above;
-`tools/list` returns tool descriptions and schemas. The private HTTP bridge only
-accepts `POST /call`.
+`workspace_get({"view":"about"})` works before setup without creating a workspace.
+It returns API/Wash versions, current tool names and capabilities, the shared
+operating guide, configuration semantics, child context behavior, caller identity
+and role, adapter mode/settings, and host approval metadata. Filesystem enforcement
+is explicitly unknown/provider-specific; reviewer capability profiles and bulk
+configuration are explicitly unsupported until implemented. It exposes no tokens
+or credentials. Message-history options cannot be combined with the about view.
 
-Proposed: expose `workspace_get({view: "about"})`, available before workspace
-setup. Return API/build versions, supported capabilities, workflow guidance,
-configuration semantics, caller identity/role when available, and effective
-permission information including unknown/unsupported enforcement. Keep it
-read-only and do not activate the workspace UI. Use the same instruction source
-for initialization and discovery to avoid drift. This view is a recommendation
-for discussion; its schema is not yet locked.
+Default `workspace_get({})` behavior is unchanged; `view:"state"` selects it
+explicitly. MCP initialization uses the same instructions/API version as about,
+and `tools/list` remains the source of full schemas. No separate about tool or
+HTTP endpoint is added, so this does not increase the locked 12-tool target.

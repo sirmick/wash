@@ -119,9 +119,16 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
   expect(text, `MCP ${name} response`).toMatch(error ? /^WORKSPACE_ERROR / : /^WORKSPACE_RESULT /);
   return error ? text : JSON.parse(text.slice('WORKSPACE_RESULT '.length));
  };
+ const about = await tool('workspace_get', {view:'about'});
+ expect(about.server).toBe('wash_workspace');
+ expect(about.caller.role).toBe('unattached');
+ expect(about.instructions).toContain('END YOUR TURN');
+ expect(about.capabilities.bulk_workspace_configuration).toBe(false);
+ expect(about.permissions.filesystem_enforcement).toMatch(/^unknown:/);
  expect(await tool('workspace_get')).toBeNull();
  await expect(app.locator('[data-testid="workspace-sidebar"]')).toHaveCount(0);
  await tool('setup_workspace', { name: 'Profiles' });
+ expect((await tool('workspace_get', {view:'about'})).caller.role).toBe('orchestrator');
  const before = await tool('workspace_get');
  expect(before.sessions[before.workspace.orchestrator].config_options.map((c: any) => c.category)).toEqual(['model', 'thought_level']);
  await tool('workspace_configure', {

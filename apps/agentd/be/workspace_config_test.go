@@ -154,3 +154,58 @@ func TestWorkspaceHistoryPagesBoundBytesAndPreserveCursor(t *testing.T) {
 		t.Fatal("invalid limit")
 	}
 }
+
+func TestWorkspaceAboutBeforeSetupAndWithoutMutation(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "workspace.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "about-lead", agent: "codex", mode: "read-only", configs: profileOptions("fast", "low")}
+	call := func(raw string) (any, error) {
+		return ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_get", Arguments: json.RawMessage(raw)})
+	}
+	for _, attached := range []bool{false, true} {
+		if attached {
+			if _, err = s.Setup(h.sessionID, h.agent, t.TempDir(), "Team", "", nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := s.Snapshot()
+		got, err := call(`{"view":"about"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		about := got.(map[string]any)
+		wantRole := "unattached"
+		if attached {
+			wantRole = "orchestrator"
+		}
+		if about["caller"].(map[string]any)["role"] != wantRole {
+			t.Fatal(about)
+		}
+		if about["instructions"] != workspacemcp.Instructions {
+			t.Fatal("discovery guidance drift")
+		}
+		permissions := about["permissions"].(map[string]any)
+		if permissions["adapter_mode"] != "read-only" || !strings.HasPrefix(permissions["filesystem_enforcement"].(string), "unknown:") {
+			t.Fatal(permissions)
+		}
+		permissions["adapter_settings"].(map[string]string)["provider_model"] = "changed"
+		if h.configs[0].CurrentValue != "fast" {
+			t.Fatal("leaked mutable settings")
+		}
+		for _, raw := range []string{`{"view":"unknown"}`, `{"view":"about","include_messages":true}`, `{"view":"about","after":"x"}`, `{"view":"about","limit":1}`} {
+			if _, err := call(raw); err == nil {
+				t.Fatalf("accepted invalid view: %s", raw)
+			}
+		}
+		if !reflect.DeepEqual(before, s.Snapshot()) {
+			t.Fatal("about mutated workspace")
+		}
+		state, err := call(`{"view":"state"}`)
+		if err != nil || (state != nil) != attached {
+			t.Fatal(state, err)
+		}
+	}
+}

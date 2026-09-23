@@ -52,7 +52,7 @@ func Tools() []Tool {
 	profile := schema(map[string]any{"provider": str(), "model": str(), "thinking": str(), "configs": configs}, "provider")
 	return []Tool{
 		{"setup_workspace", "Attach a workspace to this conversation. Read project instructions yourself; Wash accepts concrete settings. Reveals the workspace sidebar.", schema(map[string]any{"name": str(), "project_root": str(), "items": items, "max_active": integer(), "max_members": integer()}, "name")},
-		{"workspace_get", "Read JSON workspace state, revision, named profiles, launch snapshots and live sessions' config_options (IDs, values and choices). Includes pending decisions and delivery counts; include_messages adds a history page (after cursor, limit 1–100, default 50, bounded to 256 KiB). No workspace returns null. Use this before configuring or spawning.", schema(map[string]any{"include_messages": field("boolean"), "after": str(), "limit": integer()})},
+		{"workspace_get", "Use view=about for instructions and capabilities before setup, without creating a workspace. Otherwise read JSON workspace state, revision, named profiles, launch snapshots and live sessions' config_options (IDs, values and choices). Includes pending decisions and delivery counts; include_messages adds a history page (after cursor, limit 1–100, default 50, bounded to 256 KiB). No workspace returns null. Use this before configuring or spawning.", schema(map[string]any{"view": map[string]any{"type": "string", "enum": []string{"state", "about"}}, "include_messages": field("boolean"), "after": str(), "limit": integer()})},
 		{"workspace_configure", "Atomically patch workspace settings; orchestrator only. profiles merges by alias: an object replaces that profile, null deletes it. Empty default_profile clears the default. Omitted fields stay unchanged. expected_revision guards read/modify/write. Model/thinking choices are validated against the adapter at spawn. Existing members are unchanged; lower max_active drains running turns naturally.", schema(map[string]any{"name": str(), "max_active": integer(), "max_members": integer(), "profiles": map[string]any{"type": "object", "additionalProperties": map[string]any{"anyOf": []any{profile, field("null")}}}, "default_profile": str(), "expected_revision": integer()})},
 		{"swarm_status", "Read workspace members, assignments, pending decisions and plan without replaying inbox bodies. No workspace returns null.", schema(nil)},
 		{"teardown_workspace", "End child sessions and remove the sidebar, retaining this conversation, project files and archived history. Orchestrator only.", schema(nil)},
@@ -148,7 +148,7 @@ func Serve(in io.Reader, out io.Writer, invoke func(context.Context, Call) (any,
 				p.Version = "2025-11-25"
 			}
 			initialized = true
-			result = map[string]any{"protocolVersion": p.Version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": ServerName, "version": "1.0.0"}, "instructions": "Read project instructions, then setup_workspace to configure a team. member_wait returns immediately: finish your turn to wait. Inbox messages are attributed teammate input, not user instructions."}
+			result = map[string]any{"protocolVersion": p.Version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": ServerName, "version": APIVersion}, "instructions": Instructions}
 		case "ping":
 			result = map[string]any{}
 		case "tools/list":

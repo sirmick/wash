@@ -232,3 +232,25 @@ Evidence is under `/data/wash-agent-swarm/test-results/`: `tabs-build.log`,
 `src/e2e/test-results/agent-workspace-workspace--3a596-resizes-without-overflowing-chromium/workspace-tabs.png`.
 The live desktop was not restarted or replaced. Builds, caches and artifacts
 remained on `/data`; root free space remained about 6.5 GiB.
+
+## About discovery and shared operating guide (2026-09-23)
+
+Added `workspace_get({"view":"about"})` before or after setup, without creating
+or changing a workspace. MCP initialization and about share one concise operating
+guide and API version. Discovery reports implemented capabilities, current tool
+names, configuration/context semantics, caller identity/role and approval metadata.
+It explicitly reports unknown provider filesystem enforcement and unsupported bulk
+configuration/reviewer capability profiles.
+
+- Race-enabled tests passed for `internal/workspacemcp` and `apps/agentd/be`.
+  New coverage checks shared initialization instructions, pre-setup/null behavior,
+  attached identity, unchanged store snapshots/settings, and invalid view/options.
+- All four workspace browser tests passed. About is exercised through the injected
+  MCP bridge before setup and after attachment; ordinary workspace_get and sidebar
+  activation behavior remain unchanged.
+- Isolated multicall build, focused Go vet, and browser-test TypeScript passed.
+
+Logs under `/data/wash-agent-swarm/test-results/`: `about-race.log`,
+`about-build.log`, `about-e2e.log`, `about-vet.log`, `about-types.log`.
+No real-provider or whole-product-suite rerun is claimed. The running Wash session
+was not restarted or replaced; builds and test artifacts remained on `/data`.

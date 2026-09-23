@@ -233,6 +233,7 @@ func (ws *workspaceService) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 type workspaceArgs struct {
+	View            string            `json:"view"`
 	Profile         string            `json:"profile"`
 	Model           string            `json:"model"`
 	Thinking        string            `json:"thinking"`
@@ -345,6 +346,17 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, call workspacem
 		}
 		return ws.store.Setup(sid, h.agent, h.cwd, a.Name, root, a.Items, swarm.Limits{MaxActive: a.MaxActive, MaxMembers: a.MaxMembers})
 	case "swarm_status", "workspace_get":
+		if a.View != "" && a.View != "state" && a.View != "about" {
+			return nil, errors.New("view must be state or about")
+		}
+		if a.View == "about" {
+			var fields map[string]json.RawMessage
+			_ = json.Unmarshal(call.Arguments, &fields)
+			if len(fields) != 1 {
+				return nil, errors.New("about does not accept message history options")
+			}
+			return ws.about(h), nil
+		}
 		w := ws.store.View(sid)
 		if w == nil {
 			return nil, nil

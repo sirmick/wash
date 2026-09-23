@@ -59,3 +59,36 @@ func TestNoInvocationBeforeInitializeOrForUnknownTool(t *testing.T) {
 		t.Fatal(out.String())
 	}
 }
+
+func TestInitializationAndAboutShareOperatingInstructions(t *testing.T) {
+	var out bytes.Buffer
+	err := Serve(strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n"), &out, func(context.Context, Call) (any, error) { t.Fatal("initialization invoked a tool"); return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+			ServerInfo   struct {
+				Version string `json:"version"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err = json.Unmarshal(out.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	about := About()
+	if response.Result.Instructions != about["instructions"] || response.Result.ServerInfo.Version != about["api_version"] {
+		t.Fatal("initialize/about drift")
+	}
+	if err := ValidateCall(Call{Name: "workspace_get", Arguments: json.RawMessage(`{"view":"about"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	names := about["tools"].([]string)
+	if len(names) != len(Tools()) || about["wash_version"] == "" {
+		t.Fatal(about)
+	}
+	if about["capabilities"].(map[string]bool)["bulk_workspace_configuration"] {
+		t.Fatal("advertised unimplemented bulk API")
+	}
+}
