@@ -191,3 +191,44 @@ prefix (`race`, `e2e`, `components`, `status`, `guards`, `build`). The screensho
 These activity checks use deterministic ACP fixtures. They do not change the
 previously documented real-Claude authentication or broader syslogs limitations.
 Root free space remained about 6.5 GiB; builds and artifacts stayed on `/data`.
+
+## Main-panel workspace tabs and sidebar resizing (2026-09-23)
+
+Plan progress/live Markdown and member inspection now open in main-panel tabs.
+The sidebar contains navigation, team status, decisions and message activity.
+Conversation stays mounted; per-member inbox drafts survive switching tabs.
+The shared divider supports dragging plus keyboard resizing and remembers its
+width locally. Preview subscriptions follow the selected tab and are cleared
+when a reloaded window starts at Conversation.
+
+Validation in the isolated `/data/wash-agent-swarm/src` checkout:
+
+- **30 component tests passed** (workspace layout and shared AgentSession).
+  Coverage includes live updates without resetting selection, independent drafts,
+  deduplication, close/keyboard navigation, selecting the owning conversation,
+  teardown while inspecting a teammate, workspace replacement, removed members,
+  preview subscription clearing, and bounded/persisted resizing.
+- **14 browser tests passed** across workspace and Agent-session suites. The
+  workspace suite verifies main-panel placement, real drag resizing, keyboard
+  navigation, no layout overflow, reload width persistence, live Markdown updates,
+  resident/retired transcript inspection, inbox messaging, profiles and telemetry.
+  After the final preview-on-reload correction, all four workspace browser tests
+  and all 30 component tests passed again.
+- Shared UI/shell, Agent frontend and isolated multicall builds passed. Browser
+  test TypeScript, design-token, interaction-marker and version guards passed.
+  The member-tab screenshot was visually reviewed. The standalone app `tsc`
+  command remains affected by existing import-extension, test-type and other
+  baseline diagnostics; it is not reported as a passing check.
+
+An initial browser run timed out because the test's About window covered the
+Plan button after reload. The test now closes that fixture window before
+continuing; the final workflow run passes. Component tests retain the existing
+jsdom canvas warning. These are deterministic ACP fixture tests, with no new
+real-provider or full-product-suite claim.
+
+Evidence is under `/data/wash-agent-swarm/test-results/`: `tabs-build.log`,
+`tabs-components.log`, `tabs-e2e-final.log`, `tabs-e2e-preview.log`,
+`tabs-guards.log`, and `tabs-types.log`. Screenshot:
+`src/e2e/test-results/agent-workspace-workspace--3a596-resizes-without-overflowing-chromium/workspace-tabs.png`.
+The live desktop was not restarted or replaced. Builds, caches and artifacts
+remained on `/data`; root free space remained about 6.5 GiB.

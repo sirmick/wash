@@ -292,7 +292,7 @@ agentd's attachment state; browser-local UI state does not activate a workspace.
 Windows opened for members of an active workspace also receive its context. The
 sidebar contains:
 
-- Progress: the ordered keyed plan items, showing text, emoji, and state.
+- Plan navigation: completion count and an entry opening the ordered keyed items in a main-panel tab.
 - Optional document entry: name and path of the registered Markdown file.
 - Members: name, role, lifetime, activity, waiting reason, and the member's own
   status text and emoji, refreshed live.
@@ -319,12 +319,21 @@ correct source attribution, and click-through to the appropriate member.
 
 ### Member and document inspection
 
-Proposed first layout: keep the window's owning conversation on the left. The
-right column has a team overview, the progress list, and a selected detail view.
-Selecting the optional document renders Markdown there; selecting a member shows
-its assignment, messages, and
-transcript with an explicit option to open/focus its dedicated Agent window.
-This layout remains a design choice for review, not a settled user requirement.
+The sidebar is navigation and status. Clicking Plan or its registered document
+opens a Plan tab in the main panel, with keyed progress and live Markdown.
+Clicking a teammate opens a named tab containing assignments, transcript preview,
+recovery controls, and a human inbox message field. Selecting the window's own
+member returns to Conversation. Tabs are reused, closeable, and keyboard
+navigable (arrow keys, Home/End, Delete to close).
+
+The owning Conversation remains mounted while another tab is selected, preserving
+its draft and attachments. Inbox drafts are kept separately per member until the
+workspace changes. Only the selected member receives transcript updates. A new
+workspace or teardown clears the extra tabs; reload starts at Conversation.
+
+A draggable divider resizes the sidebar. A focused divider also accepts left/right
+arrows and Home/End; the width preference is remembered locally without activating
+a workspace. Both panes shrink within the window and scroll independently.
 
 A transcript preview is a subscriber, not another controller. A swarm-scoped
 subscription sends membership/message updates without subscribing every window

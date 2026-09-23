@@ -5,7 +5,8 @@ import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
 // stores.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { WorkspaceSidebar, type WorkspaceFrame, type WorkspaceResult } from './WorkspaceSidebar.tsx';
+import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
+import { WorkspaceLayout } from './WorkspaceLayout';
 import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
 import { isStaleTranscript } from './transcript-guard.ts';
@@ -1125,7 +1126,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           overflow: 'hidden',
         }}
       >
-        <div style={{ flex: 1, 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column' }}>
+        <WorkspaceLayout frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
+          onAction={(name, args) => send({ kind: 'workspace_action', name, arguments: args })}>
           <Show
             when={sessionKey()}
             fallback={
@@ -1175,10 +1177,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               }}
             />
           </Show>
-        </div>
-        <Show when={workspaceFrame().workspace}>
-          <WorkspaceSidebar frame={workspaceFrame()} result={workspaceResult()} onAction={(name, args) => send({ kind: 'workspace_action', name, arguments: args })} />
-        </Show>
+        </WorkspaceLayout>
       </div>
     </div>
     </>

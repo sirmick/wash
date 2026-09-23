@@ -188,6 +188,8 @@ export interface AgentSessionProps {
   /** Rendered above the transcript; the launcher uses it for its form. */
   header?: JSX.Element;
   placeholder?: string;
+  /** Omit the composer for transcript previews with a separate inbox input. */
+  hideComposer?: boolean;
 }
 
 // fmtTokens renders a context count the way a status bar wants it: two
@@ -960,6 +962,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
         </Show>
       </div>
 
+      <Show when={!props.hideComposer}>
       <div
         data-testid="agent-composer-drop"
         onDragOver={onDragOver}
@@ -1187,6 +1190,8 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           </Show>
         </div>
       </div>
+
+      </Show>
 
       <div
         style={{
