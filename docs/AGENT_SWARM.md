@@ -1,6 +1,10 @@
 # Agent swarms through MCP
 
-Status: initial implementation, 2026-09-22. Implemented and tested in the isolated
+Status: original implementation/design, 2026-09-22. The implemented API 2 bulk
+interface, resident package workflow and first-class QA are specified in
+[AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md); it supersedes v1 tool names below.
+
+Initial implementation: Implemented and tested in the isolated
 `/data/wash-agent-swarm/src` checkout on `agent-workspace-mcp`; not deployed into
 the running desktop. See [validation notes](AGENT_SWARM_VALIDATION.md) and the
 [Redoubt project example](examples/redoubt-workspace.md).
@@ -186,8 +190,9 @@ One service in agentd implements the operations. The GUI calls the same service
 through Wash app messages. A bundled stdio MCP bridge exposes it to hosted agents.
 Do not add a separate workflow daemon or make MCP bridge processes own the swarm.
 
-Current implemented operations (v1). The agreed bulk replacement is recorded in
-[the bulk MCP contract](AGENT_SWARM_BULK.md); it is not implemented yet.
+Legacy operations (v1), retained as hidden compatibility calls for existing
+conversations. New agents use the implemented twelve-tool
+[bulk MCP contract](AGENT_SWARM_BULK.md).
 
 | Tools | Inputs/purpose |
 | --- | --- |

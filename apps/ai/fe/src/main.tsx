@@ -1126,7 +1126,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           overflow: 'hidden',
         }}
       >
-        <WorkspaceLayout frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
+        <WorkspaceLayout onAnswer={(id, decision, rule) => send({kind:'answer', id, decision, rule:rule ?? ''})} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
           onAction={(name, args) => send({ kind: 'workspace_action', name, arguments: args })}>
           <Show
             when={sessionKey()}

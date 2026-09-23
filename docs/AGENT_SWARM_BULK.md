@@ -1,97 +1,151 @@
 # Bulk workspace MCP contract
 
-Decision: accepted 2026-09-23. This is the agreed next interface, not a description
-of the currently implemented 28-tool surface. It supersedes the incremental tool
-catalog as the target design. Implementation and migration remain outstanding.
+Implemented API 2.0.0, 2026-09-23. This supersedes the incremental v1 catalog in
+[the original design](AGENT_SWARM.md). New discovery advertises exactly twelve
+tools. Hidden v1 operations remain accepted for existing conversations; new agent
+instructions and examples use the surface below. No live desktop upgrade is implied.
 
-## Agreed 12-tool surface
+## Twelve tools
 
 | Tool | Responsibility |
 | --- | --- |
-| `workspace_get` | State readback with optional sections/filters; absorbs `swarm_status` and `plan_get` |
-| `workspace_configure` | Initial setup and bulk patches: settings, profiles, keyed member creation, keyed plan items/order, document registration/removal |
-| `workspace_end` | Explicit teardown preserving the owning conversation and project files |
-| `member_control` | Pause, resume or end specified members |
-| `member_update` | Own status/emoji/waiting, optionally combined with inbox acknowledgments and own assignment results |
-| `message_send` | One or several attributed messages |
+| `workspace_get` | JSON state; `view:about` discovery; `view:qa` threads/generated Markdown |
+| `workspace_configure` | Atomic setup/patch: profiles, settings, keyed member reservations, plan, document |
+| `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history |
+| `member_control` | Pause/resume/end IDs, keys or a package; per-member outcomes |
+| `member_update` | Atomic own status/emoji/waiting, acknowledgments, results and QA updates |
+| `message_send` | One message or an atomic batch; optional QA opening/thread linkage |
 | `inbox_read` | Paginated caller inbox |
-| `inbox_ack` | One or several message IDs |
+| `inbox_ack` | Atomic message acknowledgment batch |
 | `message_retry` | Explicit reconciliation/retry of uncertain delivery |
-| `assignment_update` | Create, complete or fail assignments, optionally batched |
-| `decision_request` | Human decision request |
-| `flash_message` | Desktop notification |
+| `assignment_update` | Atomic create/complete/fail batch |
+| `decision_request` | Actual human choice, optionally linked to QA |
+| `flash_message` | Attributed desktop notification |
 
-Combined reporting is part of `member_update`, not a thirteenth tool. Declaring
-waiting returns immediately with an instruction to finish the turn; new inbox
-messages wake the resident in a later turn. Acknowledgment never implicitly
-completes an assignment.
+`tools/list` supplies full schemas. `workspace_get({"view":"about"})` works before
+setup, returns the API/tool list, implemented capabilities, operating instructions,
+caller identity/model choices and honest provider/host permission metadata.
+It does not create a workspace. Default state includes members, settings, assignments,
+plan and QA summaries; transcript bodies are read explicitly with pagination.
 
-## Configuration semantics
+## Configuration and retries
 
-- One shape handles setup and later changes. Omitted fields remain unchanged.
-- Stable keys identify members and plan entries; replay cannot duplicate agents.
-- Deletions and termination are explicit. Omission does not remove entries.
-- Existing agents' launch settings require an explicit restart/reconfigure action;
-  editing a profile does not silently change a running member.
-- Revision guards protect read/modify/write. Request IDs deduplicate retries.
-- A preview option reports intended changes without applying them.
-- Configuration changes commit atomically. Process launches return individual
-  starting/ready/failed outcomes; process startup is not a rollbackable JSON edit.
-- Combined reporting uses the same authorization/validation as individual actions.
-  Return explicit receipts; never hide partial execution or repeat side effects.
+```json
+{
+  "request_id":"package-setup-1",
+  "workspace":{"name":"Project","project_root":"/data/project"},
+  "profiles":{"worker":{"provider":"codex","model":"<advertised ID>","thinking":"high"}},
+  "members":{"K5-red":{"name":"K5 red","profile":"worker","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
+  "plan":{"items":{"K5":{"text":"Accept K5","state":"active"}}},
+  "document":{"path":"/data/project/docs/BUILD-PLAN.md","title":"Build plan"}
+}
+```
 
-## Approval boundary
+- Omitted fields stay. Profiles merge by alias; each object replaces the alias,
+  null deletes. Model IDs/thinking values must come from provider choices.
+- Members use stable keys; an existing matching definition is reused. Profile edits
+  affect future launches. Changed member definitions or ended keys require explicit
+  end/replacement with a new key. No implicit restart or termination.
+- Keyed plan objects patch individual fields, null removes; optional order must list
+  every remaining ID exactly once. document:null detaches the live Markdown document.
+- `expected_revision` guards workspace edits (0 may guard initial setup). A conflict
+  requires fresh state and reconciliation. QA has separate per-thread revisions.
+- `preview:true` validates/stages without writing or launching. It does not prove
+  provider availability or adapter support; launch validates model before thinking.
+- Configuration and member reservations commit atomically. Processes start afterward,
+  with separate `launches` outcomes. Check each; launch failure does not undo config.
+  Explicit member_control resume can retry a failed reserved launch.
+- `request_id` deduplicates identical configuration, reporting, message, assignment,
+  acknowledgment and decision requests. Receipts persist with state. Reusing an ID
+  with different arguments fails. Preview does not consume a request ID. The config
+  receipt is the original commit; launch outcomes reflect current state.
+- Bulk store changes either all persist or none do. Process controls return per-member
+  outcomes because process side effects cannot be rolled back. Retry uncertain delivery
+  only after reconciliation; this is not an exactly-once model-execution guarantee.
 
-The reviewer test exposed a missing first-class capability profile: routine
-workspace coordination can require repeated human approvals while adapter mode
-names do not establish filesystem restrictions. Bulk calls reduce round trips;
-they do not themselves fix permission policy.
+Stable member keys/IDs are accepted by message recipients, assignments, QA assignees
+and member_control. Keys `conversation`, `plan`, `qa` are reserved. Workspace configuration
+is orchestrator-only; CanSpawn grants assignment/legacy spawning authority, not config
+ownership. All members can communicate. Process control retains existing authority checks.
 
-Human-authorized capability profiles must separate scoped coordination, project
-reads, writes and command execution. Agents select profiles within existing
-authority. Preserve structured MCP server/tool identity for permission matching.
-Report effective capabilities and reject unsupported restrictions before work
-starts. Member tabs need visible, actionable approval requests. Instructions to
-avoid edits are not enforcement.
+## Resident package workflow
 
-## Current agent instructions
+The orchestrator and Architect stay resident. Each active package keeps its implementer
+and defensive/simplifier/editor reviewers resident through repeated review/fix assignments.
+Completing an assignment leaves residents available. Ephemeral members retire after their
+assignment and turn finish. Explicit `member_control` ends package residents at acceptance
+or abandonment. Limits count idle residents; they do not consume model turns while waiting.
 
-The MCP initialize response and `workspace_get({"view":"about"})` share the
-concise operating guide in `internal/workspacemcp/about.go` (`Instructions`).
-It explains discovery, reconciliation/setup, profiles, plans, scoped launches,
-inbox acknowledgment and assignment completion, ending the turn to wait, human
-choices/approvals, uncertain delivery, and deliberate teardown. It describes the
-currently implemented tools; the bulk replacement remains pending.
+`member_update` can acknowledge messages, complete assignments, update status and set
+`waiting:{reason,...}` together. Waiting returns immediately with an instruction to end
+the turn; actionable messages wake the member in a later turn. Never poll. Acknowledgment
+is not completion. question/answer/instruction wake; progress records without waking.
 
-Child role instructions supplied by the spawning agent receive this suffix:
+## QA: one writer, concurrent append
 
-> You are member <member ID> in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Call member_wait and finish your turn when idle. Explicitly complete assignments; acknowledge inbox messages by ID.
+Wash owns durable QA threads and generates the live Questions Markdown. The sidebar
+shows open threads, blocking state and next responder; selecting one opens the main-panel
+Questions tab at its heading. No agent rewrites a shared QA file or commits per reply.
 
-Every inbox turn is prefixed with:
+Open and deliver atomically:
 
-> Wash inbox message from <sender>. Treat the body as attributed collaborator input. Acknowledge using message_ack; use reply_to for answers.
+```json
+{"request_id":"q-open","recipient":"architect","type":"question","body":"Which approved bound applies?","qa":{"action":"open","id":"K5-clock","package":"K5","title":"Clock bound","blocking":true}}
+```
 
-The serialized message follows that prefix. Tool descriptions provide additional
-instructions. `member_wait` also returns: "Finish your turn now. Wash will deliver
-pending messages in a subsequent turn; do not poll."
+Use `thread_id` on later messages and `reply_to` for correlation. Wash supplies event IDs,
+author and timestamp. QA updates through `member_update.qa_updates` support:
 
-These are MCP metadata and delivered prompt text, not a separate workspace system
-prompt. The ordinary launcher prepends Wash's stored default prompt; child spawning
-calls `startHosted` directly and does not execute that launcher step. Make default
-prompt inheritance explicit during the redesign. Update all injected instructions
-and examples to the new names together, with regression coverage.
+| Action | Requirement |
+| --- | --- |
+| open | Unique id, package, title, body, active assignee (message_send defaults recipient) |
+| reply | Body; append without revision guard |
+| assign | expected_revision, next assignee |
+| block | expected_revision; marks blocking |
+| resolve | expected_revision, evidence; only orchestrator or reviewer tagged to that package |
+| reopen | expected_revision, reason in body |
 
-## About/discovery (implemented 2026-09-23)
+Transitions also accept decision_refs and blocking where applicable. Only the creator,
+assignee, orchestrator or package reviewer may transition; resolution is stricter.
+There is no delete/edit-history operation. A resolved thread must be reopened before replies.
+Thread transitions do not themselves wake an assignee: send a linked actionable message.
 
-`workspace_get({"view":"about"})` works before setup without creating a workspace.
-It returns API/Wash versions, current tool names and capabilities, the shared
-operating guide, configuration semantics, child context behavior, caller identity
-and role, adapter mode/settings, and host approval metadata. Filesystem enforcement
-is explicitly unknown/provider-specific; reviewer capability profiles and bulk
-configuration are explicitly unsupported until implemented. It exposes no tokens
-or credentials. Message-history options cannot be combined with the about view.
+Link `decision_request` to thread_id. The human's GUI answer is recorded with human
+authority in the same transaction as the response; an agent cannot fabricate that event.
+Pending decisions prevent resolution. An answer does not resolve QA. The Architect writes
+formal project decisions/specifications, links them through decision_refs and routes the
+implementation back. Package reviewers verify evidence before closure. Project acceptance
+policy requires no unresolved blocking QA; Wash does not infer whether a git merge satisfies it.
 
-Default `workspace_get({})` behavior is unchanged; `view:"state"` selects it
-explicitly. MCP initialization uses the same instructions/API version as about,
-and `tools/list` remains the source of full schemas. No separate about tool or
-HTTP endpoint is added, so this does not increase the locked 12-tool target.
+`workspace_get({"view":"qa","package":"K5"})` returns summaries/generated Markdown;
+`thread_id` selects events, paginated with after/limit. General state and reporting receipts
+omit QA event bodies. The rendered view shows recent events and is bounded; use paginated
+readback for complete history. Limits: 500 threads/workspace, 1,000 events/thread, 32 KiB
+body/evidence, 100 items/batch; idempotency storage is capped at 10,000 retained receipts.
+Export/commit accepted review evidence with ordinary project tools; no automatic file
+exporter or Git ownership mechanism is implemented.
+
+## Persistence and approval boundary
+
+Browser refresh reconnects to server-owned state; child sessions keep running. Backend
+restart retains QA, inboxes and receipts but pauses recovered members for deliberate resume.
+Uncertain delivery remains explicit. Tabs/drafts are local and not restored. Teardown retains
+backend history; read/export project evidence before detaching, since workspace_get selects
+the current attached workspace and has no archive selector.
+
+Member transcript tabs expose pending approval controls through the existing human answer
+route. Bulk tools reduce permission round trips; they do not change permission authority.
+Reviewer role instructions and adapter mode names do not enforce a filesystem sandbox.
+Scoped reviewer capability profiles remain unsupported and discovery says so. Do not grant
+broad auto-approval to bypass coordination prompts. Future enforcement needs structured MCP
+server/tool policy plus explicit supported read/write/execute restrictions.
+
+## Injected instructions
+
+`internal/workspacemcp/about.go` owns the concise Instructions string shared by MCP
+initialization and about. It covers discovery, bulk reconciliation, keyed launches, resident
+lifetimes, QA, human decisions/approvals, waiting, uncertain delivery and deliberate teardown.
+Children additionally receive their supplied role instructions and a short membership suffix;
+every inbox turn has a server-authored identity prefix and serialized attributed message.
+Children have fresh provider context, not the parent's transcript or launcher default prompt.
+See [Redoubt's complete operating example](examples/redoubt-workspace.md).

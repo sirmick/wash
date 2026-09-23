@@ -135,3 +135,22 @@ test('sidebar width is keyboard resizable, bounded and remembered', async () => 
  expect(screen.getByRole('separator').getAttribute('aria-valuenow')).toBe('85');
  localStorage.removeItem('wash.agent.workspace.split');
 });
+
+test('QA opens in the main panel, refreshes live and approval controls address the selected teammate', async () => {
+ const f=frame();f.workspace!.qa=[{id:'q1',package:'K5',title:'Wakeup bound',assignee:'lead',state:'open',blocking:true,revision:1}];f.qa_markdown='# Workspace QA\n\n## K5 · q1 — Wakeup bound\n\nAwaiting architect.';
+ f.preview={member_id:'lead',events:[],asks:[{id:'approval-1',tool:'Read',subject:'workspace_get',age_ms:0}]};
+ const [value,setValue]=createSignal(f);const onAction=vi.fn(),onAnswer=vi.fn();
+ render(() => <WorkspaceLayout frame={value()} onAction={onAction} onAnswer={onAnswer}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-question-q1'));
+ expect(screen.getByRole('tab',{name:/Questions/}).getAttribute('aria-selected')).toBe('true');
+ expect(screen.getByTestId('workspace-qa').textContent).toContain('Awaiting architect');
+ expect(screen.getByTestId('workspace-sidebar').querySelector('[data-testid="workspace-qa"]')).toBeNull();
+ setValue({...value(),qa_markdown:'# Workspace QA\n\nOwner chose bound A.'});
+ expect(screen.getByTestId('workspace-qa').textContent).toContain('Owner chose bound A');
+ expect(onAction).not.toHaveBeenCalledWith('member_inspect',{member_id:'qa'});
+ await fireEvent.click(screen.getByTestId('workspace-member-lead'));
+ expect(screen.getByText('workspace_get')).toBeTruthy();
+ const allow=screen.getByText('Allow');
+ await fireEvent.click(allow);
+ expect(onAnswer).toHaveBeenCalledWith('approval-1','allow');
+});

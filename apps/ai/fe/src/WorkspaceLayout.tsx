@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, untrack } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Splitter, Tab, tokens } from '@wash/ui';
+import { Splitter, Tab, Markdown, tokens } from '@wash/ui';
 import { WorkspaceSidebar, type WorkspaceFrame, type WorkspaceResult } from './WorkspaceSidebar';
 import { WorkspaceMemberPanel, WorkspacePlan, type WorkspaceAction } from './WorkspacePanels';
 
@@ -19,6 +19,7 @@ const savedSplit = () => {
  * its draft, attachments, pending questions and transcript across workspace tabs. */
 export const WorkspaceLayout: Component<{
   frame: WorkspaceFrame; result?: WorkspaceResult; currentSessionID?: string;
+  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
   onAction: WorkspaceAction; children: JSX.Element;
 }> = (props) => {
   let container!: HTMLDivElement;
@@ -27,13 +28,24 @@ export const WorkspaceLayout: Component<{
   const [split, setSplit] = createSignal(savedSplit());
   const [opened, setOpened] = createSignal<string[]>([]);
   const [active, setActive] = createSignal('conversation');
+  const [qaFocus, setQaFocus] = createSignal('');
+  let qaPanel!: HTMLDivElement;
+  createEffect(() => {
+    const id=qaFocus(); props.frame.qa_markdown;
+    if (active()==='qa' && id) queueMicrotask(() => {
+      for (const heading of qaPanel?.querySelectorAll('h2') ?? []) {
+        if (heading.textContent?.includes(` · ${id} — `)) { heading.scrollIntoView?.({block:'start'}); break; }
+      }
+    });
+  });
   const [drafts, setDrafts] = createSignal<Record<string, string>>({});
   const workspace = () => props.frame.workspace;
   const ownMember = createMemo(() => workspace()?.members.find((m) => m.session_id === props.currentSessionID)?.id);
   const tabs = () => ['conversation', ...opened()];
-  const label = (id: string) => id === 'conversation' ? 'Conversation' : id === 'plan' ? 'Plan'
+  const label = (id: string) => id === 'conversation' ? 'Conversation' : id === 'plan' ? 'Plan' : id === 'qa' ? 'Questions'
     : workspace()?.members.find((m) => m.id === id)?.name ?? id;
   const select = (id: string) => {
+    if (id.startsWith('qa:')) {setQaFocus(id.slice(3));id='qa';}
     if (id === ownMember()) id = 'conversation';
     if (id !== 'conversation' && !opened().includes(id)) setOpened([...opened(), id]);
     setActive(id);
@@ -52,6 +64,7 @@ export const WorkspaceLayout: Component<{
   createEffect(on(workspaceID, () => {
     setOpened([]);
     setActive('conversation');
+    setQaFocus('');
     setDrafts({});
   }));
   // Membership may change in a snapshot; retired members remain navigable.
@@ -59,12 +72,12 @@ export const WorkspaceLayout: Component<{
     const members = workspace()?.members ?? [];
     const own = ownMember();
     untrack(() => {
-      const valid = opened().filter((id) => id === 'plan' || members.some((m) => m.id === id && id !== own));
+      const valid = opened().filter((id) => id === 'plan' || id === 'qa' || members.some((m) => m.id === id && id !== own));
       if (valid.length !== opened().length) setOpened(valid);
       if (active() !== 'conversation' && !valid.includes(active())) setActive('conversation');
     });
   });
-  const inspected = createMemo(() => workspace() && active() !== 'conversation' && active() !== 'plan' ? active() : '');
+  const inspected = createMemo(() => workspace() && active() !== 'conversation' && active() !== 'plan' && active() !== 'qa' ? active() : '');
   createEffect(on([workspaceID, inspected], ([id, memberID]) => {
     // Only the visible member streams events. Also clear any server-side
     // preview restored on reload, when this window starts at Conversation.
@@ -103,10 +116,12 @@ export const WorkspaceLayout: Component<{
       <Show when={workspace() && active() !== 'conversation'}>
         <div role="tabpanel" id={`${prefix}-panel-${active()}`} aria-labelledby={`${prefix}-tab-${active()}`}
           style={{ flex: 1, 'min-height': 0, overflow: 'hidden' }}>
+          <Show when={active() === 'qa'} fallback={
           <Show when={active() === 'plan'} fallback={
             <WorkspaceMemberPanel frame={props.frame} result={props.result} memberID={active()}
-              draft={drafts()[active()] ?? ''} onDraft={(text) => setDrafts({ ...drafts(), [active()]: text })} onAction={props.onAction} />
+              draft={drafts()[active()] ?? ''} onDraft={(text) => setDrafts({ ...drafts(), [active()]: text })} onAction={props.onAction} onAnswer={props.onAnswer} />
           }><WorkspacePlan frame={props.frame} /></Show>
+          }><div ref={qaPanel} data-testid="workspace-qa" style={{height:'100%', overflow:'auto', padding:`${tokens.spaceMd}px`, 'box-sizing':'border-box'}}><Markdown text={props.frame.qa_markdown ?? '# Workspace QA\n\nNo questions yet.'} /></div></Show>
         </div>
       </Show>
     </div>

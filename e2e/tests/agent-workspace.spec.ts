@@ -123,7 +123,7 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  expect(about.server).toBe('wash_workspace');
  expect(about.caller.role).toBe('unattached');
  expect(about.instructions).toContain('END YOUR TURN');
- expect(about.capabilities.bulk_workspace_configuration).toBe(false);
+ expect(about.capabilities.bulk_workspace_configuration).toBe(true);
  expect(about.permissions.filesystem_enforcement).toMatch(/^unknown:/);
  expect(await tool('workspace_get')).toBeNull();
  await expect(app.locator('[data-testid="workspace-sidebar"]')).toHaveCount(0);
@@ -276,4 +276,58 @@ test('workspace tabs preserve drafts and the sidebar resizes without overflowing
  await expect(app.getByRole('tablist',{name:'Workspace views'})).toHaveCount(0);
  await expect(composer).toBeEnabled();
  await expect(page.locator('wash-app-ai')).toHaveCount(1);
+});
+
+
+test('bulk workspace setup keeps package workers resident and QA survives refresh with owner attribution', async ({page,router}) => {
+ test.setTimeout(90_000);
+ await page.goto(router.url);await expect(page.locator('wash-app-session')).toBeVisible();
+ const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'start',agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
+ const app=page.locator('wash-app-ai'),sidebar=app.getByTestId('workspace-sidebar');
+ const composer=app.getByTestId('agent-composer').first(),outputs=app.getByTestId('agent-transcript').first().getByText(/^WORKSPACE_(RESULT|ERROR) /);
+ const tool=async(name:string,args:object={},error=false)=>{
+  const tab=app.getByRole('tab',{name:'Conversation',exact:true});if(await tab.count())await tab.click();
+  const count=await outputs.count();await composer.fill(`workspace ${name} ${JSON.stringify(args)}`);await composer.press('Enter');await expect(outputs).toHaveCount(count+1);
+  const text=await outputs.last().innerText();expect(text).toMatch(error?/^WORKSPACE_ERROR /:/^WORKSPACE_RESULT /);return error?text:JSON.parse(text.slice('WORKSPACE_RESULT '.length));
+ };
+ await expect(composer).toBeEnabled();
+ const about=await tool('workspace_get',{view:'about'});expect(about.tools).toHaveLength(12);
+ expect(about.tools).not.toContain('member_spawn');expect(about.caller.config_options.length).toBeGreaterThan(0);
+ const config={request_id:'package-setup',workspace:{name:'Package QA'},profiles:{worker:{provider:'codex',model:'fast',thinking:'low'}},members:{
+  implementer:{name:'K5 implementer',profile:'worker',lifetime:'resident',package:'K5',role:'implementer',instructions:'Implement only the assigned package.',task:'First delivery'},
+  red:{name:'K5 red',profile:'worker',lifetime:'resident',package:'K5',role:'reviewer',instructions:'Review defensively; wait for work.'},
+ },plan:{items:{K5:{text:'K5 package',state:'active'}}}};
+ await tool('workspace_configure',{...config,preview:true});await expect(sidebar).toHaveCount(0);
+ const configured=await tool('workspace_configure',config);
+ expect(configured.launches.implementer.state).toBe('available');expect(configured.launches.red.state).toBe('available');
+ const state=()=>JSON.parse(readFileSync(join(router.xdgStateHome,'wash/workspaces.json'),'utf8')).workspaces.at(-1);
+ await expect.poll(()=>state().assignments[0]?.state).toBe('completed');
+ expect(state().members.find((m:any)=>m.key==='implementer').state).toBe('available');
+ const repeated=await tool('workspace_configure',config);expect(repeated.receipt.members).toEqual(configured.receipt.members);expect(state().members).toHaveLength(3);
+ await tool('assignment_update',{request_id:'fix-pass',updates:[{action:'create',member_id:'implementer',text:'Follow-up fix'}]});
+ await expect.poll(()=>state().assignments[1]?.state).toBe('completed');expect(state().members).toHaveLength(3);
+ await tool('message_send',{recipient:'red',type:'instruction',body:'ASK_PERMISSION'});
+ await sidebar.getByTestId(`workspace-member-${configured.receipt.members.red}`).click();
+ await expect(app.getByTestId('workspace-member-detail').getByRole('button',{name:/^Allow(\s|$)/})).toBeVisible();
+ await app.getByTestId('workspace-member-detail').getByRole('button',{name:/^Allow(\s|$)/}).click();
+ await expect(app.getByTestId('workspace-member-detail')).toContainText('Permission outcome: allow');
+ await tool('message_send',{request_id:'open-qa',recipient:'red',type:'question',body:'Does the clock meet the bound?',qa:{id:'K5-bound',action:'open',package:'K5',title:'Wakeup bound',blocking:true}});
+ await sidebar.getByTestId('workspace-question-K5-bound').click();
+ await expect(app.getByTestId('workspace-qa')).toContainText('Does the clock meet the bound?');
+ await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author===configured.receipt.members.red&&e.body==='Fixture answer')).toBe(true);
+ await tool('decision_request',{text:'Choose the bound: recommend A, alternative B.',thread_id:'K5-bound',request_id:'owner-choice'});
+ await sidebar.getByLabel('Decision response').fill('Use bound A');await sidebar.getByRole('button',{name:'Answer',exact:true}).click();
+ await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author==='human'&&e.body==='Use bound A')).toBe(true);
+ await page.reload();await expect(sidebar).toBeVisible();await sidebar.getByTestId('workspace-qa-link').click();
+ await expect(app.getByTestId('workspace-qa')).toContainText('Use bound A');await expect(app.getByTestId('workspace-qa')).toContainText('Owner');
+ const qa=await tool('workspace_get',{view:'qa',thread_id:'K5-bound'});
+ await tool('member_update',{qa_updates:[{id:'K5-bound',action:'resolve',expected_revision:qa.thread.revision-1,evidence:'stale'}]},true);
+ await tool('member_update',{request_id:'resolve-qa',status:'Package accepted',qa_updates:[{id:'K5-bound',action:'resolve',expected_revision:qa.thread.revision,evidence:'Regression tests passed; review complete.'}]});
+ await expect(sidebar.getByTestId('workspace-qa-link')).toContainText('0 open');
+ await tool('member_control',{action:'end',package:'K5'});
+ await expect.poll(()=>state().members.filter((m:any)=>m.package==='K5').every((m:any)=>m.state==='ended')).toBe(true);
+ expect(state().qa[0].state).toBe('resolved');
+ await sidebar.getByTestId('workspace-qa-link').click();await page.screenshot({path:test.info().outputPath('workspace-qa.png')});
+ await tool('workspace_end');await expect(sidebar).toHaveCount(0);
 });

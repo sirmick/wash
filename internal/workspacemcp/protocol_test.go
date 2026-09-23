@@ -41,7 +41,7 @@ func TestProtocolDiscoveryAndToolErrors(t *testing.T) {
 			t.Fatal(v)
 		}
 	}
-	if !strings.Contains(lines[1], "setup_workspace") || !strings.Contains(lines[1], "plan_update_item") {
+	if !strings.Contains(lines[1], "workspace_configure") || !strings.Contains(lines[1], "member_update") {
 		t.Fatal("missing tools")
 	}
 	if !strings.Contains(lines[3], `"isError":true`) {
@@ -88,7 +88,7 @@ func TestInitializationAndAboutShareOperatingInstructions(t *testing.T) {
 	if len(names) != len(Tools()) || about["wash_version"] == "" {
 		t.Fatal(about)
 	}
-	if about["capabilities"].(map[string]bool)["bulk_workspace_configuration"] {
-		t.Fatal("advertised unimplemented bulk API")
+	if !about["capabilities"].(map[string]bool)["bulk_workspace_configuration"] {
+		t.Fatal("missing bulk API capability")
 	}
 }

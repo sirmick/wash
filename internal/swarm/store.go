@@ -36,6 +36,11 @@ type Usage struct {
 	Size int64 `json:"size"`
 }
 type Member struct {
+	Key            string            `json:"key,omitempty"`
+	Package        string            `json:"package,omitempty"`
+	Role           string            `json:"role,omitempty"`
+	Instructions   string            `json:"instructions,omitempty"`
+	InitialTask    string            `json:"initial_task,omitempty"`
 	Usage          *Usage            `json:"usage,omitempty"`
 	Profile        string            `json:"profile,omitempty"`
 	LaunchSettings *AgentProfile     `json:"launch_settings,omitempty"`
@@ -65,6 +70,7 @@ type Assignment struct {
 	Result   string `json:"result,omitempty"`
 }
 type Message struct {
+	Thread     string `json:"thread_id,omitempty"`
 	ID         string `json:"id"`
 	Swarm      string `json:"swarm_id"`
 	Sender     string `json:"sender"`
@@ -82,6 +88,7 @@ type Document struct {
 	Title string `json:"title"`
 }
 type Workspace struct {
+	QA             []QAThread              `json:"qa"`
 	Profiles       map[string]AgentProfile `json:"profiles"`
 	DefaultProfile string                  `json:"default_profile"`
 	ID             string                  `json:"id"`
@@ -100,6 +107,7 @@ type Workspace struct {
 	Messages       []Message               `json:"messages"`
 }
 type State struct {
+	Receipts   []Receipt   `json:"receipts,omitempty"`
 	Version    int         `json:"version"`
 	Workspaces []Workspace `json:"workspaces"`
 }
@@ -238,7 +246,7 @@ func (s *Store) Mutate(session string, lead bool, fn func(*Workspace, *Member) e
 	return s.change(func(st *State) error {
 		w, m := find(st, session)
 		if w == nil {
-			return errors.New("no active workspace; call setup_workspace")
+			return errors.New("no active workspace; call workspace_configure")
 		}
 		if lead && m.ID != w.Lead {
 			return errors.New("orchestrator operation")
@@ -319,8 +327,11 @@ func ValidateItems(items []Item) error {
 	return nil
 }
 func GetMember(w *Workspace, id string) *Member {
+	if w == nil {
+		return nil
+	}
 	for i := range w.Members {
-		if w.Members[i].ID == id {
+		if w.Members[i].ID == id || w.Members[i].Key != "" && w.Members[i].Key == id {
 			return &w.Members[i]
 		}
 	}

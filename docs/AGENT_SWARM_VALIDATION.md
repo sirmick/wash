@@ -254,3 +254,59 @@ Logs under `/data/wash-agent-swarm/test-results/`: `about-race.log`,
 `about-build.log`, `about-e2e.log`, `about-vet.log`, `about-types.log`.
 No real-provider or whole-product-suite rerun is claimed. The running Wash session
 was not restarted or replaced; builds and test artifacts remained on `/data`.
+
+## Bulk MCP and durable QA (2026-09-23)
+
+API 2 advertises the agreed twelve tools. Configuration reserves keyed members in
+an atomic store transaction, then reports separate process outcomes. Durable request
+receipts deduplicate retries. Resident package workers keep their sessions through
+follow-up assignments. QA uses attributed append-only events and guarded transitions;
+Wash generates a live Questions tab and links actual human decisions. Teammate tabs
+now expose actionable approval requests. Hidden v1 calls remain for compatibility.
+
+Validation in the isolated `/data/wash-agent-swarm/src` checkout:
+
+- Race-enabled tests pass for `internal/swarm`, `internal/workspacemcp` and
+  `apps/agentd/be`. Coverage includes 24 concurrent QA replies, revision conflicts,
+  package-specific resolution authority, owner-decision gates, persistence/recovery,
+  duplicate request receipts, disk-write rollback, preview isolation, failed bulk
+  rollback, preserving a separately configured project root, and bounded readback.
+- **31 component tests pass** across workspace layout and shared AgentSession,
+  including Questions/main-panel placement, live QA updates and member approvals.
+- **15 browser tests pass** across workspace and Agent-session suites. New coverage
+  drives the injected MCP bridge through bulk preview/setup/retry, stable member
+  identities, follow-up resident assignments, teammate approval reaching the adapter,
+  linked teammate QA answers, attributed human decisions, browser refresh, revision
+  rejection/resolution, package ending and teardown. Test children now use the new
+  acknowledgment/reporting/assignment tools; v1 caller compatibility remains covered.
+- Agent frontend, isolated multicall and ACP fixture builds pass. Focused Go vet,
+  browser-test TypeScript, design-token, interaction and version checks pass.
+  The QA screenshot was visually reviewed. A final backend-only adjustment preserves
+  visible GUI errors from per-member resume outcomes; focused race/vet pass afterward.
+
+The initial component/browser approval selectors failed because they expected different
+Allow text or omitted its keyboard hint; corrected selectors pass. Initial backend
+checks exposed/fixed top-level null handling and a duplicated opening QA event.
+One unrelated Git lookup check needed GIT_CEILING_DIRECTORIES because `/data` is itself
+another repository. These failures were investigated, not treated as successful runs.
+
+Browser tests use deterministic ACP fixtures. Backend recovery is exercised by store
+reopening; this is not a new real-provider/full-process crash test. No new real-provider
+or whole-product-suite claim is made. Existing real-Claude authentication, full-suite
+syslogs and standalone app TypeScript limitations remain as documented above. Scoped
+reviewer filesystem capability profiles remain unsupported; permission authority is
+unchanged and discovery states that limit. Bulk calls do not bypass human approval.
+
+Evidence under `/data/wash-agent-swarm/test-results/`: `bulk-race-final.log`,
+`bulk-components.log`, `bulk-e2e-final.log`, `bulk-build.log`, `bulk-build-final.log`,
+`bulk-vet.log`, `bulk-types.log`, `bulk-guards.log`. Screenshot:
+`src/e2e/test-results/agent-workspace-bulk-works-5a7df-resh-with-owner-attribution-chromium/workspace-qa.png`.
+
+Updated Redoubt's PROJECT and SWARM instructions for resident package teams, QA
+ownership, exact bulk tool usage, refresh/recovery and approvals. Verified that SWARM's
+Claims section and all following ledger/evidence sections are byte-for-byte preserved
+from the pre-edit file. Its existing BUILD-PLAN changes were untouched. Redoubt edits
+remain uncommitted; the matching PROJECT example is included in Wash.
+
+The running Wash desktop was not restarted, installed over or replaced. Builds,
+caches, logs and artifacts stayed on `/data`; root free space remained about 6.4 GiB.

@@ -42,7 +42,7 @@ func schema(props map[string]any, required ...string) map[string]any {
 	return s
 }
 func field(kind string) map[string]any { return map[string]any{"type": kind} }
-func Tools() []Tool {
+func legacyTools() []Tool {
 	str := func() any { return field("string") }
 	integer := func() any { return field("integer") }
 	item := schema(map[string]any{"id": str(), "text": str(), "emoji": str(), "state": map[string]any{"type": "string", "enum": []string{"pending", "active", "blocked", "done"}}}, "id", "text", "state")
@@ -88,7 +88,7 @@ func ValidateCall(call Call) error {
 	if len(call.Arguments) > 0 && json.Unmarshal(call.Arguments, &args) != nil {
 		return fmt.Errorf("arguments must be an object")
 	}
-	for _, tool := range Tools() {
+	for _, tool := range allTools() {
 		if tool.Name != call.Name {
 			continue
 		}
@@ -171,7 +171,7 @@ func Serve(in io.Reader, out io.Writer, invoke func(context.Context, Call) (any,
 				break
 			}
 			known := false
-			for _, t := range Tools() {
+			for _, t := range allTools() {
 				if t.Name == call.Name {
 					known = true
 					break

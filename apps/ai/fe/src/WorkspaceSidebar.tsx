@@ -1,7 +1,7 @@
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { Button, Markdown, tokens, agentActivityLabel, agentActivityColor, agentActivityPulses } from '@wash/ui';
-import type { AgentEvent } from '@wash/ui';
+import type { AgentEvent, AgentAsk } from '@wash/ui';
 
 export interface WorkspaceItem { id: string; text: string; emoji?: string; state: string; revision: number }
 export interface WorkspaceProfile { provider: string; model?: string; thinking?: string; configs?: Record<string, string> }
@@ -16,7 +16,9 @@ export interface WorkspaceMessage {
   id: string; sender: string; recipient: string; type: string; body: string;
   delivery: string; assignment_id?: string;
 }
+export interface QAThread { id: string; package: string; title: string; assignee: string; state: string; blocking: boolean; revision: number }
 export interface WorkspaceState {
+  qa?: QAThread[];
   profiles?: Record<string, WorkspaceProfile>; default_profile?: string;
   id: string; name: string; state: string; revision: number; orchestrator: string;
   items: WorkspaceItem[]; members: WorkspaceMember[]; messages: WorkspaceMessage[];
@@ -25,7 +27,8 @@ export interface WorkspaceState {
 }
 export interface WorkspaceFrame {
   sequence?: number;
-  preview?: { member_id: string; events: AgentEvent[]; note?: string };
+  qa_markdown?: string;
+  preview?: { member_id: string; events: AgentEvent[]; asks?: AgentAsk[]; note?: string };
   workspace: WorkspaceState | null;
   activity?: Record<string, string>;
   activity_detail?: Record<string, string>;
@@ -35,7 +38,7 @@ export interface WorkspaceFrame {
 }
 export interface WorkspaceResult {
   operation: string;
-  result?: { member_id?: string; events?: AgentEvent[]; note?: string };
+  result?: { member_id?: string; events?: AgentEvent[]; asks?: AgentAsk[]; note?: string };
   error?: string;
 }
 
@@ -74,6 +77,15 @@ export const WorkspaceSidebar: Component<{
       <Show when={w().document}>
         <Button onClick={() => props.onSelect('plan')}>{w().document?.title || 'Project document'}</Button>
       </Show>
+      <Button data-testid="workspace-qa-link" onClick={() => props.onSelect('qa')}>
+        Questions · {(w().qa ?? []).filter(q => q.state !== 'resolved').length} open
+      </Button>
+      <For each={(w().qa ?? []).filter(q => q.state !== 'resolved')}>{q => (
+        <button data-wash-hit type="button" data-testid={`workspace-question-${q.id}`} onClick={() => props.onSelect(`qa:${q.id}`)} style={{ display: 'block', width: '100%', 'text-align': 'left', background: 'transparent', color: tokens.fg, border: 'none', padding: `${tokens.spaceSm}px` }}>
+          {q.blocking ? '⏳ ' : ''}{q.package} · {q.title}
+          <small style={{ display: 'block', color: tokens.fgMuted }}>{q.state} · {label(q.assignee)}</small>
+        </button>
+      )}</For>
       <div style={heading}>Team</div>
       <For each={w().members}>{(m) => (
         <button data-wash-hit type="button" data-testid={`workspace-member-${m.id}`} onClick={() => props.onSelect(m.id)} style={{

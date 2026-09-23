@@ -1,6 +1,11 @@
 package agentd
 
-import "github.com/sirmick/wash/internal/workspacemcp"
+import (
+	"encoding/json"
+
+	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/workspacemcp"
+)
 
 // Discovery is read-only and available before setup. Report limits honestly:
 // adapter mode names and role instructions do not establish a sandbox guarantee.
@@ -22,12 +27,16 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 	}
 	hostedMu.Lock()
 	mode, yolo := h.mode, h.yolo
+	optionsJSON, _ := json.Marshal(h.configs)
+	var options []acp.ConfigOption
+	_ = json.Unmarshal(optionsJSON, &options)
 	settings := map[string]string{}
 	for _, c := range h.configs {
 		settings[c.ID] = c.CurrentValue
 	}
 	hostedMu.Unlock()
 	pol := hostedPolicy()
+	caller["config_options"] = options
 	result["caller"] = caller
 	result["permissions"] = map[string]any{
 		"adapter_mode": mode, "adapter_settings": settings,

@@ -34,6 +34,7 @@ export const WorkspacePlan: Component<{ frame: WorkspaceFrame }> = (props) => {
 
 export const WorkspaceMemberPanel: Component<{
   frame: WorkspaceFrame; result?: WorkspaceResult; memberID: string;
+  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
   draft: string; onDraft: (draft: string) => void; onAction: WorkspaceAction;
 }> = (props) => {
   const w = () => props.frame.workspace!;
@@ -42,6 +43,7 @@ export const WorkspaceMemberPanel: Component<{
   const setDraft = (text: string) => props.onDraft(text);
   const events = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.events
     : props.result?.operation === 'member_inspect' && props.result.result?.member_id === props.memberID ? props.result.result.events ?? [] : [];
+  const asks = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.asks ?? [] : props.result?.operation === 'member_inspect' && props.result.result?.member_id === props.memberID ? props.result.result.asks ?? [] : [];
   const previewNote = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.note
     : props.result?.operation === 'member_inspect' && props.result.result?.member_id === props.memberID ? props.result.result.note : undefined;
   return <div style={{ height: '100%', 'min-height': 0, padding: `${tokens.spaceMd}px`, 'box-sizing': 'border-box' }}>
@@ -59,7 +61,7 @@ export const WorkspaceMemberPanel: Component<{
           <For each={w().assignments.filter((a) => a.member_id === m().id)}>{(a) => <section><p>{a.text} · {a.state}</p><Show when={a.result}><p style={{ 'white-space': 'pre-wrap' }}>{a.result}</p></Show></section>}</For>
           <Show when={previewNote()}><p>{previewNote()}</p></Show>
           </div>
-          <div style={{ flex: 1, 'min-height': 0 }}><AgentSession events={events} hideComposer /></div>
+          <div style={{ flex: 1, 'min-height': 0 }}><AgentSession events={events} asks={asks} onAnswer={props.onAnswer} hideComposer /></div>
           <textarea aria-label={`Message ${m().name}`} value={draft()} onInput={(e) => setDraft(e.currentTarget.value)} style={{ width: '100%', 'box-sizing': 'border-box' }} />
           <Button disabled={!draft().trim() || m().state === 'ended'} onClick={() => { props.onAction('member_message', { recipient: m().id, body: draft() }); setDraft(''); }}>Send message</Button>
         </section>
