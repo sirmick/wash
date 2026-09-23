@@ -150,6 +150,7 @@ export const MenuSeparator: Component = () => (
 // reads too timid for a menu row.
 export interface MenuItemProps {
   label: string;
+  title?: string;
   icon?: JSX.Element;
   trailing?: JSX.Element;
   disabled?: boolean;
@@ -166,6 +167,7 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
       type="button"
       data-wash-hit="strong"
       data-testid={props['data-testid']}
+      title={props.title}
       // Disabled for real, not just dimmed: without the attribute the item
       // stays keyboard-focusable and assistive tech announces it as
       // available. The onClick guard below stays as the belt to this

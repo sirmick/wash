@@ -127,6 +127,7 @@ import {
   Quote,
   Strikethrough,
   Table as TableIcon,
+  Terminal as TerminalIcon,
 } from 'lucide-solid';
 import { createWysiwyg, isMarkdownPath, type WysiwygHandle, type WysiwygSearchState } from './wysiwyg';
 import { pushRecent, dropRecent, rankFiles } from './quick-open';
@@ -2232,6 +2233,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     send({ kind: 'spawn', app_id: 'com.wash.fm', ...(target ? { open: target } : {}) });
   };
 
+  const openFolderIn = (appID: 'com.wash.term' | 'com.wash.fm', folder: string) => {
+    if (folder) send({ kind: 'spawn', app_id: appID, open: folder });
+  };
+  const contextFolder = () => {
+    const c = ctxMenu();
+    return c ? (isDirLike(c.entry) ? c.path : parentPath(c.path)) : '';
+  };
+  const openContextFolderIn = (appID: 'com.wash.term' | 'com.wash.fm') => {
+    const folder = contextFolder();
+    closeCtxMenu();
+    openFolderIn(appID, folder);
+  };
+
   // ---- drop-to-open on the editor area ----
   //
   // A drag from fm (or this sidebar) carries application/x-wash-paths.
@@ -3355,6 +3369,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <MenuItem label="Quick Open…" trailing={<kbd style={kbdStyle}>Ctrl+P</kbd>} onClick={run(openQuickOpen)} data-testid="edit-menu-quick-open" />
             <MenuItem label="Open Recent" trailing={<span style={langHintStyle}>▸</span>} disabled={recent().length === 0} onClick={() => setOpenMenu('recent')} data-testid="edit-menu-open-recent" />
             <MenuSeparator />
+            <MenuItem label="Open terminal window in project folder" icon={<TerminalIcon size={14} />} title={root()} disabled={!root()} onClick={run(() => openFolderIn('com.wash.term', root()))} data-testid="edit-menu-open-terminal" />
+            <MenuItem label="Open file manager in project folder" icon={<FolderIcon size={14} />} title={root()} disabled={!root()} onClick={run(() => openFolderIn('com.wash.fm', root()))} data-testid="edit-menu-open-file-manager" />
+            <MenuSeparator />
             <MenuItem label="Save" trailing={<kbd style={kbdStyle}>Ctrl+S</kbd>} disabled={!activeTab()} onClick={run(() => void saveActive())} data-testid="edit-menu-save" />
             <MenuItem label="Save As…" trailing={<kbd style={kbdStyle}>Ctrl+Shift+S</kbd>} disabled={!activeTab()} onClick={run(saveAsActive)} data-testid="edit-menu-save-as" />
             <MenuItem label="Save All" trailing={<kbd style={kbdStyle}>Ctrl+Alt+S</kbd>} disabled={dirtyTabs().length === 0} onClick={run(() => void saveAll())} data-testid="edit-menu-save-all" />
@@ -4148,6 +4165,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             }}
             data-testid="edit-ctx-open"
           />
+          <MenuItem
+            label="Open terminal window in this folder"
+            icon={<TerminalIcon size={14} />}
+            title={contextFolder()}
+            onClick={() => openContextFolderIn('com.wash.term')}
+            data-testid="edit-ctx-open-terminal"
+          />
+          <MenuItem
+            label="Open file manager in this folder"
+            icon={<FolderIcon size={14} />}
+            title={contextFolder()}
+            onClick={() => openContextFolderIn('com.wash.fm')}
+            data-testid="edit-ctx-open-file-manager"
+          />
+          <MenuSeparator />
           <MenuItem
             label="Copy path"
             onClick={() => {
