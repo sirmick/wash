@@ -10,7 +10,7 @@
 //	FE → ai   prompt   {text, blocks?}         → ai → agentd  agent_prompt
 //	FE → ai   answer   {id, decision, rule?}   → ai → agentd  agent_answer
 //	FE → ai   open_path {path}                 → router open routing
-//	FE → ai   open_terminal {cwd}              → spawn com.wash.term --open <cwd>
+//	FE → ai   open_terminal/open_file_manager/open_text_editor {cwd} → spawn the app in that folder
 //
 // And ONE message this app accepts from an app that is not agentd:
 //
@@ -603,20 +603,28 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"key":  session.key,
 		})
 
-	case "open_terminal":
-		// A shell where the agent is working — the roster row's verb and
-		// the Session menu's, which are two views of one thing. The path
-		// is confined here (the FE named it; a window is not authority)
-		// and the router starts wash-term with it as `--open <dir>`.
+	case "open_terminal", "open_file_manager", "open_text_editor":
+		// Project shortcuts use fixed app IDs and a confined directory. Never
+		// let a frontend supply an arbitrary application or launch argument.
+		target := map[string]string{"open_terminal": "term", "open_file_manager": "fm", "open_text_editor": "edit"}[str(m["kind"])]
+		label := map[string]string{"term": "terminal", "fm": "file manager", "edit": "text editor"}[target]
 		dir := str(m["cwd"])
-		abs, err := aiFS.Confine(dir)
-		if err != nil {
-			log.Printf("wash-ai: open terminal %q: %v", dir, err)
+		if dir == "" {
 			return
 		}
-		log.Printf("wash-ai: open terminal cwd=%s", abs)
-		if err := c.SpawnRequestOpen("com.wash.term", abs); err != nil {
-			log.Printf("wash-ai: spawn term %s: %v", abs, err)
+		abs, err := aiFS.Confine(dir)
+		if err != nil {
+			log.Printf("wash-ai: open %s %q: %v", label, dir, err)
+			return
+		}
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			log.Printf("wash-ai: open %s: not a directory: %s", label, abs)
+			return
+		}
+		log.Printf("wash-ai: open %s cwd=%s", label, abs)
+		if err := c.SpawnRequestOpen("com.wash."+target, abs); err != nil {
+			log.Printf("wash-ai: spawn %s %s: %v", target, abs, err)
 		}
 
 	case "open_path":

@@ -168,11 +168,19 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		log.Printf("wash-edit ready instance=%s window=%d root=%s", instanceID, windowID, root)
 	}
 
-	// Launched via the router's open routing (fm double-click → wash-edit
-	// --open <path>): drive the FE to that file. cmd.open_file is the same
-	// hook external drivers already use, so the FE opens it in a tab.
+	// A project shortcut opens the folder tree; ordinary file launches still
+	// open a tab. Resolve through the editor's filesystem boundary first.
 	if p := c.LaunchOpenPath(); p != "" {
-		_ = bus.Emit("cmd.open_file", map[string]any{"path": p})
+		abs, err := editFS.Confine(p)
+		if err != nil {
+			log.Printf("wash-edit: launch path %q: %v", p, err)
+			return
+		}
+		kind := "cmd.open_file"
+		if info, err := os.Stat(abs); err == nil && info.IsDir() {
+			kind = "cmd.set_root"
+		}
+		_ = bus.Emit(kind, map[string]any{"path": abs})
 	}
 }
 

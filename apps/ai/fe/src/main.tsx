@@ -708,10 +708,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   the window showing a session and the row naming it are
                   two views of one thing. */}
               <MenuItem
-                label="Open terminal here"
+                label="Open terminal in project folder"
                 disabled={!row()?.cwd}
                 onClick={() => { close(); send({ kind: 'open_terminal', cwd: row()?.cwd ?? '' }); }}
                 data-testid="ai-menu-open-terminal"
+              />
+              <MenuItem
+                label="Open file manager in project folder"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_file_manager', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-file-manager"
+              />
+              <MenuItem
+                label="Open text editor in project folder"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_text_editor', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-text-editor"
               />
               <MenuSeparator />
               <Show when={configs().length === 0}>
@@ -781,6 +793,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onRename={(r) => openRename({ key: r.key, session_id: r.session_id, title: r.title })}
           onAddRoot={(r) => openAddRoot(r.key, r.cwd ?? '')}
           onOpenTerminal={(r) => send({ kind: 'open_terminal', cwd: r.cwd ?? '' })}
+          onOpenFileManager={(r) => send({ kind: 'open_file_manager', cwd: r.cwd ?? '' })}
+          onOpenTextEditor={(r) => send({ kind: 'open_text_editor', cwd: r.cwd ?? '' })}
           onAnswer={(a, decision, remember) => send({
             kind: 'answer',
             id: a.id,

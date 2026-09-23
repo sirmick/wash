@@ -135,6 +135,8 @@ export interface AgentRosterProps {
   onAddRoot?: (row: RosterRow) => void;
   /** open a terminal in the session's working directory */
   onOpenTerminal?: (row: RosterRow) => void;
+  onOpenFileManager?: (row: RosterRow) => void;
+  onOpenTextEditor?: (row: RosterRow) => void;
 }
 
 // stateColor / stateLabel are thin adapters over the shared vocabulary in
@@ -234,6 +236,8 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
                 onRename={props.onRename ? () => props.onRename?.(r()) : undefined}
                 onAddRoot={props.onAddRoot ? () => props.onAddRoot?.(r()) : undefined}
                 onOpenTerminal={props.onOpenTerminal ? () => props.onOpenTerminal?.(r()) : undefined}
+                onOpenFileManager={props.onOpenFileManager ? () => props.onOpenFileManager?.(r()) : undefined}
+                onOpenTextEditor={props.onOpenTextEditor ? () => props.onOpenTextEditor?.(r()) : undefined}
               />
             </Show>
           );
@@ -375,6 +379,8 @@ const AgentRowView: Component<{
   onRename?: () => void;
   onAddRoot?: () => void;
   onOpenTerminal?: () => void;
+  onOpenFileManager?: () => void;
+  onOpenTextEditor?: () => void;
 }> = (props) => {
   // The verbs live in a menu rather than a strip of buttons: the set
   // grows (resume and fork are still to come) and a sidebar row is 190px
@@ -406,7 +412,7 @@ const AgentRowView: Component<{
     fn?.();
   };
   const hasVerbs = () =>
-    Boolean(props.onDetach || props.onCancel || props.onStop || props.onRename || props.onAddRoot || props.onOpenTerminal);
+    Boolean(props.onDetach || props.onCancel || props.onStop || props.onRename || props.onAddRoot || props.onOpenTerminal || props.onOpenFileManager || props.onOpenTextEditor);
   // Where it's working: "wash · main*" — repo, branch, and a star when the
   // tree is dirty. Absent for an agent outside a checkout.
   const place = (): string => {
@@ -635,10 +641,22 @@ const AgentRowView: Component<{
                   the diff it made. Needs a cwd: a row with none has
                   nowhere to open. */}
               <MenuItem
-                label="Open terminal here"
+                label="Open terminal in project folder"
                 data-testid="agents-menu-open-terminal"
                 disabled={!props.onOpenTerminal || !props.row.cwd}
                 onClick={run(props.onOpenTerminal)}
+              />
+              <MenuItem
+                label="Open file manager in project folder"
+                data-testid="agents-menu-open-file-manager"
+                disabled={!props.onOpenFileManager || !props.row.cwd}
+                onClick={run(props.onOpenFileManager)}
+              />
+              <MenuItem
+                label="Open text editor in project folder"
+                data-testid="agents-menu-open-text-editor"
+                disabled={!props.onOpenTextEditor || !props.row.cwd}
+                onClick={run(props.onOpenTextEditor)}
               />
               <MenuSeparator />
               <MenuItem
