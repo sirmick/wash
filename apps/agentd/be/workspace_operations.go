@@ -99,6 +99,9 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 	return result, nil
 }
 func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c workspacemcp.Call) (any, error) {
+	if h.capability == "reviewer" && !reviewerWorkspaceTool(c.Name) {
+		return nil, errors.New("reviewer capability prohibits this workspace operation")
+	}
 	if err := workspacemcp.ValidateCall(c); err != nil {
 		return nil, err
 	}

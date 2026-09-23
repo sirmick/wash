@@ -76,6 +76,9 @@ var (
 
 // CreateTerminal answers terminal/create.
 func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
+	if h.capability == "reviewer" {
+		return acp.CreateTerminalResponse{}, fmt.Errorf("reviewer capability prohibits command execution")
+	}
 	if req.Command == "" {
 		return acp.CreateTerminalResponse{}, fmt.Errorf("terminal/create: no command")
 	}

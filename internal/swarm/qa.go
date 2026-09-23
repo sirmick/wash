@@ -252,6 +252,9 @@ func writeQAMarkdown(out io.Writer, w *Workspace, bounded bool) error {
 		if m := GetMember(w, id); m != nil {
 			return m.Name
 		}
+		if name := w.QAAuthors[id]; name != "" {
+			return name
+		}
 		return id
 	}
 	clean := func(s string) string {
@@ -262,6 +265,13 @@ func writeQAMarkdown(out io.Writer, w *Workspace, bounded bool) error {
 		title = w.QADocument.Title
 	}
 	fmt.Fprintf(b, "# %s\n\nQuestions, decisions and review evidence.\n", clean(title))
+	if w.QAPreamble != "" {
+		text := w.QAPreamble
+		if bounded && len(text) > 100*1024 {
+			text = text[:100*1024] + "\n\nEarlier Markdown truncated; read the QA file for the complete document."
+		}
+		fmt.Fprintf(b, "\n%s\n", text)
+	}
 	for _, q := range w.QA {
 		if bounded && b.size > 200*1024 {
 			b.WriteString("\nView truncated; read complete thread events with workspace_get view=qa and thread_id.\n")
@@ -301,4 +311,25 @@ func writeQAMarkdown(out io.Writer, w *Workspace, bounded bool) error {
 		b.WriteString("\nNo QA threads yet.\n")
 	}
 	return b.err
+}
+
+// ClaimQADocument transfers file projection ownership from completed runs. The
+// caller runs this inside configuration's staged transaction.
+func (s *Store) ClaimQADocument(session string) error {
+	return s.change(func(st *State) error {
+		w, _ := find(st, session)
+		if w == nil || w.QADocument == nil {
+			return nil
+		}
+		for i := range st.Workspaces {
+			old := &st.Workspaces[i]
+			if old.ID != w.ID && old.QADocument != nil && (old.QADocument.Path == w.QADocument.Path || w.QADocumentID != "" && (old.QADocumentID == w.QADocumentID || old.ID == w.QADocumentID)) {
+				if old.State != "ended" {
+					return errors.New("QA document belongs to another active workspace")
+				}
+				old.QADocument = nil
+			}
+		}
+		return nil
+	})
 }

@@ -346,7 +346,7 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 			}
 		}
 		hostedMu.Unlock()
-		return map[string]any{"workspace": w, "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
+		return map[string]any{"workspace": w, "approvals": workspaceApprovals(w), "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
 	case "workspace_end":
 		old := ws.store.View(sid)
 		if old == nil {
@@ -366,7 +366,7 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 				if w.Messages[i].State == "dispatched" {
 					w.Messages[i].State = "uncertain"
 				}
-				if w.Messages[i].State == "queued" || w.Messages[i].Recipient == "human" && w.Messages[i].State == "recorded" {
+				if w.Messages[i].State == "queued" {
 					w.Messages[i].State = "cancelled"
 				}
 			}
@@ -384,7 +384,10 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 				}
 			}
 		}
-		return map[string]any{"ended": true}, nil
+		ws.syncQADocuments()
+		// find() deliberately hides ended workspaces; report the final save
+		// explicitly, while failed exports keep retrying in the service loop.
+		return map[string]any{"ended": true, "qa_document_status": ws.qaDocumentStatus(old)}, nil
 	case "inbox_read":
 		w := ws.store.View(sid)
 		if w == nil {
@@ -519,7 +522,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		}
 		hostedMu.Unlock()
 	}
-	child, err := startHosted(settings.Provider, member.Cwd, ws.conn)
+	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, settings.Capability)
 	var initialConfigs map[string]string
 	if err == nil {
 		hostedMu.Lock()
@@ -660,7 +663,11 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 		err = target.client.Cancel(target.sessionID)
 	}
 	if loading {
-		target, err = resumeHosted(m.Provider, m.Cwd, m.Session, ws.conn)
+		capability := ""
+		if m.LaunchSettings != nil {
+			capability = m.LaunchSettings.Capability
+		}
+		target, err = resumeHostedCapability(m.Provider, m.Cwd, m.Session, ws.conn, capability)
 		loadErr := err
 		err = ws.store.Mutate(h.sessionID, false, func(current *swarm.Workspace, _ *swarm.Member) error {
 			v := swarm.GetMember(current, id)
@@ -838,6 +845,7 @@ func (ws *workspaceService) publish(force bool) {
 			}
 			activity, detail, usage := workspaceRuntime(w)
 			msg["activity"], msg["activity_detail"], msg["usage"] = activity, detail, usage
+			msg["approvals"] = workspaceApprovals(w)
 			msg["qa_markdown"] = swarm.QAMarkdown(w)
 			msg["qa_document_status"] = ws.qaDocumentStatus(w)
 			qaSummary(w)

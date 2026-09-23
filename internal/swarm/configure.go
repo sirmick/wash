@@ -29,6 +29,16 @@ func ValidProfileName(s string) bool {
 	return true
 }
 func ValidateProfile(p AgentProfile) error {
+	if p.Capability != "" && p.Capability != "reviewer" {
+		return errors.New("unknown capability profile")
+	}
+	if p.Capability == "reviewer" {
+		for id := range p.Configs {
+			if id == "mode" || id == "permission_mode" || id == "sandbox" {
+				return errors.New("reviewer capability cannot override permission mode")
+			}
+		}
+	}
 	if !ValidText(p.Provider, 80) || strings.TrimSpace(p.Provider) != p.Provider {
 		return errors.New("profile requires a provider")
 	}
@@ -132,6 +142,9 @@ func ResolveProfile(w *Workspace, name string, explicit AgentProfile, parentProv
 	}
 	if result.Provider == "" {
 		result.Provider = parentProvider
+	}
+	if explicit.Capability != "" {
+		result.Capability = explicit.Capability
 	}
 	if explicit.Model != "" {
 		result.Model = explicit.Model

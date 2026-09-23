@@ -4,7 +4,7 @@ import { Button, Markdown, tokens, agentActivityLabel, agentActivityColor, agent
 import type { AgentEvent, AgentAsk } from '@wash/ui';
 
 export interface WorkspaceItem { id: string; text: string; emoji?: string; state: string; revision: number }
-export interface WorkspaceProfile { provider: string; model?: string; thinking?: string; configs?: Record<string, string> }
+export interface WorkspaceProfile { capability?: string; provider: string; model?: string; thinking?: string; configs?: Record<string, string> }
 export interface WorkspaceUsage { used: number; size: number }
 export interface WorkspaceMember {
   usage?: WorkspaceUsage;
@@ -29,7 +29,8 @@ export interface WorkspaceState {
 export interface WorkspaceFrame {
   sequence?: number;
   qa_markdown?: string;
-  qa_document_status?: {path?: string; state: string; error?: string};
+  qa_document_status?: {path?: string; state: string; error?: string; saved_revision?: number};
+  approvals?: (AgentAsk & {member_id: string})[];
   preview?: { member_id: string; events: AgentEvent[]; asks?: AgentAsk[]; note?: string };
   workspace: WorkspaceState | null;
   activity?: Record<string, string>;
@@ -54,6 +55,7 @@ export const WorkspaceSidebar: Component<{
   const [answers, setAnswers] = createSignal<Record<string, string>>({});
   const w = () => props.frame.workspace!;
   const questions = createMemo(() => w().messages.filter((m) => m.type === 'decision_request' && m.delivery === 'recorded'));
+  const needsAttention = () => (props.frame.approvals?.length ?? 0) + questions().length + (w().qa ?? []).filter(q => q.state === 'awaiting-owner').length + (props.frame.qa_document_status?.state === 'error' ? 1 : 0);
   const label = (id: string) => id === 'human' ? 'You' : w().members.find((m) => m.id === id)?.name ?? id;
   const activity = (m: WorkspaceMember) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
   const usage = (m: WorkspaceMember) => props.frame.usage?.[m.id] ?? m.usage;
@@ -73,6 +75,32 @@ export const WorkspaceSidebar: Component<{
       `}</style>
       <div style={heading}>{w().name} <Show when={w().state !== 'active'}>· {w().state}</Show></div>
       <Show when={props.result?.error}><div role="alert">{props.result?.error}</div></Show>
+      <Show when={needsAttention() > 0}>
+        <section data-testid="workspace-attention" aria-label="Needs you">
+          <div style={heading}>Needs you</div>
+          <Show when={props.frame.qa_document_status?.state === 'error'}>
+            <button data-wash-hit type="button" role="alert" data-testid="workspace-qa-save-error" onClick={() => props.onSelect('qa')} style={{color:tokens.accentRed, 'text-align':'left'}}>
+              QA Markdown could not be saved: {props.frame.qa_document_status?.error}
+            </button>
+          </Show>
+          <For each={props.frame.approvals ?? []}>{ask => (
+            <Button data-testid={`workspace-approval-${ask.id}`} onClick={() => props.onSelect(ask.member_id)}>
+              {label(ask.member_id)} · Approval needed: {ask.tool} {ask.subject}
+            </Button>
+          )}</For>
+          <For each={(w().qa ?? []).filter(q => q.state === 'awaiting-owner')}>{q => (
+            <Button onClick={() => props.onSelect(`qa:${q.id}`)}>{q.package} · Owner question: {q.title}</Button>
+          )}</For>
+      <For each={questions()}>{(q) => (
+        <section data-testid="workspace-decision" style={{ padding: `${tokens.spaceSm}px 0` }}>
+          <div style={heading}>{label(q.sender)} needs your decision</div>
+          <Markdown text={q.body} />
+          <textarea aria-label="Decision response" value={answers()[q.id] ?? ''} onInput={(e) => setAnswers({ ...answers(), [q.id]: e.currentTarget.value })} style={{ width: '100%', 'box-sizing': 'border-box' }} />
+          <Button disabled={!answers()[q.id]?.trim()} onClick={() => props.onAction('decision_response', { id: q.id, body: answers()[q.id] })}>Answer</Button>
+        </section>
+      )}</For>
+        </section>
+      </Show>
       <Button data-testid="workspace-plan-link" onClick={() => props.onSelect('plan')}>
         Plan · {w().items.filter((item) => item.state === 'done').length}/{w().items.length}
       </Button>
@@ -115,14 +143,6 @@ export const WorkspaceSidebar: Component<{
           <Show when={m.status}><div>{m.status}</div></Show>
           <Show when={m.waiting}><small style={{ color: tokens.fgMuted }}>{m.waiting}</small></Show>
         </button>
-      )}</For>
-      <For each={questions()}>{(q) => (
-        <section data-testid="workspace-decision" style={{ padding: `${tokens.spaceSm}px 0` }}>
-          <div style={heading}>{label(q.sender)} needs your decision</div>
-          <Markdown text={q.body} />
-          <textarea aria-label="Decision response" value={answers()[q.id] ?? ''} onInput={(e) => setAnswers({ ...answers(), [q.id]: e.currentTarget.value })} style={{ width: '100%', 'box-sizing': 'border-box' }} />
-          <Button disabled={!answers()[q.id]?.trim()} onClick={() => props.onAction('decision_response', { id: q.id, body: answers()[q.id] })}>Answer</Button>
-        </section>
       )}</For>
       <details>
         <summary data-wash-hit style={heading}>Messages</summary>

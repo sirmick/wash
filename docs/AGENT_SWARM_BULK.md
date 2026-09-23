@@ -1,6 +1,6 @@
 # Bulk workspace MCP contract
 
-Implemented API 2.0.0, 2026-09-23. This supersedes the incremental v1 catalog in
+Implemented API 2.1.0, 2026-09-23. This supersedes the incremental v1 catalog in
 [the original design](AGENT_SWARM.md). New discovery advertises exactly twelve
 tools. Removed v1 operations return Unknown tool; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
@@ -92,13 +92,20 @@ includes all events, IDs and timestamps. The bounded tab preview shows the confi
 path and file-write errors. No agent rewrites that generated file or commits per reply.
 
 Relative output paths resolve from the project root; parent directories must exist.
-Use a new/empty .md file or this workspace's generated file. Existing unrelated documents,
-symlinks, the plan path and another active workspace's QA path are rejected.
+Specify a .md filename on creation. An existing file is loaded: Wash files contain a
+versioned checkpoint that restores threads, revisions, attribution and pending owner
+questions even without the old backend store. Ordinary Markdown is preserved verbatim
+in the live document; it is not guessed into structured threads. A corrupt/unsupported
+checkpoint fails without changing the file. Restore reads are limited to 64 MiB.
+Unfinished questions are assigned to the new orchestrator, who assigns the current team;
+historical agent identities do not relaunch sessions. A retained backend record takes
+precedence over its stale export. Symlinks, the plan path, and another active workspace's
+QA file/document identity are rejected. Completed runs transfer projection ownership.
 `qa_document:null` detaches output without deleting history or files. Configuration preview
 never writes the file. The backend remains authoritative: a projection failure does not
 undo a committed QA update. Read `qa_document_status` (saved/pending/error) in tool results
 or the Questions tab; the service retries failures and reconstructs output after restart.
-Changing the configured path leaves the old file intact. Output continues without an open tab.
+Saved status includes saved_revision. Changing the configured path leaves the old file intact. Output continues without an open tab.
 
 Open and deliver atomically:
 
@@ -136,22 +143,42 @@ omit QA event bodies. The rendered view shows recent events and is bounded; use 
 readback for complete history. Limits: 500 threads/workspace, 1,000 events/thread, 32 KiB
 body/evidence, 100 items/batch; idempotency storage is capped at 10,000 retained receipts.
 Commit the automatically maintained Markdown with ordinary project tools when appropriate.
-There is no automatic Git commit or edit/import synchronization from the generated file.
+There is no automatic Git commit or live two-way synchronization of manual edits. Reopening imports the checkpoint; agents must not edit generated history.
 
 ## Persistence and approval boundary
 
 Browser refresh reconnects to server-owned state; child sessions keep running. Backend
 restart retains QA, inboxes and receipts but pauses recovered members for deliberate resume.
 Uncertain delivery remains explicit. Tabs/drafts are local and not restored. Teardown retains
-backend history and the last generated QA file; confirm output is saved before detaching.
+backend history, attempts the final QA save and returns qa_document_status. Failed exports continue retrying after teardown and backend restart, and show a desktop error.
 `workspace_get` selects the current attached workspace and has no archive selector.
 
 Member transcript tabs expose pending approval controls through the existing human answer
 route. Bulk tools reduce permission round trips; they do not change permission authority.
 Reviewer role instructions and adapter mode names do not enforce a filesystem sandbox.
-Scoped reviewer capability profiles remain unsupported and discovery says so. Do not grant
-broad auto-approval to bypass coordination prompts. Future enforcement needs structured MCP
-server/tool policy plus explicit supported read/write/execute restrictions.
+Set `capability:"reviewer"` in a profile or member definition for the explicit restricted
+launch, for example:
+
+```json
+{"profiles":{"review":{"provider":"claude","capability":"reviewer"}}}
+```
+
+This currently requires verified `@agentclientprotocol/claude-agent-acp` 0.79.0;
+Codex, Gemini and unverified versions fail launch with an actionable error. Inspect
+about.permissions.reviewer_capability_profiles before choosing a provider. Codex's
+`read-only` adapter mode uses workspaceWrite and cannot satisfy this contract.
+
+The Claude profile uses its provider tool allowlist (Read/Glob/Grep), disables ordinary
+settings/hooks and unrelated MCP servers, and refuses write/terminal callbacks in Wash.
+Only scoped coordination tools are approved automatically; explicit host policy denies
+still win. Workspace configuration, lifecycle control and spawning are unavailable.
+These are provider tool restrictions, not an OS sandbox or a claim about trusted managed
+hooks. Restrictions are immutable for a session and reapplied on resume; model/thinking
+remain configurable. No broad auto-approval or role-prompt enforcement is substituted.
+
+The sidebar's Needs you section shows pending approvals across all members, owner
+questions and QA save errors before plan/team navigation. Approval links open the correct
+member tab, where existing human controls answer the request.
 
 ## Injected instructions
 

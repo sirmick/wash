@@ -484,3 +484,34 @@ func (h *ctxHandler) RequestPermission(ctx context.Context, _ RequestPermissionR
 	return Cancelled(), nil
 }
 func (h *ctxHandler) SessionUpdate(context.Context, SessionNotification) {}
+
+func TestSessionCreationAndResumeForwardCapabilityMetadata(t *testing.T) {
+	for _, resume := range []bool{false, true} {
+		c, agent := newPair(t, &recordingHandler{})
+		c.init.AgentCapabilities.LoadSession = true
+		meta := map[string]any{"claudeCode": map[string]any{"options": map[string]any{"tools": []string{"Read", "Glob", "Grep"}, "strictMcpConfig": true}}}
+		done := make(chan error, 1)
+		go func() {
+			var err error
+			if resume {
+				_, err = c.LoadSession(context.Background(), "saved", "/project", nil, meta)
+			} else {
+				_, err = c.NewSession(context.Background(), "/project", nil, meta)
+			}
+			done <- err
+		}()
+		req := agent.next()
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(req.Params, &body); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(meta)
+		if string(body["_meta"]) != string(b) {
+			t.Fatalf("metadata missing on resume=%v: %s", resume, req.Params)
+		}
+		agent.reply(*req.ID, `{"sessionId":"new"}`)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -124,3 +124,23 @@ func (ws *workspaceService) captureUsage(h *hosted) {
 		log.Printf("agentd: workspace usage checkpoint: %v", err)
 	}
 }
+
+// Pending approvals for every teammate, independent of the selected preview.
+func workspaceApprovals(w *swarm.Workspace) []map[string]any {
+	out := []map[string]any{}
+	if svc == nil {
+		return out
+	}
+	byKey := map[string]string{}
+	for _, m := range w.Members {
+		if h := workspaceHosted(m.Session); h != nil {
+			byKey[h.key] = m.ID
+		}
+	}
+	for _, ask := range svc.Snapshot().Asks {
+		if id := byKey[ask.RowKey]; id != "" {
+			out = append(out, map[string]any{"id": ask.ID, "member_id": id, "tool": ask.Tool, "subject": ask.Subject})
+		}
+	}
+	return out
+}

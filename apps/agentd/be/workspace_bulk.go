@@ -25,6 +25,7 @@ func decodeWorkspace(raw json.RawMessage, out any) error {
 }
 
 type memberSpec struct {
+	Capability   string            `json:"capability,omitempty"`
 	Name         string            `json:"name"`
 	Profile      string            `json:"profile,omitempty"`
 	Provider     string            `json:"provider,omitempty"`
@@ -111,6 +112,13 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		doc.Path = path
 	}
 	var qaDoc *swarm.Document
+	var qaRestore *qaArchive
+	qaLocked := false
+	defer func() {
+		if qaLocked {
+			ws.qaMu.Unlock()
+		}
+	}()
 	if len(p.QADocument) > 0 && string(p.QADocument) != "null" {
 		if err := decodeWorkspace(p.QADocument, &qaDoc); err != nil {
 			return nil, err
@@ -133,13 +141,6 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		qaDoc.Path = filepath.Join(parent, filepath.Base(path))
 		if !strings.EqualFold(filepath.Ext(qaDoc.Path), ".md") {
 			return nil, errors.New("QA document must be a .md file")
-		}
-		owner := ""
-		if current := ws.store.View(h.sessionID); current != nil {
-			owner = current.ID
-		}
-		if err := validateQAFile(qaDoc.Path, owner); err != nil {
-			return nil, err
 		}
 	}
 	keys := make([]string, 0, len(p.Members))
@@ -178,6 +179,17 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			}
 		}
 	}
+	// Never hold the projection lock while path approval can wait on a human.
+	// Read/claim under the same lock as export to avoid importing a stale write.
+	if qaDoc != nil {
+		ws.qaMu.Lock()
+		qaLocked = true
+		var err error
+		qaRestore, err = readQAArchive(qaDoc.Path)
+		if err != nil {
+			return nil, err
+		}
+	}
 	result, err := ws.store.Transaction(h.sessionID, "workspace_configure", p.Request, raw, p.Preview, func(s *swarm.Store) (any, error) {
 		current := s.View(h.sessionID)
 		if current == nil {
@@ -211,9 +223,28 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			if len(p.QADocument) > 0 {
 				if qaDoc != nil {
 					for _, other := range allWorkspaces {
-						if other.ID != w.ID && other.State != "ended" && other.QADocument != nil && other.QADocument.Path == qaDoc.Path {
+						if other.ID != w.ID && other.State != "ended" && other.QADocument != nil && (other.QADocument.Path == qaDoc.Path || qaRestore != nil && qaRestore.DocumentID != "" && qaOwner(&other) == qaRestore.DocumentID) {
 							return errors.New("QA document is used by another workspace")
 						}
+					}
+				}
+				if qaDoc != nil && (w.QADocument == nil || w.QADocument.Path != qaDoc.Path) {
+					source := qaRestore
+					// The store may contain newer history than a failed final export.
+					for _, other := range allWorkspaces {
+						if other.ID != w.ID && other.QADocument != nil && other.QADocument.Path == qaDoc.Path && other.State == "ended" {
+							restored := archiveQA(&other)
+							source = &restored
+							break
+						}
+					}
+					if source != nil && source.DocumentID != qaOwner(w) {
+						if err := restoreQA(w, source); err != nil {
+							return err
+						}
+					}
+					if qaRestore != nil {
+						w.QAOriginalHash = qaRestore.OriginalHash
 					}
 				}
 				w.QADocument = qaDoc
@@ -296,7 +327,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					}
 					// Profile edits affect future launches; explicit launch overrides must still match.
 					old := prior.LaunchSettings
-					if old == nil || spec.Provider != "" && old.Provider != spec.Provider || spec.Model != "" && old.Model != spec.Model || spec.Thinking != "" && old.Thinking != spec.Thinking {
+					if old == nil || spec.Capability != "" && old.Capability != spec.Capability || spec.Provider != "" && old.Provider != spec.Provider || spec.Model != "" && old.Model != spec.Model || spec.Thinking != "" && old.Thinking != spec.Thinking {
 						return errors.New("existing member launch settings differ")
 					}
 					for id, val := range spec.Configs {
@@ -318,9 +349,12 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if live >= w.MaxMembers {
 					return errors.New("workspace member limit reached")
 				}
-				profile, settings, err := swarm.ResolveProfile(w, spec.Profile, swarm.AgentProfile{Provider: spec.Provider, Model: spec.Model, Thinking: spec.Thinking, Configs: spec.Configs}, h.agent)
+				profile, settings, err := swarm.ResolveProfile(w, spec.Profile, swarm.AgentProfile{Capability: spec.Capability, Provider: spec.Provider, Model: spec.Model, Thinking: spec.Thinking, Configs: spec.Configs}, h.agent)
 				if err != nil {
 					return err
+				}
+				if settings.Capability == "reviewer" && spec.CanSpawn {
+					return errors.New("reviewer capability cannot spawn agents")
 				}
 				if err := knownProvider(settings.Provider); err != nil {
 					return err
@@ -332,6 +366,9 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if err != nil {
 			return nil, err
 		}
+		if err := s.ClaimQADocument(h.sessionID); err != nil {
+			return nil, err
+		}
 		w := s.View(h.sessionID)
 		members := map[string]string{}
 		for _, key := range keys {
@@ -339,6 +376,10 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 		return map[string]any{"workspace_id": w.ID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "profiles": w.Profiles, "default_profile": w.DefaultProfile, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
 	})
+	if qaLocked {
+		ws.qaMu.Unlock()
+		qaLocked = false
+	}
 	if err != nil || p.Preview {
 		return result, err
 	}

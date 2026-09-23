@@ -107,8 +107,11 @@ That is `assignment_update`. Completing an assignment keeps a resident available
 an ephemeral agent retires after its assignment and turn end. Reserve ephemeral
 agents for bounded auxiliary tasks, not package implementers or reviewers.
 
-Reviewer roles are instructions, not enforced filesystem sandboxes. About reports
-permission limits. Do not equate an adapter's 'read-only' mode with filesystem safety,
+Reviewer roles alone impose no tool restrictions. Inspect about.permissions and use
+capability:"reviewer" only with an explicitly supported provider/profile. Currently the
+verified Claude adapter supports read/search plus scoped coordination; the Codex adapter
+does not. Do not silently change the specified reviewer model/provider: ask the owner
+for an approved alternative if enforced review is required. About reports permission limits. Do not equate an adapter's 'read-only' mode with filesystem safety,
 or grant broad auto-approval to bypass coordination prompts. Human approval requests
 are actionable in the member's main-panel tab. A blocked approval is not a messaging
 failure; report it rather than repeatedly launching the same blocked preset.
@@ -120,8 +123,10 @@ Wash owns the durable QA records and the live **Questions** Markdown tab. Config
 `Redoubt QA`. Wash creates the file and atomically refreshes its complete history after
 every QA update, including actual human answers. The tab shows its path and write errors.
 Check `qa_document_status`; on error the backend records are safe and file writes retry.
-Use a new/empty file, or reuse this workspace's generated file. Preserve an older
-workspace's file by choosing a new filename; never overwrite formal project QA records.
+Always reuse that configured filename when returning to the project. Existing Wash QA
+restores its checkpoint, attribution and pending owner decisions; existing ordinary Markdown
+is preserved. Reassign reopened unfinished questions from the orchestrator to the current
+team. A conflicting active workspace or damaged checkpoint fails without overwriting it.
 All agents use MCP; nobody edits a shared QA Markdown file. Git commits do not serialize
 concurrent questions. Stable thread IDs, atomic append operations and revision guards do.
 The Architect alone edits formal QUESTIONS/ANSWERS/specifications under the project QA
@@ -203,5 +208,7 @@ Failed reserved launches can be retried with member_control resume; read outcome
 Only on requested teardown, call `workspace_end`. Children end and the sidebar disappears;
 the owning conversation, retained history and project files remain. Teardown is not permission
 to restart Wash or discard worktrees. Archived QA remains in backend storage and the
-generated Markdown file remains on disk. Confirm qa_document_status is saved before
-teardown; workspace_get reads the attached workspace.
+generated Markdown file remains on disk. workspace_end attempts the final save and returns
+qa_document_status; failures remain visible and retry after teardown/restart. Read the status
+before claiming export is complete. Reconfigure the same filename to resume QA in a new run;
+workspace_get reads the attached workspace.

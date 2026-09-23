@@ -24,12 +24,13 @@ type Item struct {
 	Revision int64  `json:"revision"`
 }
 
-// AgentProfile describes launch settings, never credentials or permissions.
+// AgentProfile describes launch settings and an optional enforced capability profile.
 type AgentProfile struct {
-	Provider string            `json:"provider"`
-	Model    string            `json:"model,omitempty"`
-	Thinking string            `json:"thinking,omitempty"`
-	Configs  map[string]string `json:"configs,omitempty"`
+	Capability string            `json:"capability,omitempty"`
+	Provider   string            `json:"provider"`
+	Model      string            `json:"model,omitempty"`
+	Thinking   string            `json:"thinking,omitempty"`
+	Configs    map[string]string `json:"configs,omitempty"`
 }
 type Usage struct {
 	Used int64 `json:"used"`
@@ -88,6 +89,10 @@ type Document struct {
 	Title string `json:"title"`
 }
 type Workspace struct {
+	QAOriginalHash string                  `json:"qa_original_hash,omitempty"`
+	QADocumentID   string                  `json:"qa_document_id,omitempty"`
+	QAPreamble     string                  `json:"qa_preamble,omitempty"`
+	QAAuthors      map[string]string       `json:"qa_authors,omitempty"`
 	QADocument     *Document               `json:"qa_document,omitempty"`
 	QA             []QAThread              `json:"qa"`
 	Profiles       map[string]AgentProfile `json:"profiles"`

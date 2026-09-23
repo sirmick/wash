@@ -43,7 +43,8 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 		"host_auto_approval": yolo, "host_policy_enabled": pol.Enabled,
 		"approval_order":               "host policy rules, then session auto-approval, then human approval (or cancellation if unavailable/disabled)",
 		"filesystem_enforcement":       "unknown: provider-specific; not verified by Wash workspace discovery",
-		"reviewer_capability_profiles": "unsupported; role instructions do not enforce filesystem restrictions",
+		"reviewer_capability_profiles": map[string]any{"reviewer": map[string]any{"provider": "claude", "adapter": "@agentclientprotocol/claude-agent-acp", "verified_versions": []string{"0.79.0"}, "tools": []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "enforcement": "provider tool allowlist plus host write/terminal denial; not an OS sandbox"}, "codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported"},
+		"active_capability":            h.capability,
 	}
 	return result
 }

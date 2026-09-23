@@ -78,6 +78,8 @@ func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 	return map[string]any{"thread": q, "cursor": cursor, "has_more": more}, nil
 }
 func qaSummary(w *swarm.Workspace) {
+	w.QAPreamble = ""
+	w.QAOriginalHash = ""
 	for i := range w.QA {
 		w.QA[i].Events = nil
 	}

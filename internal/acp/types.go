@@ -92,8 +92,9 @@ type McpServer struct {
 // adapter that gets a relative path fails in a way that reads like a
 // missing directory rather than a protocol error.
 type NewSessionRequest struct {
-	Cwd        string      `json:"cwd"`
-	McpServers []McpServer `json:"mcpServers"`
+	Meta       map[string]any `json:"_meta,omitempty"`
+	Cwd        string         `json:"cwd"`
+	McpServers []McpServer    `json:"mcpServers"`
 }
 
 // SessionMode is one approval/sandbox preset the agent offers. Codex ships
@@ -204,10 +205,11 @@ type SetModeRequest struct {
 }
 
 type LoadSessionRequest struct {
-	SessionID             string      `json:"sessionId"`
-	Cwd                   string      `json:"cwd"`
-	McpServers            []McpServer `json:"mcpServers"`
-	AdditionalDirectories []string    `json:"additionalDirectories,omitempty"`
+	Meta                  map[string]any `json:"_meta,omitempty"`
+	SessionID             string         `json:"sessionId"`
+	Cwd                   string         `json:"cwd"`
+	McpServers            []McpServer    `json:"mcpServers"`
+	AdditionalDirectories []string       `json:"additionalDirectories,omitempty"`
 }
 
 // LoadSessionResponse is what session/load answers with.
@@ -445,6 +447,7 @@ const (
 // ToolCall is both the `tool_call` update and (partially populated) the
 // subject of a permission request.
 type ToolCall struct {
+	Meta       json.RawMessage `json:"_meta,omitempty"`
 	ToolCallID string          `json:"toolCallId,omitempty"`
 	Title      string          `json:"title,omitempty"`
 	Kind       string          `json:"kind,omitempty"`

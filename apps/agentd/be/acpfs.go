@@ -89,6 +89,9 @@ func (h *hosted) ReadTextFile(ctx context.Context, req acp.ReadTextFileRequest) 
 
 // WriteTextFile answers fs/write_text_file.
 func (h *hosted) WriteTextFile(ctx context.Context, req acp.WriteTextFileRequest) error {
+	if h.capability == "reviewer" {
+		return fmt.Errorf("reviewer capability prohibits file writes")
+	}
 	if len(req.Content) > maxAgentWriteBytes {
 		return fmt.Errorf("write of %d bytes exceeds the %d-byte limit", len(req.Content), maxAgentWriteBytes)
 	}

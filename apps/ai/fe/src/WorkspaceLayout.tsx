@@ -124,7 +124,8 @@ export const WorkspaceLayout: Component<{
           }><div ref={qaPanel} data-testid="workspace-qa" style={{height:'100%', overflow:'auto', padding:`${tokens.spaceMd}px`, 'box-sizing':'border-box'}}><Show when={workspace()?.qa_document} fallback={<p style={{color:tokens.fgMuted}}>No QA Markdown file configured.</p>}>
               <p data-testid="workspace-qa-path" style={{color:tokens.fgMuted,'overflow-wrap':'anywhere'}}>{workspace()?.qa_document?.path}</p>
             </Show>
-            <Show when={props.frame.qa_document_status?.state === 'error'}><p role="alert">QA records are saved, but the Markdown file could not be updated: {props.frame.qa_document_status?.error}</p></Show>
+            <Show when={props.frame.qa_document_status?.state === 'error'}><p>QA records are saved, but the Markdown file could not be updated: {props.frame.qa_document_status?.error}</p></Show>
+            <Show when={props.frame.qa_document_status?.state === 'saved'}><p style={{color:tokens.fgMuted}}>QA Markdown saved<Show when={props.frame.qa_document_status?.saved_revision}> through workspace revision {props.frame.qa_document_status?.saved_revision}</Show>.</p></Show>
             <Markdown text={props.frame.qa_markdown ?? '# Workspace QA\n\nNo questions yet.'} /></div></Show>
         </div>
       </Show>

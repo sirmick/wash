@@ -59,6 +59,9 @@ const reasonAskOff = "ask_desktop off"
 
 // hosted is one ACP session this process owns.
 type hosted struct {
+	// Immutable for the lifetime of this provider connection.
+	capability  string
+	sessionMeta map[string]any
 	// conn is the service connection, used to push transcript events to
 	// the windows watching this session.
 	conn *sdk.Conn
@@ -868,6 +871,12 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	pol := hostedPolicy()
 	preq := toolRequest(req.ToolCall, h.cwd)
 	res := agentpolicy.Evaluate(pol, preq)
+	if h.capability == "reviewer" {
+		if res.Decision == agentpolicy.DecisionDeny || !h.reviewerPermission(req.ToolCall) {
+			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+		}
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+	}
 
 	switch res.Decision {
 	case agentpolicy.DecisionAllow:
@@ -1371,7 +1380,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// agent_set_mode: switch the session's approval preset.
 	sdk.HandleFromVoid(bus, "agent_set_mode", func(_ *sdk.Conn, _ string, req modeReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
-		if h == nil || req.Mode == "" {
+		if h == nil || req.Mode == "" || h.capability == "reviewer" {
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1394,7 +1403,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// reasoning effort, plan mode, …).
 	sdk.HandleFromVoid(bus, "agent_set_config", func(_ *sdk.Conn, _ string, req configReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
-		if h == nil || req.ID == "" {
+		if h == nil || req.ID == "" || h.capability == "reviewer" && req.ID == "mode" {
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

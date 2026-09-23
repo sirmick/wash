@@ -160,3 +160,20 @@ test('QA opens in the main panel, refreshes live and approval controls address t
  await fireEvent.click(allow);
  expect(onAnswer).toHaveBeenCalledWith('approval-1','allow');
 });
+
+test('attention shows unselected teammate approvals, owner decisions and save failures before the plan', async () => {
+ const f=frame();f.approvals=[{id:'pending',member_id:'lead',tool:'Read',subject:'notes',age_ms:0}];
+ f.workspace!.messages=[{id:'decision',sender:'lead',recipient:'human',type:'decision_request',body:'Choose?',delivery:'recorded'}];
+ f.qa_document_status={state:'error',error:'disk full'};
+ const [value,setValue]=createSignal(f);const onAction=vi.fn();
+ render(()=><WorkspaceLayout frame={value()} onAction={onAction}>Conversation</WorkspaceLayout>);
+ const attention=screen.getByTestId('workspace-attention');
+ expect(attention.compareDocumentPosition(screen.getByTestId('workspace-plan-link')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ expect(attention.textContent).toContain('Approval needed');expect(attention.textContent).toContain('Choose?');expect(attention.textContent).toContain('disk full');
+ await fireEvent.click(screen.getByTestId('workspace-approval-pending'));
+ expect(onAction).toHaveBeenLastCalledWith('member_inspect',{member_id:'lead'});
+ await fireEvent.click(screen.getByTestId('workspace-qa-save-error'));
+ expect(screen.getByRole('tab',{name:/Questions/}).getAttribute('aria-selected')).toBe('true');
+ setValue({...value(),approvals:[],qa_document_status:{state:'saved'},workspace:{...value().workspace!,messages:[]}});
+ expect(screen.queryByTestId('workspace-attention')).toBeNull();
+});

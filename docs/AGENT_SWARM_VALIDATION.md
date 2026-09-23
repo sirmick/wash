@@ -363,3 +363,40 @@ Updated Redoubt's PROJECT/SWARM setup to use `docs/WORKSPACE-QA.md` and removed 
 instructions. Its Claims section and subsequent evidence ledger remained byte-for-byte
 unchanged. The running Wash desktop was not restarted or replaced; artifacts stayed on
 `/data`. These notes supersede earlier statements that automatic QA export was absent.
+
+## Resumable QA, attention and reviewer capability follow-up (2026-09-23)
+
+API 2.1 keeps the twelve-tool surface. QA files now contain a lossless versioned
+checkpoint: reopening the configured filename restores threads, author names and
+pending owner decisions without requiring the original store. Ordinary Markdown
+is retained as document text. Tests cover file-only restore, concurrent history,
+active ownership conflicts, corrupt checkpoint rejection, teardown write failure,
+retry after store reopening and transfer of newer unsaved history to a new run.
+QA export attempts its final save on end and continues retrying failures afterward.
+
+Reviewer capability is explicit on launch profiles/member definitions. The provider
+contract was inspected in locally installed claude-agent-acp 0.79.0: session/new and
+session/load forward `_meta.claudeCode.options` to the SDK, including its tool allowlist.
+Only this adapter/version is enabled. Codex's read-only mode was confirmed to use
+workspaceWrite; unsupported providers/versions fail closed. Tests cover metadata on
+both ACP requests, host write/terminal denial even with yolo or an allow policy,
+scoped coordination approvals, explicit policy denial and retained resume settings.
+This is a provider tool restriction, not an OS sandbox. No real-provider inference
+or full-process crash test is claimed in this follow-up.
+
+Needs you surfaces all teammates' pending approvals, owner questions and QA export
+errors before plan/team navigation. Shared Markdown rendering now keeps loose list
+items together and honors ordered-list starts, fixing repeated 1 markers.
+
+Validation in `/data/wash-agent-swarm/src`:
+- Race-enabled swarm, workspace MCP, ACP, agentd and fixture tests pass.
+- All 71 focused Markdown, Agent transcript/roster and workspace component tests pass.
+- All 15 Agent-session/workspace browser tests pass, including an unselected teammate's
+  approval link and end/reopen of QA using the same filename.
+- Isolated frontend/multicall build, focused Go vet, browser-test TypeScript and
+  design/interaction/version/import guards pass.
+
+Logs: `/data/wash-agent-swarm/test-results/review-{race,components,e2e,build,vet,types,guards}.log`.
+Root filesystem usage stayed unchanged (6.4 GiB free); `/data` had 11 GiB free after
+build/test. The running desktop was not restarted or installed over. Redoubt PROJECT
+and SWARM guidance now describes reopening and capability limits; Claims remains intact.

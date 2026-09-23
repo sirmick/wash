@@ -132,11 +132,19 @@ func TestQADocumentProtectsExistingFilesAndReportsWriteFailure(t *testing.T) {
 	config := func(path string) (any, error) {
 		return qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Project"}, "qa_document": map[string]string{"path": path}})
 	}
-	if _, err = config(plan); err == nil {
-		t.Fatal("claimed existing project file")
+	if _, err = config(plan); err != nil {
+		t.Fatal(err)
 	}
-	if s.View("lead") != nil {
-		t.Fatal("invalid file committed setup")
+	if !strings.Contains(swarm.QAMarkdown(s.View("lead")), "# Human plan") {
+		t.Fatal("existing Markdown was not loaded")
+	}
+	if _, err = qaFileCall(t, ws, h, "workspace_configure", map[string]any{"qa_document": nil}); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the unrelated symlink target separate from the adopted Markdown.
+	plan = filepath.Join(dir, "UNRELATED.md")
+	if err = os.WriteFile(plan, []byte("# Human plan"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "QA.md")
 	if err = os.Symlink(plan, path); err != nil {
@@ -184,5 +192,138 @@ func TestQADocumentProtectsExistingFilesAndReportsWriteFailure(t *testing.T) {
 	b, _ = os.ReadFile(path)
 	if !strings.Contains(string(b), "Retain this question") {
 		t.Fatal(string(b))
+	}
+}
+
+func TestQADocumentResumesFromFileWithoutStoreAndRetainsDecisions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "QA.md")
+	s, _ := swarm.Open(filepath.Join(dir, "first.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "first", agent: "codex", cwd: dir}
+	setup := map[string]any{"workspace": map[string]string{"name": "Project"}, "qa_document": map[string]string{"path": path}}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+	lead := s.View(h.sessionID).Lead
+	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": lead, "type": "question", "body": "Keep evidence", "qa": map[string]any{"id": "q", "action": "open", "package": "K5", "title": "Decision"}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := qaFileCall(t, ws, h, "decision_request", map[string]any{"text": "Use A?", "thread_id": "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := result.(map[string]any)["id"]
+	old := s.View(h.sessionID)
+	if _, err = qaFileCall(t, ws, h, "workspace_end", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	// A completely separate backend has only the Markdown file.
+	s2, _ := swarm.Open(filepath.Join(dir, "second.json"))
+	ws2 := &workspaceService{store: s2}
+	h2 := &hosted{sessionID: "second", agent: "codex", cwd: dir}
+	if _, err = qaFileCall(t, ws2, h2, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+	w := s2.View(h2.sessionID)
+	if len(w.QA) != 1 || w.QA[0].State != "awaiting-owner" || w.QA[0].Assignee != w.Lead || w.QA[0].Events[0].Author != old.Lead || w.QAAuthors[old.Lead] == "" {
+		t.Fatalf("bad restore: %+v", w)
+	}
+	raw, _ := json.Marshal(map[string]any{"id": decision, "body": "Use A"})
+	if _, err = ws2.answer(h2, raw); err != nil {
+		t.Fatal(err)
+	}
+	if s2.View(h2.sessionID).QA[0].State != "open" {
+		t.Fatal("restored decision cannot be answered")
+	}
+}
+func TestQADocumentFinalFailureRetriesAndNewRunTakesLatestHistory(t *testing.T) {
+	for _, reopen := range []bool{false, true} {
+		t.Run(fmt.Sprint(reopen), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "QA.md")
+			state := filepath.Join(dir, "state.json")
+			s, _ := swarm.Open(state)
+			ws := &workspaceService{store: s}
+			h := &hosted{sessionID: "first", agent: "codex", cwd: dir}
+			setup := map[string]any{"workspace": map[string]string{"name": "Project"}, "qa_document": map[string]string{"path": path}}
+			if _, err := qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
+				t.Fatal(err)
+			}
+			before := s.View(h.sessionID)
+			// A directory prevents atomic replacement without relying on user privileges.
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := qaFileCall(t, ws, h, "member_update", map[string]any{"qa_updates": []any{map[string]any{"id": "q", "action": "open", "package": "K5", "title": "Final", "body": "Newest durable evidence", "assignee": before.Lead}}}); err != nil {
+				t.Fatal(err)
+			}
+			end, err := qaFileCall(t, ws, h, "workspace_end", map[string]any{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if end.(map[string]any)["qa_document_status"].(qaDocumentStatus).State != "error" {
+				t.Fatal(end)
+			}
+			if err = os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := swarm.Open(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ws = &workspaceService{store: recovered}
+			if reopen {
+				h.sessionID = "next"
+				if _, err = qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
+					t.Fatal(err)
+				}
+				if len(recovered.View(h.sessionID).QA) != 1 {
+					t.Fatal("new run lost unsaved history")
+				}
+				if recovered.Snapshot().Workspaces[0].QADocument != nil {
+					t.Fatal("old run still owns projection")
+				}
+			} else {
+				ws.syncQADocuments()
+			}
+			b, err := os.ReadFile(path)
+			if err != nil || !strings.Contains(string(b), "Newest durable evidence") {
+				t.Fatal(string(b), err)
+			}
+			if !reopen && ws.qaDocumentStatus(before).State != "saved" {
+				t.Fatal("ended export did not retry")
+			}
+		})
+	}
+}
+func TestQADocumentActiveOwnershipAndMalformedCheckpointAreAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "QA.md")
+	s, _ := swarm.Open(filepath.Join(dir, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "one", agent: "codex", cwd: dir}
+	setup := map[string]any{"workspace": map[string]string{"name": "Project"}, "qa_document": map[string]string{"path": path}}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+	other := &hosted{sessionID: "two", agent: "codex", cwd: dir}
+	if _, err := qaFileCall(t, ws, other, "workspace_configure", setup); err == nil || s.View("two") != nil {
+		t.Fatal("duplicate active writer")
+	}
+	bad := []byte("# History\n<!-- wash-qa-checkpoint-v1: broken -->\n")
+	if err := os.WriteFile(filepath.Join(dir, "broken.md"), bad, 0600); err != nil {
+		t.Fatal(err)
+	}
+	setup["qa_document"] = map[string]string{"path": filepath.Join(dir, "broken.md")}
+	if _, err := qaFileCall(t, ws, other, "workspace_configure", setup); err == nil || s.View("two") != nil {
+		t.Fatal("damaged checkpoint committed")
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "broken.md"))
+	if string(b) != string(bad) {
+		t.Fatal("damaged original overwritten")
 	}
 }

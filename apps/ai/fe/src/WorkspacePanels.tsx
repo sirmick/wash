@@ -53,7 +53,7 @@ export const WorkspaceMemberPanel: Component<{
           <div style={heading}>{m().name} · {m().lifetime}</div>
           <Show when={m().launch_settings}>
             <p data-testid="workspace-member-launch" style={{ color: tokens.fgMuted, 'overflow-wrap': 'anywhere' }}>
-              Launched: {[m().profile, m().provider, m().launch_settings?.model, m().launch_settings?.thinking ? `thinking ${m().launch_settings?.thinking}` : ''].filter(Boolean).join(' · ')}
+              Launched: {[m().profile, m().provider, m().launch_settings?.model, m().launch_settings?.capability ? `capability ${m().launch_settings?.capability}` : "", m().launch_settings?.thinking ? `thinking ${m().launch_settings?.thinking}` : ''].filter(Boolean).join(' · ')}
             </p>
           </Show>
           <Show when={m().state === 'paused' || m().state === 'failed'}><Button onClick={() => props.onAction('member_resume', { member_id: m().id })}>Resume member</Button></Show>
