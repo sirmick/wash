@@ -357,6 +357,7 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, call workspacem
 				decisions = append(decisions, msg)
 			}
 		}
+		activity, detail, usage := workspaceRuntime(w)
 		var messagePage any
 		if a.IncludeMessages {
 			page, cursor, more, err := workspaceHistoryPage(w.Messages, a.After, a.Limit)
@@ -385,7 +386,7 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, call workspacem
 			}
 		}
 		hostedMu.Unlock()
-		return map[string]any{"workspace": w, "delivery_counts": counts, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
+		return map[string]any{"workspace": w, "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
 	case "teardown_workspace":
 		old := ws.store.View(sid)
 		if old == nil {
@@ -1036,19 +1037,8 @@ func (ws *workspaceService) publish(force bool) {
 					msg["preview"] = preview
 				}
 			}
-			activity := map[string]string{}
-			for _, m := range w.Members {
-				if v := workspaceHosted(m.Session); v != nil {
-					v.turnMu.Lock()
-					state := "idle"
-					if v.turnLive {
-						state = "working"
-					}
-					v.turnMu.Unlock()
-					activity[m.ID] = state
-				}
-			}
-			msg["activity"] = activity
+			activity, detail, usage := workspaceRuntime(w)
+			msg["activity"], msg["activity_detail"], msg["usage"] = activity, detail, usage
 			if w.Document != nil {
 				text, err := readWorkspaceDocument(w.Document.Path)
 				msg["document_text"] = text
@@ -1205,6 +1195,7 @@ func workspaceLeadSession(w swarm.Workspace) string {
 // A user can end a session from the ordinary Agent controls too. Keep that
 // lifetime transition in workspace state rather than leaving a phantom member.
 func (ws *workspaceService) retired(h *hosted) {
+	ws.captureUsage(h)
 	w := ws.store.View(h.sessionID)
 	if w == nil {
 		return

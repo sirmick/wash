@@ -893,6 +893,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               fallback={<Show when={e.kind === 'tool'}><ToolRow e={e} onOpen={props.onOpenTool} /></Show>}
             >
               <div
+                data-testid={e.kind === 'user' ? 'agent-human-message' : undefined}
                 style={{
                   font: tokens.type.textMd,
                   color: e.kind === 'thought' ? tokens.fgMuted : tokens.fg,
@@ -904,9 +905,13 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                   // where your turn ended and the agent's began.
                   ...(e.kind === 'user'
                     ? {
-                        'border-left': `2px solid ${tokens.borderFocus}`,
-                        'padding-left': `${tokens.spaceMd}px`,
-                        color: tokens.fgMuted,
+                        'border-left': `3px solid ${tokens.accentBlue}`,
+                        padding: `${tokens.spaceMd}px ${tokens.spaceLg}px`,
+                        'border-radius': tokens.radiusMd,
+                        background: tokens.bgInfo,
+                        color: tokens.fgInfo,
+                        'font-family': tokens.fontSans,
+                        'font-weight': 600,
                       }
                     : {}),
                 }}
@@ -1144,7 +1149,8 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             'border-radius': tokens.radiusMd,
             padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
             font: tokens.type.textMd,
-            color: tokens.fg,
+            'font-weight': 500,
+            color: tokens.fgInfo,
             outline: 'none',
             'box-sizing': 'border-box',
           }}

@@ -50,3 +50,22 @@ test('decisions and paused member recovery have explicit controls', async () => 
  await fireEvent.click(screen.getByText('Resume member'));
  expect(onAction).toHaveBeenCalledWith('member_resume',{member_id:'lead'});
 });
+
+
+test('live activity and usage update independently of the plan and retain unknown counts', async () => {
+ const [value,setValue]=createSignal(frame());
+ render(() => <WorkspaceSidebar frame={value()} onAction={()=>{}}/>);
+ const dot=screen.getByTestId('workspace-activity-lead');
+ expect(screen.getByTestId('workspace-usage-lead').textContent).toContain('not reported');
+ setValue({...value(),activity:{lead:'thinking'},usage:{lead:{used:14689,size:258400}}});
+ expect(dot.getAttribute('data-activity')).toBe('thinking');
+ expect(dot.getAttribute('data-pulse')).toBe('true');
+ expect(screen.getByTestId('workspace-usage-lead').textContent).toContain('14,689 / 258,400 tokens');
+ setValue({...value(),activity:{lead:'tool'},activity_detail:{lead:'Running tests'}});
+ expect(screen.getByText('Running tests')).toBeTruthy();
+ expect(screen.getByTestId('workspace-activity-label-lead').textContent).toBe('Using tools');
+ setValue({...value(),activity:{lead:'waiting-message'}});
+ expect(dot.getAttribute('data-pulse')).toBe('false');
+ expect(screen.queryByText('Running tests')).toBeNull();
+ expect(screen.getByTestId('workspace-activity-label-lead').textContent).toBe('Awaiting message');
+});

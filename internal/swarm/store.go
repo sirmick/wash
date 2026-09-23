@@ -31,7 +31,12 @@ type AgentProfile struct {
 	Thinking string            `json:"thinking,omitempty"`
 	Configs  map[string]string `json:"configs,omitempty"`
 }
+type Usage struct {
+	Used int64 `json:"used"`
+	Size int64 `json:"size"`
+}
 type Member struct {
+	Usage          *Usage            `json:"usage,omitempty"`
 	Profile        string            `json:"profile,omitempty"`
 	LaunchSettings *AgentProfile     `json:"launch_settings,omitempty"`
 	InitialConfigs map[string]string `json:"initial_configs,omitempty"`

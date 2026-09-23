@@ -42,6 +42,7 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  expect(state().assignments[0].state).toBe('completed');
  expect(state().assignments[0].result).toBe('Completed after an inbox reply');
  const retired=state().members.find((m:any)=>m.name==='Implementer').id;
+ await expect(sidebar.locator(`[data-testid="workspace-usage-${retired}"]`)).toContainText('2,048 / 32,000 tokens');
  await sidebar.locator(`[data-testid="workspace-member-${retired}"]`).click();
  await expect(sidebar.locator('[data-testid="workspace-member-detail"]')).toContainText('Archived conversation');
  await expect(sidebar.locator('[data-testid="workspace-member-detail"]')).toContainText('Completed after an inbox reply');
@@ -150,4 +151,46 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  expect(removed.workspace.name).toBe('Profiles');
  await tool('teardown_workspace');
  await expect(sidebar).toHaveCount(0);
+});
+
+
+test('sidebar shows live context and activity, and human messages remain distinct', async ({page,router}) => {
+ test.setTimeout(45_000);
+ await page.goto(router.url);
+ await expect(page.locator('wash-app-session')).toBeVisible();
+ const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'start',agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
+ const app=page.locator('wash-app-ai');
+ const composer=app.locator('[data-testid="agent-composer"]').first();
+ await expect(composer).toBeEnabled();
+ await composer.fill('workspace setup_workspace {"name":"Telemetry"}');
+ await composer.press('Enter');
+ const sidebar=app.locator('[data-testid="workspace-sidebar"]');
+ await expect(sidebar).toBeVisible();
+ const state=()=>JSON.parse(readFileSync(join(router.xdgStateHome,'wash/workspaces.json'),'utf8')).workspaces.at(-1);
+ const lead=state().orchestrator;
+ const dot=sidebar.locator(`[data-testid="workspace-activity-${lead}"]`);
+ await expect(dot).toHaveAttribute('data-activity','idle');
+ await composer.fill('workspace_activity');await composer.press('Enter');
+ await expect(dot).toHaveAttribute('data-activity','thinking');
+ await expect(sidebar.locator(`[data-testid="workspace-usage-${lead}"]`)).toContainText('14,689 / 258,400 tokens');
+ await expect(dot).toHaveCSS('animation-name','wash-workspace-pulse');
+ await page.emulateMedia({reducedMotion:'reduce'});
+ await expect(dot).toHaveCSS('animation-name','none');
+ await expect(dot).toHaveAttribute('data-activity','tool');
+ await expect(sidebar).toContainText('Running test suite');
+ await expect(dot).toHaveAttribute('data-activity','responding');
+ await expect(dot).toHaveAttribute('data-activity','idle');
+ await expect.poll(()=>state().members[0].usage?.used).toBe(14689);
+ const human=app.locator('[data-testid="agent-human-message"]').last();
+ await expect(human).toHaveText('workspace_activity');
+ await expect(human).toHaveCSS('font-weight','600');
+ const colors=await human.evaluate(el=>({fg:getComputedStyle(el).color,bg:getComputedStyle(el).backgroundColor}));
+ expect(colors.bg).not.toBe('rgba(0, 0, 0, 0)');
+ await page.screenshot({path:test.info().outputPath('workspace-activity.png')});
+ await composer.fill('workspace member_wait {"reason":"Awaiting next instruction"}');await composer.press('Enter');
+ await expect(dot).toHaveAttribute('data-activity','waiting-message');
+ await expect(dot).toHaveAttribute('data-pulse','false');
+ await page.reload();
+ await expect(sidebar.locator(`[data-testid="workspace-usage-${lead}"]`)).toContainText('2,048 / 32,000 tokens');
 });

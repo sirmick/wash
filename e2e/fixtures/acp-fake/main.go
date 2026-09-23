@@ -182,7 +182,20 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 	text := promptText(m)
 	raw := promptTextRaw(m)
 	id := m["id"]
+	if os.Getenv("WASH_FAKE_WORKSPACE") == "1" && raw == "workspace_activity" {
+		notify(out, update(map[string]any{"sessionUpdate": "usage_update", "used": 14689, "size": 258400}))
+		notify(out, update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "Checking the implementation."}}))
+		time.Sleep(2 * time.Second)
+		notify(out, update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "activity-test", "title": "Running test suite", "kind": "execute", "status": "in_progress"}))
+		time.Sleep(2 * time.Second)
+		notify(out, update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "activity-test", "status": "completed"}))
+		notify(out, chunk("Activity fixture complete"))
+		time.Sleep(2 * time.Second)
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
 	if text, ok := workspaceScript(raw); ok {
+		notify(out, update(map[string]any{"sessionUpdate": "usage_update", "used": 2048, "size": 32000}))
 		// Preserve JSON option names verbatim through the Markdown transcript.
 		if strings.HasPrefix(text, "WORKSPACE_") {
 			text = "```\n" + text + "\n```"

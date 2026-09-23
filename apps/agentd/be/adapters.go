@@ -380,6 +380,7 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	blocks = append(blocks, t.blocks...)
 	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
 	if workspaces != nil {
+		workspaces.captureUsage(h)
 		if e := workspaces.store.TurnEnded(h.sessionID, t.mailID, err != nil || res.StopReason == acp.StopCancelled); e != nil {
 			log.Printf("agentd: workspace turn outcome: %v", e)
 		}

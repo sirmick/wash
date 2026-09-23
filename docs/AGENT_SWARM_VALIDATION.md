@@ -163,3 +163,31 @@ Logs: `profiles-race.log`, `profiles-e2e-final.log`, `profiles-component.log`,
 `/data/wash-agent-swarm/test-results/`. The active desktop was not restarted or
 replaced. Build caches, temporary files and browser artifacts remained on `/data`;
 root free space stayed at about 6.5 GiB.
+
+
+## Sidebar telemetry and human-message visibility (2026-09-23)
+
+Validated in the isolated checkout without restarting/installing over the active
+desktop:
+
+- Race tests passed for `apps/agentd/be`, `internal/swarm` and the ACP fixture.
+  Regressions cover overlapping tool calls, late events after turn end, permission
+  and lifecycle precedence, durable usage after member retirement, and protecting
+  archived counts when an orchestrator conversation starts another workspace.
+- **13 browser tests passed** across workspace and Agent-session suites. The new
+  test observes thinking → tool → responding → idle from ACP notifications,
+  checks context counts and persisted checkpoints, verifies reduced-motion CSS,
+  then checks awaiting-message state and usage after a browser reload. The existing
+  collaboration test now verifies token counts on a retired ephemeral member.
+- **28 component tests** passed for the workspace sidebar and shared AgentSession;
+  **10 existing shared status tests** passed. Go vet, E2E TypeScript, design tokens,
+  interaction markers, and version checks passed.
+- Shared UI/shell, Agent frontend and isolated multicall builds passed. The browser
+  screenshot was visually reviewed for human-message contrast and sidebar layout.
+
+Evidence logs under `/data/wash-agent-swarm/test-results/` use the `activity-`
+prefix (`race`, `e2e`, `components`, `status`, `guards`, `build`). The screenshot is
+`src/e2e/test-results/agent-workspace-sidebar-sh-8d2fc-an-messages-remain-distinct-chromium/workspace-activity.png`.
+These activity checks use deterministic ACP fixtures. They do not change the
+previously documented real-Claude authentication or broader syslogs limitations.
+Root free space remained about 6.5 GiB; builds and artifacts stayed on `/data`.

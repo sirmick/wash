@@ -1,11 +1,13 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from 'solid-js';
 import type { Component } from 'solid-js';
-import { AgentSession, Button, Markdown, tokens } from '@wash/ui';
+import { AgentSession, Button, Markdown, tokens, agentActivityLabel, agentActivityColor, agentActivityPulses } from '@wash/ui';
 import type { AgentEvent } from '@wash/ui';
 
 export interface WorkspaceItem { id: string; text: string; emoji?: string; state: string; revision: number }
 export interface WorkspaceProfile { provider: string; model?: string; thinking?: string; configs?: Record<string, string> }
+export interface WorkspaceUsage { used: number; size: number }
 export interface WorkspaceMember {
+  usage?: WorkspaceUsage;
   profile?: string; launch_settings?: WorkspaceProfile; initial_configs?: Record<string, string>;
   id: string; name: string; provider: string; lifetime: string; state: string;
   status?: string; emoji?: string; waiting?: string; session_id: string;
@@ -26,6 +28,8 @@ export interface WorkspaceFrame {
   preview?: { member_id: string; events: AgentEvent[]; note?: string };
   workspace: WorkspaceState | null;
   activity?: Record<string, string>;
+  activity_detail?: Record<string, string>;
+  usage?: Record<string, WorkspaceUsage>;
   document_text?: string;
   document_error?: string;
 }
@@ -56,6 +60,9 @@ export const WorkspaceSidebar: Component<{
     ? props.result.result.events ?? [] : [];
   const previewNote = () => props.frame.preview?.member_id === selected() ? props.frame.preview.note
     : props.result?.result?.member_id === selected() ? props.result.result.note : undefined;
+  const activity = (m: WorkspaceMember) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
+  const usage = (m: WorkspaceMember) => props.frame.usage?.[m.id] ?? m.usage;
+  const count = (n: number) => n.toLocaleString('en-US');
   const heading = { font: tokens.type.titleSm, padding: `${tokens.spaceSm}px 0` };
   return (
     <aside data-testid="workspace-sidebar" aria-label="Agent workspace" style={{
@@ -64,6 +71,11 @@ export const WorkspaceSidebar: Component<{
       'border-left': `1px solid ${tokens.borderMenu}`, background: tokens.bgInset,
       padding: `${tokens.spaceMd}px`, 'box-sizing': 'border-box',
     }}>
+      <style>{`
+        @keyframes wash-workspace-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+        .wash-workspace-activity[data-pulse="true"] { animation: wash-workspace-pulse 1.6s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) { .wash-workspace-activity[data-pulse="true"] { animation: none; } }
+      `}</style>
       <div style={heading}>{w().name} <Show when={w().state !== 'active'}>· {w().state}</Show></div>
       <Show when={props.result?.error}><div role="alert">{props.result?.error}</div></Show>
       <Show when={w().items.length}>
@@ -90,7 +102,23 @@ export const WorkspaceSidebar: Component<{
           background: selected() === m.id ? tokens.bgWindow : 'transparent', color: tokens.fg,
           border: `1px solid ${selected() === m.id ? tokens.borderMenu : 'transparent'}`, cursor: 'pointer',
         }}>
-          <div>{m.emoji} {m.name} <small>· {m.state === 'available' ? props.frame.activity?.[m.id] ?? 'idle' : m.state}</small></div>
+          <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceSm}px` }}>
+            <span aria-hidden="true" class="wash-workspace-activity" data-testid={`workspace-activity-${m.id}`} data-activity={activity(m)} data-pulse={agentActivityPulses(activity(m)) ? 'true' : 'false'} style={{
+              display: 'inline-block', width: '8px', height: '8px', 'border-radius': '50%', 'flex-shrink': 0, background: agentActivityColor(activity(m)),
+            }} />
+            <span>{m.emoji} {m.name}</span>
+          </div>
+          <small data-testid={`workspace-activity-label-${m.id}`} style={{ color: agentActivityColor(activity(m)) }}>{agentActivityLabel(activity(m))}</small>
+          <Show when={props.frame.activity_detail?.[m.id] && activity(m) === 'tool'}>
+            <div title={props.frame.activity_detail?.[m.id]} style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.frame.activity_detail?.[m.id]}</div>
+          </Show>
+          <div data-testid={`workspace-usage-${m.id}`} style={{ color: tokens.fgMuted, 'font-variant-numeric': 'tabular-nums' }}>
+            <Show when={usage(m)} fallback={<small>Context tokens not reported</small>}>{(u) => (
+              <small title="Provider-reported context usage, not cumulative or billed tokens">
+                Context: {count(u().used)}<Show when={u().size > 0}> / {count(u().size)}</Show> tokens
+              </small>
+            )}</Show>
+          </div>
           <Show when={m.status}><div>{m.status}</div></Show>
           <Show when={m.waiting}><small style={{ color: tokens.fgMuted }}>{m.waiting}</small></Show>
         </button>

@@ -599,3 +599,30 @@ declarative workflow engine are outside the initial slice.
 - A real Codex adapter called the injected tool both before and after session
   reload. Claude session creation succeeded, but its prompt failed with expired
   OAuth credentials. A real Claude tool round trip remains unverified.
+
+
+## Sidebar activity and context counts
+
+Each team row shows provider-reported context tokens used and, when available,
+the context-window capacity. These are current context counts, not cumulative
+input/output or billed totals. Missing telemetry says “Context tokens not
+reported.” Live usage arrives with the existing workspace frame; turn and
+retirement boundaries checkpoint the latest counts so completed ephemeral members
+retain them. A new workspace in the same orchestrator conversation cannot rewrite
+the previous workspace's archived counts. Telemetry does not invalidate the
+workspace coordination revision used by `workspace_configure`.
+
+Activity comes from live ACP events and the turn gate, rather than replaying the
+transcript or asking the model for status. The row shows a colored dot and a text
+label: violet thinking, cyan tool use, green responding, blue working, pale blue
+awaiting a message, amber human input, and red failure. Tool use also shows the
+current tool title. Concurrent tools remain active until all finish. A late event
+after a turn ends cannot restore a busy indicator. A member's durable waiting
+reason takes effect only after its turn yields. Lifecycle states override activity.
+Active states pulse; idle/waiting/ended states are still, and reduced-motion
+preferences disable pulsing. Color is accompanied by text in every state.
+
+Human transcript entries retain literal text and now use stronger weight, a themed
+blue foreground/background and an accent border. The composer also uses a stronger
+weight and foreground. Shared Agent views use the same treatment. Workspace JSON
+readback includes live activity/detail/usage alongside saved member usage.
