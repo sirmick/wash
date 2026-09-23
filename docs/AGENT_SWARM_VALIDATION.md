@@ -335,3 +335,31 @@ new real-provider test run is claimed.
 Logs: `/data/wash-agent-swarm/test-results/remove-legacy-{race,vet,types,build,guards}.log`
 and `remove-legacy-e2e-final.log`. Live Wash was not restarted or replaced; all build
 artifacts stayed on `/data`. Redoubt's instructions already use the twelve tools.
+
+## Configured live QA Markdown file (2026-09-23)
+
+`workspace_configure.qa_document` registers the Markdown output path/title at setup
+or later. Wash writes the full attributed history, event IDs and timestamps through
+one serialized atomic writer after updates, including GUI human answers. The Questions
+tab shows the configured path and any write error. Backend records remain authoritative;
+write errors are reported separately and retried, and missing output regenerates after
+backend recovery. Preview writes nothing; detach/teardown preserve the file. Unchanged
+records do not rewrite it. Existing unrelated files and symlinks are rejected.
+
+- Focused race tests passed for swarm, MCP and agentd. New coverage checks forty
+  concurrent replies without lost or truncated history, actual human answer export,
+  missing-file recovery after store reopening, no unchanged-file rewrite, detachment,
+  preview isolation, protection of existing files/symlinks, and write-error recovery
+  without loss of committed records.
+- All 31 focused component tests passed, including QA path/error display and recovery.
+- All 15 workspace/Agent-session browser tests passed, including configured file creation,
+  live question/answer writes, visible path, refresh and resolved-state output.
+- Agent frontend/multicall builds, focused Go vet, browser-test TypeScript and repository
+  design/interaction/version guards passed. Browser coverage uses deterministic fixtures;
+  no new real-provider or full-process crash validation is claimed.
+
+Evidence: `/data/wash-agent-swarm/test-results/qa-file-{race,components,e2e,build,vet,types,guards}.log`.
+Updated Redoubt's PROJECT/SWARM setup to use `docs/WORKSPACE-QA.md` and removed manual-export
+instructions. Its Claims section and subsequent evidence ledger remained byte-for-byte
+unchanged. The running Wash desktop was not restarted or replaced; artifacts stayed on
+`/data`. These notes supersede earlier statements that automatic QA export was absent.

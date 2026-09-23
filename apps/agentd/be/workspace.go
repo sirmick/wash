@@ -26,6 +26,8 @@ import (
 )
 
 type workspaceService struct {
+	qaMu      sync.Mutex
+	qaFiles   map[string]qaFileState
 	store     *swarm.Store
 	conn      *sdk.Conn
 	mu        sync.Mutex
@@ -689,6 +691,7 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 	return map[string]any{"member_id": id}, err
 }
 func (ws *workspaceService) answer(h *hosted, raw json.RawMessage) (any, error) {
+	defer ws.syncQADocuments()
 	a, err := parseWorkspaceArgs(raw)
 	if err != nil {
 		return nil, err
@@ -784,6 +787,7 @@ func readWorkspaceDocument(path string) (string, error) {
 	return string(b), nil
 }
 func (ws *workspaceService) publish(force bool) {
+	ws.syncQADocuments()
 	ws.publishMu.Lock()
 	defer ws.publishMu.Unlock()
 	if ws.watcher != nil {
@@ -835,6 +839,7 @@ func (ws *workspaceService) publish(force bool) {
 			activity, detail, usage := workspaceRuntime(w)
 			msg["activity"], msg["activity_detail"], msg["usage"] = activity, detail, usage
 			msg["qa_markdown"] = swarm.QAMarkdown(w)
+			msg["qa_document_status"] = ws.qaDocumentStatus(w)
 			qaSummary(w)
 			if w.Document != nil {
 				text, err := readWorkspaceDocument(w.Document.Path)

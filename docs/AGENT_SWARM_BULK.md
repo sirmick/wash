@@ -37,7 +37,8 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
   "profiles":{"worker":{"provider":"codex","model":"<advertised ID>","thinking":"high"}},
   "members":{"K5-red":{"name":"K5 red","profile":"worker","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
   "plan":{"items":{"K5":{"text":"Accept K5","state":"active"}}},
-  "document":{"path":"/data/project/docs/BUILD-PLAN.md","title":"Build plan"}
+  "document":{"path":"/data/project/docs/BUILD-PLAN.md","title":"Build plan"},
+  "qa_document":{"path":"/data/project/docs/WORKSPACE-QA.md","title":"Project QA"}
 }
 ```
 
@@ -85,7 +86,19 @@ is not completion. question/answer/instruction wake; progress records without wa
 
 Wash owns durable QA threads and generates the live Questions Markdown. The sidebar
 shows open threads, blocking state and next responder; selecting one opens the main-panel
-Questions tab at its heading. No agent rewrites a shared QA file or commits per reply.
+Questions tab at its heading. Configure `qa_document:{path,title}` at setup. Wash creates
+the file and atomically replaces it after each QA update or human answer; the full file
+includes all events, IDs and timestamps. The bounded tab preview shows the configured
+path and file-write errors. No agent rewrites that generated file or commits per reply.
+
+Relative output paths resolve from the project root; parent directories must exist.
+Use a new/empty .md file or this workspace's generated file. Existing unrelated documents,
+symlinks, the plan path and another active workspace's QA path are rejected.
+`qa_document:null` detaches output without deleting history or files. Configuration preview
+never writes the file. The backend remains authoritative: a projection failure does not
+undo a committed QA update. Read `qa_document_status` (saved/pending/error) in tool results
+or the Questions tab; the service retries failures and reconstructs output after restart.
+Changing the configured path leaves the old file intact. Output continues without an open tab.
 
 Open and deliver atomically:
 
@@ -122,16 +135,16 @@ policy requires no unresolved blocking QA; Wash does not infer whether a git mer
 omit QA event bodies. The rendered view shows recent events and is bounded; use paginated
 readback for complete history. Limits: 500 threads/workspace, 1,000 events/thread, 32 KiB
 body/evidence, 100 items/batch; idempotency storage is capped at 10,000 retained receipts.
-Export/commit accepted review evidence with ordinary project tools; no automatic file
-exporter or Git ownership mechanism is implemented.
+Commit the automatically maintained Markdown with ordinary project tools when appropriate.
+There is no automatic Git commit or edit/import synchronization from the generated file.
 
 ## Persistence and approval boundary
 
 Browser refresh reconnects to server-owned state; child sessions keep running. Backend
 restart retains QA, inboxes and receipts but pauses recovered members for deliberate resume.
 Uncertain delivery remains explicit. Tabs/drafts are local and not restored. Teardown retains
-backend history; read/export project evidence before detaching, since workspace_get selects
-the current attached workspace and has no archive selector.
+backend history and the last generated QA file; confirm output is saved before detaching.
+`workspace_get` selects the current attached workspace and has no archive selector.
 
 Member transcript tabs expose pending approval controls through the existing human answer
 route. Bulk tools reduce permission round trips; they do not change permission authority.

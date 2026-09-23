@@ -3,6 +3,7 @@ package swarm
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -218,7 +219,32 @@ func LinkQA(w *Workspace, id string, msg *Message) error {
 }
 func QAMarkdown(w *Workspace) string {
 	var b strings.Builder
-	b.WriteString("# Workspace QA\n\nQuestions, decisions and review evidence.\n")
+	_ = writeQAMarkdown(&b, w, true)
+	return b.String()
+}
+
+// WriteQAMarkdown writes the complete history; UI readback alone is bounded.
+func WriteQAMarkdown(out io.Writer, w *Workspace) error { return writeQAMarkdown(out, w, false) }
+
+type qaWriter struct {
+	out  io.Writer
+	size int
+	err  error
+}
+
+func (b *qaWriter) Write(p []byte) (int, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
+	n, err := b.out.Write(p)
+	b.size += n
+	b.err = err
+	return n, err
+}
+func (b *qaWriter) WriteString(s string) { _, _ = io.WriteString(b, s) }
+func writeQAMarkdown(out io.Writer, w *Workspace, bounded bool) error {
+	b := &qaWriter{out: out}
+
 	name := func(id string) string {
 		if id == "human" {
 			return "Owner"
@@ -231,40 +257,48 @@ func QAMarkdown(w *Workspace) string {
 	clean := func(s string) string {
 		return strings.NewReplacer("\n", " ", "\r", " ", "#", "", "<", "&lt;", ">", "&gt;").Replace(s)
 	}
+	title := "Workspace QA"
+	if w.QADocument != nil && w.QADocument.Title != "" {
+		title = w.QADocument.Title
+	}
+	fmt.Fprintf(b, "# %s\n\nQuestions, decisions and review evidence.\n", clean(title))
 	for _, q := range w.QA {
-		if b.Len() > 200*1024 {
+		if bounded && b.size > 200*1024 {
 			b.WriteString("\nView truncated; read complete thread events with workspace_get view=qa and thread_id.\n")
 			break
 		}
-		fmt.Fprintf(&b, "\n## %s · %s — %s\n\nStatus: **%s** · Assigned to: %s · Revision: %d\n", clean(q.Package), q.ID, clean(q.Title), q.State, clean(name(q.Assignee)), q.Revision)
+		fmt.Fprintf(b, "\n## %s · %s — %s\n\nStatus: **%s** · Assigned to: %s · Revision: %d\n", clean(q.Package), q.ID, clean(q.Title), q.State, clean(name(q.Assignee)), q.Revision)
 		if q.Blocking {
 			b.WriteString("\n**Blocks package work.**\n")
 		}
 		if len(q.DecisionRefs) > 0 {
-			fmt.Fprintf(&b, "\nDecision references: %s\n", strings.Join(q.DecisionRefs, ", "))
+			fmt.Fprintf(b, "\nDecision references: %s\n", strings.Join(q.DecisionRefs, ", "))
 		}
 		events := q.Events
-		if len(events) > 30 {
+		if bounded && len(events) > 30 {
 			b.WriteString("\nEarlier events omitted; read the thread through MCP.\n")
 			events = events[len(events)-30:]
 		}
 		for _, e := range events {
-			if b.Len() > 200*1024 {
+			if bounded && b.size > 200*1024 {
 				break
 			}
 			kind := map[string]string{"open": "Question", "reply": "Reply", "question": "Question", "answer": "Answer", "assign": "Assigned", "block": "Blocked", "resolve": "Resolved", "reopen": "Reopened", "decision_request": "Owner decision requested", "decision_response": "Owner decision", "progress": "Progress", "instruction": "Instruction"}[e.Kind]
 			if kind == "" {
 				kind = e.Kind
 			}
-			fmt.Fprintf(&b, "\n### %s · %s\n\n", clean(name(e.Author)), kind)
+			fmt.Fprintf(b, "\n### %s · %s\n\n", clean(name(e.Author)), kind)
+			if !bounded {
+				fmt.Fprintf(b, "Event: `%s` · %s\n\n", e.ID, time.UnixMilli(e.Created).UTC().Format(time.RFC3339))
+			}
 			// Quote each line so collaborator text cannot forge attributed headings.
 			for _, line := range strings.Split(e.Body, "\n") {
-				fmt.Fprintf(&b, "> %s\n", line)
+				fmt.Fprintf(b, "> %s\n", line)
 			}
 		}
 	}
 	if len(w.QA) == 0 {
 		b.WriteString("\nNo QA threads yet.\n")
 	}
-	return b.String()
+	return b.err
 }

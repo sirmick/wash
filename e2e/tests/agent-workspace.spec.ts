@@ -301,12 +301,15 @@ test('bulk workspace setup keeps package workers resident and QA survives refres
  await tool('setup_workspace',{name:'Removed'},true);
  await expect(sidebar).toHaveCount(0);
 expect(about.caller.config_options.length).toBeGreaterThan(0);
- const config={request_id:'package-setup',workspace:{name:'Package QA'},profiles:{worker:{provider:'codex',model:'fast',thinking:'low'}},members:{
+ const qaPath=join(router.xdgConfigHome,'QA.md');
+ const config={qa_document:{path:qaPath,title:'Package questions'},request_id:'package-setup',workspace:{name:'Package QA'},profiles:{worker:{provider:'codex',model:'fast',thinking:'low'}},members:{
   implementer:{name:'K5 implementer',profile:'worker',lifetime:'resident',package:'K5',role:'implementer',instructions:'Implement only the assigned package.',task:'First delivery'},
   red:{name:'K5 red',profile:'worker',lifetime:'resident',package:'K5',role:'reviewer',instructions:'Review defensively; wait for work.'},
  },plan:{items:{K5:{text:'K5 package',state:'active'}}}};
  await tool('workspace_configure',{...config,preview:true});await expect(sidebar).toHaveCount(0);
  const configured=await tool('workspace_configure',config);
+ expect(readFileSync(qaPath,'utf8')).toContain('# Package questions');
+ expect(configured.qa_document_status.state).toBe('saved');
  expect(configured.launches.implementer.state).toBe('available');expect(configured.launches.red.state).toBe('available');
  const state=()=>JSON.parse(readFileSync(join(router.xdgStateHome,'wash/workspaces.json'),'utf8')).workspaces.at(-1);
  await expect.poll(()=>state().assignments[0]?.state).toBe('completed');
@@ -322,10 +325,13 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await tool('message_send',{request_id:'open-qa',recipient:'red',type:'question',body:'Does the clock meet the bound?',qa:{id:'K5-bound',action:'open',package:'K5',title:'Wakeup bound',blocking:true}});
  await sidebar.getByTestId('workspace-question-K5-bound').click();
  await expect(app.getByTestId('workspace-qa')).toContainText('Does the clock meet the bound?');
+ await expect(app.getByTestId('workspace-qa-path')).toHaveText(qaPath);
+ expect(readFileSync(qaPath,'utf8')).toContain('Does the clock meet the bound?');
  await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author===configured.receipt.members.red&&e.body==='Fixture answer')).toBe(true);
  await tool('decision_request',{text:'Choose the bound: recommend A, alternative B.',thread_id:'K5-bound',request_id:'owner-choice'});
  await sidebar.getByLabel('Decision response').fill('Use bound A');await sidebar.getByRole('button',{name:'Answer',exact:true}).click();
  await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author==='human'&&e.body==='Use bound A')).toBe(true);
+ await expect.poll(()=>readFileSync(qaPath,'utf8')).toContain('Use bound A');
  await page.reload();await expect(sidebar).toBeVisible();await sidebar.getByTestId('workspace-qa-link').click();
  await expect(app.getByTestId('workspace-qa')).toContainText('Use bound A');await expect(app.getByTestId('workspace-qa')).toContainText('Owner');
  const qa=await tool('workspace_get',{view:'qa',thread_id:'K5-bound'});
@@ -335,6 +341,7 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await tool('member_control',{action:'end',package:'K5'});
  await expect.poll(()=>state().members.filter((m:any)=>m.package==='K5').every((m:any)=>m.state==='ended')).toBe(true);
  expect(state().qa[0].state).toBe('resolved');
+ expect(readFileSync(qaPath,'utf8')).toContain('Status: **resolved**');
  await sidebar.getByTestId('workspace-qa-link').click();await page.screenshot({path:test.info().outputPath('workspace-qa.png')});
  await tool('workspace_end');await expect(sidebar).toHaveCount(0);
 });

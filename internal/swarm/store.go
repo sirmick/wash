@@ -88,6 +88,7 @@ type Document struct {
 	Title string `json:"title"`
 }
 type Workspace struct {
+	QADocument     *Document               `json:"qa_document,omitempty"`
 	QA             []QAThread              `json:"qa"`
 	Profiles       map[string]AgentProfile `json:"profiles"`
 	DefaultProfile string                  `json:"default_profile"`

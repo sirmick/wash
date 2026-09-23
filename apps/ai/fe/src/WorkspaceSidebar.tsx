@@ -19,6 +19,7 @@ export interface WorkspaceMessage {
 export interface QAThread { id: string; package: string; title: string; assignee: string; state: string; blocking: boolean; revision: number }
 export interface WorkspaceState {
   qa?: QAThread[];
+  qa_document?: {path: string; title?: string};
   profiles?: Record<string, WorkspaceProfile>; default_profile?: string;
   id: string; name: string; state: string; revision: number; orchestrator: string;
   items: WorkspaceItem[]; members: WorkspaceMember[]; messages: WorkspaceMessage[];
@@ -28,6 +29,7 @@ export interface WorkspaceState {
 export interface WorkspaceFrame {
   sequence?: number;
   qa_markdown?: string;
+  qa_document_status?: {path?: string; state: string; error?: string};
   preview?: { member_id: string; events: AgentEvent[]; asks?: AgentAsk[]; note?: string };
   workspace: WorkspaceState | null;
   activity?: Record<string, string>;

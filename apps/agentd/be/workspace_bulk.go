@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/sirmick/wash/internal/swarm"
 )
@@ -47,11 +49,12 @@ type bulkConfig struct {
 		Name string `json:"name"`
 		Root string `json:"project_root"`
 	} `json:"workspace,omitempty"`
-	Members  map[string]*memberSpec `json:"members,omitempty"`
-	Plan     *planPatch             `json:"plan,omitempty"`
-	Document json.RawMessage        `json:"document,omitempty"`
-	Request  string                 `json:"request_id,omitempty"`
-	Preview  bool                   `json:"preview,omitempty"`
+	Members    map[string]*memberSpec `json:"members,omitempty"`
+	Plan       *planPatch             `json:"plan,omitempty"`
+	QADocument json.RawMessage        `json:"qa_document,omitempty"`
+	Document   json.RawMessage        `json:"document,omitempty"`
+	Request    string                 `json:"request_id,omitempty"`
+	Preview    bool                   `json:"preview,omitempty"`
 }
 
 func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw json.RawMessage) (any, error) {
@@ -61,7 +64,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		return nil, err
 	}
 	for key, value := range fields {
-		if string(value) == "null" && key != "document" {
+		if string(value) == "null" && key != "document" && key != "qa_document" {
 			return nil, fmt.Errorf("%s cannot be null", key)
 		}
 	}
@@ -106,6 +109,38 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			return nil, err
 		}
 		doc.Path = path
+	}
+	var qaDoc *swarm.Document
+	if len(p.QADocument) > 0 && string(p.QADocument) != "null" {
+		if err := decodeWorkspace(p.QADocument, &qaDoc); err != nil {
+			return nil, err
+		}
+		if qaDoc == nil || !swarm.ValidText(qaDoc.Path, 4096) || len(qaDoc.Title) > 500 {
+			return nil, errors.New("invalid QA document")
+		}
+		path := qaDoc.Path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		path, err := h.confineOrAsk(ctx, "Write", path)
+		if err != nil {
+			return nil, err
+		}
+		parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+		if err != nil {
+			return nil, err
+		}
+		qaDoc.Path = filepath.Join(parent, filepath.Base(path))
+		if !strings.EqualFold(filepath.Ext(qaDoc.Path), ".md") {
+			return nil, errors.New("QA document must be a .md file")
+		}
+		owner := ""
+		if current := ws.store.View(h.sessionID); current != nil {
+			owner = current.ID
+		}
+		if err := validateQAFile(qaDoc.Path, owner); err != nil {
+			return nil, err
+		}
 	}
 	keys := make([]string, 0, len(p.Members))
 	for key, m := range p.Members {
@@ -171,9 +206,23 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if _, err := s.Configure(h.sessionID, patch); err != nil {
 			return nil, err
 		}
+		allWorkspaces := s.Snapshot().Workspaces
 		err := s.Mutate(h.sessionID, true, func(w *swarm.Workspace, creator *swarm.Member) error {
+			if len(p.QADocument) > 0 {
+				if qaDoc != nil {
+					for _, other := range allWorkspaces {
+						if other.ID != w.ID && other.State != "ended" && other.QADocument != nil && other.QADocument.Path == qaDoc.Path {
+							return errors.New("QA document is used by another workspace")
+						}
+					}
+				}
+				w.QADocument = qaDoc
+			}
 			if len(p.Document) > 0 {
 				w.Document = doc
+			}
+			if w.QADocument != nil && w.Document != nil && w.QADocument.Path == w.Document.Path {
+				return errors.New("QA output must differ from the plan document")
 			}
 			if p.Plan != nil {
 				ids := make([]string, 0, len(p.Plan.Items))
@@ -288,7 +337,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		for _, key := range keys {
 			members[key] = swarm.GetMember(w, key).ID
 		}
-		return map[string]any{"workspace_id": w.ID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "profiles": w.Profiles, "default_profile": w.DefaultProfile, "items": w.Items, "document": w.Document, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
+		return map[string]any{"workspace_id": w.ID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "profiles": w.Profiles, "default_profile": w.DefaultProfile, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
 	})
 	if err != nil || p.Preview {
 		return result, err

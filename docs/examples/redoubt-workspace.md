@@ -50,6 +50,7 @@ model placeholders and derive the keyed plan from the current project first.
   },
   "default_profile":"pleb",
   "document":{"path":"/data/redoubt/docs/BUILD-PLAN.md","title":"Redoubt build plan"},
+  "qa_document":{"path":"/data/redoubt/docs/WORKSPACE-QA.md","title":"Redoubt QA"},
   "members":{
     "architect":{
       "name":"Architect","profile":"god","cwd":"/data/redoubt",
@@ -114,7 +115,13 @@ failure; report it rather than repeatedly launching the same blocked preset.
 
 ## First-class QA and design decisions
 
-Wash owns the durable QA records and generates the live **Questions** Markdown tab.
+Wash owns the durable QA records and the live **Questions** Markdown tab. Configure
+`qa_document` during workspace setup: `/data/redoubt/docs/WORKSPACE-QA.md`, title
+`Redoubt QA`. Wash creates the file and atomically refreshes its complete history after
+every QA update, including actual human answers. The tab shows its path and write errors.
+Check `qa_document_status`; on error the backend records are safe and file writes retry.
+Use a new/empty file, or reuse this workspace's generated file. Preserve an older
+workspace's file by choosing a new filename; never overwrite formal project QA records.
 All agents use MCP; nobody edits a shared QA Markdown file. Git commits do not serialize
 concurrent questions. Stable thread IDs, atomic append operations and revision guards do.
 The Architect alone edits formal QUESTIONS/ANSWERS/specifications under the project QA
@@ -153,9 +160,10 @@ Only the orchestrator or a reviewer tagged to that package can resolve, with evi
 Use the actual revision/references/evidence, not these placeholders. Pending human
 decisions prevent resolution. Reopen with a reason when evidence changes. Acceptance
 requires no unresolved blocking QA; record any deferred nonblocking question explicitly.
-At acceptance the orchestrator may export QA Markdown via workspace_get and commit a
-review record with normal file tools. There is no automatic exporter or agent-per-question
-commit requirement. Persist formal decisions/evidence in the owning project documents.
+At acceptance the orchestrator can commit the generated WORKSPACE-QA.md with the
+review evidence; no per-question commit or manual export is needed. Wash is its only
+writer. `qa_document:null` stops file updates without deleting the file or QA records.
+Persist formal decisions/evidence in the owning project documents.
 
 ## Inbox, status and waiting
 
@@ -194,5 +202,6 @@ Failed reserved launches can be retried with member_control resume; read outcome
 
 Only on requested teardown, call `workspace_end`. Children end and the sidebar disappears;
 the owning conversation, retained history and project files remain. Teardown is not permission
-to restart Wash or discard worktrees. Archived QA is retained in backend storage; export needed
-project evidence before teardown, since workspace_get reads the attached workspace.
+to restart Wash or discard worktrees. Archived QA remains in backend storage and the
+generated Markdown file remains on disk. Confirm qa_document_status is saved before
+teardown; workspace_get reads the attached workspace.

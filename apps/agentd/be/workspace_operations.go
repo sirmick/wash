@@ -70,6 +70,35 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 	return results, nil
 }
 func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.Call) (any, error) {
+	result, err := ws.callOperation(ctx, h, c)
+	var options struct {
+		Preview bool `json:"preview"`
+	}
+	_ = json.Unmarshal(c.Arguments, &options)
+	if err != nil || options.Preview {
+		return result, err
+	}
+	if c.Name != "workspace_get" && c.Name != "inbox_read" {
+		ws.syncQADocuments()
+	}
+	w := ws.store.View(h.sessionID)
+	if w != nil && w.QADocument != nil && result != nil {
+		// Report file failures separately from a successfully committed QA change.
+		status := ws.qaDocumentStatus(w)
+		if object, ok := result.(map[string]any); ok {
+			object["qa_document_status"] = status
+		} else {
+			encoded, _ := json.Marshal(result)
+			var object map[string]any
+			if json.Unmarshal(encoded, &object) == nil && object != nil {
+				object["qa_document_status"] = status
+				result = object
+			}
+		}
+	}
+	return result, nil
+}
+func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c workspacemcp.Call) (any, error) {
 	if err := workspacemcp.ValidateCall(c); err != nil {
 		return nil, err
 	}
