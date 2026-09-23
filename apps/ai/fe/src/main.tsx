@@ -1,9 +1,11 @@
+import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
 // Shared bundle for two surfaces: the singleton Agents manager renders the
 // roster/history/launcher; an Agent controller renders one AgentSession.
 // The custom element names the role; agentd remains authoritative for both
 // stores.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { WorkspaceSidebar, type WorkspaceFrame, type WorkspaceResult } from './WorkspaceSidebar.tsx';
 import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
 import { isStaleTranscript } from './transcript-guard.ts';
@@ -75,6 +77,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     isManagerElement(props.host.tagName) ? 'manager' : 'session',
   );
   const [events, setEvents] = createSignal<AgentEvent[]>([]);
+  const [workspaceFrame, setWorkspaceFrame] = createSignal<WorkspaceFrame>({ workspace: null });
+  const [workspaceResult, setWorkspaceResult] = createSignal<WorkspaceResult>();
   // One replay request in flight at a time; the snapshot clears it.
   let resyncPending = false;
   const [sessionKey, setSessionKey] = createSignal('');
@@ -200,6 +204,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
+      case 'workspace_state':
+        if (!staleTranscript(m)) setWorkspaceFrame(m as unknown as WorkspaceFrame);
+        break;
+      case 'workspace_patch':
+        if (!staleTranscript(m)) {
+          const next = applyWorkspacePatch(workspaceFrame(), m as unknown as WorkspacePatch);
+          if (next) setWorkspaceFrame(next);
+          else send({ kind: 'workspace_refresh' });
+        }
+        break;
+      case 'workspace_result':
+        if (!staleTranscript(m)) setWorkspaceResult(m as unknown as WorkspaceResult);
+        break;
       case 'role':
         setRole(m.role === 'manager' ? 'manager' : 'session');
         break;
@@ -1159,6 +1176,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             />
           </Show>
         </div>
+        <Show when={workspaceFrame().workspace}>
+          <WorkspaceSidebar frame={workspaceFrame()} result={workspaceResult()} onAction={(name, args) => send({ kind: 'workspace_action', name, arguments: args })} />
+        </Show>
       </div>
     </div>
     </>

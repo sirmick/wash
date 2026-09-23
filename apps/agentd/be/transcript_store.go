@@ -460,6 +460,9 @@ func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 		}
 		t.seq = max
 	}
+	if workspaces != nil {
+		workspaces.restoreProvenance(sessionID, t.events)
+	}
 	events := append([]Event(nil), t.events...)
 	transMu.Unlock()
 

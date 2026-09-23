@@ -29,6 +29,7 @@ import (
 	"github.com/sirmick/wash/internal/runner/fswatchd"
 	"github.com/sirmick/wash/internal/runner/launch"
 	routerrun "github.com/sirmick/wash/internal/runner/router"
+	"github.com/sirmick/wash/internal/workspacemcp"
 	"github.com/sirmick/wash/pkg/apps/registry"
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -38,6 +39,9 @@ import (
 var vmloginRun func([]string) int
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == workspacemcp.Argument {
+		os.Exit(workspacemcp.Run())
+	}
 	name := filepath.Base(os.Args[0])
 
 	// Subcommand mode: invoked as plain `wash <verb> [...]`.

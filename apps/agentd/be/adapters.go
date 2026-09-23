@@ -199,6 +199,9 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	bindTranscript(h.key, h.sessionID, agentID, h.cwd, time.Now())
 	h.applyModes(res2.Modes)
 	h.register()
+	if workspaces != nil {
+		workspaces.bindSession(h)
+	}
 	go h.watchExit()
 	// The settings block arrives with the session, not only on later
 	// updates — without this the controls were empty until the agent
@@ -208,6 +211,7 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	// the LAST summary, so a session the router outlives still says what
 	// it was running rather than only cleanly-retired ones.
 	h.noteSession("", time.Now())
+	h.sessionReady.Store(true)
 	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d mcp=%d",
 		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes), len(h.mcp))
 	return h, nil
@@ -304,6 +308,14 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	}
 
 	h.stop = stop
+	if workspaces != nil {
+		if err := workspaces.inject(h); err != nil {
+			h.stop()
+			return nil, err
+		}
+		originalStop := h.stop
+		h.stop = func() { workspaces.revoke(h); originalStop() }
+	}
 	h.client = acp.NewClient(stdout, stdin, h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
@@ -325,7 +337,7 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		Terminal: true,
 	}, acp.Implementation{Name: "wash", Title: "wash", Version: version.Version})
 	if err != nil {
-		stop()
+		h.stop()
 		return nil, fmt.Errorf("initialize %s: %w", a.ID, err)
 	}
 	// The adapter's auth methods are kept for the error message the
@@ -342,7 +354,16 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 // is already claimed (tests).
 func promptHosted(h *hosted, t turn) (next turn) {
 	text := t.text
-	if h.conn != nil {
+	if t.origin != "" {
+		body := t.displayText
+		if body == "" {
+			body = text
+		}
+		e := appendEvent(h.key, Event{Kind: "collaboration", Text: t.origin + "\n\n" + body}, time.Now())
+		if h.conn != nil {
+			pushEvent(h.conn, h.key, e)
+		}
+	} else if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
 		queuePreviewPatch(h.key)
 	} else {
@@ -358,6 +379,12 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	}
 	blocks = append(blocks, t.blocks...)
 	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
+	if workspaces != nil {
+		if e := workspaces.store.TurnEnded(h.sessionID, t.mailID, err != nil || res.StopReason == acp.StopCancelled); e != nil {
+			log.Printf("agentd: workspace turn outcome: %v", e)
+		}
+		defer workspaces.signal()
+	}
 	switch {
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
@@ -497,6 +524,9 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	// Register BEFORE loading: the replay arrives as notifications, and
 	// they need a roster row and a transcript to land in.
 	h.register()
+	if workspaces != nil {
+		workspaces.bindSession(h)
+	}
 	go h.watchExit()
 	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, h.mcp)
 	if err != nil {
@@ -521,6 +551,7 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	log.Printf("agentd: acp session resumed key=%s agent=%s session=%s cwd=%s mode=%s modes=%d configs=%d",
 		h.key, agentID, sessionID, h.cwd, res.Modes.CurrentModeID, len(res.Modes.AvailableModes), len(res.ConfigOptions))
 	h.setState("done", "resumed")
+	h.sessionReady.Store(true)
 	return h, nil
 }
 

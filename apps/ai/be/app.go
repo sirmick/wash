@@ -428,6 +428,13 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": agentd.FocusKind, "key": key})
 		}
 
+	case "workspace_refresh":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "workspace_refresh", "key": session.key})
+	case "workspace_action":
+		if session.key == "" {
+			return
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "workspace_action", "key": session.key, "name": m["name"], "arguments": m["arguments"]})
 	case "resync":
 		// The FE holds a transcript it can no longer append deltas to (it
 		// missed a base). Replay the history; deltas resume from it.
@@ -774,6 +781,10 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 	// Usage is a coalesced, latest-wins patch from agentd. Forward it as
 	// Bulk: a token counter must never sit ahead of typing, window movement,
 	// or a permission question on the browser's single socket.
+	case "workspace_state", "workspace_patch", "workspace_result":
+		if str(m["key"]) == session.key {
+			c.SendAppMsgBulk(m)
+		}
 	case "usage_patch":
 		c.SendAppMsgBulk(m)
 

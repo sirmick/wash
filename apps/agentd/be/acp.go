@@ -118,7 +118,8 @@ type hosted struct {
 	detached bool
 	// closing is set the moment retire starts, before the adapter is
 	// killed, so the exit watcher can tell "we ended it" from "it died".
-	closing atomic.Bool
+	closing      atomic.Bool
+	sessionReady atomic.Bool
 	// tail is the adapter's last stderr bytes (see stderrTail).
 	// stderrDone closes when the adapter's stderr reader has drained. The
 	// exit watcher wakes on stdout closing, which routinely beats the last
@@ -175,8 +176,11 @@ type hosted struct {
 // splitting it into two turns would make the agent answer the first
 // without the second.
 type turn struct {
-	text   string
-	blocks []acp.ContentBlock
+	origin      string
+	displayText string
+	mailID      string
+	text        string
+	blocks      []acp.ContentBlock
 }
 
 // empty reports a turn with nothing in it, which is what the queue drain
@@ -374,6 +378,9 @@ func (h *hosted) retire() {
 		return
 	}
 	h.closing.Store(true)
+	if workspaces != nil {
+		workspaces.retired(h)
+	}
 	h.journal("agent.end", "session ended")
 	h.releaseOwned(ReasonSessionEnded)
 	forgetTranscriptWatchers(h.key)
@@ -480,6 +487,10 @@ func (h *hosted) watchExit() {
 
 	// The row first, so the status line changes colour before the note
 	// lands; then the note, which is what explains the colour.
+	if workspaces != nil {
+		_ = workspaces.store.TurnEnded(h.sessionID, "", true)
+		workspaces.signal()
+	}
 	h.endTurn("failed", "exited")
 	text := "The agent exited unexpectedly"
 	if err != nil && err != acp.ErrClosed {
@@ -1395,6 +1406,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		h := lookupHosted(req.Key)
 		if h == nil {
 			return nil
+		}
+		if workspaces != nil {
+			_ = workspaces.store.TurnEnded(h.sessionID, "", true)
 		}
 		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
 		// A question the turn was blocked on goes with the turn: the

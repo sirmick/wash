@@ -41,6 +41,9 @@ var sessionID = "fake-session-1"
 const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 func main() {
+	if os.Getenv("WASH_FAKE_WORKSPACE") == "1" {
+		sessionID = fmt.Sprintf("fake-session-%d", os.Getpid())
+	}
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64<<10), 8<<20)
 	out := bufio.NewWriter(os.Stdout)
@@ -83,6 +86,7 @@ func main() {
 			})
 
 		case "session/new":
+			captureWorkspace(m)
 			reply(out, id, map[string]any{
 				"sessionId": sessionID,
 				"modes": map[string]any{
@@ -113,6 +117,7 @@ func main() {
 			notify(out, update(map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": mode}))
 
 		case "session/load":
+			captureWorkspace(m)
 			// A load MUST replay the conversation before it answers.
 			// Reproducing that ordering is the point of covering it here.
 			notify(out, chunk("Earlier in this session we discussed **resuming**."))
@@ -168,6 +173,11 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 	text := promptText(m)
 	raw := promptTextRaw(m)
 	id := m["id"]
+	if text, ok := workspaceScript(raw); ok {
+		notify(out, chunk(text))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
 
 	notify(out, update(map[string]any{
 		"sessionUpdate": "usage_update", "used": 14689, "size": 258400,
@@ -410,6 +420,7 @@ func await(id string) any {
 	if ch == nil {
 		return nil
 	}
+	defer func() { pendingMu.Lock(); delete(pending, id); pendingMu.Unlock() }()
 	select {
 	case v := <-ch:
 		return v
@@ -421,10 +432,12 @@ func await(id string) any {
 func deliver(id string, result any) {
 	pendingMu.Lock()
 	ch := pending[id]
-	delete(pending, id)
 	pendingMu.Unlock()
 	if ch != nil {
-		ch <- result
+		select {
+		case ch <- result:
+		default:
+		}
 	}
 }
 

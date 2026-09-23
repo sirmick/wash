@@ -69,17 +69,17 @@ test.describe('adapter configuration', () => {
     await startAgent(page, router.url);
     // The fake logs every frame it could not handle, but session/new it
     // answers — so the wire is asserted where wash writes it: agentd's
-    // own line, which now counts what it offered.
-    await router.waitForLog(/agentd: acp session started .*mcp=2/, 25_000, cursor);
+    // own line: both configured servers plus the built-in workspace bridge.
+    await router.waitForLog(/agentd: acp session started .*mcp=3/, 25_000, cursor);
   });
 
-  test('no agents.json is the launch every box had before', async ({ page, router }) => {
+  test('no agents.json keeps default launch settings and offers the built-in workspace MCP', async ({ page, router }) => {
     const cursor = router.logCursor();
     const win = await startAgent(page, router.url);
     const composer = win.locator('textarea');
     await composer.fill('launchinfo');
     await composer.press('Enter');
     await expect(win.getByText(/LAUNCH<<args= mark=>>/)).toBeVisible({ timeout: 20_000 });
-    await router.waitForLog(/agentd: acp session started .*mcp=0/, 25_000, cursor);
+    await router.waitForLog(/agentd: acp session started .*mcp=1/, 25_000, cursor);
   });
 });

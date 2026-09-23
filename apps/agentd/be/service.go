@@ -178,6 +178,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	registerSessionAdminHandlers(bus)
 	registerTranscriptHandlers(bus)
 	registerControllerHandlers(bus)
+	if err := startWorkspaces(c, bus); err != nil {
+		log.Printf("agentd: workspace service unavailable: %v", err)
+	}
 	// Child-spawning services group-kill on SIGTERM AND on connection
 	// close; the SDK fires this hook on both.
 	sdk.OnTerminate(stopAllHosted)
