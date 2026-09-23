@@ -11,7 +11,6 @@ import (
 	"sort"
 
 	"github.com/sirmick/wash/internal/swarm"
-	"github.com/sirmick/wash/internal/workspacemcp"
 )
 
 func decodeWorkspace(raw json.RawMessage, out any) error {
@@ -21,10 +20,6 @@ func decodeWorkspace(raw json.RawMessage, out any) error {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	return d.Decode(out)
-}
-func legacyCall(ctx context.Context, ws *workspaceService, h *hosted, name string, args any) (any, error) {
-	raw, _ := json.Marshal(args)
-	return ws.callLegacy(ctx, h, workspacemcp.Call{Name: name, Arguments: raw})
 }
 
 type memberSpec struct {
@@ -320,7 +315,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			continue
 		}
 		if m.State == "pending" {
-			_, startErr := ws.spawn(ctx, h, workspaceArgs{Reserved: m.ID})
+			_, startErr := ws.spawn(ctx, h, m.ID)
 			if startErr != nil {
 				state := "ended"
 				if current := swarm.GetMember(ws.store.View(h.sessionID), m.ID); current != nil {

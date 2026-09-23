@@ -79,8 +79,6 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 	switch c.Name {
 	case "workspace_configure":
 		return ws.configureBulk(ctx, h, c.Arguments)
-	case "workspace_end":
-		return legacyCall(ctx, ws, h, "teardown_workspace", map[string]any{})
 	case "member_control":
 		var p struct {
 			Action  string   `json:"action"`
@@ -147,7 +145,7 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 					return nil
 				})
 				if err == nil {
-					result, err = ws.spawn(ctx, h, workspaceArgs{Reserved: id})
+					result, err = ws.spawn(ctx, h, id)
 				}
 			} else {
 				result, err = ws.lifecycle(ctx, h, "member_"+p.Action, id)
@@ -224,7 +222,30 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 				return nil, err
 			}
 			if p.Waiting != nil {
-				if _, err := legacyCall(ctx, &workspaceService{store: s}, h, "member_wait", map[string]any{"reason": p.Waiting.Reason, "reply_to": p.Waiting.Reply}); err != nil {
+				if err := s.Mutate(h.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
+					if !swarm.ValidText(p.Waiting.Reason, 500) {
+						return errors.New("invalid waiting reason")
+					}
+					if p.Waiting.Reply != "" {
+						found := false
+						for _, msg := range w.Messages {
+							if msg.ID == p.Waiting.Reply && (msg.Sender == m.ID || msg.Recipient == m.ID) {
+								found = true
+								break
+							}
+						}
+						if !found {
+							return errors.New("unknown waiting correlation")
+						}
+					}
+					m.WaitingFor, m.Waiting = p.Waiting.Reply, p.Waiting.Reason
+					for i := range w.Assignments {
+						if w.Assignments[i].Member == m.ID && w.Assignments[i].State == "active" {
+							w.Assignments[i].State = "blocked"
+						}
+					}
+					return nil
+				}); err != nil {
 					return nil, err
 				}
 			}
@@ -266,7 +287,7 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 		}
 		return ws.store.Transaction(h.sessionID, c.Name, p.Request, c.Arguments, false, func(s *swarm.Store) (any, error) { return applyAssignments(s, h, p.Updates) })
 	case "message_send":
-		// Preserve the v1 single-message shape for resumed conversations.
+		// A single message and a batch use the same atomic mutation path.
 		var fields map[string]json.RawMessage
 		_ = json.Unmarshal(c.Arguments, &fields)
 		var p struct {
@@ -377,6 +398,6 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 		}
 		return result, err
 	default:
-		return ws.callLegacy(ctx, h, c)
+		return ws.callCore(h, c)
 	}
 }

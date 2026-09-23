@@ -22,25 +22,26 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
   if (await app.getByRole('tab',{name:'Conversation',exact:true}).count()) await app.getByRole('tab',{name:'Conversation',exact:true}).click();
   await composer.fill(`workspace ${name} ${JSON.stringify(args)}`);await composer.press('Enter');
  };
- await tool('setup_workspace',{name:'Redoubt test',items:[{id:'timer',text:'Build timer',state:'pending'}]});
+ await tool('workspace_configure',{workspace:{name:'Redoubt test'},plan:{items:{timer:{text:'Build timer',state:'pending'}}}});
  const sidebar=app.locator('[data-testid="workspace-sidebar"]');
  await expect(sidebar).toBeVisible();
- await tool('plan_update_item',{id:'timer',state:'active',emoji:'🔨'});
+ await tool('workspace_configure',{plan:{items:{timer:{state:'active',emoji:'🔨'}}}});
  await sidebar.locator('[data-testid="workspace-plan-link"]').click();
  await expect(app.locator('[data-testid="workspace-item-timer"]')).toContainText('active');
  const doc=join(router.xdgConfigHome,'PLAN.md');writeFileSync(doc,'# Timer design\nFirst version.');
- await tool('document_set',{path:doc,title:'Design notes'});
+ await tool('workspace_configure',{document:{path:doc,title:'Design notes'}});
  await sidebar.getByRole('button',{name:'Design notes',exact:true}).click();
  await expect(app.locator('[data-testid="workspace-document"]')).toContainText('First version');
  writeFileSync(doc+'.tmp','# Timer design\nAtomic replacement.');renameSync(doc+'.tmp',doc);
  await expect(app.locator('[data-testid="workspace-document"]')).toContainText('Atomic replacement');
- await tool('member_spawn',{name:'Architect',instructions:'Review clock designs.',lifetime:'resident'});
+ await tool('workspace_configure',{members:{architect:{name:'Architect',instructions:'Review clock designs.',lifetime:'resident'}}});
  await expect.poll(()=>state().members.length).toBe(2);
  const resident=state().members.find((m:any)=>m.name==='Architect').id;
  await expect.poll(()=>state().messages.filter((m:any)=>m.recipient===resident&&m.delivery==='acknowledged').length).toBe(1);
+ expect(state().members.find((m:any)=>m.id===resident).initial_configs.model).toBe('fast');
  await tool('message_send',{recipient:resident,type:'question',body:'Which clock?'});
  await expect.poll(()=>state().messages.some((m:any)=>m.type==='answer'&&m.body==='Fixture answer')).toBe(true);
- await tool('member_spawn',{name:'Implementer',instructions:'Implement an assigned timer.',lifetime:'ephemeral',task:'WAIT_FOR_ANSWER'});
+ await tool('workspace_configure',{members:{implementer:{name:'Implementer',instructions:'Implement an assigned timer.',lifetime:'ephemeral',task:'WAIT_FOR_ANSWER'}}});
  await expect.poll(()=>state().members.find((m:any)=>m.name==='Implementer')?.state).toBe('ended');
  expect(state().assignments[0].state).toBe('completed');
  expect(state().assignments[0].result).toBe('Completed after an inbox reply');
@@ -50,7 +51,7 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await expect(app.locator('[data-testid="workspace-member-detail"]')).toContainText('Archived conversation');
  await expect(app.locator('[data-testid="workspace-member-detail"]')).toContainText('Completed after an inbox reply');
  expect(state().members.find((m:any)=>m.id===resident).state).toBe('available');
- await tool('member_pause',{member_id:resident});
+ await tool('member_control',{action:'pause',member_ids:[resident]});
  await expect.poll(()=>state().members.find((m:any)=>m.id===resident).state).toBe('paused');
  await tool('message_send',{recipient:resident,type:'instruction',body:'Retained while paused'});
  await expect.poll(()=>state().messages.find((m:any)=>m.body==='Retained while paused')?.delivery).toBe('queued');
@@ -64,7 +65,7 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await expect.poll(()=>state().messages.find((m:any)=>m.body==='Human follow-up')?.delivery).toBe('acknowledged');
  expect(state().messages.find((m:any)=>m.body==='Retained while paused').delivery).toBe('acknowledged');
  await expect(app.locator('[data-testid="workspace-member-detail"]')).toContainText('Human follow-up');
- await tool('member_set_status',{text:'Review complete',emoji:'✅'});
+ await tool('member_update',{status:'Review complete',emoji:'✅'});
  await expect(sidebar).toContainText('Review complete');
  await tool('decision_request',{text:'Ship the timer?'});
  await sidebar.getByLabel('Decision response').fill('Proceed');
@@ -78,7 +79,7 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  const focusCursor=router.logCursor();
  await flash.click();
  await router.waitForLog(/agentd: focus key=.*raising controller=/,10_000,focusCursor);
- await tool('plan_update_item',{id:'timer',state:'done'});
+ await tool('workspace_configure',{plan:{items:{timer:{state:'done'}}}});
  await sidebar.locator('[data-testid="workspace-plan-link"]').click();
  await expect(app.locator('[data-testid="workspace-item-timer"]')).toContainText('done');
  await page.reload();
@@ -88,11 +89,11 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await expect(sidebar).toBeVisible();
  await sidebar.locator('[data-testid="workspace-plan-link"]').click();
  await expect(app.locator('[data-testid="workspace-item-timer"]')).toContainText('done');
- await tool('teardown_workspace');
+ await tool('workspace_end');
  await expect(sidebar).toHaveCount(0);
  expect(readFileSync(doc,'utf8')).toContain('Atomic replacement');
  expect(state().state).toBe('ended');
- await tool('setup_workspace',{name:'Another project'});
+ await tool('workspace_configure',{workspace:{name:'Another project'}});
  await expect(sidebar).toContainText('Another project');
  await expect(page.locator('wash-app-ai')).toHaveCount(1);
 });
@@ -127,7 +128,7 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  expect(about.permissions.filesystem_enforcement).toMatch(/^unknown:/);
  expect(await tool('workspace_get')).toBeNull();
  await expect(app.locator('[data-testid="workspace-sidebar"]')).toHaveCount(0);
- await tool('setup_workspace', { name: 'Profiles' });
+ await tool('workspace_configure', { workspace:{name: 'Profiles'} });
  expect((await tool('workspace_get', {view:'about'})).caller.role).toBe('orchestrator');
  const before = await tool('workspace_get');
  expect(before.sessions[before.workspace.orchestrator].config_options.map((c: any) => c.category)).toEqual(['model', 'thought_level']);
@@ -136,20 +137,22 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
   profiles: { god: { provider: 'codex', model: 'smart', thinking: 'high' }, pleb: { provider: 'codex', model: 'fast', thinking: 'low' } },
   default_profile: 'pleb',
  });
- const resident = await tool('member_spawn', { name: 'Architect', profile: 'god', instructions: 'Wait for design questions.', lifetime: 'resident' });
+ const resident = (await tool('workspace_configure', {members:{architect:{ name: 'Architect', profile: 'god', instructions: 'Wait for design questions.', lifetime: 'resident' }}})).launches.architect;
  expect(resident.profile).toBe('god');
  expect(resident.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
  const sidebar = app.locator('[data-testid="workspace-sidebar"]');
  await sidebar.locator(`[data-testid="workspace-member-${resident.id}"]`).click();
  await expect(app.locator('[data-testid="workspace-member-launch"]')).toHaveText('Launched: god · codex · smart · thinking high');
  await tool('workspace_configure', { profiles: { god: { provider: 'codex', model: 'fast', thinking: 'low' } } });
- const helper = await tool('member_spawn', { name: 'Helper', instructions: 'Wait for work.', lifetime: 'resident' });
+ const helper = (await tool('workspace_configure', {members:{helper:{ name: 'Helper', instructions: 'Wait for work.', lifetime: 'resident' }}})).launches.helper;
  expect(helper.profile).toBe('pleb');
  expect(helper.initial_configs).toEqual({ model: 'fast', reasoning_effort: 'low' });
- const override = await tool('member_spawn', { name: 'Reviewer', profile: 'god', model: 'smart', thinking: 'high', instructions: 'Wait for a review.', lifetime: 'resident' });
+ const override = (await tool('workspace_configure', {members:{reviewer:{ name: 'Reviewer', profile: 'god', model: 'smart', thinking: 'high', instructions: 'Wait for a review.', lifetime: 'resident' }}})).launches.reviewer;
  expect(override.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
- await tool('member_spawn', { name: 'Unknown', profile: 'missing', instructions: 'Must not launch.', lifetime: 'resident' }, true);
- await tool('member_spawn', { name: 'Invalid thinking', profile: 'pleb', thinking: 'high', instructions: 'Must not run.', lifetime: 'resident' }, true);
+ await tool('workspace_configure', {members:{unknown:{ name: 'Unknown', profile: 'missing', instructions: 'Must not launch.', lifetime: 'resident' }}}, true);
+ const failedLaunch = await tool('workspace_configure', {members:{invalid:{ name: 'Invalid thinking', profile: 'pleb', thinking: 'high', instructions: 'Must not run.', lifetime: 'resident' }}});
+ expect(failedLaunch.launches.invalid.state).toBe('failed');
+ expect(failedLaunch.launches.invalid.error).toBeTruthy();
  const after = await tool('workspace_get', { include_messages: true });
  expect(after.workspace.profiles.god.model).toBe('fast');
  expect(after.workspace.members.find((m: any) => m.id === resident.id).launch_settings).toMatchObject({ model: 'smart', thinking: 'high' });
@@ -165,7 +168,7 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  expect(removed.workspace.profiles.pleb.model).toBe('fast');
  expect(removed.workspace.default_profile).toBe('');
  expect(removed.workspace.name).toBe('Profiles');
- await tool('teardown_workspace');
+ await tool('workspace_end');
  await expect(sidebar).toHaveCount(0);
 });
 
@@ -179,7 +182,7 @@ test('sidebar shows live context and activity, and human messages remain distinc
  const app=page.locator('wash-app-ai');
  const composer=app.locator('[data-testid="agent-composer"]').first();
  await expect(composer).toBeEnabled();
- await composer.fill('workspace setup_workspace {"name":"Telemetry"}');
+ await composer.fill('workspace workspace_configure {"workspace":{"name":"Telemetry"}}');
  await composer.press('Enter');
  const sidebar=app.locator('[data-testid="workspace-sidebar"]');
  await expect(sidebar).toBeVisible();
@@ -204,7 +207,7 @@ test('sidebar shows live context and activity, and human messages remain distinc
  const colors=await human.evaluate(el=>({fg:getComputedStyle(el).color,bg:getComputedStyle(el).backgroundColor}));
  expect(colors.bg).not.toBe('rgba(0, 0, 0, 0)');
  await page.screenshot({path:test.info().outputPath('workspace-activity.png')});
- await composer.fill('workspace member_wait {"reason":"Awaiting next instruction"}');await composer.press('Enter');
+ await composer.fill('workspace member_update {"waiting":{"reason":"Awaiting next instruction"}}');await composer.press('Enter');
  await expect(dot).toHaveAttribute('data-activity','waiting-message');
  await expect(dot).toHaveAttribute('data-pulse','false');
  await page.reload();
@@ -232,9 +235,9 @@ test('workspace tabs preserve drafts and the sidebar resizes without overflowing
   return JSON.parse((await outputs.last().innerText()).slice('WORKSPACE_RESULT '.length));
  };
  await expect(composer).toBeEnabled();
- await tool('setup_workspace',{name:'Tab navigation',items:[{id:'clock',text:'Verify timer clock',state:'active'}]});
- const member=await tool('member_spawn',{name:'Architect',lifetime:'resident',instructions:'Wait for a design question.'});
- const other=await tool('member_spawn',{name:'Reviewer',lifetime:'resident',instructions:'Wait for review.'});
+ await tool('workspace_configure',{workspace:{name:'Tab navigation'},plan:{items:{clock:{text:'Verify timer clock',state:'active'}}}});
+ const member=(await tool('workspace_configure',{members:{architect:{name:'Architect',lifetime:'resident',instructions:'Wait for a design question.'}}})).launches.architect;
+ const other=(await tool('workspace_configure',{members:{reviewer:{name:'Reviewer',lifetime:'resident',instructions:'Wait for review.'}}})).launches.reviewer;
  await composer.fill('Keep this conversation draft');
  await sidebar.getByTestId('workspace-plan-link').click();
  await expect(main.getByTestId('workspace-item-clock')).toContainText('Verify timer clock');
@@ -271,7 +274,7 @@ test('workspace tabs preserve drafts and the sidebar resizes without overflowing
  await page.reload();
  await expect(divider).toHaveAttribute('aria-valuenow',saved!);
  await expect(app.getByRole('tab')).toHaveCount(1);
- await tool('teardown_workspace');
+ await tool('workspace_end');
  await expect(sidebar).toHaveCount(0);
  await expect(app.getByRole('tablist',{name:'Workspace views'})).toHaveCount(0);
  await expect(composer).toBeEnabled();
@@ -293,7 +296,11 @@ test('bulk workspace setup keeps package workers resident and QA survives refres
  };
  await expect(composer).toBeEnabled();
  const about=await tool('workspace_get',{view:'about'});expect(about.tools).toHaveLength(12);
- expect(about.tools).not.toContain('member_spawn');expect(about.caller.config_options.length).toBeGreaterThan(0);
+ expect(about.tools).not.toContain('member_spawn');
+ await tool('member_spawn',{},true);
+ await tool('setup_workspace',{name:'Removed'},true);
+ await expect(sidebar).toHaveCount(0);
+expect(about.caller.config_options.length).toBeGreaterThan(0);
  const config={request_id:'package-setup',workspace:{name:'Package QA'},profiles:{worker:{provider:'codex',model:'fast',thinking:'low'}},members:{
   implementer:{name:'K5 implementer',profile:'worker',lifetime:'resident',package:'K5',role:'implementer',instructions:'Implement only the assigned package.',task:'First delivery'},
   red:{name:'K5 red',profile:'worker',lifetime:'resident',package:'K5',role:'reviewer',instructions:'Review defensively; wait for work.'},

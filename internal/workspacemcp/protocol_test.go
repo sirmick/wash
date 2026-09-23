@@ -13,14 +13,14 @@ func TestProtocolDiscoveryAndToolErrors(t *testing.T) {
 	in := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"member_wait","arguments":{"reason":"instructions"}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"teardown_workspace","arguments":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"member_update","arguments":{"waiting":{"reason":"instructions"}}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"workspace_end","arguments":{}}}
 `
 	var out bytes.Buffer
 	calls := 0
 	err := Serve(strings.NewReader(in), &out, func(_ context.Context, c Call) (any, error) {
 		calls++
-		if c.Name == "teardown_workspace" {
+		if c.Name == "workspace_end" {
 			return nil, errors.New("not orchestrator")
 		}
 		return map[string]any{"waiting": true}, nil
@@ -51,7 +51,7 @@ func TestProtocolDiscoveryAndToolErrors(t *testing.T) {
 func TestNoInvocationBeforeInitializeOrForUnknownTool(t *testing.T) {
 	var out bytes.Buffer
 	called := false
-	err := Serve(strings.NewReader("{\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"setup_workspace\"}}\n"), &out, func(context.Context, Call) (any, error) { called = true; return nil, nil })
+	err := Serve(strings.NewReader("{\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"workspace_configure\"}}\n"), &out, func(context.Context, Call) (any, error) { called = true; return nil, nil })
 	if err != nil || called {
 		t.Fatal(err, called)
 	}
@@ -90,5 +90,42 @@ func TestInitializationAndAboutShareOperatingInstructions(t *testing.T) {
 	}
 	if !about["capabilities"].(map[string]bool)["bulk_workspace_configuration"] {
 		t.Fatal("missing bulk API capability")
+	}
+}
+
+func TestRemovedToolsAreRejectedBeforeDispatch(t *testing.T) {
+	removed := []string{"setup_workspace", "swarm_status", "teardown_workspace", "member_spawn", "member_pause", "member_resume", "member_end", "member_wait", "member_set_status", "message_ack", "assignment_create", "assignment_complete", "assignment_fail", "plan_get", "plan_set", "plan_add_item", "plan_update_item", "plan_remove_item", "plan_reorder", "document_set", "document_clear"}
+	if len(Tools()) != 12 {
+		t.Fatalf("want exactly twelve tools, got %d", len(Tools()))
+	}
+	for _, name := range removed {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateCall(Call{Name: name, Arguments: json.RawMessage(`{}`)}); err == nil || !strings.Contains(err.Error(), "unknown workspace tool") {
+				t.Fatalf("removed tool accepted: %v", err)
+			}
+			var in, out bytes.Buffer
+			enc := json.NewEncoder(&in)
+			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": Call{Name: name, Arguments: json.RawMessage(`{}`)}})
+			if err := Serve(&in, &out, func(context.Context, Call) (any, error) { t.Fatal("removed tool dispatched"); return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			var response struct {
+				Error struct {
+					Code    int
+					Message string
+				}
+			}
+			if len(lines) != 2 {
+				t.Fatal(out.String())
+			}
+			if err := json.Unmarshal([]byte(lines[1]), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Error.Code != -32602 || response.Error.Message != "Unknown tool" {
+				t.Fatal(lines[1])
+			}
+		})
 	}
 }

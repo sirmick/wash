@@ -310,3 +310,28 @@ remain uncommitted; the matching PROJECT example is included in Wash.
 
 The running Wash desktop was not restarted, installed over or replaced. Builds,
 caches, logs and artifacts stayed on `/data`; root free space remained about 6.4 GiB.
+
+## Remove legacy MCP compatibility (2026-09-23)
+
+This supersedes the compatibility notes above: only the twelve current tools are
+advertised or accepted. Deleted the old catalog, dispatch cases, incremental plan
+mutator, legacy spawn path and wrapper calls. The GUI retains its private human
+operations; those are not MCP tools. Current docs and provider probes use the new API.
+
+Protocol tests reject all 21 removed tool names before invocation; a backend test
+also rejects direct legacy calls. Migrated browser coverage uses bulk setup/member
+configuration, keyed plan/document patches, combined status/waiting and lifecycle
+control. It explicitly checks unknown-tool errors through the injected MCP bridge.
+
+This migration exposed a bulk-launch bug: persistence omits an empty settings map,
+so inheriting the parent's model could write to a nil map. The launch path now
+initializes that map, and the browser flow verifies inherited model settings without
+a named profile. The initial two browser failures were fixed; the final run passed
+all 15 workspace/Agent-session browser tests. Focused race tests passed for swarm,
+MCP, agentd and ACP; focused vet, browser-test TypeScript, isolated multicall build,
+design, interaction and version guards passed. No frontend source changed and no
+new real-provider test run is claimed.
+
+Logs: `/data/wash-agent-swarm/test-results/remove-legacy-{race,vet,types,build,guards}.log`
+and `remove-legacy-e2e-final.log`. Live Wash was not restarted or replaced; all build
+artifacts stayed on `/data`. Redoubt's instructions already use the twelve tools.

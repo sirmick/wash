@@ -252,45 +252,19 @@ func (ws *workspaceService) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 type workspaceArgs struct {
-	Thread          string            `json:"thread_id"`
-	Package         string            `json:"package"`
-	Reserved        string            `json:"-"`
-	View            string            `json:"view"`
-	Profile         string            `json:"profile"`
-	Model           string            `json:"model"`
-	Thinking        string            `json:"thinking"`
-	IncludeMessages bool              `json:"include_messages"`
-	Name            string            `json:"name"`
-	Root            string            `json:"project_root"`
-	Items           []swarm.Item      `json:"items"`
-	ID              string            `json:"id"`
-	Member          string            `json:"member_id"`
-	Recipient       string            `json:"recipient"`
-	Type            string            `json:"type"`
-	Body            string            `json:"body"`
-	Reply           string            `json:"reply_to"`
-	Assignment      string            `json:"assignment_id"`
-	Request         string            `json:"request_id"`
-	Text            string            `json:"text"`
-	Emoji           string            `json:"emoji"`
-	State           string            `json:"state"`
-	Reason          string            `json:"reason"`
-	Path            string            `json:"path"`
-	Title           string            `json:"title"`
-	Level           string            `json:"level"`
-	IDs             []string          `json:"ids"`
-	Expected        *int64            `json:"expected_revision"`
-	After           string            `json:"after"`
-	Provider        string            `json:"provider"`
-	Cwd             string            `json:"cwd"`
-	Instructions    string            `json:"instructions"`
-	Lifetime        string            `json:"lifetime"`
-	Task            string            `json:"task"`
-	Configs         map[string]string `json:"configs"`
-	Limit           int               `json:"limit"`
-	MaxActive       int               `json:"max_active"`
-	MaxMembers      int               `json:"max_members"`
-	CanSpawn        bool              `json:"can_spawn"`
+	Thread          string `json:"thread_id"`
+	Package         string `json:"package"`
+	View            string `json:"view"`
+	ID              string `json:"id"`
+	Member          string `json:"member_id"`
+	Recipient       string `json:"recipient"`
+	Body            string `json:"body"`
+	Text            string `json:"text"`
+	Emoji           string `json:"emoji"`
+	Level           string `json:"level"`
+	After           string `json:"after"`
+	IncludeMessages bool   `json:"include_messages"`
+	Limit           int    `json:"limit"`
 }
 
 func parseWorkspaceArgs(raw json.RawMessage) (workspaceArgs, error) {
@@ -303,71 +277,14 @@ func parseWorkspaceArgs(raw json.RawMessage) (workspaceArgs, error) {
 	err := d.Decode(&a)
 	return a, err
 }
-func (ws *workspaceService) callLegacy(ctx context.Context, h *hosted, call workspacemcp.Call) (any, error) {
-	if err := workspacemcp.ValidateCall(call); err != nil {
-		return nil, err
-	}
-	if call.Name == "workspace_configure" {
-		var patch swarm.ConfigurePatch
-		raw := call.Arguments
-		if len(raw) == 0 {
-			raw = []byte("{}")
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			return nil, err
-		}
-		for key, value := range fields {
-			if string(value) == "null" {
-				return nil, fmt.Errorf("%s cannot be null", key)
-			}
-		}
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&patch); err != nil {
-			return nil, err
-		}
-		for name, profile := range patch.Profiles {
-			if profile == nil {
-				continue
-			}
-			known := false
-			for _, adapter := range adapters {
-				if adapter.ID == profile.Provider {
-					known = true
-				}
-			}
-			if !known {
-				return nil, fmt.Errorf("profile %q: unknown provider %q", name, profile.Provider)
-			}
-		}
-		revision, err := ws.store.Configure(h.sessionID, patch)
-		return map[string]any{"revision": revision}, err
-	}
+func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, error) {
 	a, err := parseWorkspaceArgs(call.Arguments)
 	if err != nil {
 		return nil, err
 	}
 	sid := h.sessionID
 	switch call.Name {
-	case "setup_workspace":
-		root := a.Root
-		if root == "" {
-			root = h.cwd
-		}
-		root, err = h.confineOrAsk(ctx, "Read", root)
-		if err != nil {
-			return nil, err
-		}
-		info, err := os.Stat(root)
-		if err != nil {
-			return nil, err
-		}
-		if !info.IsDir() {
-			return nil, errors.New("project_root must be a directory")
-		}
-		return ws.store.Setup(sid, h.agent, h.cwd, a.Name, root, a.Items, swarm.Limits{MaxActive: a.MaxActive, MaxMembers: a.MaxMembers})
-	case "swarm_status", "workspace_get":
+	case "workspace_get":
 		if a.View != "" && a.View != "state" && a.View != "about" && a.View != "qa" {
 			return nil, errors.New("view must be state, about or qa")
 		}
@@ -428,7 +345,7 @@ func (ws *workspaceService) callLegacy(ctx context.Context, h *hosted, call work
 		}
 		hostedMu.Unlock()
 		return map[string]any{"workspace": w, "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
-	case "teardown_workspace":
+	case "workspace_end":
 		old := ws.store.View(sid)
 		if old == nil {
 			return map[string]any{"ended": true}, nil
@@ -466,16 +383,6 @@ func (ws *workspaceService) callLegacy(ctx context.Context, h *hosted, call work
 			}
 		}
 		return map[string]any{"ended": true}, nil
-	case "member_spawn":
-		return ws.spawn(ctx, h, a)
-	case "message_send":
-		return ws.store.Send(sid, a.Recipient, a.Type, a.Body, a.Reply, a.Assignment, a.Request)
-	case "message_ack":
-		return map[string]any{"id": a.ID}, ws.store.Acknowledge(sid, a.ID)
-	case "assignment_create":
-		return ws.store.Assign(sid, a.Member, a.Text, a.Request)
-	case "assignment_complete", "assignment_fail":
-		return map[string]any{"id": a.ID}, ws.store.Complete(sid, a.ID, a.Body, call.Name == "assignment_fail")
 	case "inbox_read":
 		w := ws.store.View(sid)
 		if w == nil {
@@ -519,76 +426,12 @@ func (ws *workspaceService) callLegacy(ctx context.Context, h *hosted, call work
 			cursor = out[len(out)-1].ID
 		}
 		return map[string]any{"messages": out, "cursor": cursor, "has_more": more}, nil
-	case "plan_get":
-		w := ws.store.View(sid)
-		if w == nil {
-			return nil, errors.New("no workspace")
-		}
-		out := []swarm.Item{}
-		for _, it := range w.Items {
-			if len(a.IDs) == 0 || slices.Contains(a.IDs, it.ID) {
-				out = append(out, it)
-			}
-		}
-		return map[string]any{"items": out, "revision": w.PlanRevision}, nil
-	case "member_pause", "member_resume", "member_end":
-		return ws.lifecycle(ctx, h, call.Name, a.Member)
-	case "document_set":
-		path, err := h.confineOrAsk(ctx, "Read", a.Path)
-		if err != nil {
-			return nil, err
-		}
-		if _, err = readWorkspaceDocument(path); err != nil {
-			return nil, err
-		}
-		err = ws.store.Mutate(sid, true, func(w *swarm.Workspace, _ *swarm.Member) error {
-			w.Document = &swarm.Document{Path: path, Title: a.Title}
-			return nil
-		})
-		return map[string]any{"path": path}, err
 	}
-	var revision int64
-	var workspaceName, memberName, decisionID string
-	lead := strings.HasPrefix(call.Name, "plan_") || call.Name == "document_clear" || call.Name == "message_retry"
+	var workspaceName, memberName string
+	lead := call.Name == "message_retry"
 	err = ws.store.Mutate(sid, lead, func(w *swarm.Workspace, m *swarm.Member) error {
-		defer func() { revision = w.PlanRevision; workspaceName = w.Name; memberName = m.Name }()
+		workspaceName, memberName = w.Name, m.Name
 		switch call.Name {
-		case "member_wait":
-			if !swarm.ValidText(a.Reason, 500) {
-				return errors.New("invalid waiting reason")
-			}
-			if a.Reply != "" {
-				found := false
-				for _, msg := range w.Messages {
-					if msg.ID == a.Reply && (msg.Sender == m.ID || msg.Recipient == m.ID) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					return errors.New("unknown waiting correlation")
-				}
-			}
-			m.WaitingFor = a.Reply
-			m.Waiting = a.Reason
-			for i := range w.Assignments {
-				if w.Assignments[i].Member == m.ID && w.Assignments[i].State == "active" {
-					w.Assignments[i].State = "blocked"
-				}
-			}
-		case "member_set_status":
-			if len(a.Text) > 500 || len(a.Emoji) > 64 {
-				return errors.New("status too long")
-			}
-			m.UpdatedAt = time.Now().UnixMilli()
-			m.Status = a.Text
-			m.Emoji = a.Emoji
-		case "decision_request":
-			message, err := swarm.AddMessage(w, m.ID, "human", "decision_request", a.Text, "", "", "")
-			if err == nil {
-				decisionID = message.ID
-			}
-			return err
 		case "flash_message":
 			if !slices.Contains([]string{"", "info", "warning", "error"}, a.Level) || len(a.Emoji) > 64 {
 				return errors.New("invalid flash options")
@@ -607,26 +450,15 @@ func (ws *workspaceService) callLegacy(ctx context.Context, h *hosted, call work
 				}
 			}
 			return errors.New("unknown message")
-		case "document_clear":
-			w.Document = nil
-		case "plan_set", "plan_add_item", "plan_update_item", "plan_remove_item", "plan_reorder":
-			return mutatePlan(w, call.Name, a, call.Arguments)
 		default:
 			return errors.New("unknown workspace operation")
 		}
-		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	result := map[string]any{"ok": true, "id": a.ID, "revision": revision}
-	if call.Name == "decision_request" {
-		result["id"] = decisionID
-	}
-	if call.Name == "member_wait" {
-		result["instruction"] = "Finish your turn now. Wash will deliver pending messages in a subsequent turn; do not poll."
-	}
-	if (call.Name == "flash_message" || call.Name == "decision_request") && ws.conn != nil {
+	result := map[string]any{"ok": true, "id": a.ID}
+	if call.Name == "flash_message" && ws.conn != nil {
 		level := a.Level
 		if level == "" {
 			level = "info"
@@ -638,77 +470,6 @@ func (ws *workspaceService) callLegacy(ctx context.Context, h *hosted, call work
 	}
 	return result, nil
 }
-func mutatePlan(w *swarm.Workspace, name string, a workspaceArgs, raw json.RawMessage) error {
-	idx := -1
-	for i, it := range w.Items {
-		if it.ID == a.ID {
-			idx = i
-			break
-		}
-	}
-	rev := w.PlanRevision
-	if name == "plan_update_item" || name == "plan_remove_item" {
-		if idx < 0 {
-			return errors.New("unknown item")
-		}
-		rev = w.Items[idx].Revision
-	}
-	if a.Expected != nil && *a.Expected != rev {
-		return errors.New("stale plan revision; read current state")
-	}
-	switch name {
-	case "plan_set":
-		if a.Items == nil {
-			a.Items = []swarm.Item{}
-		}
-		w.Items = a.Items
-		for i := range w.Items {
-			w.Items[i].Revision = w.PlanRevision + 1
-		}
-	case "plan_add_item":
-		w.Items = append(w.Items, swarm.Item{ID: a.ID, Text: a.Text, Emoji: a.Emoji, State: a.State, Revision: w.PlanRevision + 1})
-	case "plan_update_item":
-		var fields map[string]json.RawMessage
-		_ = json.Unmarshal(raw, &fields)
-		it := &w.Items[idx]
-		if _, ok := fields["text"]; ok {
-			it.Text = a.Text
-		}
-		if _, ok := fields["emoji"]; ok {
-			it.Emoji = a.Emoji
-		}
-		if _, ok := fields["state"]; ok {
-			it.State = a.State
-		}
-		it.Revision = w.PlanRevision + 1
-	case "plan_remove_item":
-		w.Items = append(w.Items[:idx], w.Items[idx+1:]...)
-	case "plan_reorder":
-		if len(a.IDs) != len(w.Items) {
-			return errors.New("reorder must include every ID once")
-		}
-		out := []swarm.Item{}
-		for _, id := range a.IDs {
-			found := false
-			for _, it := range w.Items {
-				if it.ID == id {
-					out = append(out, it)
-					found = true
-					break
-				}
-			}
-			if !found {
-				return errors.New("unknown reorder ID")
-			}
-		}
-		w.Items = out
-	}
-	if err := swarm.ValidateItems(w.Items); err != nil {
-		return err
-	}
-	w.PlanRevision++
-	return nil
-}
 func workspaceHosted(session string) *hosted {
 	hostedMu.Lock()
 	defer hostedMu.Unlock()
@@ -719,89 +480,32 @@ func workspaceHosted(session string) *hosted {
 	}
 	return nil
 }
-func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, a workspaceArgs) (any, error) {
+func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string) (any, error) {
 	var member swarm.Member
 	var workspaceID string
-	var err error
-	if a.Reserved != "" {
-		err = ws.store.Mutate(parent.sessionID, true, func(w *swarm.Workspace, _ *swarm.Member) error {
-			if w.State != "active" {
-				return errors.New("workspace paused")
-			}
-			m := swarm.GetMember(w, a.Reserved)
-			if m == nil || m.State != "pending" {
-				return errors.New("member is not pending launch")
-			}
-			member = *m
-			workspaceID = w.ID
-			m.State = "starting"
-			return nil
-		})
-		if err != nil {
-			return nil, err
+	err := ws.store.Mutate(parent.sessionID, true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		if w.State != "active" {
+			return errors.New("workspace paused")
 		}
-		a.Instructions = member.Instructions
-		a.Task = member.InitialTask
-	} else {
-
-		if !swarm.ValidText(a.Name, 120) || !swarm.ValidText(a.Instructions, 30000) || !slices.Contains([]string{"resident", "ephemeral"}, a.Lifetime) {
-			return nil, errors.New("invalid member name, instructions or lifetime")
+		m := swarm.GetMember(w, id)
+		if m == nil || m.State != "pending" {
+			return errors.New("member is not pending launch")
 		}
-		if a.Task != "" && !swarm.ValidText(a.Task, 32768) {
-			return nil, errors.New("invalid task")
-		}
-		if a.Lifetime == "ephemeral" && a.Task == "" {
-			return nil, errors.New("ephemeral member requires a task")
-		}
-		if a.Cwd == "" {
-			a.Cwd = parent.cwd
-		}
-		cwd, pathErr := parent.confineOrAsk(ctx, "Bash", a.Cwd)
-		if pathErr != nil {
-			return nil, pathErr
-		}
-		workspaceID = ""
-		member = swarm.Member{ID: swarm.ID(), Name: a.Name, Provider: a.Provider, Cwd: cwd, Lifetime: a.Lifetime, State: "starting", CanSpawn: a.CanSpawn}
-		err = ws.store.Mutate(parent.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
-			if !m.CanSpawn {
-				return errors.New("spawning authority required")
-			}
-			if w.State != "active" {
-				return errors.New("workspace paused")
-			}
-			active := 0
-			for _, v := range w.Members {
-				if v.State != "ended" {
-					active++
-				}
-				if v.Name == a.Name && v.State != "ended" {
-					return errors.New("member name already exists")
-				}
-			}
-			if active >= w.MaxMembers {
-				return fmt.Errorf("member limit (%d) reached", w.MaxMembers)
-			}
-			profile, settings, err := swarm.ResolveProfile(w, a.Profile, swarm.AgentProfile{Provider: a.Provider, Model: a.Model, Thinking: a.Thinking, Configs: a.Configs}, parent.agent)
-			if err != nil {
-				return err
-			}
-			member.Profile = profile
-			member.Provider = settings.Provider
-			member.LaunchSettings = &settings
-			workspaceID = w.ID
-			member.Creator = m.ID
-			w.Members = append(w.Members, member)
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
+		member, workspaceID = *m, w.ID
+		m.State = "starting"
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// Without a profile, preserve same-provider model inheritance. A profile
 	// starts from that provider's defaults rather than the caller's settings.
 	settings := *member.LaunchSettings
 	settings.Configs = maps.Clone(settings.Configs)
+	if settings.Configs == nil {
+		settings.Configs = make(map[string]string)
+	}
 	if member.Profile == "" && settings.Model == "" && settings.Provider == parent.agent {
 		hostedMu.Lock()
 		for _, cfg := range parent.configs {
@@ -859,15 +563,15 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, a workspa
 		member = *v
 		// Queue the role before assignments, using the same durable dispatch and
 		// concurrency limits as every later inbox turn.
-		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", a.Instructions+"\n\nYou are member "+member.ID+" in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Report assignment results with member_update or assignment_update; acknowledge inbox messages with inbox_ack. Track package questions in QA threads using message_send and member_update. Resident package workers remain available for fixes until the orchestrator ends them.", "", "", "")
+		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", member.Instructions+"\n\nYou are member "+member.ID+" in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Report assignment results with member_update or assignment_update; acknowledge inbox messages with inbox_ack. Track package questions in QA threads using message_send and member_update. Resident package workers remain available for fixes until the orchestrator ends them.", "", "", "")
 		if e != nil {
 			return e
 		}
-		if a.Task != "" {
-			task := swarm.Assignment{ID: swarm.ID(), Assigner: v.Creator, Member: v.ID, Text: a.Task, State: "assigned"}
+		if member.InitialTask != "" {
+			task := swarm.Assignment{ID: swarm.ID(), Assigner: v.Creator, Member: v.ID, Text: member.InitialTask, State: "assigned"}
 			w.Assignments = append(w.Assignments, task)
 			initialAssignment = &task
-			_, e = swarm.AddMessage(w, v.Creator, v.ID, "instruction", a.Task, "", task.ID, "")
+			_, e = swarm.AddMessage(w, v.Creator, v.ID, "instruction", member.InitialTask, "", task.ID, "")
 		}
 		return e
 	})

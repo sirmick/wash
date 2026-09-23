@@ -2,7 +2,7 @@
 
 Status: original implementation/design, 2026-09-22. The implemented API 2 bulk
 interface, resident package workflow and first-class QA are specified in
-[AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md); it supersedes v1 tool names below.
+[AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md); it defines the only supported tool surface. Removed v1 tools are rejected.
 
 Initial implementation: Implemented and tested in the isolated
 `/data/wash-agent-swarm/src` checkout on `agent-workspace-mcp`; not deployed into
@@ -21,7 +21,7 @@ Run Redoubt's development workflow from an existing Wash Agent conversation:
 > plan, and start the ready work.
 
 Until setup, this is an ordinary Agent window with its existing conversation
-layout. The agent reads the requested project file(s) and calls `setup_workspace`.
+layout. The agent reads the requested project file(s) and calls `workspace_configure`.
 That successful call attaches the workspace and makes the right-hand sidebar
 appear in the same window, preserving its conversation and composer.
 
@@ -42,9 +42,9 @@ Wash exposes workspace and collaboration primitives over MCP. Agents read the
 project's JSON, TOML, Markdown, or other instructions and configure the workspace
 through those tools. Wash does not need a project workflow parser in this version.
 
-`setup_workspace` receives concrete settings derived by the agent: a name,
+`workspace_configure` receives concrete settings derived by the agent: a name,
 project root, initial progress items, and optional concurrency/member limits.
-`document_set` registers the optional Markdown document separately. Source-file
+`workspace_configure.document` registers the optional Markdown document separately. Source-file
 references remain in project instructions and explicit member role messages;
 Wash does not interpret their format. `workspace_get` returns the workspace as JSON, including configuration, revisions,
 profiles, members, launch snapshots, plan, assignments, pending decisions, delivery
@@ -53,7 +53,7 @@ name, concurrency/member limits, named launch profiles, and optional default
 profile atomically. Further MCP calls populate members and assignments.
 Reading a project file alone does not activate workspace UI.
 
-`teardown_workspace` reverses setup: end the workspace's child sessions, retain
+`workspace_end` reverses setup: end the workspace's child sessions, retain
 history, detach workspace state, and remove the sidebar. The top-level session
 continues as an ordinary Agent conversation and can set up another workspace later.
 
@@ -111,7 +111,7 @@ Separate these dimensions:
 - Self-reported status: a short text, optional emoji, and update timestamp,
   supplied by the member through MCP and displayed in the sidebar.
 
-`member_set_status({text, emoji})` replaces the caller's own display status;
+`member_update({status, emoji})` replaces the caller's own display status;
 empty text and emoji clear it. The caller is identified by its session credentials,
 so no target member ID is needed. Examples: `🔎 Reviewing timer behavior`,
 `🛠️ Implementing K5`, and `⏳ Waiting for architect`. Validate bounded plain text
@@ -167,7 +167,7 @@ names and schemas below are provisional; these distinctions are the contract.
 4. A paused or failed member retains pending messages. Stopping a turn pauses
    automatic inbox dispatch, so queued mail cannot immediately undo the user's
    Stop action. Resume is explicit.
-5. `member_wait` records the reason and optional correlation ID, returns promptly,
+5. `member_update.waiting` records the reason and optional correlation ID, returns promptly,
    and instructs the agent to finish its turn. The agent is only actually waiting
    once the turn ends. Recheck the inbox then: a reply arriving before the yield
    must not be lost or stranded.
@@ -190,25 +190,18 @@ One service in agentd implements the operations. The GUI calls the same service
 through Wash app messages. A bundled stdio MCP bridge exposes it to hosted agents.
 Do not add a separate workflow daemon or make MCP bridge processes own the swarm.
 
-Legacy operations (v1), retained as hidden compatibility calls for existing
-conversations. New agents use the implemented twelve-tool
-[bulk MCP contract](AGENT_SWARM_BULK.md).
+Exactly twelve operations are advertised and accepted; removed v1 names fail with
+Unknown tool. There are no compatibility aliases. See the full schemas and examples
+in [the bulk MCP contract](AGENT_SWARM_BULK.md).
 
-| Tools | Inputs/purpose |
+| Tools | Purpose |
 | --- | --- |
-| `setup_workspace`, `swarm_status`, `teardown_workspace` | Attach workspace state to the caller's existing session and reveal its sidebar, inspect, or tear down and restore the ordinary Agent window |
-| `workspace_get` | `view:"about"` reads operating instructions, capabilities and caller permission metadata before setup; default/state reads JSON state and live adapter options, with optional bounded history |
-| `workspace_configure` | Orchestrator-only atomic patch of name, limits, profiles and default profile; optional workspace revision guard |
-| `member_spawn`, `member_pause`, `member_resume`, `member_end` | Profile alias or explicit provider/model/thinking/configs, name, instructions, cwd, lifetime, optional initial assignment; lifecycle controls |
-| `assignment_create`, `assignment_complete`, `assignment_fail` | Record work and its explicit outcome; notify assigner |
-| `message_send`, `inbox_read`, `message_ack` | Typed member messages, retained history, acknowledgment |
-| `member_wait` | Yield for instructions or a correlated reply |
-| `member_set_status` | Set or clear the caller's own short status text and emoji; update its sidebar row live |
-| `flash_message` | Show an attributed desktop-wide notification, independent of Agent-window visibility or focus |
-| `decision_request` | Surface a human decision and subsequently deliver its answer |
-| `plan_set`, `plan_get` | Initialize/replace an ordered keyed progress list; read all items or selected IDs |
-| `plan_add_item`, `plan_update_item`, `plan_remove_item`, `plan_reorder` | Incrementally change progress items by stable ID |
-| `document_set`, `document_clear` | Register or remove the optional live Markdown document view; leave its file intact |
+| `workspace_get`, `workspace_configure`, `workspace_end` | Discover/read, atomically configure, explicitly detach |
+| `member_control`, `member_update` | Lifecycle controls and combined status/results/waiting/QA reporting |
+| `message_send`, `inbox_read`, `inbox_ack`, `message_retry` | Attributed messages and durable inbox delivery |
+| `assignment_update` | Create assignments or report results |
+| `decision_request`, `flash_message` | Human decisions and desktop notifications |
+
 
 All new ordinary Wash-hosted sessions receive the bridge at session creation, so
 they can later become orchestrators without changing their tool list. Child
@@ -252,7 +245,7 @@ Reducing `max_active` allows running turns to finish and limits new dispatches.
 `max_members` cannot be reduced below current membership. At most 64 named
 profiles and 32 raw settings per profile are accepted.
 
-`member_spawn.profile` selects an alias, otherwise the configured default applies.
+`workspace_configure.members[key].profile` selects an alias, otherwise the configured default applies.
 Explicit `model` and `thinking` replace those profile fields; explicit `configs`
 merges by option ID. Conflicting semantic and raw values for the same setting
 are rejected. A provider override must match the selected profile. With no
@@ -277,7 +270,7 @@ sessions can have no live entry. State and live provider options are separate
 snapshots; the workspace revision only guards durable workspace mutations.
 
 `workspace_get` returns `null` before setup and never activates the sidebar.
-By default `workspace.messages` contains pending decisions, as in `swarm_status`;
+By default `workspace.messages` contains pending decisions;
 `delivery_counts` summarizes all retained mail. `include_messages: true` returns
 a history page in `workspace.messages`, with `message_page.cursor` and
 `message_page.has_more`. Use `after` to continue, optionally `limit` (default 50,
@@ -289,7 +282,7 @@ members can also use the existing paged `inbox_read` for their own mail.
 
 Preserve the current split between the Agents manager and individual Agent
 windows. An ordinary Agent window has no workspace sidebar, empty placeholder, or
-reserved sidebar space. Successful `setup_workspace` publishes the attachment
+reserved sidebar space. Successful `workspace_configure` publishes the attachment
 state that reveals a resizable right-hand column in the existing window. Failed
 setup leaves the ordinary layout intact. Teardown removes the column and returns
 the space to the conversation. A frontend reload reconstructs this choice from
@@ -364,24 +357,17 @@ For example:
 }
 ```
 
-`plan_set` takes that shape to initialize or deliberately replace the list.
-Routine updates use `plan_update_item`, for example:
+Use `workspace_configure.plan.items` to create or patch entries by stable key:
 
 ```json
-{"id": "k5", "text": "Timer handling implemented and reviewed", "emoji": "✅", "state": "done"}
+{"plan":{"items":{"k5":{"text":"Timer handling implemented and reviewed","emoji":"✅","state":"done"}}}}
 ```
 
-Only supplied fields change. Empty emoji clears it; omitted emoji preserves it.
-Updates to unknown IDs fail rather than silently adding rows. Add rejects duplicate
-IDs, remove names an existing ID, and reorder changes order without rewriting
-contents. An empty `plan_set` clears the list. Validate a whole operation before
-applying it; a malformed replacement must not erase the previous plan.
-
-Mutation replies contain a small acknowledgment, affected IDs, and revision, not
-the full plan. `plan_get` can retrieve the entire list or selected items. Retain
-item revisions and support an expected revision on updates so a stale edit can be
-rejected explicitly. Whole-list replacement and reordering use a list revision.
-The orchestrator owns plan writes initially; delegation can be added deliberately.
+Only supplied fields change. New IDs require text and default to pending. Null removes
+an existing ID; plan.order lists every remaining ID exactly once. Guard mutations with
+the workspace's expected_revision from workspace_get. Validation and configuration
+commit atomically. The orchestrator owns plan writes. Read current items through
+workspace_get; there is no separate plan tool surface.
 
 Persist the latest items/order in agentd. Publish item changes to subscribed GUIs
 as small patches, with a full snapshot on initial subscription or resynchronization.
@@ -395,7 +381,7 @@ frequently changing package/milestone progress; the document holds detailed
 design, acceptance criteria, decisions, and explanations. There is no automatic
 two-way synchronization or mandatory Markdown rewrite for an item update.
 
-The Markdown file is authoritative for the document view. `document_set` validates
+The Markdown file is authoritative for the document view. `workspace_configure.document` validates
 and registers the path; ordinary file edits update the document. Reuse filesystem
 watching and the shared Markdown renderer. Watch the parent directory so atomic
 file replacement is detected; debounce reads, retain scroll position, and show
@@ -409,7 +395,7 @@ artifact. Changes to the document by a human editor also refresh.
 
 ## 8. Lifetime, persistence, and recovery
 
-Closing an Agent window leaves swarm execution in agentd. `teardown_workspace`
+Closing an Agent window leaves swarm execution in agentd. `workspace_end`
 is a separate operation: stop accepting assignments/spawns, pause dispatch,
 terminate child sessions, resolve pending assignments/decisions as cancelled,
 retain history, and leave the top-level conversation available. Release workspace
@@ -444,7 +430,7 @@ Automatic crash recovery and retry of work are later extensions.
 ## 9. Redoubt acceptance scenario
 
 1. An ordinary Agent window initially shows only its existing conversation UI.
-   Its agent reads Redoubt's instructions and invokes `setup_workspace`; the
+   Its agent reads Redoubt's instructions and invokes `workspace_configure`; the
    sidebar appears in that same window without replacing the session.
 2. It creates keyed progress items, optionally registers the detailed Markdown
    plan, and creates one resident architect.
@@ -462,7 +448,7 @@ Automatic crash recovery and retry of work are later extensions.
    position. Neither update requires retransmitting the entire plan to the agent.
 10. Reviewers retire after completion; the architect remains waiting. Reloading
     the browser or closing/reopening the window retains the running team.
-11. On request, the orchestrator calls `teardown_workspace`. Children end, the
+11. On request, the orchestrator calls `workspace_end`. Children end, the
     sidebar disappears, and the same top-level conversation continues. Project
     files remain intact; a later setup works through the existing MCP connection.
 
@@ -570,7 +556,7 @@ Engineering checks, requiring evidence rather than user preference:
 - Choose the smallest IPC route for the stdio MCP bridge and finalize schemas.
 - Prove MCP injection and subsequent session loading with the installed Codex and
   Claude adapters. Include a resumed resident receiving the same tools and identity.
-- Prove an agent can finish a turn after `member_wait`, then answer a later inbox
+- Prove an agent can finish a turn after `member_update.waiting`, then answer a later inbox
   delivery with retained context. Include the reply-before-yield race.
 - Prove setup/teardown remains callable from the same top-level conversation and
   verify all lifecycle operations return without waiting on that calling turn.
@@ -598,7 +584,7 @@ declarative workflow engine are outside the initial slice.
   current controller and shows the latest 300 transcript events. Plan changes
   travel as keyed upserts/removals; a missing sequence triggers resynchronization.
 - `workspace_get` adds JSON configuration, profile snapshots and live adapter settings;
-  `workspace_configure` persists atomic configuration patches. `swarm_status` reports
+  `workspace_configure` persists atomic configuration patches. `workspace_get` reports
   members, plan, assignments, pending decisions and delivery
   counts. It avoids replaying the whole inbox. `inbox_read` accepts `after` and
   `limit` (default 50, maximum 100), returning messages, cursor and has_more.

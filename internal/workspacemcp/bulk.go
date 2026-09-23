@@ -1,6 +1,5 @@
 package workspacemcp
 
-func allTools() []Tool { return append(Tools(), legacyTools()...) }
 func Tools() []Tool {
 	str := field("string")
 	boolean := field("boolean")
@@ -18,7 +17,7 @@ func Tools() []Tool {
 	member := schema(map[string]any{"name": str, "profile": str, "provider": str, "model": str, "thinking": str, "configs": configs, "cwd": str, "instructions": str, "lifetime": enum("resident", "ephemeral"), "task": str, "can_spawn": boolean, "package": str, "role": enum("architect", "implementer", "reviewer")}, "name", "instructions", "lifetime")
 	item := schema(map[string]any{"text": str, "emoji": str, "state": enum("pending", "active", "blocked", "done")})
 	messageInput := map[string]any{"messages": array(msg), "request_id": str}
-	// Accept the previous single-message shape, but advertise batching first.
+	// One message and a batch share the same tool.
 	for k, v := range msgProps {
 		messageInput[k] = v
 	}

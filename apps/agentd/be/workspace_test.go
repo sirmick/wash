@@ -30,7 +30,7 @@ func TestWorkspacePlanPatchAndAccess(t *testing.T) {
 		_, e := ws.call(context.Background(), h, workspacemcp.Call{Name: name, Arguments: json.RawMessage(args)})
 		return e
 	}
-	if err = call("plan_update_item", `{"id":"k5","state":"active","expected_revision":1}`); err != nil {
+	if err = call("workspace_configure", `{"plan":{"items":{"k5":{"state":"active"}}},"expected_revision":1}`); err != nil {
 		t.Fatal(err)
 	}
 	w := s.View("lead")
@@ -38,9 +38,14 @@ func TestWorkspacePlanPatchAndAccess(t *testing.T) {
 		t.Fatal(w.Items)
 	}
 	before := s.Snapshot()
-	for _, c := range []struct{ n, a string }{{"plan_update_item", `{"id":"k5","state":"done","expected_revision":1}`}, {"plan_add_item", `{"id":"k5","text":"Duplicate","state":"pending"}`}, {"plan_reorder", `{"ids":["k5","k5"]}`}, {"plan_set", `{"items":[{"id":"broken","text":"bad","state":"nonsense"}]}`}} {
-		if call(c.n, c.a) == nil {
-			t.Fatalf("accepted %s", c.a)
+	for _, args := range []string{
+		`{"expected_revision":1,"plan":{"items":{"k5":{"state":"done"}}}}`,
+		`{"plan":{"items":{"missing":{"emoji":"x"}}}}`,
+		`{"plan":{"order":["k5","k5"]}}`,
+		`{"plan":{"items":{"broken":{"text":"bad","state":"nonsense"}}}}`,
+	} {
+		if call("workspace_configure", args) == nil {
+			t.Fatalf("accepted %s", args)
 		}
 	}
 	if !reflect.DeepEqual(before, s.Snapshot()) {
@@ -51,10 +56,10 @@ func TestWorkspacePlanPatchAndAccess(t *testing.T) {
 		return nil
 	})
 	h.sessionID = "worker"
-	if call("plan_update_item", `{"id":"k5","state":"done"}`) == nil {
+	if call("workspace_configure", `{"plan":{"items":{"k5":{"state":"done"}}}}`) == nil {
 		t.Fatal("child edited shared plan")
 	}
-	if err = call("member_set_status", `{"text":"Checking timers","emoji":"🔎"}`); err != nil {
+	if err = call("member_update", `{"status":"Checking timers","emoji":"🔎"}`); err != nil {
 		t.Fatal(err)
 	}
 	if swarm.GetMember(s.View("worker"), "worker").State != "available" {
@@ -63,7 +68,7 @@ func TestWorkspacePlanPatchAndAccess(t *testing.T) {
 }
 func TestWorkspaceMCPAuthAndReservedName(t *testing.T) {
 	ws := &workspaceService{tokens: map[string]*hosted{}}
-	r := httptest.NewRequest("POST", "/call", strings.NewReader(`{"name":"setup_workspace","arguments":{"name":"stolen"}}`))
+	r := httptest.NewRequest("POST", "/call", strings.NewReader(`{"name":"workspace_configure","arguments":{"workspace":{"name":"stolen"}}}`))
 	r.Header.Set("Authorization", "Bearer fabricated")
 	w := httptest.NewRecorder()
 	ws.serve(w, r)
@@ -139,7 +144,7 @@ func TestWorkspaceInboxPagingAndToolSpecificArguments(t *testing.T) {
 	if page["messages"].([]swarm.Message)[0].Body != "third" || page["has_more"] != false {
 		t.Fatal(page)
 	}
-	for _, call := range []workspacemcp.Call{{Name: "member_set_status", Arguments: json.RawMessage(`{"text":"ok","member_id":"someone-else"}`)}, {Name: "plan_set", Arguments: json.RawMessage(`{}`)}} {
+	for _, call := range []workspacemcp.Call{{Name: "member_update", Arguments: json.RawMessage(`{"status":"ok","member_id":"someone-else"}`)}, {Name: "workspace_configure", Arguments: json.RawMessage(`{"plan":{"items":{"bad":{"state":"invalid"}}}}`)}} {
 		if _, err = ws.call(context.Background(), h, call); err == nil {
 			t.Fatalf("accepted invalid call %s", call.Name)
 		}
@@ -279,5 +284,15 @@ func TestWorkspaceReplayPreservesVerifiedProvenance(t *testing.T) {
 	}
 	if events[1].Kind != "user" || events[2].Kind != "user" {
 		t.Fatal("unverified input changed provenance")
+	}
+}
+
+func TestRemovedWorkspaceToolCannotBypassMCPBridge(t *testing.T) {
+	// Even a direct backend caller cannot reach a hidden compatibility path.
+	ws := &workspaceService{}
+	for _, name := range []string{"setup_workspace", "member_spawn", "plan_set", "member_wait", "teardown_workspace"} {
+		if _, err := ws.call(context.Background(), &hosted{}, workspacemcp.Call{Name: name, Arguments: json.RawMessage(`{}`)}); err == nil || !strings.Contains(err.Error(), "unknown workspace tool") {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }

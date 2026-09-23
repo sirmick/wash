@@ -42,45 +42,6 @@ func schema(props map[string]any, required ...string) map[string]any {
 	return s
 }
 func field(kind string) map[string]any { return map[string]any{"type": kind} }
-func legacyTools() []Tool {
-	str := func() any { return field("string") }
-	integer := func() any { return field("integer") }
-	item := schema(map[string]any{"id": str(), "text": str(), "emoji": str(), "state": map[string]any{"type": "string", "enum": []string{"pending", "active", "blocked", "done"}}}, "id", "text", "state")
-	items := map[string]any{"type": "array", "items": item}
-	ids := map[string]any{"type": "array", "items": field("string")}
-	configs := map[string]any{"type": "object", "additionalProperties": field("string")}
-	profile := schema(map[string]any{"provider": str(), "model": str(), "thinking": str(), "configs": configs}, "provider")
-	return []Tool{
-		{"setup_workspace", "Attach a workspace to this conversation. Read project instructions yourself; Wash accepts concrete settings. Reveals the workspace sidebar.", schema(map[string]any{"name": str(), "project_root": str(), "items": items, "max_active": integer(), "max_members": integer()}, "name")},
-		{"workspace_get", "Use view=about for instructions and capabilities before setup, without creating a workspace. Otherwise read JSON workspace state, revision, named profiles, launch snapshots and live sessions' config_options (IDs, values and choices). Includes pending decisions and delivery counts; include_messages adds a history page (after cursor, limit 1–100, default 50, bounded to 256 KiB). No workspace returns null. Use this before configuring or spawning.", schema(map[string]any{"view": map[string]any{"type": "string", "enum": []string{"state", "about"}}, "include_messages": field("boolean"), "after": str(), "limit": integer()})},
-		{"workspace_configure", "Atomically patch workspace settings; orchestrator only. profiles merges by alias: an object replaces that profile, null deletes it. Empty default_profile clears the default. Omitted fields stay unchanged. expected_revision guards read/modify/write. Model/thinking choices are validated against the adapter at spawn. Existing members are unchanged; lower max_active drains running turns naturally.", schema(map[string]any{"name": str(), "max_active": integer(), "max_members": integer(), "profiles": map[string]any{"type": "object", "additionalProperties": map[string]any{"anyOf": []any{profile, field("null")}}}, "default_profile": str(), "expected_revision": integer()})},
-		{"swarm_status", "Read workspace members, assignments, pending decisions and plan without replaying inbox bodies. No workspace returns null.", schema(nil)},
-		{"teardown_workspace", "End child sessions and remove the sidebar, retaining this conversation, project files and archived history. Orchestrator only.", schema(nil)},
-		{"member_spawn", "Start a resident or ephemeral teammate with fresh context. profile selects a registered alias (otherwise default_profile). Explicit model/thinking override those profile fields; configs merges by option ID. Conflicting semantic/raw settings fail. Provider must match. Model/thinking use adapter values, discovered through workspace_get. Supply role instructions and relevant files. Returns a member ID for messaging.", schema(map[string]any{"name": str(), "profile": str(), "provider": str(), "model": str(), "thinking": str(), "cwd": str(), "instructions": str(), "lifetime": map[string]any{"type": "string", "enum": []string{"resident", "ephemeral"}}, "task": str(), "configs": map[string]any{"type": "object", "additionalProperties": field("string")}, "can_spawn": field("boolean")}, "name", "instructions", "lifetime")},
-		{"member_pause", "Pause inbox dispatch for a member and stop its current turn.", schema(map[string]any{"member_id": str()}, "member_id")},
-		{"member_resume", "Resume a paused member. Uncertain deliveries require explicit message_retry before they run again.", schema(map[string]any{"member_id": str()}, "member_id")},
-		{"member_end", "End a child member and retain its history. Orchestrator only.", schema(map[string]any{"member_id": str()}, "member_id")},
-		{"member_wait", "Record why you are waiting, then END YOUR TURN. This call returns immediately; Wash delivers subsequent messages in a new turn. Do not poll.", schema(map[string]any{"reason": str(), "reply_to": str()}, "reason")},
-		{"member_set_status", "Set your own short sidebar status and emoji. Empty strings clear fields. Does not change execution state.", schema(map[string]any{"text": str(), "emoji": str()}, "text")},
-		{"message_send", "Send an attributed message to a teammate. Questions, answers and instructions wake idle members; progress does not. Use request_id to deduplicate retries.", schema(map[string]any{"recipient": str(), "type": map[string]any{"type": "string", "enum": []string{"instruction", "question", "answer", "progress"}}, "body": str(), "reply_to": str(), "assignment_id": str(), "request_id": str()}, "recipient", "type", "body")},
-		{"inbox_read", "Read your retained inbox, optionally after a message ID. Reading does not acknowledge or complete work.", schema(map[string]any{"after": str(), "limit": integer()})},
-		{"message_ack", "Acknowledge receipt of one of your messages. This does not complete its assignment.", schema(map[string]any{"id": str()}, "id")},
-		{"message_retry", "Explicitly requeue an uncertain delivery after reconciliation. Orchestrator only; execution may have occurred already.", schema(map[string]any{"id": str()}, "id")},
-		{"assignment_create", "Assign work and send an instruction. Orchestrator or spawning delegate only.", schema(map[string]any{"member_id": str(), "text": str(), "request_id": str()}, "member_id", "text")},
-		{"assignment_complete", "Report your assignment result; wakes its assigner. Ephemeral members retire after this turn ends.", schema(map[string]any{"id": str(), "body": str()}, "id", "body")},
-		{"assignment_fail", "Report your assignment failure and notify its assigner.", schema(map[string]any{"id": str(), "body": str()}, "id", "body")},
-		{"decision_request", "Ask the human for a decision. Include the recommendation and alternatives in the question; other members keep working.", schema(map[string]any{"text": str()}, "text")},
-		{"flash_message", "Show a desktop-wide notification regardless of Agent-window visibility. Does not block work.", schema(map[string]any{"text": str(), "emoji": str(), "level": map[string]any{"type": "string", "enum": []string{"info", "warning", "error"}}}, "text")},
-		{"plan_get", "Read the keyed progress list, optionally selected IDs.", schema(map[string]any{"ids": ids})},
-		{"plan_set", "Initialize or deliberately replace the progress list. Routine edits should use plan_update_item. Orchestrator only.", schema(map[string]any{"items": items, "expected_revision": integer()}, "items")},
-		{"plan_add_item", "Append a new keyed progress item. Orchestrator only.", item},
-		{"plan_update_item", "Patch a progress item by ID, preserving omitted fields. Orchestrator only. Returns a compact receipt.", schema(map[string]any{"id": str(), "text": str(), "emoji": str(), "state": str(), "expected_revision": integer()}, "id")},
-		{"plan_remove_item", "Remove one progress item. Orchestrator only.", schema(map[string]any{"id": str(), "expected_revision": integer()}, "id")},
-		{"plan_reorder", "Set the exact order of all progress IDs, without changing their contents. Orchestrator only.", schema(map[string]any{"ids": ids, "expected_revision": integer()}, "ids")},
-		{"document_set", "Register an existing Markdown document for a live view. The document remains a normal project file. Orchestrator only.", schema(map[string]any{"path": str(), "title": str()}, "path")},
-		{"document_clear", "Remove the document view, preserving its file. Orchestrator only.", schema(nil)},
-	}
-}
 
 // ValidateCall enforces tool-specific fields before the shared backend decoder.
 func ValidateCall(call Call) error {
@@ -88,7 +49,7 @@ func ValidateCall(call Call) error {
 	if len(call.Arguments) > 0 && json.Unmarshal(call.Arguments, &args) != nil {
 		return fmt.Errorf("arguments must be an object")
 	}
-	for _, tool := range allTools() {
+	for _, tool := range Tools() {
 		if tool.Name != call.Name {
 			continue
 		}
@@ -171,7 +132,7 @@ func Serve(in io.Reader, out io.Writer, invoke func(context.Context, Call) (any,
 				break
 			}
 			known := false
-			for _, t := range allTools() {
+			for _, t := range Tools() {
 				if t.Name == call.Name {
 					known = true
 					break

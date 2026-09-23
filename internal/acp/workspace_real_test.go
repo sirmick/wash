@@ -17,7 +17,7 @@ import (
 
 // Opt-in, bounded provider probe. Run with WASH_ACP_ADAPTER and
 // WASH_WORKSPACE_BINARY pointing at an isolated Wash build. The only tool
-// allowed by the probe is a read-only swarm_status; no real workspace starts.
+// allowed by the probe is a read-only workspace_get; no real workspace starts.
 func TestWorkspaceMCPAgainstRealAdapter(t *testing.T) {
 	adapter, bin := os.Getenv("WASH_ACP_ADAPTER"), os.Getenv("WASH_WORKSPACE_BINARY")
 	if adapter == "" || bin == "" {
@@ -36,7 +36,7 @@ func TestWorkspaceMCPAgainstRealAdapter(t *testing.T) {
 			return
 		}
 		var call struct{ Name string }
-		if json.NewDecoder(r.Body).Decode(&call) != nil || call.Name != "swarm_status" {
+		if json.NewDecoder(r.Body).Decode(&call) != nil || call.Name != "workspace_get" {
 			http.Error(w, "read-only probe", 400)
 			return
 		}
@@ -72,7 +72,7 @@ func TestWorkspaceMCPAgainstRealAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session/new: %v", err)
 	}
-	prompt := []ContentBlock{{Type: "text", Text: "Call the wash_workspace swarm_status tool exactly once. Then report its probe value. Do not use other tools."}}
+	prompt := []ContentBlock{{Type: "text", Text: "Call the wash_workspace workspace_get tool exactly once. Then report its probe value. Do not use other tools."}}
 	if _, err = client.Prompt(ctx, session.SessionID, prompt...); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}

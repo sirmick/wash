@@ -2,8 +2,8 @@
 
 Implemented API 2.0.0, 2026-09-23. This supersedes the incremental v1 catalog in
 [the original design](AGENT_SWARM.md). New discovery advertises exactly twelve
-tools. Hidden v1 operations remain accepted for existing conversations; new agent
-instructions and examples use the surface below. No live desktop upgrade is implied.
+tools. Removed v1 operations return Unknown tool; there are no hidden aliases or
+compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
 
 ## Twelve tools
 
@@ -65,7 +65,7 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
 
 Stable member keys/IDs are accepted by message recipients, assignments, QA assignees
 and member_control. Keys `conversation`, `plan`, `qa` are reserved. Workspace configuration
-is orchestrator-only; CanSpawn grants assignment/legacy spawning authority, not config
+is orchestrator-only; CanSpawn grants assignment authority, not config
 ownership. All members can communicate. Process control retains existing authority checks.
 
 ## Resident package workflow
