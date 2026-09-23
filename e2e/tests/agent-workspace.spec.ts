@@ -87,3 +87,67 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await expect(sidebar).toContainText('Another project');
  await expect(page.locator('wash-app-ai')).toHaveCount(1);
 });
+
+
+test('MCP reads workspace JSON and launches named profiles with model-dependent thinking', async ({ page, router }) => {
+ test.setTimeout(90_000);
+ await page.goto(router.url);
+ await expect(page.locator('wash-app-session')).toBeVisible();
+ const started = await router.controlRequest({ t: 'launch', app_id: 'com.wash.ai' });
+ await router.controlRequest({ t: 'msg', instance_id: String(started.instance_id), data: { kind: 'start', agent: 'codex', cwd: router.xdgConfigHome, prompt: '' } });
+ const app = page.locator('wash-app-ai');
+ const composer = app.locator('[data-testid="agent-composer"]').first();
+ const transcript = app.locator('[data-testid="agent-transcript"]').first();
+ const outputs = transcript.getByText(/^WORKSPACE_(RESULT|ERROR) /);
+ await expect(composer).toBeEnabled();
+ const tool = async (name: string, args: object = {}, error = false) => {
+  const count = await outputs.count();
+  await composer.fill(`workspace ${name} ${JSON.stringify(args)}`);
+  await composer.press('Enter');
+  await expect(outputs).toHaveCount(count + 1);
+  const text = await outputs.last().innerText();
+  expect(text, `MCP ${name} response`).toMatch(error ? /^WORKSPACE_ERROR / : /^WORKSPACE_RESULT /);
+  return error ? text : JSON.parse(text.slice('WORKSPACE_RESULT '.length));
+ };
+ expect(await tool('workspace_get')).toBeNull();
+ await expect(app.locator('[data-testid="workspace-sidebar"]')).toHaveCount(0);
+ await tool('setup_workspace', { name: 'Profiles' });
+ const before = await tool('workspace_get');
+ expect(before.sessions[before.workspace.orchestrator].config_options.map((c: any) => c.category)).toEqual(['model', 'thought_level']);
+ await tool('workspace_configure', {
+  expected_revision: before.workspace.revision,
+  profiles: { god: { provider: 'codex', model: 'smart', thinking: 'high' }, pleb: { provider: 'codex', model: 'fast', thinking: 'low' } },
+  default_profile: 'pleb',
+ });
+ const resident = await tool('member_spawn', { name: 'Architect', profile: 'god', instructions: 'Wait for design questions.', lifetime: 'resident' });
+ expect(resident.profile).toBe('god');
+ expect(resident.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
+ const sidebar = app.locator('[data-testid="workspace-sidebar"]');
+ await sidebar.locator(`[data-testid="workspace-member-${resident.id}"]`).click();
+ await expect(sidebar.locator('[data-testid="workspace-member-launch"]')).toHaveText('Launched: god · codex · smart · thinking high');
+ await tool('workspace_configure', { profiles: { god: { provider: 'codex', model: 'fast', thinking: 'low' } } });
+ const helper = await tool('member_spawn', { name: 'Helper', instructions: 'Wait for work.', lifetime: 'resident' });
+ expect(helper.profile).toBe('pleb');
+ expect(helper.initial_configs).toEqual({ model: 'fast', reasoning_effort: 'low' });
+ const override = await tool('member_spawn', { name: 'Reviewer', profile: 'god', model: 'smart', thinking: 'high', instructions: 'Wait for a review.', lifetime: 'resident' });
+ expect(override.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
+ await tool('member_spawn', { name: 'Unknown', profile: 'missing', instructions: 'Must not launch.', lifetime: 'resident' }, true);
+ await tool('member_spawn', { name: 'Invalid thinking', profile: 'pleb', thinking: 'high', instructions: 'Must not run.', lifetime: 'resident' }, true);
+ const after = await tool('workspace_get', { include_messages: true });
+ expect(after.workspace.profiles.god.model).toBe('fast');
+ expect(after.workspace.members.find((m: any) => m.id === resident.id).launch_settings).toMatchObject({ model: 'smart', thinking: 'high' });
+ expect(after.sessions[resident.id].config_options.find((c: any) => c.id === 'model').currentValue).toBe('smart');
+ expect(after.workspace.members.some((m: any) => m.name === 'Unknown')).toBe(false);
+ const failed = after.workspace.members.find((m: any) => m.name === 'Invalid thinking');
+ expect(failed.state).toBe('failed');
+ expect(after.workspace.messages.some((m: any) => m.recipient === failed.id)).toBe(false);
+ await tool('workspace_configure', { expected_revision: before.workspace.revision, name: 'Stale edit' }, true);
+ await tool('workspace_configure', { profiles: { god: null }, default_profile: '' });
+ const removed = await tool('workspace_get');
+ expect(removed.workspace.profiles.god).toBeUndefined();
+ expect(removed.workspace.profiles.pleb.model).toBe('fast');
+ expect(removed.workspace.default_profile).toBe('');
+ expect(removed.workspace.name).toBe('Profiles');
+ await tool('teardown_workspace');
+ await expect(sidebar).toHaveCount(0);
+});

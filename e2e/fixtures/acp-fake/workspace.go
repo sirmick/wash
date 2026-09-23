@@ -144,3 +144,43 @@ func workspaceScript(raw string) (string, bool) {
 	}
 	return "", false
 }
+
+// Workspace-only fixture options model the dependency between a model and its
+// supported thinking levels. Other fixture scripts keep their existing wire.
+var workspaceModel = "fast"
+var workspaceThinking = "low"
+
+func initialConfigOptions() []any {
+	if os.Getenv("WASH_FAKE_WORKSPACE") == "1" {
+		return workspaceConfigOptions()
+	}
+	return []any{configState("model", "fast")["configOptions"].([]any)[0]}
+}
+func workspaceConfigOptions() []any {
+	levels := []any{map[string]any{"value": "low", "name": "Low"}}
+	if workspaceModel == "smart" {
+		levels = append(levels, map[string]any{"value": "high", "name": "High"})
+	}
+	return []any{
+		map[string]any{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": workspaceModel, "options": []any{map[string]any{"value": "fast", "name": "Fast"}, map[string]any{"value": "smart", "name": "Smart"}}},
+		map[string]any{"id": "reasoning_effort", "name": "Thinking", "category": "thought_level", "type": "select", "currentValue": workspaceThinking, "options": levels},
+	}
+}
+func workspaceSetConfig(id, value string) (any, error) {
+	switch id {
+	case "model":
+		if value != "fast" && value != "smart" {
+			return nil, fmt.Errorf("unsupported model")
+		}
+		workspaceModel = value
+		workspaceThinking = "low"
+	case "reasoning_effort":
+		if value != "low" && !(value == "high" && workspaceModel == "smart") {
+			return nil, fmt.Errorf("unsupported thinking for model")
+		}
+		workspaceThinking = value
+	default:
+		return nil, fmt.Errorf("unsupported setting")
+	}
+	return map[string]any{"configOptions": workspaceConfigOptions()}, nil
+}

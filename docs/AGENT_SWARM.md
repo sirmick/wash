@@ -42,8 +42,11 @@ through those tools. Wash does not need a project workflow parser in this versio
 project root, initial progress items, and optional concurrency/member limits.
 `document_set` registers the optional Markdown document separately. Source-file
 references remain in project instructions and explicit member role messages;
-Wash does not interpret their format. Further MCP calls populate the workspace
-with members and assignments.
+Wash does not interpret their format. `workspace_get` returns the workspace as JSON, including configuration, revisions,
+profiles, members, launch snapshots, plan, assignments, pending decisions, delivery
+counts, and live sessions' adapter options. `workspace_configure` changes the
+name, concurrency/member limits, named launch profiles, and optional default
+profile atomically. Further MCP calls populate members and assignments.
 Reading a project file alone does not activate workspace UI.
 
 `teardown_workspace` reverses setup: end the workspace's child sessions, retain
@@ -188,7 +191,9 @@ Proposed operations:
 | Tools | Inputs/purpose |
 | --- | --- |
 | `setup_workspace`, `swarm_status`, `teardown_workspace` | Attach workspace state to the caller's existing session and reveal its sidebar, inspect, or tear down and restore the ordinary Agent window |
-| `member_spawn`, `member_pause`, `member_resume`, `member_end` | Provider, name, instructions, cwd, lifetime, optional initial assignment; lifecycle controls |
+| `workspace_get` | Read JSON state plus live adapter option IDs, categories, current values and choices; optional bounded history page |
+| `workspace_configure` | Orchestrator-only atomic patch of name, limits, profiles and default profile; optional workspace revision guard |
+| `member_spawn`, `member_pause`, `member_resume`, `member_end` | Profile alias or explicit provider/model/thinking/configs, name, instructions, cwd, lifetime, optional initial assignment; lifecycle controls |
 | `assignment_create`, `assignment_complete`, `assignment_fail` | Record work and its explicit outcome; notify assigner |
 | `message_send`, `inbox_read`, `message_ack` | Typed member messages, retained history, acknowledgment |
 | `member_wait` | Yield for instructions or a correlated reply |
@@ -218,6 +223,61 @@ All members can collaborate. The orchestrator can grant spawning capability to
 members that need it. Bound membership/concurrency through explicit swarm
 settings; children stay within the authority of the launching session. Human
 permissions remain human permissions; an orchestrator cannot fabricate approvals.
+
+### Named launch profiles and state readback
+
+Profiles are project/workspace-scoped aliases such as `god` and `pleb`. Each has
+an explicit provider, optional model and thinking value, and an optional `configs`
+map for arbitrary adapter setting IDs. These are launch settings, not executable
+commands, credentials, sandbox permissions, or a separate model catalog. Read the
+actual IDs and allowed values from `workspace_get.sessions[member_id].config_options`
+for a live session of that provider. Model IDs are opaque provider values; Wash
+never translates a marketing name into a guessed ID. Providers without a live
+session expose their choices after a default member is started. Invalid choices
+also report the adapter's allowed values at launch.
+
+`workspace_configure.profiles` merges by alias: supplying an object replaces that
+one profile; `null` deletes it. Other aliases and omitted configuration fields
+are preserved. `default_profile: ""` clears the default. Deleting the default
+requires clearing or changing it in the same transaction. Configuration is
+orchestrator-only and persists with the workspace. `expected_revision` refers to
+`workspace.revision` (not the plan revision); a stale write fails atomically.
+Reducing `max_active` allows running turns to finish and limits new dispatches.
+`max_members` cannot be reduced below current membership. At most 64 named
+profiles and 32 raw settings per profile are accepted.
+
+`member_spawn.profile` selects an alias, otherwise the configured default applies.
+Explicit `model` and `thinking` replace those profile fields; explicit `configs`
+merges by option ID. Conflicting semantic and raw values for the same setting
+are rejected. A provider override must match the selected profile. With no
+profile, same-provider children inherit the parent's selected model unless an
+explicit model is provided. Profiles use the provider's defaults for unspecified
+settings; they do not inherit the caller's model.
+
+Wash resolves the profile atomically while reserving membership, applies the
+model first, then validates thinking against the refreshed adapter choices.
+Unknown settings, invalid choices, RPC failures and silently substituted values
+fail the launch before role instructions or tasks are delivered. Model and
+thinking use ACP categories (`model`, `thought_level`), with common option IDs
+as a fallback for adapters that omit categories; other settings use exact IDs.
+
+Each child retains its alias, resolved `launch_settings` snapshot and
+`initial_configs` returned by the adapter. Editing/deleting a profile changes
+future launches, never existing sessions. Member details show the launch profile,
+provider, requested model and thinking level. `workspace_get.sessions` reports
+current options for live sessions, which can differ after GUI setting changes;
+initial settings are deliberately retained as history. Paused/unloaded/ended
+sessions can have no live entry. State and live provider options are separate
+snapshots; the workspace revision only guards durable workspace mutations.
+
+`workspace_get` returns `null` before setup and never activates the sidebar.
+By default `workspace.messages` contains pending decisions, as in `swarm_status`;
+`delivery_counts` summarizes all retained mail. `include_messages: true` returns
+a history page in `workspace.messages`, with `message_page.cursor` and
+`message_page.has_more`. Use `after` to continue, optionally `limit` (default 50,
+maximum 100); pages are additionally bounded to 256 KiB of message JSON. This
+keeps readback from replaying an entire long-running conversation. Individual
+members can also use the existing paged `inbox_read` for their own mail.
 
 ## 7. Agent window and live plan
 
@@ -475,8 +535,8 @@ The first implementation uses these defaults:
 - Child context: fresh sessions with explicit role instructions, assignments, and
   file references. Resident sessions retain their own conversations across turns.
   Do not copy the orchestrator's whole conversation into every child.
-- Child provider/model: allow an explicit provider and supported model settings
-  at spawn. Default to the parent's provider/model when supported; report an
+- Child provider/model: allow named profiles and explicit provider/model/thinking
+  settings at spawn. Without a profile, default to the parent's provider/model when supported; report an
   unsupported explicit selection rather than silently substituting. Verify how
   role instructions interact with the existing global default prompt.
 - Human intervention: allow the user to inspect and message any member, using
@@ -522,7 +582,9 @@ declarative workflow engine are outside the initial slice.
   decisions, member preview and human message controls. Previewing retains the
   current controller and shows the latest 300 transcript events. Plan changes
   travel as keyed upserts/removals; a missing sequence triggers resynchronization.
-- `swarm_status` reports members, plan, assignments, pending decisions and delivery
+- `workspace_get` adds JSON configuration, profile snapshots and live adapter settings;
+  `workspace_configure` persists atomic configuration patches. `swarm_status` reports
+  members, plan, assignments, pending decisions and delivery
   counts. It avoids replaying the whole inbox. `inbox_read` accepts `after` and
   `limit` (default 50, maximum 100), returning messages, cursor and has_more.
 - Document views are bounded to 256 KiB and must remain regular files. Tool

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -232,37 +233,41 @@ func (ws *workspaceService) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 type workspaceArgs struct {
-	Name         string            `json:"name"`
-	Root         string            `json:"project_root"`
-	Items        []swarm.Item      `json:"items"`
-	ID           string            `json:"id"`
-	Member       string            `json:"member_id"`
-	Recipient    string            `json:"recipient"`
-	Type         string            `json:"type"`
-	Body         string            `json:"body"`
-	Reply        string            `json:"reply_to"`
-	Assignment   string            `json:"assignment_id"`
-	Request      string            `json:"request_id"`
-	Text         string            `json:"text"`
-	Emoji        string            `json:"emoji"`
-	State        string            `json:"state"`
-	Reason       string            `json:"reason"`
-	Path         string            `json:"path"`
-	Title        string            `json:"title"`
-	Level        string            `json:"level"`
-	IDs          []string          `json:"ids"`
-	Expected     *int64            `json:"expected_revision"`
-	After        string            `json:"after"`
-	Provider     string            `json:"provider"`
-	Cwd          string            `json:"cwd"`
-	Instructions string            `json:"instructions"`
-	Lifetime     string            `json:"lifetime"`
-	Task         string            `json:"task"`
-	Configs      map[string]string `json:"configs"`
-	Limit        int               `json:"limit"`
-	MaxActive    int               `json:"max_active"`
-	MaxMembers   int               `json:"max_members"`
-	CanSpawn     bool              `json:"can_spawn"`
+	Profile         string            `json:"profile"`
+	Model           string            `json:"model"`
+	Thinking        string            `json:"thinking"`
+	IncludeMessages bool              `json:"include_messages"`
+	Name            string            `json:"name"`
+	Root            string            `json:"project_root"`
+	Items           []swarm.Item      `json:"items"`
+	ID              string            `json:"id"`
+	Member          string            `json:"member_id"`
+	Recipient       string            `json:"recipient"`
+	Type            string            `json:"type"`
+	Body            string            `json:"body"`
+	Reply           string            `json:"reply_to"`
+	Assignment      string            `json:"assignment_id"`
+	Request         string            `json:"request_id"`
+	Text            string            `json:"text"`
+	Emoji           string            `json:"emoji"`
+	State           string            `json:"state"`
+	Reason          string            `json:"reason"`
+	Path            string            `json:"path"`
+	Title           string            `json:"title"`
+	Level           string            `json:"level"`
+	IDs             []string          `json:"ids"`
+	Expected        *int64            `json:"expected_revision"`
+	After           string            `json:"after"`
+	Provider        string            `json:"provider"`
+	Cwd             string            `json:"cwd"`
+	Instructions    string            `json:"instructions"`
+	Lifetime        string            `json:"lifetime"`
+	Task            string            `json:"task"`
+	Configs         map[string]string `json:"configs"`
+	Limit           int               `json:"limit"`
+	MaxActive       int               `json:"max_active"`
+	MaxMembers      int               `json:"max_members"`
+	CanSpawn        bool              `json:"can_spawn"`
 }
 
 func parseWorkspaceArgs(raw json.RawMessage) (workspaceArgs, error) {
@@ -278,6 +283,43 @@ func parseWorkspaceArgs(raw json.RawMessage) (workspaceArgs, error) {
 func (ws *workspaceService) call(ctx context.Context, h *hosted, call workspacemcp.Call) (any, error) {
 	if err := workspacemcp.ValidateCall(call); err != nil {
 		return nil, err
+	}
+	if call.Name == "workspace_configure" {
+		var patch swarm.ConfigurePatch
+		raw := call.Arguments
+		if len(raw) == 0 {
+			raw = []byte("{}")
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return nil, err
+		}
+		for key, value := range fields {
+			if string(value) == "null" {
+				return nil, fmt.Errorf("%s cannot be null", key)
+			}
+		}
+		decoder := json.NewDecoder(strings.NewReader(string(raw)))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&patch); err != nil {
+			return nil, err
+		}
+		for name, profile := range patch.Profiles {
+			if profile == nil {
+				continue
+			}
+			known := false
+			for _, adapter := range adapters {
+				if adapter.ID == profile.Provider {
+					known = true
+				}
+			}
+			if !known {
+				return nil, fmt.Errorf("profile %q: unknown provider %q", name, profile.Provider)
+			}
+		}
+		revision, err := ws.store.Configure(h.sessionID, patch)
+		return map[string]any{"revision": revision}, err
 	}
 	a, err := parseWorkspaceArgs(call.Arguments)
 	if err != nil {
@@ -302,7 +344,7 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, call workspacem
 			return nil, errors.New("project_root must be a directory")
 		}
 		return ws.store.Setup(sid, h.agent, h.cwd, a.Name, root, a.Items, swarm.Limits{MaxActive: a.MaxActive, MaxMembers: a.MaxMembers})
-	case "swarm_status":
+	case "swarm_status", "workspace_get":
 		w := ws.store.View(sid)
 		if w == nil {
 			return nil, nil
@@ -315,8 +357,35 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, call workspacem
 				decisions = append(decisions, msg)
 			}
 		}
-		w.Messages = decisions
-		return map[string]any{"workspace": w, "delivery_counts": counts}, nil
+		var messagePage any
+		if a.IncludeMessages {
+			page, cursor, more, err := workspaceHistoryPage(w.Messages, a.After, a.Limit)
+			if err != nil {
+				return nil, err
+			}
+			w.Messages = page
+			messagePage = map[string]any{"cursor": cursor, "has_more": more}
+		} else {
+			if a.After != "" || a.Limit != 0 {
+				return nil, errors.New("after and limit require include_messages")
+			}
+			w.Messages = decisions
+		}
+		sessions := map[string]any{}
+		hostedMu.Lock()
+		for _, member := range w.Members {
+			for _, live := range hostedAll {
+				if live.sessionID == member.Session && live.sessionReady.Load() {
+					options := append([]acp.ConfigOption(nil), live.configs...)
+					for i := range options {
+						options[i].Options = append([]acp.ConfigOptionValue(nil), options[i].Options...)
+					}
+					sessions[member.ID] = map[string]any{"provider": live.agent, "config_options": options}
+				}
+			}
+		}
+		hostedMu.Unlock()
+		return map[string]any{"workspace": w, "delivery_counts": counts, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
 	case "teardown_workspace":
 		old := ws.store.View(sid)
 		if old == nil {
@@ -618,9 +687,6 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, a workspa
 	if a.Lifetime == "ephemeral" && a.Task == "" {
 		return nil, errors.New("ephemeral member requires a task")
 	}
-	if a.Provider == "" {
-		a.Provider = parent.agent
-	}
 	if a.Cwd == "" {
 		a.Cwd = parent.cwd
 	}
@@ -649,6 +715,13 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, a workspa
 		if active >= w.MaxMembers {
 			return fmt.Errorf("member limit (%d) reached", w.MaxMembers)
 		}
+		profile, settings, err := swarm.ResolveProfile(w, a.Profile, swarm.AgentProfile{Provider: a.Provider, Model: a.Model, Thinking: a.Thinking, Configs: a.Configs}, parent.agent)
+		if err != nil {
+			return err
+		}
+		member.Profile = profile
+		member.Provider = settings.Provider
+		member.LaunchSettings = &settings
 		workspaceID = w.ID
 		member.Creator = m.ID
 		w.Members = append(w.Members, member)
@@ -657,33 +730,36 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, a workspa
 	if err != nil {
 		return nil, err
 	}
-	// Inherit the parent's selected model only for the same provider; explicit
-	// child settings win. Never copy permissions or role defaults.
-	if a.Configs == nil {
-		a.Configs = map[string]string{}
-	}
-	if a.Provider == parent.agent {
+	// Without a profile, preserve same-provider model inheritance. A profile
+	// starts from that provider's defaults rather than the caller's settings.
+	settings := *member.LaunchSettings
+	settings.Configs = maps.Clone(settings.Configs)
+	if member.Profile == "" && settings.Model == "" && settings.Provider == parent.agent {
 		hostedMu.Lock()
 		for _, cfg := range parent.configs {
 			if cfg.Category == "model" || cfg.ID == "model" {
-				if _, ok := a.Configs[cfg.ID]; !ok && cfg.CurrentValue != "" {
-					a.Configs[cfg.ID] = cfg.CurrentValue
+				if _, ok := settings.Configs[cfg.ID]; !ok && cfg.CurrentValue != "" {
+					settings.Configs[cfg.ID] = cfg.CurrentValue
 				}
 			}
 		}
 		hostedMu.Unlock()
 	}
-	child, err := startHosted(a.Provider, cwd, ws.conn)
+	child, err := startHosted(settings.Provider, cwd, ws.conn)
+	var initialConfigs map[string]string
 	if err == nil {
-		for id, value := range a.Configs {
-			var res acp.SetConfigOptionResponse
-			res, err = child.client.SetConfigOption(ctx, child.sessionID, id, value)
-			if err != nil {
-				break
+		hostedMu.Lock()
+		options := append([]acp.ConfigOption(nil), child.configs...)
+		hostedMu.Unlock()
+		initialConfigs, err = configureWorkspaceSession(settings, options, func(id, value string) ([]acp.ConfigOption, error) {
+			res, e := child.client.SetConfigOption(ctx, child.sessionID, id, value)
+			if e == nil {
+				child.applyConfigs(res.ConfigOptions)
 			}
-			child.applyConfigs(res.ConfigOptions)
-		}
+			return res.ConfigOptions, e
+		})
 	}
+
 	if err != nil {
 		if child != nil {
 			child.retire()
@@ -708,6 +784,8 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, a workspa
 			return errors.New("member ended during startup")
 		}
 		v.Session = child.sessionID
+		v.LaunchSettings = &settings
+		v.InitialConfigs = initialConfigs
 		v.State = "available"
 		member = *v
 		// Queue the role before assignments, using the same durable dispatch and
@@ -1207,4 +1285,38 @@ func (ws *workspaceService) restoreProvenance(session string, events []Event) {
 		e.Kind = "collaboration"
 		e.Text = labels[saved.ID] + "\n\n" + saved.Body
 	}
+}
+
+// Keep optional history readback useful even when the retained inbox is large.
+// The next cursor is the last returned message, never a skipped message.
+func workspaceHistoryPage(messages []swarm.Message, after string, limit int) ([]swarm.Message, string, bool, error) {
+	if limit == 0 {
+		limit = 50
+	}
+	if limit < 1 || limit > 100 {
+		return nil, "", false, errors.New("limit must be 1–100")
+	}
+	start := 0
+	if after != "" {
+		i := slices.IndexFunc(messages, func(m swarm.Message) bool { return m.ID == after })
+		if i < 0 {
+			return nil, "", false, errors.New("unknown workspace history cursor")
+		}
+		start = i + 1
+	}
+	page := []swarm.Message{}
+	size := 0
+	for _, m := range messages[start:] {
+		b, _ := json.Marshal(m)
+		if len(page) == limit || len(page) > 0 && size+len(b) > 256<<10 {
+			break
+		}
+		page = append(page, m)
+		size += len(b)
+	}
+	cursor := after
+	if len(page) > 0 {
+		cursor = page[len(page)-1].ID
+	}
+	return page, cursor, start+len(page) < len(messages), nil
 }

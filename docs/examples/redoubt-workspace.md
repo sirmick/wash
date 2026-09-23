@@ -65,3 +65,56 @@ Incremental update:
 Use the revision returned by `plan_get`, not this illustrative value. A stale
 revision fails without changing the plan. For a resident's next task, use
 `assignment_create` with its existing member ID instead of spawning another copy.
+
+
+## Register launch profiles
+
+After setup, call `workspace_get` to inspect the workspace revision and live
+sessions' `config_options`. Use exact adapter values. The model IDs below are
+placeholders to replace with supported values; `high` must also be a supported
+thinking value for the selected model. Aliases are arbitrary project names.
+
+Call `workspace_configure`:
+
+```json
+{
+  "profiles": {
+    "god": {"provider":"codex", "model":"YOUR_STRONG_MODEL_ID", "thinking":"high"},
+    "pleb": {"provider":"codex", "model":"YOUR_FAST_MODEL_ID"}
+  },
+  "default_profile":"pleb"
+}
+```
+
+For optimistic updates, include `expected_revision` from the last
+`workspace_get.workspace.revision`; retry after reading fresh state on conflict.
+This revision is distinct from the keyed plan's revision.
+
+Launch the architect through `member_spawn`:
+
+```json
+{
+  "name":"Architect",
+  "profile":"god",
+  "lifetime":"resident",
+  "instructions":"Read docs/SWARM.md and the architect role instructions. Wait for design questions through your inbox."
+}
+```
+
+A member without an explicit profile uses `pleb` while that is the default.
+An ephemeral worker also needs its worktree, explicit task and acceptance
+criteria. Per-spawn `model`, `thinking`, and raw `configs` can override the
+profile's corresponding fields; raw configs merge by exact adapter option ID.
+A provider override must agree with the selected profile. Wash rejects invalid
+settings before delivering work rather than silently choosing another model.
+
+To change only the strong profile, configure just `profiles.god` with its full
+replacement object. Other aliases remain. Existing members retain their launch
+settings and are visible in `workspace_get`; editing the profile affects only
+future launches. To remove an alias use `{"profiles":{"god":null}}`; to remove
+the default alias in the same call also set `"default_profile":""`.
+
+The normal `workspace_get` response includes configuration, members, assignments,
+plan/document registration, pending decisions, delivery counts and live settings.
+It does not replay inbox history. Request `{"include_messages":true,"limit":20}`
+to read a history page and follow `message_page.cursor` with `after` if needed.

@@ -97,13 +97,22 @@ func main() {
 						map[string]any{"id": "agent-full-access", "name": "Agent (full access)", "description": "No approval required."},
 					},
 				},
-				"configOptions": []any{configState("model", "fast")["configOptions"].([]any)[0]},
+				"configOptions": initialConfigOptions(),
 			})
 
 		case "session/set_config_option":
 			params, _ := m["params"].(map[string]any)
 			cfgID, _ := params["configId"].(string)
 			val, _ := params["value"].(string)
+			if os.Getenv("WASH_FAKE_WORKSPACE") == "1" {
+				result, err := workspaceSetConfig(cfgID, val)
+				if err != nil {
+					replyErr(out, id, -32602, err.Error())
+				} else {
+					reply(out, id, result)
+				}
+				continue
+			}
 			// The agent's answer is authoritative and returns the WHOLE
 			// list, which is why the client replaces rather than patches.
 			reply(out, id, configState(cfgID, val))
@@ -174,6 +183,10 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 	raw := promptTextRaw(m)
 	id := m["id"]
 	if text, ok := workspaceScript(raw); ok {
+		// Preserve JSON option names verbatim through the Markdown transcript.
+		if strings.HasPrefix(text, "WORKSPACE_") {
+			text = "```\n" + text + "\n```"
+		}
 		notify(out, chunk(text))
 		reply(out, id, map[string]any{"stopReason": "end_turn"})
 		return

@@ -23,22 +23,33 @@ type Item struct {
 	State    string `json:"state"`
 	Revision int64  `json:"revision"`
 }
+
+// AgentProfile describes launch settings, never credentials or permissions.
+type AgentProfile struct {
+	Provider string            `json:"provider"`
+	Model    string            `json:"model,omitempty"`
+	Thinking string            `json:"thinking,omitempty"`
+	Configs  map[string]string `json:"configs,omitempty"`
+}
 type Member struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Provider   string `json:"provider"`
-	Cwd        string `json:"cwd"`
-	Session    string `json:"session_id"`
-	Creator    string `json:"creator"`
-	Lifetime   string `json:"lifetime"`
-	State      string `json:"state"`
-	Status     string `json:"status,omitempty"`
-	Emoji      string `json:"emoji,omitempty"`
-	Waiting    string `json:"waiting,omitempty"`
-	WaitingFor string `json:"waiting_for,omitempty"`
-	UpdatedAt  int64  `json:"status_updated_at,omitempty"`
-	CanSpawn   bool   `json:"can_spawn"`
-	Retire     bool   `json:"retire,omitempty"`
+	Profile        string            `json:"profile,omitempty"`
+	LaunchSettings *AgentProfile     `json:"launch_settings,omitempty"`
+	InitialConfigs map[string]string `json:"initial_configs,omitempty"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Provider       string            `json:"provider"`
+	Cwd            string            `json:"cwd"`
+	Session        string            `json:"session_id"`
+	Creator        string            `json:"creator"`
+	Lifetime       string            `json:"lifetime"`
+	State          string            `json:"state"`
+	Status         string            `json:"status,omitempty"`
+	Emoji          string            `json:"emoji,omitempty"`
+	Waiting        string            `json:"waiting,omitempty"`
+	WaitingFor     string            `json:"waiting_for,omitempty"`
+	UpdatedAt      int64             `json:"status_updated_at,omitempty"`
+	CanSpawn       bool              `json:"can_spawn"`
+	Retire         bool              `json:"retire,omitempty"`
 }
 type Assignment struct {
 	ID       string `json:"id"`
@@ -66,20 +77,22 @@ type Document struct {
 	Title string `json:"title"`
 }
 type Workspace struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Root         string       `json:"project_root"`
-	Lead         string       `json:"orchestrator"`
-	State        string       `json:"state"`
-	Revision     int64        `json:"revision"`
-	PlanRevision int64        `json:"plan_revision"`
-	MaxActive    int          `json:"max_active"`
-	MaxMembers   int          `json:"max_members"`
-	Items        []Item       `json:"items"`
-	Document     *Document    `json:"document,omitempty"`
-	Members      []Member     `json:"members"`
-	Assignments  []Assignment `json:"assignments"`
-	Messages     []Message    `json:"messages"`
+	Profiles       map[string]AgentProfile `json:"profiles"`
+	DefaultProfile string                  `json:"default_profile"`
+	ID             string                  `json:"id"`
+	Name           string                  `json:"name"`
+	Root           string                  `json:"project_root"`
+	Lead           string                  `json:"orchestrator"`
+	State          string                  `json:"state"`
+	Revision       int64                   `json:"revision"`
+	PlanRevision   int64                   `json:"plan_revision"`
+	MaxActive      int                     `json:"max_active"`
+	MaxMembers     int                     `json:"max_members"`
+	Items          []Item                  `json:"items"`
+	Document       *Document               `json:"document,omitempty"`
+	Members        []Member                `json:"members"`
+	Assignments    []Assignment            `json:"assignments"`
+	Messages       []Message               `json:"messages"`
 }
 type State struct {
 	Version    int         `json:"version"`
@@ -119,6 +132,9 @@ func Open(path string) (*Store, error) {
 	err = s.change(func(st *State) error {
 		for i := range st.Workspaces {
 			w := &st.Workspaces[i]
+			if w.Profiles == nil {
+				w.Profiles = map[string]AgentProfile{}
+			}
 			if w.MaxActive == 0 {
 				w.MaxActive = 4
 			}
@@ -266,7 +282,7 @@ func (s *Store) Setup(session, provider, cwd, name, root string, items []Item, l
 			return errors.New("teardown current workspace first")
 		}
 		lead := Member{ID: ID(), Name: "Orchestrator", Provider: provider, Cwd: cwd, Session: session, Lifetime: "resident", State: "available", CanSpawn: true}
-		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Items: items, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}}
+		w := Workspace{Profiles: map[string]AgentProfile{}, ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Items: items, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}}
 		if w.Items == nil {
 			w.Items = []Item{}
 		}
@@ -515,6 +531,12 @@ func (s *Store) Acknowledge(session, id string) error {
 	})
 }
 func (s *Store) TurnEnded(session, messageID string, failed bool) error {
+	// An ordinary successful turn changes no durable workspace state. In
+	// particular, reading workspace_get must not invalidate its own revision
+	// when that conversation turn ends.
+	if !failed && messageID == "" {
+		return nil
+	}
 	if s.View(session) == nil {
 		return nil
 	}

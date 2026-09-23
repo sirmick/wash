@@ -4,7 +4,9 @@ import { AgentSession, Button, Markdown, tokens } from '@wash/ui';
 import type { AgentEvent } from '@wash/ui';
 
 export interface WorkspaceItem { id: string; text: string; emoji?: string; state: string; revision: number }
+export interface WorkspaceProfile { provider: string; model?: string; thinking?: string; configs?: Record<string, string> }
 export interface WorkspaceMember {
+  profile?: string; launch_settings?: WorkspaceProfile; initial_configs?: Record<string, string>;
   id: string; name: string; provider: string; lifetime: string; state: string;
   status?: string; emoji?: string; waiting?: string; session_id: string;
 }
@@ -13,6 +15,7 @@ export interface WorkspaceMessage {
   delivery: string; assignment_id?: string;
 }
 export interface WorkspaceState {
+  profiles?: Record<string, WorkspaceProfile>; default_profile?: string;
   id: string; name: string; state: string; revision: number; orchestrator: string;
   items: WorkspaceItem[]; members: WorkspaceMember[]; messages: WorkspaceMessage[];
   document?: { path: string; title?: string };
@@ -111,6 +114,11 @@ export const WorkspaceSidebar: Component<{
       <Show when={member()}>{(m) => (
         <section data-testid="workspace-member-detail">
           <div style={heading}>{m().name} · {m().lifetime}</div>
+          <Show when={m().launch_settings}>
+            <p data-testid="workspace-member-launch" style={{ color: tokens.fgMuted, 'overflow-wrap': 'anywhere' }}>
+              Launched: {[m().profile, m().provider, m().launch_settings?.model, m().launch_settings?.thinking ? `thinking ${m().launch_settings?.thinking}` : ''].filter(Boolean).join(' · ')}
+            </p>
+          </Show>
           <Show when={m().state === 'paused' || m().state === 'failed'}><Button onClick={() => props.onAction('member_resume', { member_id: m().id })}>Resume member</Button></Show>
           <Button disabled={m().state === 'ended'} onClick={() => props.onAction('member_open', { member_id: m().id })}>Open Agent window</Button>
           <For each={w().assignments.filter((a) => a.member_id === m().id)}>{(a) => <section><p>{a.text} · {a.state}</p><Show when={a.result}><p style={{ 'white-space': 'pre-wrap' }}>{a.result}</p></Show></section>}</For>

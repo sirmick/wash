@@ -121,3 +121,45 @@ Command logs are retained under `/data/wash-agent-swarm/test-results/`, includin
 `e2e-full.log`, `agent-e2e-final.log`, `workspace-e2e-final.log`,
 `syslogs-baseline.log`, `workspace-race.log`, `frontend-checks.log`, `go-unit.log`,
 `codex-provider.log` and `claude-provider.log`.
+
+
+## Workspace JSON and named profiles follow-up (2026-09-22)
+
+The follow-up adds `workspace_get`, atomic `workspace_configure`, named launch
+profiles, provider/model/thinking/config overrides, durable launch snapshots and
+sidebar launch details. Ordinary successful conversation turns no longer change
+the workspace revision when no durable state changed, so a read/modify/write
+sequence can cross that turn boundary. Profile settings are applied and verified
+before role instructions or assignments are queued.
+
+Final checks for this change, in the same isolated `/data` checkout:
+
+- Race-enabled Go tests passed for `internal/swarm`, `internal/workspacemcp`,
+  `apps/agentd/be`, and `e2e/fixtures/acp-fake`. Coverage includes atomic rollback,
+  authorization, profile persistence/replacement/deletion, concurrent revision
+  guards, launch snapshot isolation, model-before-thinking dependencies,
+  unsupported settings, provider errors/coercion, JSON option metadata and bounded
+  history pagination.
+- **15 browser tests passed** across `agent-workspace.spec.ts`,
+  `agent-session.spec.ts`, and `agent-adapter-config.spec.ts`. The profile test
+  goes through the injected stdio MCP executable and verifies aliases, defaults,
+  overrides, actual adapter config responses, unchanged existing members after
+  profile edits, stale revision rejection, invalid launch cleanup and teardown.
+- The Agent Vite build and isolated multicall build passed. The existing sidebar
+  component suite passed (3 tests; the existing jsdom canvas warning remains).
+- Go vet for the changed packages, E2E TypeScript, design-token and interactive
+  element checks passed.
+
+The first profile E2E run exposed Markdown formatting of JSON in the fake
+adapter's output; it now fences its JSON verbatim. A subsequent run exposed the
+unnecessary turn-end revision increment described above; that was fixed and has
+a store regression test. The final 15-test run is green. These are deterministic
+ACP fixture tests; real-provider authentication/tool evidence and the unrelated
+full-suite syslogs limitation remain as documented above. No live model profile
+launch or full product suite rerun is claimed for this follow-up.
+
+Logs: `profiles-race.log`, `profiles-e2e-final.log`, `profiles-component.log`,
+`profiles-build.log`, and `profiles-guards.log` under
+`/data/wash-agent-swarm/test-results/`. The active desktop was not restarted or
+replaced. Build caches, temporary files and browser artifacts remained on `/data`;
+root free space stayed at about 6.5 GiB.
