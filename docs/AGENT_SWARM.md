@@ -4,14 +4,9 @@ Status: original implementation/design, 2026-09-22. The implemented API 2 bulk
 interface, resident package workflow and first-class QA are specified in
 [AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md); it defines the only supported tool surface. Removed v1 tools are rejected.
 
-Initial implementation: Implemented and tested in the isolated
-`/data/wash-agent-swarm/src` checkout on `agent-workspace-mcp`; not deployed into
-the running desktop. See [validation notes](AGENT_SWARM_VALIDATION.md) and the
-[Redoubt project example](examples/redoubt-workspace.md).
-
-User constraint: preserve the currently running Wash session, including the Agent
-conversation doing this work. Development and verification must use isolated
-instances; no live restart, replacement, or installation is authorized.
+See the [validation notes](AGENT_SWARM_VALIDATION.md) for what was run while
+building this, and the [Redoubt project example](examples/redoubt-workspace.md)
+for the worked setup it was designed against.
 
 ## 1. First use case
 

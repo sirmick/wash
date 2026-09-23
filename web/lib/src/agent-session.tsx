@@ -1154,7 +1154,10 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
             font: tokens.type.textMd,
             'font-weight': 500,
-            color: tokens.fgInfo,
+            // fg, not fgInfo: fgInfo is the pair for bgInfo (the sent
+            // message below), and on bgInset it is a blue-on-grey that
+            // no other wash text field types in.
+            color: tokens.fg,
             outline: 'none',
             'box-sizing': 'border-box',
           }}

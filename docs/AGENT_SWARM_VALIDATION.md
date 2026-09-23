@@ -1,11 +1,15 @@
 # Workspace implementation validation
 
 Date: 2026-09-22. Base: `e6e78fbbcd95291f51e0fc50ac0ff165caec71be`.
-Implementation branch: `agent-workspace-mcp`, isolated checkout
-`/data/wash-agent-swarm/src`. The running Wash desktop was not installed over,
-restarted, or stopped. Builds, temporary files, browser state, provider probe homes,
-and caches were placed under `/data/wash-agent-swarm`. Temporary provider homes
-and their copied authentication files were removed after the probes.
+Implementation branch: `agent-workspace-mcp`.
+
+This is the record of one authoring run, kept for what it says about *what was
+checked* — the `/data/wash-agent-swarm/...` paths below are that run's scratch
+directories and exist nowhere else. The work was done in an isolated checkout
+so the desktop running the Agent conversation was never installed over,
+restarted, or stopped; temporary provider homes and their copied authentication
+files were removed after the probes. The reproducible gates are the repo's own:
+`make unit-test`, `make test-race`, `make e2e-test`.
 
 ## Checks and results
 

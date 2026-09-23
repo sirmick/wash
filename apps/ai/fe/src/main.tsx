@@ -1,12 +1,12 @@
-import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
 // Shared bundle for two surfaces: the singleton Agents manager renders the
 // roster/history/launcher; an Agent controller renders one AgentSession.
 // The custom element names the role; agentd remains authoritative for both
 // stores.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
+import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
 import { WorkspaceLayout } from './WorkspaceLayout';
+import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
 import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultAgent, defaultCwd } from './default-agent.ts';
 import { isStaleTranscript } from './transcript-guard.ts';

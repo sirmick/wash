@@ -496,6 +496,12 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		if m == nil || m.State != "pending" {
 			return errors.New("member is not pending launch")
 		}
+		// Reserving a member always records these. Refusing here rather than
+		// dereferencing keeps a store written by another build from taking
+		// agentd down, and leaves the member pending rather than stuck starting.
+		if m.LaunchSettings == nil {
+			return errors.New("member has no recorded launch settings; end it and reserve a replacement")
+		}
 		member, workspaceID = *m, w.ID
 		m.State = "starting"
 		return nil

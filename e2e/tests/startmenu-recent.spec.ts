@@ -57,12 +57,13 @@ async function openViaFm(page: Page, router: RouterHandle, name: string, body: s
   await expect(page.locator(`[data-testid="fm-entry-${name}"]`)).toBeVisible();
 }
 
-// openEditFlyout opens the start menu and pops out its Edit row.
+// openEditFlyout opens the start menu and pops out its Edit row. Hovering
+// is what opens a flyout; clicking the row starts Edit itself.
 async function openEditFlyout(page: Page) {
   await page.locator('button[title="Apps"]').click();
   const menu = page.locator('[data-testid="start-menu"]');
   await expect(menu).toBeVisible();
-  await menu.locator('[data-testid="start-menu-recent-group-edit"]').click();
+  await menu.locator('[data-testid="start-menu-recent-group-edit"]').hover();
   const flyout = page.locator('[data-testid="start-menu-flyout"]');
   await expect(flyout).toBeVisible();
   return { menu, flyout };
@@ -163,9 +164,15 @@ test.describe('start menu: recent files', () => {
     await expect.poll(() => (JSON.parse(readFileSync(stateFile(router), 'utf8')) as { recent: unknown[] }).recent.length).toBe(0);
   });
 
-  test('a click on a row the hover already opened keeps its flyout open', async ({ page, router }) => {
+  // Hover and click are two different verbs on a Recent row: the hover
+  // pops out the recents, the click starts the app the row names. Before
+  // this the click only opened the flyout, so the four most-used rows in
+  // the menu were the one place clicking an app's name did not start it.
+  test('hovering a Recent row pops out its recents; clicking it launches that app', async ({ page, router }) => {
     await openFm(page, router);
     await openViaFm(page, router, 'notes.md', 'hello from the editor');
+    // One editor so far — the state the click changes.
+    await expect(page.locator('wash-app-edit')).toHaveCount(1);
 
     await page.locator('button[title="Apps"]').click();
     const menu = page.locator('[data-testid="start-menu"]');
@@ -173,17 +180,23 @@ test.describe('start menu: recent files', () => {
     await edit.hover();
     const flyout = page.locator('[data-testid="start-menu-flyout"]');
     await expect(flyout).toBeVisible();
-    await edit.click();
-    // Give a toggle every chance to have closed it.
-    await page.waitForTimeout(300);
-    await expect(flyout).toBeVisible();
     await expect(flyout.locator('[data-testid="start-menu-flyout-item"]')).toContainText('notes.md');
-    // Escape closes the flyout, then the menu.
+    // Escape closes the flyout and leaves the menu up, the way a submenu does.
     await page.keyboard.press('Escape');
     await expect(flyout).toHaveCount(0);
     await expect(menu).toBeVisible();
-    await page.keyboard.press('Escape');
+
+    // The click is the app: the menu closes and a second Edit window comes
+    // up. Under the old behaviour neither happened — the click only
+    // re-opened the flyout it had just closed.
+    const from = router.logCursor();
+    await edit.click();
     await expect(menu).toHaveCount(0);
+    await expect(page.locator('wash-app-edit')).toHaveCount(2);
+    // And it is the app, not the recent file beneath it: the router routed
+    // no path into that window. (Tab count says nothing here — the editor
+    // restores its own last tabs on launch.)
+    await expect(router.waitForLog(/open\.routed:/, 1_500, from)).rejects.toThrow();
   });
 
   test('heading diagonally for a low flyout item does not swap in the rows it crosses', async ({ page, router }) => {
@@ -295,7 +308,7 @@ test.describe('start menu: recent files', () => {
     await router.waitForLog(/open\.request: path="[^"]*\/todo\.txt" handler=com\.wash\.edit from=com\.wash\.session/, 10_000, from);
   });
 
-  test('the Edit flyout is keyboard-driven: Right opens, arrows move, Left closes, Enter opens', async ({ page, router }) => {
+  test('the Edit flyout is keyboard-driven: Right opens, arrows move, Left closes, Enter runs the item', async ({ page, router }) => {
     await openFm(page, router);
     await openViaFm(page, router, 'notes.md', 'hello from the editor');
     await openViaFm(page, router, 'todo.txt', 'buy milk');
@@ -314,11 +327,12 @@ test.describe('start menu: recent files', () => {
     await expect(flyout.locator('[data-selected="true"]')).toContainText('todo.txt');
     await page.keyboard.press('ArrowDown');
     await expect(flyout.locator('[data-selected="true"]')).toContainText('notes.md');
-    // Left closes only the flyout.
+    // Left closes only the flyout, and Right opens it again — Enter on
+    // this row is the app, not the submenu.
     await page.keyboard.press('ArrowLeft');
     await expect(flyout).toHaveCount(0);
     await expect(menu).toBeVisible();
-    await page.keyboard.press('Enter');
+    await page.keyboard.press('ArrowRight');
     await expect(flyout).toBeVisible();
     const from = router.logCursor();
     await page.keyboard.press('Enter');

@@ -284,6 +284,15 @@ bug list — all fully landed; see `git log` if you need their content.)
 - [ ] **2.4 `bus.Emit` swallow annotations.** 14 bare `_ = bus.Emit(...)`
   sites; either an `EmitLogged` helper or per-site "safe to drop" comments.
   Low value, annotation-only.
+- [ ] **Workspace store retention (`internal/swarm/store.go`).** `State.Workspaces`
+  and `State.Receipts` are append-only: an ended workspace keeps its whole
+  message log (up to 10k × 32 KiB) forever, and `Store.change` clones,
+  marshals and fsyncs the *entire* file on every MCP call. Cost therefore
+  grows with everything the box has ever run, not with the live workspace.
+  A retention policy has to keep what `workspace_configure` needs for QA
+  resume — an ended workspace is still looked up by `QADocument.Path` when a
+  final export failed — so pruning means keeping that projection state and
+  dropping the message/QA-event bodies, not dropping the workspace row.
 
 ## Frontend structural debt  (docs/FE_REFACTOR_PLAN.md)
 

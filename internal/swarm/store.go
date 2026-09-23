@@ -621,7 +621,4 @@ func (s *Store) EndMember(session, id string) error {
 		return nil
 	})
 }
-func (s *Store) Rebind(oldSession, newSession string) error {
-	return s.Mutate(oldSession, false, func(_ *Workspace, m *Member) error { m.Session = newSession; return nil })
-}
 func (s *Store) String() string { return fmt.Sprintf("workspace store %s", s.path) }

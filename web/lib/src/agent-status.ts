@@ -145,6 +145,9 @@ export function agentActivityLabel(activity: string): string {
     case 'waiting-message': return 'Awaiting message';
     case 'needs-input': return 'Needs you';
     case 'working': return 'Working';
+    // A reserved member that workspace_configure has committed but not yet
+    // launched reports its member state verbatim, so 'pending' reaches here.
+    case 'pending': return 'Queued to start';
     case 'starting': return 'Starting';
     case 'idle': return 'Idle';
     case 'paused': return 'Paused';
