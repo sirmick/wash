@@ -17,7 +17,9 @@
 //
 //	"ask"        → requests permission, then reports what was answered
 //	"echoblocks" → reports the content blocks the prompt carried
-//	"launchinfo" → reports its own argv and $WASH_FAKE_MARK
+//	"launchinfo" → reports its own argv, $WASH_FAKE_MARK and which keys it got
+//
+// Run as `opencode`, it offers OpenCode's options instead (opencode.go).
 //	"crash"  → says why on stderr and exits mid-turn (the adapter died)
 //	anything → a short markdown reply with a tool call
 package main
@@ -104,6 +106,15 @@ func main() {
 			params, _ := m["params"].(map[string]any)
 			cfgID, _ := params["configId"].(string)
 			val, _ := params["value"].(string)
+			if isOpencode() {
+				result, err := opencodeSetConfig(cfgID, val)
+				if err != nil {
+					replyErr(out, id, -32602, err.Error())
+				} else {
+					reply(out, id, result)
+				}
+				continue
+			}
 			if os.Getenv("WASH_FAKE_WORKSPACE") == "1" {
 				result, err := workspaceSetConfig(cfgID, val)
 				if err != nil {
@@ -225,6 +236,7 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		// from the UI, so the adapter says what it actually got.
 		notify(out, chunk(fmt.Sprintf("LAUNCH<<args=%s mark=%s>>",
 			strings.Join(os.Args[1:], ","), os.Getenv("WASH_FAKE_MARK"))))
+		notify(out, chunk(" "+keyReport()))
 		reply(out, id, map[string]any{"stopReason": "end_turn"})
 		return
 	}
@@ -490,7 +502,7 @@ func configState(configID, value string) map[string]any {
 	return map[string]any{
 		"configOptions": []any{
 			map[string]any{
-				"id": configID, "name": "Model", "type": "select", "currentValue": value,
+				"id": configID, "name": "Model", "category": "model", "type": "select", "currentValue": value,
 				"options": []any{
 					map[string]any{"value": "fast", "name": "Fast"},
 					map[string]any{"value": "smart", "name": "Smart"},

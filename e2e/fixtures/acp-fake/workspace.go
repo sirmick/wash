@@ -158,6 +158,9 @@ var workspaceModel = "fast"
 var workspaceThinking = "low"
 
 func initialConfigOptions() []any {
+	if isOpencode() {
+		return opencodeConfigOptions()
+	}
 	if os.Getenv("WASH_FAKE_WORKSPACE") == "1" {
 		return workspaceConfigOptions()
 	}

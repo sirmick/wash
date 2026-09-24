@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '../fixtures/router';
+import { chooseAgent } from '../fixtures/agents';
 
 const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
 
@@ -30,7 +31,7 @@ test('manager is singleton and a session has one dedicated controller', async ({
   await expect(manager.locator('[data-testid="ai-history-close"]')).toHaveCount(0);
   await expect(manager.locator('[data-testid="ai-roster-pane"]')).toBeVisible();
 
-  await manager.locator('select').selectOption('codex');
+  await chooseAgent(manager, 'codex');
   await manager.getByRole('button', { name: 'Start session' }).click();
 
   const controller = page.locator('wash-app-ai');

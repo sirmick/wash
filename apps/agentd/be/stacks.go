@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"slices"
 	"sort"
@@ -267,15 +268,21 @@ func startSession(req startReq, svcConn *sdk.Conn) (*hosted, error) {
 	hostedMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
 	defer cancel()
-	if _, err := configureWorkspaceSession(p, options, func(id, value string) ([]acp.ConfigOption, error) {
+	effective, err := configureWorkspaceSession(p, options, func(id, value string) ([]acp.ConfigOption, error) {
 		res, e := h.client.SetConfigOption(ctx, h.sessionID, id, value)
 		if e == nil {
 			h.applyConfigs(res.ConfigOptions)
 		}
 		return res.ConfigOptions, e
-	}); err != nil {
+	})
+	if err != nil {
 		h.retire()
 		return nil, fmt.Errorf("%s: %w", p.Provider, err)
 	}
+	// What the adapter reports now, not what was asked: the two are checked
+	// equal above, and this is the line to read when a session "ran on the
+	// wrong model".
+	log.Printf("agentd: session settings key=%s stack=%s tier=%s connection=%s adapter=%s effective=%v",
+		h.key, launch.stack, launch.tier, launch.connection, p.Provider, effective)
 	return h, nil
 }

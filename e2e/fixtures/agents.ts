@@ -40,7 +40,7 @@ export async function startAgentSession(
   const before = await page.locator('wash-app-ai').count();
   const manager = await openAgents(page);
   if (opts.cwd !== undefined) await pickLauncherFolder(page, manager, opts.cwd);
-  await manager.locator('[data-testid="agents-new-pane"] select').first().selectOption('codex');
+  await chooseAgent(manager, 'codex');
   await manager.getByRole('button', { name: 'Start session' }).click();
   await expect(page.locator('wash-app-ai')).toHaveCount(before + 1, { timeout: 20_000 });
   const win = page.locator('wash-app-ai').nth(before);
@@ -51,6 +51,19 @@ export async function startAgentSession(
     await composer.press('Enter');
   }
   return win;
+}
+
+/**
+ * chooseAgent picks an adapter under the launcher's Advanced section: that
+ * adapter on its own defaults, whatever stack is selected. The fake stands in
+ * for an adapter, not for a stack's models, so most specs start it this way.
+ */
+export async function chooseAgent(manager: Locator, agent: string): Promise<void> {
+  const advanced = manager.locator('[data-testid="ai-advanced"]');
+  if (!(await advanced.evaluate((d) => (d as HTMLDetailsElement).open))) {
+    await advanced.locator('summary').click();
+  }
+  await manager.locator('[data-testid="ai-agent-select"]').selectOption(agent);
 }
 
 /**

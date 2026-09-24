@@ -26,6 +26,9 @@ import { Button, Input, Menu, MenuItem, MenuSeparator, Overlay, fmtBytes, tokens
 export interface SessionMeta {
   session_id: string;
   agent?: string;
+  /** the stack and tier it was started from; Restart starts them again */
+  stack?: string;
+  tier?: string;
   model?: string;
   cwd?: string;
   dir?: string;

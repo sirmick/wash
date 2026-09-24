@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-import { AGENT_APPS, FAKE_DIR, openAgents } from '../fixtures/agents';
+import { AGENT_APPS, FAKE_DIR, chooseAgent, openAgents } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
@@ -68,7 +68,7 @@ test('a stored default prompt reaches the agent, ahead of what you typed', async
 
   // Start a session with a prompt of your own. agentd opens a controller
   // for it; the transcript is there, not in the manager.
-  await manager.locator('[data-testid="agents-new-pane"] select').first().selectOption('codex');
+  await chooseAgent(manager, 'codex');
   await manager.getByRole('button', { name: 'Start session' }).click();
   const controller = page.locator('wash-app-ai');
   await expect(controller).toHaveCount(1, { timeout: 20_000 });

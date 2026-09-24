@@ -14,6 +14,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
+import { chooseAgent } from '../fixtures/agents';
 
 // Hover, not click: a click on a Recent row starts the app it names (see
 // startmenu-recent.spec.ts). The flyout is what hovering the row gives you.
@@ -194,7 +195,7 @@ test.describe('Agent ›: agent sessions', () => {
     await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agents', exact: true }).click();
     const manager = page.locator('wash-app-agents');
     await expect(manager).toBeVisible();
-    await manager.locator('select').selectOption('codex');
+    await chooseAgent(manager, 'codex');
     await manager.getByRole('button', { name: 'Start session' }).click();
     const controller = page.locator('wash-app-ai');
     const composer = controller.locator('textarea');

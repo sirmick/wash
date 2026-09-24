@@ -68,10 +68,12 @@ const selectStyle: JSX.CSSProperties = {
   cursor: 'pointer',
 };
 
-/** Select is a styled <select> over [value, label] option pairs. */
+/** Select is a styled <select> over [value, label] option pairs. A third
+ *  element `true` greys an option out: shown, with its label saying why,
+ *  but not choosable. */
 export const Select: Component<{
   value: string;
-  options: [string, string][];
+  options: [string, string, boolean?][];
   onChange: (v: string) => void;
   'data-testid'?: string;
 }> = (props) => (
@@ -81,7 +83,7 @@ export const Select: Component<{
     onInput={(e) => props.onChange(e.currentTarget.value)}
     style={selectStyle}
   >
-    <For each={props.options}>{([v, l]) => <option value={v}>{l}</option>}</For>
+    <For each={props.options}>{([v, l, off]) => <option value={v} disabled={off}>{l}</option>}</For>
   </select>
 );
 

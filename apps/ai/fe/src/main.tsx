@@ -8,7 +8,8 @@ import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
 import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
-import { defaultAgent, defaultCwd } from './default-agent.ts';
+import { defaultStack, defaultCwd } from './default-stack.ts';
+import { Launcher, startMessage, DEFAULT_TIER, type Adapter, type LaunchForm, type StackView } from './Launcher.tsx';
 import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
 import { isManagerElement } from './role.ts';
@@ -22,16 +23,11 @@ import type {
   AgentAsk, AgentEvent, AgentStatus, RosterAsk, RosterRow,
 } from '@wash/ui';
 
-interface Adapter {
-  id: string;
-  name: string;
-  available: boolean;
-  note?: string;
-}
-
 interface RecentSession {
   session_id: string;
   agent: string;
+  /** the stack it was started from — what the launcher defaults to */
+  stack?: string;
   /** full working directory — what the launcher refills (N5b) */
   cwd?: string;
   /** short label for display ("wash"), not a path to start in */
@@ -52,6 +48,7 @@ interface RosterState {
   rows?: RosterRow[];
   asks?: RosterAsk[];
   adapters?: Adapter[];
+  stacks?: StackView[];
   recent?: RecentSession[];
   /** a stored default prompt exists — the TEXT is fetched on demand */
   has_default_prompt?: boolean;
@@ -88,11 +85,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [managerSplit, setManagerSplit] = createSignal(68);
   let managerBody!: HTMLDivElement;
 
-  // Launcher form. agentDefaulted latches N5a's one-shot preselect so
+  // Launcher form. stackDefaulted latches N5a's one-shot preselect so
   // later roster pushes can't overwrite a deliberate "Choose…".
-  let agentDefaulted = false;
-  const [agent, setAgent] = createSignal('');
-  const [cwd, setCwd] = createSignal('');
+  let stackDefaulted = false;
+  const [form, setForm] = createSignal<LaunchForm>({ stack: '', tier: DEFAULT_TIER, agent: '', model: '', cwd: '' });
+  const patchForm = (patch: Partial<LaunchForm>) => setForm((f) => ({ ...f, ...patch }));
+  const cwd = () => form().cwd;
   const [starting, setStarting] = createSignal(false);
   const [picking, setPicking] = createSignal(false);
   // Launched with --agent/--cwd: show what is starting rather than an
@@ -223,8 +221,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
       case 'autostart':
         setAutostart({ agent: String(m.agent ?? ''), cwd: String(m.cwd ?? '') });
-        setAgent(String(m.agent ?? ''));
-        setCwd(String(m.cwd ?? ''));
+        patchForm({ agent: String(m.agent ?? ''), cwd: String(m.cwd ?? '') });
         setStarting(true);
         break;
       case 'started':
@@ -329,18 +326,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           }
         }
         // Fill the launcher in on the first roster that names the
-        // adapters (docs/AGENT_UX.md N5a/N5b): the agent you used last,
-        // in the folder you used it in. Once only, and only while the
+        // stacks (docs/AGENT_UX.md N5a/N5b): the stack you used last, in
+        // the folder you used it in. Once only, and only while the
         // untouched launcher is what's showing — a user who set the
         // select (or a window that's already a session) is never fought.
-        if (!agentDefaulted && !sessionKey() && !autostart() && agent() === '') {
-          const d = defaultAgent(roster().adapters ?? [], roster().recent ?? []);
+        if (!stackDefaulted && !sessionKey() && !autostart() && form().stack === '') {
+          const d = defaultStack(roster().stacks ?? [], roster().recent ?? []);
           if (d) {
-            agentDefaulted = true;
-            setAgent(d);
+            stackDefaulted = true;
+            patchForm({ stack: d, tier: DEFAULT_TIER });
             // Only if the user hasn't typed/picked one — the folder field
             // is editable from the moment the window opens.
-            if (cwd() === '') setCwd(defaultCwd(roster().recent ?? []));
+            if (cwd() === '') patchForm({ cwd: defaultCwd(roster().recent ?? []) });
           }
         }
         break;
@@ -447,7 +444,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const status = createMemo<AgentStatus>(() => {
     const r = row();
     return {
-      agent: r?.agent ?? agent(),
+      agent: r?.agent ?? autostart()?.agent ?? '',
       dir: r?.dir,
       cwd: r?.cwd,
       branch: r?.branch,
@@ -514,13 +511,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const start = () => {
-    // Same preference the preselect uses (N5a), so a submit from
-    // "Choose…" and the visible default cannot disagree about the agent.
-    const a = agent() || defaultAgent(adapters(), roster().recent ?? []);
-    if (!a) return;
     setStarting(true);
     setError('');
-    send({ kind: 'start', agent: a, cwd: cwd() });
+    send(startMessage(form()));
   };
 
   const booting = (
@@ -542,38 +535,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   );
 
   const launcher = (
-    <div style={{ padding: `${tokens.spaceMd}px`, display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceMd}px` }}>
-      <div style={{ font: tokens.type.titleSm, color: tokens.fg }}>New session</div>
-
-      <label style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
-        <span style={labelStyle}>agent</span>
-        <Select
-          value={agent()}
-          onChange={setAgent}
-          data-testid="ai-agent-select"
-          options={[
-            ['', 'Choose…'],
-            ...adapters().map((a) => [a.id, a.available ? a.name : `${a.name} — ${a.note ?? 'not installed'}`] as [string, string]),
-          ]}
-        />
-      </label>
-
-      <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
-        <span style={labelStyle}>folder</span>
-        <div style={{ display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'stretch' }}>
-          <Input
-            data-testid="ai-folder-input"
-            spellcheck={false}
-            placeholder="Home"
-            value={cwd()}
-            title={cwd() || 'Home'}
-            onInput={(e: InputEvent) => setCwd((e.currentTarget as HTMLInputElement).value)}
-            onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' && !starting()) { e.preventDefault(); start(); } }}
-            style={{ font: tokens.type.monoMd, flex: 1, 'min-width': 0 }}
-          />
-          <Button onClick={() => setPicking(true)}>Choose…</Button>
-        </div>
-      </div>
+    <>
+      <Launcher
+        stacks={roster().stacks ?? []}
+        adapters={adapters()}
+        form={form()}
+        onForm={patchForm}
+        onStart={start}
+        onPickFolder={() => setPicking(true)}
+        starting={starting()}
+        error={error()}
+        hasDefaultPrompt={!!roster().has_default_prompt}
+        onOpenPrompt={openPrompt}
+      />
 
       <FilePicker
         open={saving()}
@@ -596,47 +570,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         hostInstanceID={props.instance}
         start={cwd()}
         onConfirm={(p) => {
-          setCwd(p);
+          patchForm({ cwd: p });
           setPicking(false);
         }}
         onCancel={() => setPicking(false)}
         data-testid="ai-folder-picker"
       />
 
-      <Show when={error()}>
-        <div
-          style={{
-            font: tokens.type.textSm,
-            color: tokens.fgDanger,
-            background: tokens.bgDanger,
-            border: `1px solid ${tokens.borderDanger}`,
-            'border-radius': tokens.radiusMd,
-            padding: `${tokens.spaceMd}px`,
-          }}
-        >
-          {error()}
-        </div>
-      </Show>
-
-      {/* Stated on the launcher, not hidden in a menu: a default prompt that
-          silently prefixes every new session is the kind of magic that
-          gets blamed on the agent. One line, and one click to read or
-          change it. */}
-      <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceSm}px`, font: tokens.type.textSm }}>
-        <span data-testid="ai-prompt-status" style={{ color: tokens.fgMuted }}>
-          {roster().has_default_prompt
-            ? 'A default prompt will be sent first.'
-            : 'No default prompt.'}
-        </span>
-        <Button variant="ghost" data-testid="ai-prompt-open" onClick={openPrompt}>
-          {roster().has_default_prompt ? 'Edit…' : 'Set…'}
-        </Button>
-      </div>
-
-      <Button variant="primary" disabled={starting()} onClick={start}>
-        {starting() ? 'Starting…' : 'Start session'}
-      </Button>
-    </div>
+    </>
   );
 
   // Three outcomes, not two: dismissing the dialog must ABORT the close,
@@ -813,11 +754,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       onDelete={(s) => setDeleteFor(s)}
       onPrune={() => setPruning(true)}
       onRestart={(s) => {
-        const a = s.agent || defaultAgent(adapters(), roster().recent ?? []);
-        if (!a) return;
+        // Fresh, the way it was started: its stack and tier, or, for a
+        // session started without one, its adapter.
         setStarting(true);
         setError('');
-        send({ kind: 'start', agent: a, cwd: s.cwd ?? '' });
+        send(s.stack
+          ? startMessage({ stack: s.stack, tier: s.tier ?? DEFAULT_TIER, agent: '', model: '', cwd: s.cwd ?? '' })
+          : startMessage({ stack: '', tier: '', agent: s.agent ?? '', model: '', cwd: s.cwd ?? '' }));
       }}
       onResume={(s) => {
         const act = historyAction(s);
@@ -1196,13 +1139,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   );
 
   return <Show when={role() === 'manager'} fallback={sessionView}>{managerView}</Show>;
-};
-
-const labelStyle = {
-  font: tokens.type.monoSm,
-  'letter-spacing': '0.09em',
-  'text-transform': 'uppercase' as const,
-  color: tokens.fgDim,
 };
 
 defineWashApp('wash-app-ai', App);
