@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -76,13 +77,41 @@ func TestAMemberCannotApproveItsOwnExitFromPlanMode(t *testing.T) {
 	}
 }
 
-func TestADeclinedPlanExitTellsTheOrchestratorWithoutWakingIt(t *testing.T) {
+// Refusing the plan exit ends the member's turn (claude-agent-acp answers it
+// with deny+interrupt), so the plan would reach nobody. Observed: the member
+// paused, its mail "uncertain", the plan fished out of ~/.claude/plans. Wash
+// hands the orchestrator the plan and wakes it.
+func TestARefusedPlanExitHandsTheOrchestratorThePlan(t *testing.T) {
+	withStateDir(t)
 	s, ws := planWorkspace(t)
-	ws.planExitDenied(&hosted{sessionID: "impl-s"})
+	plan := "# K5a plan v3\n\n1. Loader stub at a fixed address.\n" + strings.Repeat("Detail line.\n", 400)
+	ws.planExitDenied(&hosted{sessionID: "impl-s"}, plan)
 	v := s.View("lead")
 	last := v.Messages[len(v.Messages)-1]
-	if last.Recipient != v.Lead || last.Sender != "impl" || last.Type != "progress" || !strings.Contains(last.Body, `"configure"`) {
-		t.Fatalf("orchestrator not told how to approve: %+v", last)
+	if last.Recipient != v.Lead || last.Sender != "impl" || last.Type != "question" || last.State != "queued" || !strings.Contains(last.Body, `"configure"`) || !strings.Contains(last.Body, "Loader stub at a fixed address") {
+		t.Fatalf("orchestrator not woken with the plan: %+v", last)
+	}
+	if len(last.Body) > swarm.ReportLimit {
+		t.Fatalf("report is %d bytes", len(last.Body))
+	}
+	_, path, _ := strings.Cut(last.Body, "Full plan: ")
+	path, _, _ = strings.Cut(path, "\n")
+	if b, err := os.ReadFile(path); err != nil || strings.TrimSpace(string(b)) != strings.TrimSpace(plan) {
+		t.Fatalf("full plan not saved at %q: %v", path, err)
+	}
+}
+
+func TestARefusedPlanExitDoesNotPauseTheMember(t *testing.T) {
+	resetAsks()
+	withState(t, 1)
+	withPolicy(t, agentpolicy.Policy{Enabled: true, Default: "allow"})
+	old := workspaces
+	workspaces = nil
+	defer func() { workspaces = old }()
+	h := &hosted{key: "acp:p", agent: "claude", cwd: t.TempDir(), workspaceMember: true}
+	_, _ = h.RequestPermission(context.Background(), acp.RequestPermissionRequest{ToolCall: acp.ToolCall{Kind: acp.ToolKindSwitchMode, RawInput: json.RawMessage(`{"plan":"x"}`)}, Options: exitPlanOptions})
+	if !h.interrupted.Load() {
+		t.Fatal("the turn the refusal ends would pause the member")
 	}
 }
 

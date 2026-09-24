@@ -15,8 +15,10 @@ API 3.1 adds plan-mode control. `member_control` `configure` (orchestrator only)
 member's adapter settings, e.g. `configs:{"mode":"default"}` once its plan is approved; the change
 is recorded as the member's `adjusted_configs`, beside its unchanged keyed launch definition, and
 reapplied on every resume. A member's request to leave plan mode (ACP tool kind `switch_mode`) is
-always declined, before any policy rule or auto-approval, and the orchestrator gets a non-waking
-progress note saying how to approve it. `interrupt` ends a member's current turn and leaves it
+always declined, before any policy rule or auto-approval. claude-agent-acp answers that refusal by
+ending the turn, so wash treats the stop like `interrupt` (member available, mail delivered),
+saves the plan from the request under `$XDG_STATE_HOME/wash/workspace-plans/`, and wakes the
+orchestrator with a question carrying the plan's start, its path and the approving call. `interrupt` ends a member's current turn and leaves it
 available, with what the turn carried delivered; `pause` still also stops dispatch. A profile or
 member `subagents:"deny"` removes Claude's own Agent/Task tool at launch and on resume; adapters
 wash cannot restrict fail to launch.

@@ -594,6 +594,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 	}
 	return member, nil
 }
+
 // memberBrief is a member's first message: its role, how a workspace member
 // works, and its initial task (assignment), or, without one, to wait for it.
 func memberBrief(m swarm.Member, assignment string) string {
@@ -824,15 +825,43 @@ func (ws *workspaceService) interrupt(id string, m *swarm.Member) (any, error) {
 	return map[string]any{"interrupted": true}, nil
 }
 
-// planExitDenied tells the orchestrator, without waking it, that a member
-// asked to leave plan mode and wash refused: leaving it is the
-// orchestrator's call, made with member_control configure.
-func (ws *workspaceService) planExitDenied(h *hosted) {
+// planExitDenied hands the orchestrator a member's finished plan. The member
+// asked to leave plan mode, which is the orchestrator's call; its turn has
+// ended, so the plan would otherwise reach nobody (observed: fished out of
+// ~/.claude/plans by hand). The full plan goes to a file, since it outgrows a
+// report; the question wakes the orchestrator with its start and the path.
+func (ws *workspaceService) planExitDenied(h *hosted, plan string) {
+	path := ""
+	if plan = strings.TrimSpace(plan); plan != "" {
+		dir := filepath.Join(filepath.Dir(transcriptDir()), "workspace-plans")
+		p := filepath.Join(dir, time.Now().Format("20060102-150405")+"-"+safeFileName(h.sessionID)+".md")
+		err := os.MkdirAll(dir, 0o700)
+		if err == nil {
+			err = os.WriteFile(p, []byte(plan+"\n"), 0o600)
+		}
+		if err == nil {
+			path = p
+		} else {
+			log.Printf("agentd: workspace plan for session=%s not saved: %v", h.sessionID, err)
+		}
+	}
 	_ = ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
 		if m.ID == w.Lead {
 			return nil
 		}
-		_, err := swarm.AddMessage(w, m.ID, w.Lead, "progress", m.Name+" asked to leave plan mode; wash declined. When you approve its plan, switch it with member_control {\"action\":\"configure\",\"member_ids\":[\""+m.ID+"\"],\"configs\":{\"mode\":\"default\"}}.", "", "", "")
+		approve := "Approve with member_control {\"action\":\"configure\",\"member_ids\":[\"" + m.ID + "\"],\"configs\":{\"mode\":\"default\"}} and tell it to proceed, or answer with changes."
+		body := m.Name + " asked to leave plan mode; wash kept it in plan mode and its turn ended. " + approve
+		if path != "" {
+			head := m.Name + " finished its plan and asked to leave plan mode; wash kept it in plan mode and its turn ended.\nFull plan: " + path + "\n\n"
+			tail := "\n\n" + approve
+			room := swarm.ReportLimit - len(head) - len(tail) - len("…")
+			excerpt := plan
+			if len(excerpt) > room {
+				excerpt = strings.ToValidUTF8(excerpt[:max(room, 0)], "") + "…"
+			}
+			body = head + excerpt + tail
+		}
+		_, err := swarm.AddMessage(w, m.ID, w.Lead, "question", body, "", "", "")
 		return err
 	})
 	ws.signal()

@@ -882,11 +882,22 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	// "allow", which on claude-agent-acp 0.81.1 can clear the member's
 	// context and switch it to auto or bypass mode. Checked before every
 	// rule and before yolo, so neither can grant it.
+	//
+	// claude-agent-acp answers that refusal with deny+interrupt, which ends
+	// the turn; it offers no refusal that lets the turn go on. So the stop is
+	// marked as one wash asked for (the member stays available and its mail
+	// counts as delivered, rather than paused and "uncertain"), and wash
+	// hands the plan in the request to the orchestrator itself.
 	if h.workspaceMember && req.ToolCall.Kind == acp.ToolKindSwitchMode {
 		log.Printf("agentd: acp decide key=%s tool=%s decision=deny reason=plan-exit-is-orchestrators", h.key, preq.ToolName)
-		h.decision(DecisionDeny, "leaving plan mode is the orchestrator's call; report your plan and wait", preq.ToolName, "")
+		h.decision(DecisionDeny, "leaving plan mode is the orchestrator's call; wash sent it your plan", preq.ToolName, "")
+		h.interrupted.Store(true)
+		var in struct {
+			Plan string `json:"plan"`
+		}
+		_ = json.Unmarshal(req.ToolCall.RawInput, &in)
 		if workspaces != nil {
-			go workspaces.planExitDenied(h)
+			go workspaces.planExitDenied(h, in.Plan)
 		}
 		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
 	}
