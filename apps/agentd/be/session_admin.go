@@ -169,7 +169,7 @@ func registerSessionAdminHandlers(bus *sdk.Bus) {
 	sdk.HandleFromVoid(bus, "agent_rename", func(conn *sdk.Conn, _ string, req agentproto.AgentRename, _ wire.Sender) error {
 		if _, err := renameSession(req.Key, req.SessionID, req.Title, time.Now()); err != nil {
 			log.Printf("agentd: rename key=%s session=%s: %v", req.Key, req.SessionID, err)
-			conn.Warn("Could not rename that session", err.Error())
+			desktop(conn, agentproto.Notify{Title: "Could not rename that session", Body: err.Error(), Level: wire.NotifyLevelWarn})
 		}
 		return nil
 	})
@@ -178,7 +178,7 @@ func registerSessionAdminHandlers(bus *sdk.Bus) {
 		reply := agentproto.HistoryDeleted{SessionID: req.SessionID}
 		if err := deleteStoredSession(req.SessionID); err != nil {
 			log.Printf("agentd: delete session=%s: %v", req.SessionID, err)
-			conn.Warn("Could not delete that session", err.Error())
+			desktop(conn, agentproto.Notify{Title: "Could not delete that session", Body: err.Error(), Level: wire.NotifyLevelWarn})
 			reply.Error = err.Error()
 		}
 		if from.InstanceID == "" {

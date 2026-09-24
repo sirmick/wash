@@ -273,8 +273,8 @@ func (g *gen) typescript() []byte {
 		}
 		b.WriteString("}\n")
 	}
-	for _, dir := range []agentproto.Dir{agentproto.Request, agentproto.Push} {
-		union := map[agentproto.Dir]string{agentproto.Request: "AgentdRequest", agentproto.Push: "AgentdPush"}[dir]
+	for _, dir := range []agentproto.Dir{agentproto.Request, agentproto.Push, agentproto.DesktopDir} {
+		union := map[agentproto.Dir]string{agentproto.Request: "AgentdRequest", agentproto.Push: "AgentdPush", agentproto.DesktopDir: "DesktopEvent"}[dir]
 		var members []string
 		for _, m := range agentproto.Messages {
 			if m.Dir == dir {
@@ -313,17 +313,17 @@ func oneLine(s string) string {
 
 func (g *gen) markdown() []byte {
 	var b bytes.Buffer
-	for _, dir := range []agentproto.Dir{agentproto.Request, agentproto.Push} {
-		title := map[agentproto.Dir]string{agentproto.Request: "Requests (to agentd)", agentproto.Push: "Pushes (from agentd)"}[dir]
+	for _, dir := range []agentproto.Dir{agentproto.Request, agentproto.Push, agentproto.DesktopDir} {
+		title := map[agentproto.Dir]string{agentproto.Request: "Requests (to agentd)", agentproto.Push: "Pushes (from agentd)", agentproto.DesktopDir: "Desktop events (agentd to the desktop)"}[dir]
 		fmt.Fprintf(&b, "\n### %s\n\n", title)
-		who := map[agentproto.Dir]string{agentproto.Request: "From", agentproto.Push: "To"}[dir]
+		who := map[agentproto.Dir]string{agentproto.Request: "From", agentproto.Push: "To", agentproto.DesktopDir: "Handled by"}[dir]
 		fmt.Fprintf(&b, "| Kind | Payload | %s | Reply / class | What it does |\n|---|---|---|---|---|\n", who)
 		for _, m := range agentproto.Messages {
 			if m.Dir != dir {
 				continue
 			}
 			extra := m.Reply
-			if dir == agentproto.Push {
+			if dir != agentproto.Request {
 				extra = string(m.Class)
 				if extra == "" {
 					extra = string(agentproto.Interactive)

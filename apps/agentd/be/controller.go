@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/sirmick/wash/internal/agentproto"
-	"log"
 	"sync"
 	"time"
 
@@ -328,17 +327,7 @@ func openHosted(conn *sdk.Conn, key string) {
 	if !reserveControllerLaunch(key) {
 		return
 	}
-	pendingAttachMu.Lock()
-	pendingAttach = append(pendingAttach, key)
-	pendingAttachMu.Unlock()
-	if err := conn.SpawnRequest(aiAppID); err != nil {
-		log.Printf("agentd: open controller key=%s: %v", key, err)
-		removePendingAttach(key)
-		clearControllerLaunch(key)
-		restoreDetached(key)
-		return
-	}
-	log.Printf("agentd: opening controller key=%s", key)
+	desktop(conn, agentproto.OpenSession{Key: key})
 }
 
 func registerControllerHandlers(bus *sdk.Bus) {

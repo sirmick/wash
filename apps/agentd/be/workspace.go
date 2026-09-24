@@ -472,7 +472,7 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		if level == "warning" {
 			level = "warn"
 		}
-		ws.conn.NotifyAbout(h.key, workspaceName+" · "+memberName, strings.TrimSpace(a.Emoji+" "+a.Text), level)
+		desktop(ws.conn, agentproto.Notify{Key: h.key, Title: workspaceName + " · " + memberName, Body: strings.TrimSpace(a.Emoji + " " + a.Text), Level: level})
 	}
 	return result, nil
 }

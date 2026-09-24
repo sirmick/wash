@@ -230,7 +230,7 @@ func resumeSession(c *sdk.Conn, sessionID string) {
 		log.Printf("agentd: resume unknown session=%s", sessionID)
 		// Said where the click happened, not only in the log: a row that
 		// does nothing when clicked reads as a dead app.
-		c.Warn("Could not reopen that session", "wash has no record of it — not in its history and no transcript on disk.")
+		desktop(c, agentproto.Notify{Title: "Could not reopen that session", Body: "wash has no record of it — not in its history and no transcript on disk.", Level: wire.NotifyLevelWarn})
 		return
 	}
 	cwd, sid := s.Cwd, s.SessionID
@@ -252,7 +252,7 @@ func resumeSession(c *sdk.Conn, sessionID string) {
 		hs, err := resumeHosted(launch, cwd, sid, c)
 		if err != nil {
 			log.Printf("agentd: resume session=%s: %v", sid, err)
-			c.Warn("Could not reopen that session", err.Error())
+			desktop(c, agentproto.Notify{Title: "Could not reopen that session", Body: err.Error(), Level: wire.NotifyLevelWarn})
 			// Keep the transcript in History. Native state can disappear
 			// independently of wash's transcript, and the row still offers
 			// the explicit restart-fresh and delete choices.
@@ -296,74 +296,6 @@ func resolveResumeTarget(sessionID string) (agentproto.Session, bool) {
 		UserTitle:  m.UserTitle,
 		LastSeen:   sessionRecency(m) / 1000,
 	}, m.Agent != ""
-}
-
-// aiAppID is the window a reopened session appears in. Resume used to
-// open a TERMINAL running `claude --resume` — which, once the intercept
-// tier was deleted, produced an agent wash could no longer see at all
-// (docs/AGENT_APP.md §10).
-const aiAppID = "com.wash.ai"
-
-var (
-	pendingAttachMu sync.Mutex
-	pendingAttach   []string
-)
-
-// popAttach takes the oldest queued attach. Spawn replies arrive in the
-// order they were requested, and a click is a rare event.
-func popAttach() (string, bool) {
-	pendingAttachMu.Lock()
-	defer pendingAttachMu.Unlock()
-	if len(pendingAttach) == 0 {
-		return "", false
-	}
-	k := pendingAttach[0]
-	pendingAttach = pendingAttach[1:]
-	return k, true
-}
-
-func removePendingAttach(key string) {
-	pendingAttachMu.Lock()
-	defer pendingAttachMu.Unlock()
-	for i, pending := range pendingAttach {
-		if pending == key {
-			pendingAttach = append(pendingAttach[:i], pendingAttach[i+1:]...)
-			return
-		}
-	}
-}
-
-// onSpawnResult fires when the router has started the window a resume
-// asked for; it is then told which live session to attach to.
-func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
-	if appID != aiAppID {
-		return
-	}
-	key, ok := popAttach()
-	if !ok {
-		return
-	}
-	if err != nil {
-		log.Printf("agentd: resume spawn failed: %v", err)
-		clearControllerLaunch(key)
-		restoreDetached(key)
-		return
-	}
-	if owner, ok := claimController(key, instanceID); !ok {
-		clearControllerLaunch(key)
-		if owner == "" {
-			// The window died before it could be told its session: leave
-			// the session detached, so the roster offers to open it again.
-			log.Printf("agentd: controller instance=%s gone before attach key=%s", instanceID, key)
-			restoreDetached(key)
-		}
-		return
-	}
-	if e := agentproto.Send(c, wire.Recipient{InstanceID: instanceID}, agentproto.Attach{Key: key}); e != nil {
-		log.Printf("agentd: resume attach instance=%s: %v", instanceID, e)
-		releaseController(instanceID)
-		restoreDetached(key)
-	}
 }
 
 // forgetSession drops one entry from the remembered list.

@@ -28,6 +28,9 @@ const (
 	Request Dir = "request"
 	// Push is sent by agentd.
 	Push Dir = "push"
+	// DesktopDir is something agentd asks of the desktop (desktop.go), handled
+	// in one place rather than sent to a frontend.
+	DesktopDir Dir = "event"
 )
 
 // Class is the router's queueing class for a push (docs/QOS.md §3).

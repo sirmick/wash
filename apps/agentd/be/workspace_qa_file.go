@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/sirmick/wash/internal/agentproto"
+	"github.com/sirmick/wash/pkg/wire"
 	"io"
 	"os"
 	"path/filepath"
@@ -168,7 +169,7 @@ func (ws *workspaceService) syncQADocuments() {
 			next.Status.Error = err.Error()
 			next.Status.Updated = prior.Status.Updated
 			if ws.conn != nil && (prior.Status.State != "error" || prior.Status.Error != next.Status.Error) {
-				ws.conn.NotifyAbout("", w.Name+" · QA save failed", next.Status.Error+". Records retained; Wash will retry.", "error")
+				desktop(ws.conn, agentproto.Notify{Title: w.Name + " · QA save failed", Body: next.Status.Error + ". Records retained; Wash will retry.", Level: wire.NotifyLevelError})
 			}
 		} else {
 			next.Info, _ = os.Lstat(w.QADocument.Path)

@@ -604,6 +604,29 @@ export interface Mode {
   description?: string;
 }
 
+/**
+ * Notify brings something to the person's attention. With a Key, activating
+ * the notification sends wash.focus for that session.
+ */
+export interface Notify {
+  kind: 'notify';
+  key?: string;
+  title: string;
+  body?: string;
+  /** Level is info | warn | error. */
+  level: string;
+}
+
+/**
+ * OpenSession opens a window showing a session. agentd has already
+ * reserved the session's lease for it; the window is handed the session
+ * with an attach push.
+ */
+export interface OpenSession {
+  kind: 'open_session';
+  key: string;
+}
+
 /** Package is the human-facing description of a package code. */
 export interface Package {
   title: string;
@@ -1319,3 +1342,9 @@ export type AgentdPush =
   | WorkspacePatch
   | WorkspaceResult;
 export type AgentdPushKind = AgentdPush['kind'];
+
+/** Every event, discriminated by kind. */
+export type DesktopEvent =
+  | OpenSession
+  | Notify;
+export type DesktopEventKind = DesktopEvent['kind'];

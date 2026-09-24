@@ -1260,7 +1260,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	sdk.HandleFromVoid(bus, "agent_set_default_prompt", func(conn *sdk.Conn, _ string, req agentproto.AgentSetDefaultPrompt, from wire.Sender) error {
 		if err := saveDefaultPrompt(req.Text); err != nil {
 			log.Printf("agentd: save default prompt: %v", err)
-			conn.Fail("Could not save the default prompt", err)
+			desktop(conn, agentproto.Notify{Title: "Could not save the default prompt", Body: err.Error(), Level: wire.NotifyLevelError})
 			return nil
 		}
 		stored := loadDefaultPrompt()
@@ -1313,7 +1313,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			// that was ended elsewhere). Say so where the person is,
 			// rather than in a log they never see.
 			log.Printf("agentd: acp prompt for unknown session key=%s", req.Key)
-			conn.Warn("That session has ended", "Its agent is no longer running. Reopen it from History to continue.")
+			desktop(conn, agentproto.Notify{Title: "That session has ended", Body: "Its agent is no longer running. Reopen it from History to continue.", Level: wire.NotifyLevelWarn})
 			return nil
 		}
 		// Queued inside a turn, run otherwise — never a second concurrent

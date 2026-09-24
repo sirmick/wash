@@ -62,9 +62,7 @@ func installAskToasts(c *sdk.Conn) {
 		if a.Agent != "" {
 			title = a.Agent + " needs you"
 		}
-		// NotifyAbout is fire-and-forget on its own goroutine: this runs
-		// on the ask queue's path, which must not block.
-		c.NotifyAbout(askKey(a), title, askToastBody(a), wire.NotifyLevelWarn)
+		desktop(c, agentproto.Notify{Key: askKey(a), Title: title, Body: askToastBody(a), Level: wire.NotifyLevelWarn})
 	})
 }
 

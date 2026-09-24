@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
+	"github.com/sirmick/wash/pkg/wire"
 	"slices"
 	"time"
 
@@ -440,7 +442,7 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			return map[string]any{"id": id}, err
 		})
 		if err == nil && created && ws.conn != nil {
-			ws.conn.NotifyAbout(h.key, "Workspace decision", p.Text, "info")
+			desktop(ws.conn, agentproto.Notify{Key: h.key, Title: "Workspace decision", Body: p.Text, Level: wire.NotifyLevelInfo})
 		}
 		return result, err
 	default:

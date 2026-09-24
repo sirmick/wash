@@ -519,4 +519,3 @@ func forgetInstanceTranscripts(instance string) {
 		}
 	}
 }
-

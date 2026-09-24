@@ -50,6 +50,23 @@ showing a session may take them. A role is a claim, not a credential: every
 frontend is an app of the same user on the same router, and what the roles
 enforce is that two windows do not both behave as a session's own.
 
+## Desktop events
+
+Some of what agentd does is not a message to a frontend but a request of
+the desktop: open a window on a session (`open_session`), and bring
+something to the person's attention (`notify`: a question waiting, a
+workspace flash, a failure). These are typed like the messages, listed in
+the reference below, and all go through one handler in agentd
+(`apps/agentd/be/desktop.go`). Wash's implementation spawns an Agent window
+and hands it the session with `attach`, and posts notifications through the
+router, which shows a question even when no Agent window is open. Nothing
+else in agentd spawns a window or posts a notification.
+
+The Agent window's own shortcuts (open a terminal, file manager or editor in
+the session's folder, open a file a tool touched) are that window's business,
+handled by its own backend with the window's confinement, and are not part
+of this protocol.
+
 ## Versioning
 
 `State.version` is `agentproto.Version`, and changes on any breaking change
@@ -136,6 +153,13 @@ edit by hand.
 | `workspace_state` | [`WorkspaceState`](#workspacestate) | the session's controller | bulk, keyed | The whole workspace sidebar frame. |
 | `workspace_patch` | [`WorkspacePatch`](#workspacepatch) | the session's controller | bulk, keyed | What changed in the frame since the frame with sequence base. |
 | `workspace_result` | [`WorkspaceResult`](#workspaceresult) | the acting controller | interactive, keyed | The outcome of a workspace_action. |
+
+### Desktop events (agentd to the desktop)
+
+| Kind | Payload | Handled by | Reply / class | What it does |
+|---|---|---|---|---|
+| `open_session` | [`OpenSession`](#opensession) | the desktop | interactive | Open a window on a session; it is attached once it starts. |
+| `notify` | [`Notify`](#notify) | the desktop | interactive | A notification: a question waiting, a flash message, a failure to report. |
 
 ### Types
 
@@ -638,6 +662,25 @@ Mode is one approval/sandbox preset an agent offers.
 | `id` | `string` |  |
 | `name` | `string` |  |
 | `description?` | `string` |  |
+
+#### Notify
+
+Notify brings something to the person's attention.
+
+| Field | Type | |
+|---|---|---|
+| `key?` | `string` |  |
+| `title` | `string` |  |
+| `body?` | `string` |  |
+| `level` | `string` | Level is info \| warn \| error. |
+
+#### OpenSession
+
+OpenSession opens a window showing a session.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
 
 #### Package
 
