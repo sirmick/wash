@@ -88,3 +88,22 @@ test('a workspace message renders a teammate body as Markdown and a human one li
   expect(human.container.querySelector('strong')).toBeNull();
   expect(human.container.textContent).toContain('go with **A**');
 });
+
+// Wash's approval verdicts render as a coloured row, not transcript prose.
+test('a decision event renders as a distinct approved or refused row', async () => {
+  const { DecisionRow } = await import('./agent-session.tsx');
+  const ok = render(() => (
+    <DecisionRow e={{ seq: 1, kind: 'decision', status: 'allow', title: 'Bash', detail: "python3 - <<'EOF' …", reason: 'yolo', text: 'Auto-approved (yolo): Bash …', at_ms: 0 }} />
+  ));
+  const row = ok.getByTestId('agent-decision');
+  expect(row.dataset.status).toBe('allow');
+  expect(row.textContent).toContain('✓ Auto-approved');
+  expect(row.textContent).toContain('Bash');
+  expect(row.textContent).toContain('yolo');
+  cleanup();
+  const no = render(() => (
+    <DecisionRow e={{ seq: 2, kind: 'decision', status: 'cancelled', title: 'Bash', detail: 'rm -rf build', reason: 'nobody answered in time', at_ms: 0 }} />
+  ));
+  expect(no.getByTestId('agent-decision').textContent).toContain('✕ Not approved');
+  expect(no.getByTestId('agent-decision').textContent).toContain('nobody answered in time');
+});

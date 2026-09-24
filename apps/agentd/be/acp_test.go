@@ -1135,3 +1135,35 @@ func TestNoteSubjectIsOneShortLine(t *testing.T) {
 		}
 	}
 }
+
+// Wash's own approval verdicts are their own event kind, so the Agent window
+// can colour them, and they carry the pieces it renders separately.
+func TestApprovalVerdictsAreDecisionEvents(t *testing.T) {
+	resetAsks()
+	withState(t, 0)
+	withPolicy(t, agentpolicy.Policy{Enabled: true, Default: "ask"})
+	h := &hosted{key: "acp:decision-test", yolo: true}
+	options := []acp.PermissionOption{{OptionID: "yes", Kind: acp.OptionAllowOnce}, {OptionID: "no", Kind: acp.OptionRejectOnce}}
+	if _, err := h.RequestPermission(context.Background(), acp.RequestPermissionRequest{ToolCall: acp.ToolCall{Kind: acp.ToolKindExecute, RawInput: json.RawMessage(`{"command":"python3 - <<'EOF'\nprint(1)\nEOF"}`)}, Options: options}); err != nil {
+		t.Fatal(err)
+	}
+	h.yolo = false
+	if _, err := h.RequestPermission(context.Background(), acp.RequestPermissionRequest{ToolCall: acp.ToolCall{Kind: acp.ToolKindExecute, RawInput: json.RawMessage(`{"command":"rm -rf build"}`)}, Options: options}); err != nil {
+		t.Fatal(err)
+	}
+	var got []Event
+	for _, e := range snapshot(h.key) {
+		if e.Kind == EventDecision {
+			got = append(got, e)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("decision events = %+v", snapshot(h.key))
+	}
+	if a := got[0]; a.Status != DecisionAllow || a.Title != "Bash" || a.Detail != "python3 - <<'EOF' …" || a.Reason != "yolo" || !strings.HasPrefix(a.Text, "Auto-approved (yolo): Bash") {
+		t.Errorf("allow = %+v", a)
+	}
+	if c := got[1]; c.Status != "cancelled" || c.Detail != "rm -rf build" || c.Reason != "no desktop was attached to ask" || !strings.HasPrefix(c.Text, "Not approved — ") {
+		t.Errorf("cancelled = %+v", c)
+	}
+}

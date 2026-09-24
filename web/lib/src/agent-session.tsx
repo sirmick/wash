@@ -52,6 +52,10 @@ export interface AgentEvent {
   diff?: string;
   /** set on kind==="image"; text then holds the base64 bytes */
   mime?: string;
+  /** set on kind==="decision": why wash allowed or refused (status says which),
+   *  and the tool call's subject, already cut to one short line */
+  reason?: string;
+  detail?: string;
   /** set on kind==="terminal": the raw channel its pty writes to */
   channel?: number;
   at_ms: number;
@@ -426,6 +430,43 @@ const hintStyle: JSX.CSSProperties = {
   font: tokens.type.monoSm,
   opacity: 0.7,
   'margin-left': `${tokens.spaceXs}px`,
+};
+
+/** Wash's own verdict on a tool call, as one coloured line: a green tick for
+ *  an approval nobody was asked for, red for a call that did not run. It used
+ *  to be ordinary transcript prose ("Auto-approved (yolo): Bash …"), which
+ *  read like the agent talking and hid the one thing worth seeing: that the
+ *  guard was off, or that something was refused. */
+export const DecisionRow: Component<{ e: AgentEvent }> = (p) => {
+  const allowed = () => p.e.status === 'allow';
+  const label = () => allowed()
+    ? (p.e.reason?.startsWith('allowed once') ? 'Allowed once' : 'Auto-approved')
+    : 'Not approved';
+  return (
+    <div
+      data-testid="agent-decision"
+      data-status={p.e.status}
+      title={p.e.text}
+      style={{
+        display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceSm}px`, 'min-width': 0,
+        font: tokens.type.textSm, padding: `2px ${tokens.spaceSm}px`,
+        'border-left': `3px solid ${allowed() ? tokens.fgSuccess : tokens.borderDanger}`,
+        background: allowed() ? 'transparent' : tokens.bgDenied,
+        'border-radius': tokens.radiusSm,
+      }}
+    >
+      <span style={{ color: allowed() ? tokens.fgSuccess : tokens.fgDanger, 'font-weight': 600, 'white-space': 'nowrap' }}>
+        {allowed() ? '✓' : '✕'} {label()}
+      </span>
+      <span style={{ font: tokens.type.monoSm, 'font-weight': 600, color: tokens.fg, 'white-space': 'nowrap' }}>{p.e.title}</span>
+      <Show when={p.e.detail}>
+        <span style={{ font: tokens.type.monoSm, color: tokens.fgMuted, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', 'min-width': 0 }}>{p.e.detail}</span>
+      </Show>
+      <Show when={p.e.reason}>
+        <span style={{ color: tokens.fgDim, 'white-space': 'nowrap', 'margin-left': 'auto' }}>{p.e.reason}</span>
+      </Show>
+    </div>
+  );
 };
 
 /** A workspace inbox message: "<sender> · <type>", a blank line, the body.
@@ -940,8 +981,12 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             </Show>
 
             <Show
-              when={e.kind !== 'tool' && e.kind !== 'image' && e.kind !== 'terminal'}
-              fallback={<Show when={e.kind === 'tool'}><ToolRow e={e} onOpen={props.onOpenTool} /></Show>}
+              when={e.kind !== 'tool' && e.kind !== 'image' && e.kind !== 'terminal' && e.kind !== 'decision'}
+              fallback={
+                <Show when={e.kind === 'tool'} fallback={<Show when={e.kind === 'decision'}><DecisionRow e={e} /></Show>}>
+                  <ToolRow e={e} onOpen={props.onOpenTool} />
+                </Show>
+              }
             >
               <div
                 data-testid={e.kind === 'user' ? 'agent-human-message' : undefined}

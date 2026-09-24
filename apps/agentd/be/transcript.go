@@ -58,6 +58,13 @@ var (
 const (
 	EventMessage = "message"
 	EventThought = "thought"
+	// EventDecision is wash's own approval verdict on a tool call: Status is
+	// allow or cancelled, Title the tool, Detail its (shortened) subject,
+	// Reason why. Text is the whole sentence, for any consumer that only
+	// knows how to print text. Distinct from a message so a transcript can
+	// show a guard coming off (or holding) at a glance, and so these lines
+	// stay out of the conversation preview.
+	EventDecision = "decision"
 	EventTool    = "tool"
 	// EventUser is what the human typed. ACP has a user_message_chunk
 	// variant, but an agent does not echo the prompt its client just sent
@@ -103,6 +110,9 @@ type Event struct {
 	Diff string `json:"diff,omitempty"`
 	// Mime is set on EventImage; Text then holds the base64 bytes.
 	Mime string `json:"mime,omitempty"`
+	// Reason and Detail are set on EventDecision.
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
 	// Channel is set on EventTerminal: the raw channel id to render.
 	Channel uint32 `json:"channel,omitempty"`
 	// AtMS is wall-clock at first append, for the FE's own clock anchoring.

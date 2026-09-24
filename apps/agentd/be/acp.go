@@ -908,7 +908,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=yolo subject=%q",
 			h.key, preq.ToolName, subject)
-		h.note("Auto-approved (yolo): " + preq.ToolName + " " + noteSubject(subject))
+		h.decision(DecisionAllow, "yolo", preq.ToolName, subject)
 		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	}
 
@@ -1029,12 +1029,12 @@ func (h *hosted) askOutside(ctx context.Context, tool, path string) bool {
 	yolo := h.yolo
 	hostedMu.Unlock()
 	if yolo {
-		h.note("Auto-approved (yolo): " + tool + " outside this session's folders — " + path)
+		h.decision(DecisionAllow, "yolo, outside this session's folders", tool, path)
 		return true
 	}
 	v := h.askHuman(ctx, tool, path+" (outside this session's folders)")
 	if v.decision == DecisionAllow {
-		h.note("Allowed once, outside this session's folders: " + path)
+		h.decision(DecisionAllow, "allowed once, outside this session's folders", tool, path)
 		return true
 	}
 	if v.decision != DecisionDeny && v.why != ReasonAgentExited {
@@ -1104,11 +1104,7 @@ func (h *hosted) note(text string) {
 func (h *hosted) narrateUnanswered(why, tool, subject string) {
 	log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q subject=%q",
 		h.key, tool, why, subject)
-	text := "Not approved — " + unansweredReason(why) + ": " + tool
-	if subject != "" {
-		text += " " + noteSubject(subject)
-	}
-	h.note(text)
+	h.decision("cancelled", unansweredReason(why), tool, subject)
 }
 
 // pick chooses the option to select for a decision, preferring the
@@ -1724,3 +1720,24 @@ func noteSubject(s string) string {
 }
 
 const noteSubjectMax = 80
+
+// decision puts wash's approval verdict in the transcript as its own event,
+// which the Agent window renders as a coloured row. The sentence in Text is
+// what it used to print, for consumers that only print text.
+func (h *hosted) decision(status, reason, tool, subject string) {
+	detail := noteSubject(subject)
+	text := "Not approved — " + reason + ": " + tool
+	if status == DecisionAllow {
+		text = "Auto-approved (" + reason + "): " + tool
+		if strings.HasPrefix(reason, "allowed once") {
+			text = "Allowed once (" + strings.TrimPrefix(reason, "allowed once, ") + "): " + tool
+		}
+	}
+	if detail != "" {
+		text += " " + detail
+	}
+	e := appendEvent(h.key, Event{Kind: EventDecision, Status: status, Title: tool, Detail: detail, Reason: reason, Text: text}, time.Now())
+	if h.conn != nil {
+		pushEvent(h.conn, h.key, e)
+	}
+}
