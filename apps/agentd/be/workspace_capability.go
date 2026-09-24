@@ -8,6 +8,7 @@ import (
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/swarm"
 )
 
 // This is a provider tool capability, not an OS sandbox. Pin the adapter contract:
@@ -99,22 +100,40 @@ func coordinationPermission(tc acp.ToolCall) bool {
 	return ok
 }
 
-// savedWorkspaceLaunch is what a reopened session was launched as: its
-// capability, and whether it is a member (not the workspace's lead).
-func savedWorkspaceLaunch(session string) (capability string, member bool) {
+// savedWorkspaceLaunch is what a reopened session was launched as.
+func savedWorkspaceLaunch(session string) workspaceLaunch {
 	if workspaces != nil {
 		for _, w := range workspaces.store.Snapshot().Workspaces {
 			for _, m := range w.Members {
 				if m.Session == session {
-					if m.LaunchSettings != nil {
-						capability = m.LaunchSettings.Capability
-					}
-					return capability, m.ID != w.Lead && m.State != "ended"
+					return memberLaunch(w, m)
 				}
 			}
 		}
 	}
-	return "", false
+	return workspaceLaunch{}
+}
+
+// memberLaunch is how member m of w is (re)started.
+func memberLaunch(w swarm.Workspace, m swarm.Member) workspaceLaunch {
+	l := workspaceLaunch{member: m.ID != w.Lead && m.State != "ended"}
+	if m.LaunchSettings != nil {
+		l.capability = m.LaunchSettings.Capability
+		l.noSubagents = m.LaunchSettings.Subagents == "deny"
+	}
+	return l
+}
+
+// noSubagentMetadata removes Claude's own subagent tool, for a member whose
+// profile says subagents "deny": its work then stays in its own transcript
+// and the workspace's accounting, instead of in background agents.
+func noSubagentMetadata(info acp.Implementation) (map[string]any, error) {
+	if info.Name != "@agentclientprotocol/claude-agent-acp" {
+		return nil, fmt.Errorf("subagents \"deny\" unsupported by %s %s; no session started", info.Name, info.Version)
+	}
+	return map[string]any{"claudeCode": map[string]any{"options": map[string]any{
+		"disallowedTools": []string{"Agent", "Task"},
+	}}}, nil
 }
 
 // workspaceApprovalPolicy is the decision path's one view of workspace-scoped

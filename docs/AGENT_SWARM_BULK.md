@@ -1,6 +1,6 @@
 # Bulk workspace MCP contract
 
-Implemented API 3.0.0, 2026-09-24. This supersedes the incremental v1 catalog in
+Implemented API 3.1.0, 2026-09-24. This supersedes the incremental v1 catalog in
 [the original design](AGENT_SWARM.md). New discovery advertises exactly eleven
 tools. Removed v1 operations return Unknown tool; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
@@ -11,6 +11,16 @@ Results, and a member's messages to the orchestrator, are summaries of at most 2
 (`swarm.ReportLimit`): they are re-read on every later turn of the receiver, so detail goes
 in the QA thread or a file.
 
+API 3.1 adds plan-mode control. `member_control` `configure` (orchestrator only) changes a live
+member's adapter settings, e.g. `configs:{"mode":"default"}` once its plan is approved; the change
+is recorded as the member's `adjusted_configs`, beside its unchanged keyed launch definition, and
+reapplied on every resume. A member's request to leave plan mode (ACP tool kind `switch_mode`) is
+always declined, before any policy rule or auto-approval, and the orchestrator gets a non-waking
+progress note saying how to approve it. `interrupt` ends a member's current turn and leaves it
+available, with what the turn carried delivered; `pause` still also stops dispatch. A profile or
+member `subagents:"deny"` removes Claude's own Agent/Task tool at launch and on resume; adapters
+wash cannot restrict fail to launch.
+
 ## Eleven tools
 
 | Tool | Responsibility |
@@ -18,7 +28,7 @@ in the QA thread or a file.
 | `workspace_get` | Compact team view by default; `view:state` full JSON; `view:about` discovery; `view:qa` threads/generated Markdown |
 | `workspace_configure` | Atomic setup/patch: profiles, settings, keyed member reservations, plan, document |
 | `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history |
-| `member_control` | Pause/resume/end IDs, keys or a package; per-member outcomes |
+| `member_control` | Pause/resume/interrupt/end IDs, keys or a package; orchestrator `configure` of live settings; per-member outcomes |
 | `member_update` | Atomic own status/emoji/waiting, results and QA updates |
 | `message_send` | One message or an atomic batch; optional QA opening/thread linkage |
 | `inbox_read` | Paginated caller inbox history |

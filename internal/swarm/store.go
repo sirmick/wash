@@ -36,6 +36,10 @@ type AgentProfile struct {
 	Model    string            `json:"model,omitempty"`
 	Thinking string            `json:"thinking,omitempty"`
 	Configs  map[string]string `json:"configs,omitempty"`
+	// Subagents "deny" removes the provider's own subagent tool, so the
+	// member's work stays in its transcript and the workspace's accounting.
+	// "" and "allow" leave it available.
+	Subagents string `json:"subagents,omitempty"`
 }
 
 // Package is the human-facing description of a package code.
@@ -56,6 +60,10 @@ type Member struct {
 	Profile        string            `json:"profile,omitempty"`
 	LaunchSettings *AgentProfile     `json:"launch_settings,omitempty"`
 	InitialConfigs map[string]string `json:"initial_configs,omitempty"`
+	// Adjusted are settings the orchestrator changed on the live member
+	// (member_control configure), applied over LaunchSettings on every
+	// resume. Kept apart so the keyed launch definition stays as declared.
+	Adjusted map[string]string `json:"adjusted_configs,omitempty"`
 	// AutoApprove is whether host auto-approval is on for this member now:
 	// set from Approval at launch, and by the human's toggle afterwards.
 	// Kept here, not on the session, so a restart (which pauses rather

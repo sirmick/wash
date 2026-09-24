@@ -130,15 +130,19 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		return ws.configureBulk(ctx, h, c.Arguments)
 	case "member_control":
 		var p struct {
-			Action  string   `json:"action"`
-			Members []string `json:"member_ids"`
-			Package string   `json:"package,omitempty"`
+			Action  string            `json:"action"`
+			Members []string          `json:"member_ids"`
+			Package string            `json:"package,omitempty"`
+			Configs map[string]string `json:"configs,omitempty"`
 		}
 		if err := decodeWorkspace(c.Arguments, &p); err != nil {
 			return nil, err
 		}
-		if !slices.Contains([]string{"pause", "resume", "end"}, p.Action) {
+		if !slices.Contains([]string{"pause", "resume", "end", "interrupt", "configure"}, p.Action) {
 			return nil, errors.New("invalid member action")
+		}
+		if (p.Action == "configure") != (len(p.Configs) > 0) {
+			return nil, errors.New("configs are required for configure and only for configure")
 		}
 		w := ws.store.View(h.sessionID)
 		if w == nil {
@@ -173,7 +177,7 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			// resumed. Refusing the lead as a target left no way back but
 			// ending the workspace — the GUI's Resume button calls this too.
 			selfResume := m != nil && m.ID == w.Lead && self == w.Lead && p.Action == "resume"
-			if m == nil || m.ID == w.Lead && !selfResume || self != w.Lead && m.Creator != self || p.Action == "end" && self != w.Lead {
+			if m == nil || m.ID == w.Lead && !selfResume || self != w.Lead && m.Creator != self || (p.Action == "end" || p.Action == "configure") && self != w.Lead {
 				return nil, errors.New("invalid or unauthorized member target")
 			}
 			if !slices.Contains(ids, m.ID) {
@@ -189,7 +193,11 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				outcomes = append(outcomes, map[string]string{"member_id": id, "error": "workspace ended"})
 				continue
 			}
-			if p.Action == "resume" && m.Session == "" && m.Key != "" {
+			if p.Action == "configure" {
+				result, err = ws.configureMember(ctx, h, id, p.Configs)
+			} else if p.Action == "interrupt" {
+				result, err = ws.interrupt(id, m)
+			} else if p.Action == "resume" && m.Session == "" && m.Key != "" {
 				err = ws.store.Mutate(h.sessionID, true, func(w *swarm.Workspace, _ *swarm.Member) error {
 					m := swarm.GetMember(w, id)
 					if !slices.Contains([]string{"failed", "paused", "pending"}, m.State) {

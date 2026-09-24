@@ -417,7 +417,10 @@ const (
 	ToolKindFetch   = "fetch"
 	ToolKindExecute = "execute"
 	ToolKindThink   = "think"
-	ToolKindOther   = "other"
+	// ToolKindSwitchMode is a request to change the session's mode; Claude
+	// sends leaving plan mode (ExitPlanMode) as a permission request of it.
+	ToolKindSwitchMode = "switch_mode"
+	ToolKindOther      = "other"
 
 	ToolStatusPending    = "pending"
 	ToolStatusInProgress = "in_progress"

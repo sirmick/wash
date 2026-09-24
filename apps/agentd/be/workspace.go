@@ -505,7 +505,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		}
 		hostedMu.Unlock()
 	}
-	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, settings.Capability, true)
+	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, workspaceLaunch{capability: settings.Capability, member: true, noSubagents: settings.Subagents == "deny"})
 	var initialConfigs map[string]string
 	if err == nil {
 		hostedMu.Lock()
@@ -658,11 +658,9 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 		err = target.client.Cancel(target.sessionID)
 	}
 	if loading {
-		capability := ""
-		if m.LaunchSettings != nil {
-			capability = m.LaunchSettings.Capability
-		}
-		target, err = resumeHostedCapability(m.Provider, m.Cwd, m.Session, ws.conn, capability, isMember)
+		launch := memberLaunch(*w, *m)
+		launch.member = isMember
+		target, err = resumeHostedCapability(m.Provider, m.Cwd, m.Session, ws.conn, launch)
 		if err == nil && m.LaunchSettings != nil {
 			// session/load comes back on the adapter's defaults: observed, a
 			// resumed Architect on claude-fable-5-1 at effort "default" where
@@ -673,7 +671,13 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 			hostedMu.Lock()
 			options := append([]acp.ConfigOption(nil), target.configs...)
 			hostedMu.Unlock()
-			skipped, cerr := restoreWorkspaceSession(*m.LaunchSettings, options, func(id, value string) ([]acp.ConfigOption, error) {
+			settings := *m.LaunchSettings
+			settings.Configs = maps.Clone(settings.Configs)
+			if settings.Configs == nil {
+				settings.Configs = map[string]string{}
+			}
+			maps.Copy(settings.Configs, m.Adjusted)
+			skipped, cerr := restoreWorkspaceSession(settings, options, func(id, value string) ([]acp.ConfigOption, error) {
 				res, e := target.client.SetConfigOption(ctx, target.sessionID, id, value)
 				if e == nil {
 					target.applyConfigs(res.ConfigOptions)
@@ -719,6 +723,103 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 	}
 	return map[string]any{"member_id": id}, err
 }
+
+// configureMember changes a member's adapter settings, e.g. {"mode":"default"}
+// once the orchestrator approves its plan. A live session is changed now; the
+// change is recorded either way and reapplied on every resume.
+func (ws *workspaceService) configureMember(ctx context.Context, h *hosted, id string, configs map[string]string) (any, error) {
+	w := ws.store.View(h.sessionID)
+	m := swarm.GetMember(w, id)
+	if m == nil || m.LaunchSettings == nil || m.State == "ended" {
+		return nil, errors.New("member cannot be configured")
+	}
+	// The same limits as a launch profile: a reviewer cannot be given a
+	// permission mode, whoever asks.
+	check := *m.LaunchSettings
+	check.Configs = maps.Clone(check.Configs)
+	if check.Configs == nil {
+		check.Configs = map[string]string{}
+	}
+	maps.Copy(check.Configs, m.Adjusted)
+	maps.Copy(check.Configs, configs)
+	if err := swarm.ValidateProfile(check); err != nil {
+		return nil, err
+	}
+	applied := map[string]string{}
+	if target := workspaceHosted(m.Session); target != nil && target.sessionReady.Load() {
+		hostedMu.Lock()
+		options := append([]acp.ConfigOption(nil), target.configs...)
+		hostedMu.Unlock()
+		var err error
+		applied, err = configureWorkspaceSession(swarm.AgentProfile{Configs: configs}, options, func(cid, value string) ([]acp.ConfigOption, error) {
+			res, e := target.client.SetConfigOption(ctx, target.sessionID, cid, value)
+			if e == nil {
+				target.applyConfigs(res.ConfigOptions)
+			}
+			return res.ConfigOptions, e
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	err := ws.store.Mutate(h.sessionID, true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		v := swarm.GetMember(w, id)
+		if v == nil || v.State == "ended" {
+			return errors.New("member ended")
+		}
+		if v.Adjusted == nil {
+			v.Adjusted = map[string]string{}
+		}
+		maps.Copy(v.Adjusted, configs)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"applied": applied, "adjusted_configs": configs, "live": len(applied) > 0}, nil
+}
+
+// interrupt ends a member's current turn and leaves it available: the gentle
+// stop, where pause also halts dispatch until someone resumes it. What the
+// turn carried counts as delivered; send the member what to do instead.
+func (ws *workspaceService) interrupt(id string, m *swarm.Member) (any, error) {
+	target := workspaceHosted(m.Session)
+	if target == nil || !target.sessionReady.Load() {
+		return nil, errors.New("member is not running")
+	}
+	target.turnMu.Lock()
+	live := target.turnLive
+	if live {
+		target.interrupted.Store(true)
+	}
+	target.turnMu.Unlock()
+	if !live {
+		return map[string]any{"interrupted": false, "reason": "no turn running"}, nil
+	}
+	cancelAsksFor(target.key, ReasonTurnCancelled)
+	if err := target.client.Cancel(target.sessionID); err != nil {
+		target.interrupted.Store(false)
+		return nil, err
+	}
+	log.Printf("agentd: workspace interrupt member=%s key=%s", id, target.key)
+	return map[string]any{"interrupted": true}, nil
+}
+
+// planExitDenied tells the orchestrator, without waking it, that a member
+// asked to leave plan mode and wash refused: leaving it is the
+// orchestrator's call, made with member_control configure.
+func (ws *workspaceService) planExitDenied(h *hosted) {
+	_ = ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
+		if m.ID == w.Lead {
+			return nil
+		}
+		_, err := swarm.AddMessage(w, m.ID, w.Lead, "progress", m.Name+" asked to leave plan mode; wash declined. When you approve its plan, switch it with member_control {\"action\":\"configure\",\"member_ids\":[\""+m.ID+"\"],\"configs\":{\"mode\":\"default\"}}.", "", "", "")
+		return err
+	})
+	ws.signal()
+	ws.publish(false)
+}
+
 func (ws *workspaceService) answer(h *hosted, raw json.RawMessage) (any, error) {
 	defer ws.syncQADocuments()
 	a, err := parseWorkspaceArgs(raw)

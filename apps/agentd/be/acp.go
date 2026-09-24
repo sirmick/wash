@@ -60,8 +60,13 @@ const reasonAskOff = "ask_desktop off"
 // hosted is one ACP session this process owns.
 type hosted struct {
 	// Immutable for the lifetime of this provider connection.
-	capability  string
-	sessionMeta map[string]any
+	capability      string
+	workspaceMember bool
+	sessionMeta     map[string]any
+	// interrupted marks a cancel the orchestrator asked for: the turn ends
+	// as a normal one and the member stays available, rather than being
+	// paused like a turn the human stopped.
+	interrupted atomic.Bool
 	// conn is the service connection, used to push transcript events to
 	// the windows watching this session.
 	conn *sdk.Conn
@@ -872,6 +877,19 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	preq := toolRequest(req.ToolCall, h.cwd)
 	_, _, wpol := workspaceApprovalPolicy(h.sessionID)
 	res, scope := decideWithWorkspace(pol, wpol, preq)
+	// Leaving plan mode is the orchestrator's decision, not the member's:
+	// under auto-approval wash would otherwise pick the adapter's first
+	// "allow", which on claude-agent-acp 0.81.1 can clear the member's
+	// context and switch it to auto or bypass mode. Checked before every
+	// rule and before yolo, so neither can grant it.
+	if h.workspaceMember && req.ToolCall.Kind == acp.ToolKindSwitchMode {
+		log.Printf("agentd: acp decide key=%s tool=%s decision=deny reason=plan-exit-is-orchestrators", h.key, preq.ToolName)
+		h.decision(DecisionDeny, "leaving plan mode is the orchestrator's call; report your plan and wait", preq.ToolName, "")
+		if workspaces != nil {
+			go workspaces.planExitDenied(h)
+		}
+		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
 	if h.capability == "reviewer" {
 		if res.Decision == agentpolicy.DecisionDeny || !h.reviewerPermission(req.ToolCall) {
 			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil

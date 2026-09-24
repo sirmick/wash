@@ -33,6 +33,9 @@ func ValidateProfile(p AgentProfile) error {
 	if p.Capability != "" && p.Capability != "reviewer" {
 		return errors.New("unknown capability profile")
 	}
+	if p.Subagents != "" && p.Subagents != "allow" && p.Subagents != "deny" {
+		return errors.New(`subagents must be "allow" or "deny"`)
+	}
 	if p.Approval != "" && p.Approval != "ask" && p.Approval != "auto" {
 		return errors.New(`approval must be "ask" or "auto"`)
 	}
@@ -177,6 +180,9 @@ func ResolveProfile(w *Workspace, name string, explicit AgentProfile, parentProv
 	}
 	if explicit.Thinking != "" {
 		result.Thinking = explicit.Thinking
+	}
+	if explicit.Subagents != "" {
+		result.Subagents = explicit.Subagents
 	}
 	if result.Configs == nil {
 		result.Configs = map[string]string{}

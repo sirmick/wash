@@ -33,7 +33,7 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 			t.Fatal("unverified adapter accepted", version)
 		}
 	}
-	if _, err = startHostedCapability("codex", t.TempDir(), nil, "reviewer", true); err == nil {
+	if _, err = startHostedCapability("codex", t.TempDir(), nil, workspaceLaunch{capability: "reviewer", member: true}); err == nil {
 		t.Fatal("unsupported adapter launched")
 	}
 	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
@@ -50,8 +50,8 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 	old := workspaces
 	workspaces = &workspaceService{store: s}
 	defer func() { workspaces = old }()
-	if capability, member := savedWorkspaceLaunch("review-session"); capability != "reviewer" || member {
-		t.Fatal("resume lost capability or took the lead for a member", capability, member)
+	if l := savedWorkspaceLaunch("review-session"); l.capability != "reviewer" || l.member {
+		t.Fatal("resume lost capability or took the lead for a member", l)
 	}
 }
 func TestReviewerCannotWriteExecuteConfigureOrBypassViaYolo(t *testing.T) {

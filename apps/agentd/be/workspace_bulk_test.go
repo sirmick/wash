@@ -2,8 +2,8 @@ package agentd
 
 import (
 	"context"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"

@@ -34,6 +34,7 @@ type memberSpec struct {
 	Model        string            `json:"model,omitempty"`
 	Thinking     string            `json:"thinking,omitempty"`
 	Configs      map[string]string `json:"configs,omitempty"`
+	Subagents    string            `json:"subagents,omitempty"`
 	Cwd          string            `json:"cwd,omitempty"`
 	Instructions string            `json:"instructions"`
 	Lifetime     string            `json:"lifetime"`
@@ -349,7 +350,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					}
 					// Profile edits affect future launches; explicit launch overrides must still match.
 					old := prior.LaunchSettings
-					if old == nil || spec.Capability != "" && old.Capability != spec.Capability || spec.Approval != "" && old.Approval != spec.Approval || spec.Provider != "" && old.Provider != spec.Provider || spec.Model != "" && old.Model != spec.Model || spec.Thinking != "" && old.Thinking != spec.Thinking {
+					if old == nil || spec.Capability != "" && old.Capability != spec.Capability || spec.Approval != "" && old.Approval != spec.Approval || spec.Provider != "" && old.Provider != spec.Provider || spec.Model != "" && old.Model != spec.Model || spec.Thinking != "" && old.Thinking != spec.Thinking || spec.Subagents != "" && old.Subagents != spec.Subagents {
 						return errors.New("existing member launch settings differ")
 					}
 					for id, val := range spec.Configs {
@@ -374,7 +375,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if live >= w.MaxMembers {
 					return errors.New("workspace member limit reached")
 				}
-				profile, settings, err := swarm.ResolveProfile(w, spec.Profile, swarm.AgentProfile{Capability: spec.Capability, Approval: spec.Approval, Provider: spec.Provider, Model: spec.Model, Thinking: spec.Thinking, Configs: spec.Configs}, h.agent)
+				profile, settings, err := swarm.ResolveProfile(w, spec.Profile, swarm.AgentProfile{Capability: spec.Capability, Approval: spec.Approval, Provider: spec.Provider, Model: spec.Model, Thinking: spec.Thinking, Configs: spec.Configs, Subagents: spec.Subagents}, h.agent)
 				if err != nil {
 					return err
 				}

@@ -177,13 +177,24 @@ func adapterByID(id string) (Adapter, bool) {
 // adapter is a stray child that outlives the desktop, which is the bug
 // class the child-process audit already cost us once.
 func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	return startHostedCapability(agentID, cwd, svcConn, "", false)
+	return startHostedCapability(agentID, cwd, svcConn, workspaceLaunch{})
 }
 
-// member marks a session launched as a workspace member rather than one that
-// may lead a workspace; its workspace bridge lists only the tools it may call.
-func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, capability string, member bool) (*hosted, error) {
-	h, err := dialAdapterCapability(agentID, cwd, svcConn, capability, member)
+// workspaceLaunch is how a session starts for a workspace; the zero value is
+// an ordinary session, which may go on to lead one.
+type workspaceLaunch struct {
+	// capability "reviewer" restricts the provider's tools (Claude only).
+	capability string
+	// member is a session launched into a workspace rather than one that
+	// may lead it: its bridge lists only the tools it may call, and it
+	// cannot approve its own way out of plan mode.
+	member bool
+	// noSubagents removes the provider's own subagent tool (Claude only).
+	noSubagents bool
+}
+
+func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch workspaceLaunch) (*hosted, error) {
+	h, err := dialAdapterCapability(agentID, cwd, svcConn, launch)
 	if err != nil {
 		return nil, err
 	}
@@ -226,11 +237,15 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, capability st
 // dialAdapter launches an adapter and completes the handshake. Shared by
 // start and resume, which differ only in session/new vs session/load.
 func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	return dialAdapterCapability(agentID, cwd, svcConn, "", false)
+	return dialAdapterCapability(agentID, cwd, svcConn, workspaceLaunch{})
 }
-func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, capability string, member bool) (*hosted, error) {
+func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch workspaceLaunch) (*hosted, error) {
+	capability := launch.capability
 	if capability != "" && (capability != "reviewer" || agentID != "claude") {
 		return nil, fmt.Errorf("capability %q unsupported by %s; no session started", capability, agentID)
+	}
+	if launch.noSubagents && agentID != "claude" {
+		return nil, fmt.Errorf("subagents \"deny\" unsupported by %s; no session started", agentID)
 	}
 	a, ok := adapterByID(agentID)
 	if !ok {
@@ -293,7 +308,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, capability st
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{capability: capability, key: key, agent: a.ID, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
+	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
 
 	// Only the injected coordination server is available to restricted reviewers.
 	if capability == "reviewer" {
@@ -326,7 +341,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, capability st
 
 	h.stop = stop
 	if workspaces != nil {
-		if err := workspaces.inject(h, member); err != nil {
+		if err := workspaces.inject(h, launch.member); err != nil {
 			h.stop()
 			return nil, err
 		}
@@ -361,12 +376,15 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, capability st
 	// caller may need: authMethods advertises what is AVAILABLE, not what
 	// is required, so it is only meaningful once a session call fails.
 	h.authMethods = res.AuthMethods
-	if capability != "" {
+	switch {
+	case capability != "":
 		h.sessionMeta, err = reviewerMetadata(agentID, res.AgentInfo)
-		if err != nil {
-			h.stop()
-			return nil, err
-		}
+	case launch.noSubagents:
+		h.sessionMeta, err = noSubagentMetadata(res.AgentInfo)
+	}
+	if err != nil {
+		h.stop()
+		return nil, err
 	}
 	return h, nil
 }
@@ -406,7 +424,8 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	if workspaces != nil {
 		workspaces.captureUsage(h)
 		var end error
-		if err == nil && res.StopReason == acp.StopCancelled {
+		interrupted := h.interrupted.Swap(false)
+		if err == nil && res.StopReason == acp.StopCancelled && !interrupted {
 			end = workspaces.store.TurnStopped(h.sessionID, t.mailIDs)
 		} else {
 			end = workspaces.store.TurnEnded(h.sessionID, t.mailIDs, err != nil)
@@ -540,11 +559,10 @@ func resolveCwd(cwd string) (string, error) {
 // the same handler that fills it live. The history comes back on screen,
 // rather than as a terminal scrolled to wherever it happened to be.
 func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
-	capability, member := savedWorkspaceLaunch(sessionID)
-	return resumeHostedCapability(agentID, cwd, sessionID, svcConn, capability, member)
+	return resumeHostedCapability(agentID, cwd, sessionID, svcConn, savedWorkspaceLaunch(sessionID))
 }
-func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, capability string, member bool) (*hosted, error) {
-	h, err := dialAdapterCapability(agentID, cwd, svcConn, capability, member)
+func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, launch workspaceLaunch) (*hosted, error) {
+	h, err := dialAdapterCapability(agentID, cwd, svcConn, launch)
 	if err != nil {
 		return nil, err
 	}
