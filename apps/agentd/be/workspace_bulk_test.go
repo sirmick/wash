@@ -199,3 +199,39 @@ func TestConfigureInsideApprovedRootDoesNotAsk(t *testing.T) {
 		t.Fatal("a member cwd outside the project root was accepted without asking")
 	}
 }
+
+// With titled packages a member's name is its role, so names repeat across
+// packages; they must still be unique within one.
+func TestMemberNamesAreUniquePerPackage(t *testing.T) {
+	root := t.TempDir()
+	s, err := swarm.Open(filepath.Join(root, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "claude", cwd: root}
+	call := func(members map[string]any) error {
+		raw, _ := json.Marshal(map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": members})
+		_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: raw})
+		return err
+	}
+	member := func(pkg string) map[string]any {
+		return map[string]any{"name": "Red team", "package": pkg, "role": "reviewer", "lifetime": "resident", "instructions": "Review"}
+	}
+	if err := call(map[string]any{"CT1-red": member("CT1"), "G1-red": member("G1")}); err != nil {
+		t.Fatalf("same role name in two packages refused: %v", err)
+	}
+	if _, err := s.Setup("lead", "claude", root, "Team", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "x", Key: "CT1-red", Name: "Red team", Package: "CT1", State: "available", Lifetime: "resident"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"preview": true, "members": map[string]any{"CT1-red2": member("CT1")}})
+	if _, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: raw}); err == nil {
+		t.Fatal("duplicate name within one package accepted")
+	}
+}

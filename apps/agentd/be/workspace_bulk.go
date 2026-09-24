@@ -364,8 +364,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					if m.State != "ended" {
 						live++
 					}
-					if m.Name == spec.Name && m.State != "ended" {
-						return errors.New("member name already exists")
+					// Unique within a package, not the workspace: with titled
+					// packages a member's name is its role, so every package
+					// has an "Implementer". Lookup is by ID or key, never name.
+					if m.Name == spec.Name && m.Package == spec.Package && m.State != "ended" {
+						return errors.New("member name already exists in this package")
 					}
 				}
 				if live >= w.MaxMembers {
