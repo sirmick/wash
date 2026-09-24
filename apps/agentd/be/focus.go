@@ -27,13 +27,10 @@ import (
 )
 
 // FocusKind is the cross-app message the desktop sends back when the user
-// activates a notification that named a subject key. Same string on both
-// sides of the wire; the shell's copy is FOCUS_KIND in web/shell/src.
+// activates a notification that named a subject key (agentproto.Focus).
+// Same string on both sides of the wire; the shell's copy is FOCUS_KIND in
+// web/shell/src.
 const FocusKind = "wash.focus"
-
-type focusReq struct {
-	Key string `json:"key"`
-}
 
 // askKey is the subject key a question's toast carries, or "" for a
 // question the click could not be honoured for.
@@ -80,7 +77,7 @@ func installAskToasts(c *sdk.Conn) {
 // this service already holds; it starts nothing, answers nothing, and
 // discloses nothing that is not already on the roster.
 func registerFocusHandler(bus *sdk.Bus, _ *sdk.Conn) {
-	sdk.HandleVoid(bus, FocusKind, func(conn *sdk.Conn, _ string, req focusReq) error {
+	sdk.HandleVoid(bus, FocusKind, func(conn *sdk.Conn, _ string, req agentproto.Focus) error {
 		if req.Key == "" {
 			return nil
 		}
@@ -97,10 +94,7 @@ func focusHosted(conn *sdk.Conn, key string) {
 		return
 	}
 	if instanceID := controllerFor(key); instanceID != "" {
-		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
-			"kind": FocusKind,
-			"key":  key,
-		})
+		_ = agentproto.Send(conn, wire.Recipient{InstanceID: instanceID}, agentproto.Raise{Key: key})
 		log.Printf("agentd: focus key=%s raising controller=%s", key, instanceID)
 		return
 	}

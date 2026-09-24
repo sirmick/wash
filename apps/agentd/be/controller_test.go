@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"github.com/sirmick/wash/internal/agentproto"
+	"github.com/sirmick/wash/pkg/wire"
 	"path/filepath"
 	"testing"
 	"time"
@@ -201,5 +202,39 @@ func TestClaimRefusesAnInstanceAlreadyGone(t *testing.T) {
 	}
 	if _, ok := claimController("k1", "i-live"); !ok {
 		t.Fatal("a live instance could not claim")
+	}
+}
+
+// Roles replace app ids: a manager is whoever subscribed as one, and a
+// session's controller is whoever holds its lease, whatever app either is.
+func TestRolesAreClaimedNotAppIDs(t *testing.T) {
+	resetControllersForTest()
+	t.Cleanup(resetControllersForTest)
+
+	if isManager("i-any") {
+		t.Fatal("an instance that never subscribed is a manager")
+	}
+	controllerState.Lock()
+	controllerState.managers["i-any"] = struct{}{}
+	controllerState.Unlock()
+	if !isManager("i-any") {
+		t.Fatal("a subscribed manager was not recognised")
+	}
+	forgetManager("i-any")
+	if isManager("i-any") {
+		t.Fatal("a gone manager kept the role")
+	}
+
+	if _, ok := claimController("acp:1", "i-editor"); !ok {
+		t.Fatal("a lease was refused to a non-ai app")
+	}
+	if !controls(wire.Sender{AppID: "com.wash.edit", InstanceID: "i-editor"}, "acp:1") {
+		t.Fatal("the lease holder does not control its session")
+	}
+	if controls(wire.Sender{AppID: "com.wash.ai", InstanceID: "i-other"}, "acp:1") {
+		t.Fatal("an Agent window controls a session it holds no lease on")
+	}
+	if controls(wire.Sender{}, "acp:1") {
+		t.Fatal("an unattributed sender controls a session")
 	}
 }

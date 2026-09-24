@@ -86,13 +86,13 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 	go ws.loop()
 	sdk.OnTerminate(func() { close(ws.done); _ = server.Close(); _ = watcher.Close(); _ = os.RemoveAll(dir) })
 	sdk.HandleFromVoid(bus, "workspace_refresh", func(c *sdk.Conn, _ string, req agentproto.WorkspaceRefresh, from wire.Sender) error {
-		if from.AppID == aiAppID && controllerFor(req.Key) == from.InstanceID {
+		if controls(from, req.Key) {
 			ws.publish(true)
 		}
 		return nil
 	})
 	sdk.HandleFromVoid(bus, "workspace_action", func(c *sdk.Conn, _ string, req agentproto.WorkspaceAction, from wire.Sender) error {
-		if from.AppID != aiAppID || controllerFor(req.Key) != from.InstanceID {
+		if !controls(from, req.Key) {
 			return nil
 		}
 		h := lookupHosted(req.Key)

@@ -28,6 +28,28 @@ must never sit ahead of typing or a permission question. Bulk frames can be
 overtaken, so every session-scoped push carries the session's roster `key`,
 and a frontend drops those for a session it is no longer showing.
 
+## Trust and roles
+
+The router attests an app's id and instance id and nothing else, and agentd
+does not decide what a frontend may do by which app it is. It decides by
+what the frontend has claimed:
+
+- **Manager**: an instance that sent `manager_subscribe`. It receives the
+  manager's roster view and may set and test connection keys
+  (`agent_set_key`, `agent_test_key`).
+- **Controller**: the instance holding a session's lease, taken with
+  `session_claim` or with `agent_start {claim: true}`, or given by agentd to
+  a window it opened (`attach`). At most one instance holds a session's
+  lease; a second claim is refused (`claim_denied`) and the holder raised.
+  Focus goes to the controller, a detach closes it, and only it may make
+  the workspace sidebar's requests (`workspace_refresh`, `workspace_action`).
+
+Everything else — prompting, cancelling, answering questions, stopping —
+is open to any frontend: those are the person's actions, and any window
+showing a session may take them. A role is a claim, not a credential: every
+frontend is an app of the same user on the same router, and what the roles
+enforce is that two windows do not both behave as a session's own.
+
 ## Versioning
 
 `State.version` is `agentproto.Version`, and changes on any breaking change
@@ -58,6 +80,9 @@ edit by hand.
 
 | Kind | Payload | From | Reply / class | What it does |
 |---|---|---|---|---|
+| `manager_subscribe` | [`ManagerSubscribe`](#managersubscribe) | any frontend, which becomes a manager | manager_state, now and on every change | Subscribe to the manager's roster view. |
+| `session_claim` | [`SessionClaim`](#sessionclaim) | any frontend | session_claimed then session_state, or claim_denied | Take the controller lease on a session. |
+| `wash.focus` | [`Focus`](#focus) | the shell (a notification click, no sender) or any frontend |  | Bring a session's window forward, opening one if needed. |
 | `agent_history` | [`AgentHistory`](#agenthistory) | any frontend | history | Search stored sessions. |
 | `agent_resume` | [`AgentResume`](#agentresume) | any frontend |  | Reopen a stored session in an Agent window. |
 | `agent_rename` | [`AgentRename`](#agentrename) | any frontend |  | Name a session, or clear the name. |
@@ -89,6 +114,10 @@ edit by hand.
 
 | Kind | Payload | To | Reply / class | What it does |
 |---|---|---|---|---|
+| `session_claimed` | [`SessionClaimed`](#sessionclaimed) | the claimant | interactive, keyed | The lease is yours. |
+| `claim_denied` | [`ClaimDenied`](#claimdenied) | the claimant | interactive, keyed | Another window holds the lease. |
+| `wash.focus` | [`Raise`](#raise) | the session's controller | interactive, keyed | Come to the front. |
+| `attach` | [`Attach`](#attach) | a window agentd opened for a session | interactive, keyed | The session this new window shows. |
 | `history` | [`History`](#history) | the asker | interactive | Stored sessions matching a history query. |
 | `history_deleted` | [`HistoryDeleted`](#historydeleted) | the asker | interactive | The outcome of a delete. |
 | `history_pruned` | [`HistoryPruned`](#historypruned) | the asker | interactive | The outcome of a prune. |
@@ -310,6 +339,7 @@ AgentStart starts a session.
 | `cwd` | `string` | Cwd is the folder the session works in; empty is the home folder. |
 | `prompt?` | `string` | Prompt is sent as the first turn, after the stored default prompt. |
 | `open?` | `boolean` | Open asks agentd to open (or focus) an Agent window on the new session, for a starter that is not itself that window (the manager). |
+| `claim?` | `boolean` | Claim makes the starter the session's controller (see Roles): an Agent window starting the session it will show. |
 | `req_id?` | `string` | ReqID is opaque to agentd and echoed back on agent_started, success or failure. A host with ONE session per process (wash-ai) never needs it — the reply can only be about the one thing it asked for. A host with several (wash-edit's agent tabs) cannot tell two concurrent starts apart without it, and a FAILED start carries no key at all, so there would be nothing to attribute the error to. |
 
 #### AgentStarted
@@ -368,6 +398,22 @@ Ask is one question waiting for a human.
 | `text` | `string` |  |
 | `state` | `string` |  |
 | `result?` | `string` |  |
+
+#### Attach
+
+Attach hands a window agentd opened the session it is to show; the lease is already its.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+
+#### ClaimDenied
+
+ClaimDenied refuses the lease: another instance holds it, and has been raised.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
 
 #### Command
 
@@ -444,6 +490,14 @@ Event is one line in a transcript.
 | `append?` | `boolean` | Append marks a wire-only delta: Text is what was ADDED to the event with this Seq since the last emit, not the whole message. Never set on a stored or snapshotted event (transcript_emit.go). |
 | `text_len?` | `number` | TextLen is the message's byte length after this event applies, on message/thought events. A consumer applying a delta checks its own length + the delta against it, and asks for a replay on mismatch. |
 
+#### Focus
+
+Focus asks for a session's window to come forward, opening one if nothing is showing it.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+
 #### History
 
 History answers AgentHistory, newest first, each session stamped with what the roster says about it now.
@@ -518,6 +572,12 @@ ManagerState is the Agents manager's view of the roster: every row with its tran
 | Field | Type | |
 |---|---|---|
 | `state` | `State` |  |
+
+#### ManagerSubscribe
+
+ManagerSubscribe registers the sender as a manager and asks for the manager's roster view, now and on every change.
+
+No fields.
 
 #### Member
 
@@ -654,6 +714,14 @@ QADocumentStatus is where the workspace's QA file stands on disk.
 | `evidence?` | `string` |  |
 | `events` | `QAEvent[] \| null` |  |
 
+#### Raise
+
+Raise tells a session's controller to come forward.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+
 #### RosterState
 
 RosterState is the whole roster, sent by the StateService to every subscriber on each change.
@@ -737,6 +805,22 @@ Session is one remembered agent session.
 | `live?` | `boolean` | Live is set on the way out to the FE: a session whose agent is running right now is in the roster above, so the Recent list greys it rather than offering to resume what is already here. |
 | `detached?` | `boolean` | Detached is a live session with no window pointing at it. Live and REACHABLE are not the same thing, and treating them as one is what made the History menu useless in exactly the case you open it for. agent_detach sets the flag and closes the window but never retires the row, so a detached session is still "live" — and the menu, which hides live sessions to avoid offering to duplicate a running one, hid the one thing you were trying to get back. A detached session is not something to resume. It is something to reattach to, which is a different verb with a different outcome. |
 | `row_key?` | `string` | RowKey is the roster key this session is running as, present only while it has a row. Reattach is key-addressed, not session-id addressed, so the menu needs this to offer the verb at all. |
+
+#### SessionClaim
+
+SessionClaim takes (or re-affirms) the controller lease on a session.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+
+#### SessionClaimed
+
+SessionClaimed grants the lease; a session_state follows.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
 
 #### SessionMeta
 

@@ -520,7 +520,3 @@ func forgetInstanceTranscripts(instance string) {
 	}
 }
 
-type transReq struct {
-	Key    string `json:"key"`
-	Replay bool   `json:"replay,omitempty"`
-}

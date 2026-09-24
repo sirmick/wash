@@ -330,6 +330,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		"kind":  "agent_start",
 		"agent": flagAgent,
 		"cwd":   flagCwd,
+		"claim": true,
 	})
 }
 
@@ -461,8 +462,12 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 				msg[k] = v
 			}
 		}
+		// The manager hands the session to a window of its own; an Agent
+		// window starting a session is the one that will show it.
 		if managerMode {
 			msg["open"] = true
+		} else {
+			msg["claim"] = true
 		}
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, msg)
 	case "manager_refresh":

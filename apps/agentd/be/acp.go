@@ -1296,7 +1296,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		}
 		if req.Open {
 			openHosted(conn, h.key)
-		} else if from.AppID == aiAppID {
+		} else if req.Claim && from.InstanceID != "" {
 			claimController(h.key, from.InstanceID)
 		}
 		if from.InstanceID == "" {

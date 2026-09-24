@@ -359,10 +359,7 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 		}
 		return
 	}
-	if e := c.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
-		"kind": "attach",
-		"key":  key,
-	}); e != nil {
+	if e := agentproto.Send(c, wire.Recipient{InstanceID: instanceID}, agentproto.Attach{Key: key}); e != nil {
 		log.Printf("agentd: resume attach instance=%s: %v", instanceID, e)
 		releaseController(instanceID)
 		restoreDetached(key)

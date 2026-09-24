@@ -22,10 +22,6 @@ import (
 // tested, and never back: the roster carries only whether it is set and its
 // last four characters. Nothing here logs a value.
 
-// agentsAppID is the Agents manager, the one window with a launcher and so
-// the one allowed to set or test a key.
-const agentsAppID = "com.wash.agents"
-
 // knownKeys is every key a connection can name: the described ones, and any
 // a user's connection names, so a key for a connection of one's own can be
 // set from the same screen.
@@ -103,7 +99,7 @@ func registerKeyHandlers(bus *sdk.Bus) {
 	// agent_set_key stores a key, or clears it with an empty value, then
 	// republishes: the stacks that need it become available at once.
 	sdk.HandleFromVoid(bus, "agent_set_key", func(conn *sdk.Conn, _ string, req agentproto.AgentSetKey, from wire.Sender) error {
-		if from.AppID != agentsAppID || from.InstanceID == "" {
+		if !isManager(from.InstanceID) {
 			return nil
 		}
 		reply := agentproto.KeySaved{Name: req.Name}
@@ -121,7 +117,7 @@ func registerKeyHandlers(bus *sdk.Bus) {
 	// agent_test_key checks the typed key, or the stored one when none was
 	// typed. Off the bus goroutine: it waits on the network.
 	sdk.HandleFromVoid(bus, "agent_test_key", func(conn *sdk.Conn, _ string, req agentproto.AgentTestKey, from wire.Sender) error {
-		if from.AppID != agentsAppID || from.InstanceID == "" {
+		if !isManager(from.InstanceID) {
 			return nil
 		}
 		spec, ok := knownKeys(hostedPolicy())[req.Name]

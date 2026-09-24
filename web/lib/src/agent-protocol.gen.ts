@@ -242,6 +242,11 @@ export interface AgentStart {
    */
   open?: boolean;
   /**
+   * Claim makes the starter the session's controller (see Roles): an
+   * Agent window starting the session it will show.
+   */
+  claim?: boolean;
+  /**
    * ReqID is opaque to agentd and echoed back on agent_started, success
    * or failure. A host with ONE session per process (wash-ai) never needs
    * it — the reply can only be about the one thing it asked for. A host
@@ -328,6 +333,24 @@ export interface Assignment {
   text: string;
   state: string;
   result?: string;
+}
+
+/**
+ * Attach hands a window agentd opened the session it is to show; the lease
+ * is already its.
+ */
+export interface Attach {
+  kind: 'attach';
+  key: string;
+}
+
+/**
+ * ClaimDenied refuses the lease: another instance holds it, and has been
+ * raised. A window denied its session closes.
+ */
+export interface ClaimDenied {
+  kind: 'claim_denied';
+  key: string;
 }
 
 /** Command is one slash command the agent offers. */
@@ -423,6 +446,16 @@ export interface Event {
 }
 
 /**
+ * Focus asks for a session's window to come forward, opening one if
+ * nothing is showing it. The shell sends it when a notification about the
+ * session is clicked; frontends send it to go to a running session.
+ */
+export interface Focus {
+  kind: 'wash.focus';
+  key: string;
+}
+
+/**
  * History answers AgentHistory, newest first, each session stamped with
  * what the roster says about it now.
  */
@@ -486,6 +519,14 @@ export interface KeyView {
 export interface ManagerState {
   kind: 'manager_state';
   state: State;
+}
+
+/**
+ * ManagerSubscribe registers the sender as a manager and asks for the
+ * manager's roster view, now and on every change.
+ */
+export interface ManagerSubscribe {
+  kind: 'manager_subscribe';
 }
 
 export interface Member {
@@ -630,6 +671,12 @@ export interface QAThread {
   decision_refs: string[] | null;
   evidence?: string;
   events: QAEvent[] | null;
+}
+
+/** Raise tells a session's controller to come forward. */
+export interface Raise {
+  kind: 'wash.focus';
+  key: string;
 }
 
 /**
@@ -830,6 +877,18 @@ export interface Session {
    * addressed, so the menu needs this to offer the verb at all.
    */
   row_key?: string;
+}
+
+/** SessionClaim takes (or re-affirms) the controller lease on a session. */
+export interface SessionClaim {
+  kind: 'session_claim';
+  key: string;
+}
+
+/** SessionClaimed grants the lease; a session_state follows. */
+export interface SessionClaimed {
+  kind: 'session_claimed';
+  key: string;
 }
 
 /**
@@ -1204,6 +1263,9 @@ export interface WorkspaceTranscript {
 
 /** Every request, discriminated by kind. */
 export type AgentdRequest =
+  | ManagerSubscribe
+  | SessionClaim
+  | Focus
   | AgentHistory
   | AgentResume
   | AgentRename
@@ -1234,6 +1296,10 @@ export type AgentdRequestKind = AgentdRequest['kind'];
 
 /** Every push, discriminated by kind. */
 export type AgentdPush =
+  | SessionClaimed
+  | ClaimDenied
+  | Raise
+  | Attach
   | History
   | HistoryDeleted
   | HistoryPruned

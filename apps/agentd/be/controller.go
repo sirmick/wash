@@ -322,7 +322,7 @@ func openHosted(conn *sdk.Conn, key string) {
 		return
 	}
 	if instance := controllerFor(key); instance != "" {
-		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, map[string]any{"kind": FocusKind, "key": key})
+		_ = agentproto.Send(conn, wire.Recipient{InstanceID: instance}, agentproto.Raise{Key: key})
 		return
 	}
 	if !reserveControllerLaunch(key) {
@@ -342,8 +342,10 @@ func openHosted(conn *sdk.Conn, key string) {
 }
 
 func registerControllerHandlers(bus *sdk.Bus) {
-	sdk.HandleFromVoid(bus, "manager_subscribe", func(conn *sdk.Conn, _ string, _ struct{}, from wire.Sender) error {
-		if from.AppID != "com.wash.agents" || from.InstanceID == "" {
+	// Any frontend may be a manager: its view is the roster any state
+	// subscriber already gets, and the role is what agent_set_key checks.
+	sdk.HandleFromVoid(bus, "manager_subscribe", func(conn *sdk.Conn, _ string, _ agentproto.ManagerSubscribe, from wire.Sender) error {
+		if from.InstanceID == "" {
 			return nil
 		}
 		controllerState.Lock()
@@ -352,14 +354,14 @@ func registerControllerHandlers(bus *sdk.Bus) {
 		sendView(from.InstanceID, "", managerView)
 		return nil
 	})
-	sdk.HandleFromVoid(bus, "session_claim", func(conn *sdk.Conn, _ string, req transReq, from wire.Sender) error {
-		if from.AppID != aiAppID || lookupHosted(req.Key) == nil {
+	sdk.HandleFromVoid(bus, "session_claim", func(conn *sdk.Conn, _ string, req agentproto.SessionClaim, from wire.Sender) error {
+		if from.InstanceID == "" || lookupHosted(req.Key) == nil {
 			return nil
 		}
 		owner, ok := claimController(req.Key, from.InstanceID)
 		if !ok {
-			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: owner}, map[string]any{"kind": FocusKind, "key": req.Key})
-			return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{"kind": "claim_denied", "key": req.Key})
+			_ = agentproto.Send(conn, wire.Recipient{InstanceID: owner}, agentproto.Raise{Key: req.Key})
+			return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.ClaimDenied{Key: req.Key})
 		}
 		hostedMu.Lock()
 		h := hostedAll[req.Key]
@@ -370,13 +372,27 @@ func registerControllerHandlers(bus *sdk.Bus) {
 		if h != nil {
 			h.republish()
 		}
-		_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{"kind": "session_claimed", "key": req.Key})
+		_ = agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.SessionClaimed{Key: req.Key})
 		if workspaces != nil {
 			go workspaces.publish(true)
 		}
 		sendView(from.InstanceID, req.Key, func(s agentproto.State) agentproto.State { return sessionView(s, req.Key) })
 		return nil
 	})
+}
+
+// controls reports whether the sender holds key's controller lease: the
+// check for requests only a session's own window may make.
+func controls(from wire.Sender, key string) bool {
+	return from.InstanceID != "" && controllerFor(key) == from.InstanceID
+}
+
+// isManager reports whether instance has claimed the manager role.
+func isManager(instance string) bool {
+	controllerState.Lock()
+	defer controllerState.Unlock()
+	_, ok := controllerState.managers[instance]
+	return ok
 }
 
 func forgetManager(instance string) {

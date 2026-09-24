@@ -20,6 +20,9 @@ type AgentStart struct {
 	// Open asks agentd to open (or focus) an Agent window on the new
 	// session, for a starter that is not itself that window (the manager).
 	Open bool `json:"open,omitempty"`
+	// Claim makes the starter the session's controller (see Roles): an
+	// Agent window starting the session it will show.
+	Claim bool `json:"claim,omitempty"`
 	// ReqID is opaque to agentd and echoed back on agent_started, success
 	// or failure. A host with ONE session per process (wash-ai) never needs
 	// it — the reply can only be about the one thing it asked for. A host
