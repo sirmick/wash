@@ -309,9 +309,12 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		if a.View == "qa" {
 			return qaView(w, a)
 		}
-		if a.View == "team" {
+		// Team is the default: it is what a member or orchestrator re-reads
+		// between turns, and full state (configuration, launch snapshots,
+		// every live session's adapter options) is several times its size.
+		if a.View == "" || a.View == "team" {
 			if a.Thread != "" || a.Package != "" || a.IncludeMessages || a.After != "" || a.Limit != 0 {
-				return nil, errors.New("view=team takes no other options")
+				return nil, errors.New("view=team (the default) takes no other options; message history needs view=state, threads view=qa")
 			}
 			return teamView(w), nil
 		}

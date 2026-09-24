@@ -112,7 +112,7 @@ func TestWorkspaceGetAndConfigure(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, include := range []bool{false, true} {
-		args, _ := json.Marshal(map[string]bool{"include_messages": include})
+		args, _ := json.Marshal(map[string]any{"view": "state", "include_messages": include})
 		got, err := call("workspace_get", string(args))
 		if err != nil {
 			t.Fatal(err)

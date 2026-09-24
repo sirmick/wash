@@ -1,6 +1,6 @@
 # Bulk workspace MCP contract
 
-Implemented API 2.1.0, 2026-09-23. This supersedes the incremental v1 catalog in
+Implemented API 2.2.0, 2026-09-23. This supersedes the incremental v1 catalog in
 [the original design](AGENT_SWARM.md). New discovery advertises exactly twelve
 tools. Removed v1 operations return Unknown tool; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
@@ -9,7 +9,7 @@ compatibility handlers. Agent instructions and examples use the surface below. N
 
 | Tool | Responsibility |
 | --- | --- |
-| `workspace_get` | JSON state; `view:about` discovery; `view:qa` threads/generated Markdown |
+| `workspace_get` | Compact team view by default; `view:state` full JSON; `view:about` discovery; `view:qa` threads/generated Markdown |
 | `workspace_configure` | Atomic setup/patch: profiles, settings, keyed member reservations, plan, document |
 | `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history |
 | `member_control` | Pause/resume/end IDs, keys or a package; per-member outcomes |

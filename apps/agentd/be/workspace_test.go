@@ -440,6 +440,13 @@ func TestTeamViewShowsWhoIsWaitingOnWhat(t *testing.T) {
 	ws := &workspaceService{store: s}
 	raw, _ := ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "workspace_get", Arguments: json.RawMessage(`{"view":"team"}`)})
 	out, _ := json.Marshal(raw)
+	def, _ := ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "workspace_get", Arguments: json.RawMessage(`{}`)})
+	if b, _ := json.Marshal(def); string(b) != string(out) {
+		t.Fatalf("default is not the team view: %s", b)
+	}
+	if _, err := ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "workspace_get", Arguments: json.RawMessage(`{"include_messages":true}`)}); err == nil || !strings.Contains(err.Error(), "view=state") {
+		t.Fatal("message history without view=state", err)
+	}
 	var got struct {
 		Members []struct {
 			ID           string            `json:"id"`

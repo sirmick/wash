@@ -98,7 +98,7 @@ func TestCombinedMemberUpdateRollsBackAndQAReadback(t *testing.T) {
 	if _, err := call("workspace_get", `{"view":"qa","thread_id":"q","after":"missing"}`); err == nil {
 		t.Fatal("invalid QA cursor")
 	}
-	state, err := call("workspace_get", `{}`)
+	state, err := call("workspace_get", `{"view":"state"}`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,7 +41,7 @@ through those tools. Wash does not need a project workflow parser in this versio
 project root, initial progress items, and optional concurrency/member limits.
 `workspace_configure.document` registers the optional Markdown document separately. Source-file
 references remain in project instructions and explicit member role messages;
-Wash does not interpret their format. `workspace_get` returns the workspace as JSON, including configuration, revisions,
+Wash does not interpret their format. `workspace_get` returns the compact team view by default; `view:"state"` returns the workspace as JSON, including configuration, revisions,
 profiles, members, launch snapshots, plan, assignments, pending decisions, delivery
 counts, and live sessions' adapter options. `workspace_configure` changes the
 name, concurrency/member limits, named launch profiles, and optional default
@@ -224,7 +224,7 @@ Profiles are project/workspace-scoped aliases such as `god` and `pleb`. Each has
 an explicit provider, optional model and thinking value, and an optional `configs`
 map for arbitrary adapter setting IDs. These are launch settings, not executable
 commands, credentials, sandbox permissions, or a separate model catalog. Read the
-actual IDs and allowed values from `workspace_get.sessions[member_id].config_options`
+actual IDs and allowed values from `workspace_get({"view":"state"}).sessions[member_id].config_options`
 for a live session of that provider. Model IDs are opaque provider values; Wash
 never translates a marketing name into a guessed ID. Providers without a live
 session expose their choices after a default member is started. Invalid choices
