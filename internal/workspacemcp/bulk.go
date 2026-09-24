@@ -1,5 +1,20 @@
 package workspacemcp
 
+// leadOnly tools always fail for a launched member (the store refuses them), so
+// a member's tool list leaves their schemas out of every turn's prompt.
+var leadOnly = map[string]bool{"workspace_configure": true, "workspace_end": true, "message_retry": true}
+
+// MemberTools is Tools without the orchestrator-only operations.
+func MemberTools() []Tool {
+	var out []Tool
+	for _, t := range Tools() {
+		if !leadOnly[t.Name] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func Tools() []Tool {
 	str := field("string")
 	boolean := field("boolean")

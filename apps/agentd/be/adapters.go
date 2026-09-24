@@ -177,10 +177,13 @@ func adapterByID(id string) (Adapter, bool) {
 // adapter is a stray child that outlives the desktop, which is the bug
 // class the child-process audit already cost us once.
 func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	return startHostedCapability(agentID, cwd, svcConn, "")
+	return startHostedCapability(agentID, cwd, svcConn, "", false)
 }
-func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, capability string) (*hosted, error) {
-	h, err := dialAdapterCapability(agentID, cwd, svcConn, capability)
+
+// member marks a session launched as a workspace member rather than one that
+// may lead a workspace; its workspace bridge lists only the tools it may call.
+func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, capability string, member bool) (*hosted, error) {
+	h, err := dialAdapterCapability(agentID, cwd, svcConn, capability, member)
 	if err != nil {
 		return nil, err
 	}
@@ -223,9 +226,9 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, capability st
 // dialAdapter launches an adapter and completes the handshake. Shared by
 // start and resume, which differ only in session/new vs session/load.
 func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	return dialAdapterCapability(agentID, cwd, svcConn, "")
+	return dialAdapterCapability(agentID, cwd, svcConn, "", false)
 }
-func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, capability string) (*hosted, error) {
+func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, capability string, member bool) (*hosted, error) {
 	if capability != "" && (capability != "reviewer" || agentID != "claude") {
 		return nil, fmt.Errorf("capability %q unsupported by %s; no session started", capability, agentID)
 	}
@@ -323,7 +326,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, capability st
 
 	h.stop = stop
 	if workspaces != nil {
-		if err := workspaces.inject(h); err != nil {
+		if err := workspaces.inject(h, member); err != nil {
 			h.stop()
 			return nil, err
 		}
@@ -537,10 +540,11 @@ func resolveCwd(cwd string) (string, error) {
 // the same handler that fills it live. The history comes back on screen,
 // rather than as a terminal scrolled to wherever it happened to be.
 func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
-	return resumeHostedCapability(agentID, cwd, sessionID, svcConn, savedWorkspaceCapability(sessionID))
+	capability, member := savedWorkspaceLaunch(sessionID)
+	return resumeHostedCapability(agentID, cwd, sessionID, svcConn, capability, member)
 }
-func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, capability string) (*hosted, error) {
-	h, err := dialAdapterCapability(agentID, cwd, svcConn, capability)
+func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, capability string, member bool) (*hosted, error) {
+	h, err := dialAdapterCapability(agentID, cwd, svcConn, capability, member)
 	if err != nil {
 		return nil, err
 	}

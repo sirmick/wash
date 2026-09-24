@@ -38,6 +38,13 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 	pol := hostedPolicy()
 	caller["config_options"] = options
 	result["caller"] = caller
+	if caller["role"] == "member" {
+		names := []string{}
+		for _, t := range workspacemcp.MemberTools() {
+			names = append(names, t.Name)
+		}
+		result["tools"] = names
+	}
 	result["permissions"] = map[string]any{
 		"adapter_mode": mode, "adapter_settings": settings,
 		"host_auto_approval": yolo, "host_policy_enabled": pol.Enabled,

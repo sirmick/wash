@@ -183,7 +183,7 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 	})
 	return nil
 }
-func (ws *workspaceService) inject(h *hosted) error {
+func (ws *workspaceService) inject(h *hosted, member bool) error {
 	for _, m := range h.mcp {
 		if m.Name == workspacemcp.ServerName {
 			return errors.New("reserved MCP server name: wash_workspace")
@@ -197,7 +197,11 @@ func (ws *workspaceService) inject(h *hosted) error {
 	ws.mu.Lock()
 	ws.tokens[token] = h
 	ws.mu.Unlock()
-	h.mcp = append(h.mcp, acp.McpServer{Name: workspacemcp.ServerName, Command: bin, Args: []string{workspacemcp.Argument}, Env: []acp.EnvVar{{Name: workspacemcp.SocketEnv, Value: ws.socket}, {Name: workspacemcp.TokenEnv, Value: token}}})
+	env := []acp.EnvVar{{Name: workspacemcp.SocketEnv, Value: ws.socket}, {Name: workspacemcp.TokenEnv, Value: token}}
+	if member {
+		env = append(env, acp.EnvVar{Name: workspacemcp.MemberEnv, Value: "1"})
+	}
+	h.mcp = append(h.mcp, acp.McpServer{Name: workspacemcp.ServerName, Command: bin, Args: []string{workspacemcp.Argument}, Env: env})
 	return nil
 }
 func (ws *workspaceService) revoke(h *hosted) {
@@ -504,7 +508,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		}
 		hostedMu.Unlock()
 	}
-	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, settings.Capability)
+	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, settings.Capability, true)
 	var initialConfigs map[string]string
 	if err == nil {
 		hostedMu.Lock()
@@ -620,7 +624,9 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 	if action == "member_resume" && target != nil && m.AutoApprove {
 		target.setYolo(true, restored)
 	}
+	isMember := false
 	err := ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, self *swarm.Member) error {
+		isMember = id != w.Lead
 		if self.ID != w.Lead && self.ID != id {
 			return errors.New("only self or orchestrator may pause/resume")
 		}
@@ -659,7 +665,7 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 		if m.LaunchSettings != nil {
 			capability = m.LaunchSettings.Capability
 		}
-		target, err = resumeHostedCapability(m.Provider, m.Cwd, m.Session, ws.conn, capability)
+		target, err = resumeHostedCapability(m.Provider, m.Cwd, m.Session, ws.conn, capability, isMember)
 		if err == nil && m.LaunchSettings != nil {
 			// session/load comes back on the adapter's defaults: observed, a
 			// resumed Architect on claude-fable-5-1 at effort "default" where

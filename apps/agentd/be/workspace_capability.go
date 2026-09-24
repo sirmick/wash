@@ -98,17 +98,23 @@ func coordinationPermission(tc acp.ToolCall) bool {
 	_, ok := washWorkspaceTool(tc)
 	return ok
 }
-func savedWorkspaceCapability(session string) string {
+
+// savedWorkspaceLaunch is what a reopened session was launched as: its
+// capability, and whether it is a member (not the workspace's lead).
+func savedWorkspaceLaunch(session string) (capability string, member bool) {
 	if workspaces != nil {
 		for _, w := range workspaces.store.Snapshot().Workspaces {
 			for _, m := range w.Members {
-				if m.Session == session && m.LaunchSettings != nil {
-					return m.LaunchSettings.Capability
+				if m.Session == session {
+					if m.LaunchSettings != nil {
+						capability = m.LaunchSettings.Capability
+					}
+					return capability, m.ID != w.Lead && m.State != "ended"
 				}
 			}
 		}
 	}
-	return ""
+	return "", false
 }
 
 // workspaceApprovalPolicy is the decision path's one view of workspace-scoped

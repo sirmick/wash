@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/internal/workspacemcp"
 )
@@ -76,15 +77,23 @@ func TestWorkspaceMCPAuthAndReservedName(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 	h := &hosted{}
-	if err := ws.inject(h); err != nil {
+	if err := ws.inject(h, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.mcp) != 1 {
-		t.Fatal("missing injection")
+	if len(h.mcp) != 1 || len(h.mcp[0].Env) != 2 {
+		t.Fatal("missing injection, or a possible lead marked as a member", h.mcp)
 	}
-	if err := ws.inject(h); err == nil {
+	if err := ws.inject(h, false); err == nil {
 		t.Fatal("reserved name conflict accepted")
 	}
+	member := &hosted{}
+	if err := ws.inject(member, true); err != nil {
+		t.Fatal(err)
+	}
+	if env := member.mcp[0].Env; env[len(env)-1] != (acp.EnvVar{Name: workspacemcp.MemberEnv, Value: "1"}) {
+		t.Fatal("member bridge would list orchestrator tools", env)
+	}
+	ws.revoke(member)
 	ws.revoke(h)
 	if len(ws.tokens) != 0 {
 		t.Fatal("credentials survive end")

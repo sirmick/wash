@@ -19,6 +19,10 @@ const Argument = "--workspace-mcp"
 const ServerName = "wash_workspace"
 const SocketEnv = "WASH_WORKSPACE_SOCKET"
 const TokenEnv = "WASH_WORKSPACE_TOKEN"
+
+// MemberEnv is set for a session launched as a workspace member; its bridge
+// lists MemberTools rather than Tools.
+const MemberEnv = "WASH_WORKSPACE_MEMBER"
 const MaxBytes = 1 << 20
 
 type Call struct {
@@ -70,9 +74,10 @@ func ValidateCall(call Call) error {
 	return fmt.Errorf("unknown workspace tool %q", call.Name)
 }
 
-// Serve implements the MCP stdio lifecycle; tool errors are tool results rather
-// than transport failures. Newline framing and stdout purity are required by MCP.
-func Serve(in io.Reader, out io.Writer, invoke func(context.Context, Call) (any, error)) error {
+// Serve implements the MCP stdio lifecycle over the listed tools; tool errors are
+// tool results rather than transport failures. Newline framing and stdout
+// purity are required by MCP.
+func Serve(in io.Reader, out io.Writer, tools []Tool, invoke func(context.Context, Call) (any, error)) error {
 	scan := bufio.NewScanner(in)
 	scan.Buffer(make([]byte, 4096), MaxBytes)
 	enc := json.NewEncoder(out)
@@ -117,7 +122,7 @@ func Serve(in io.Reader, out io.Writer, invoke func(context.Context, Call) (any,
 				rpcErr = "Initialize first"
 				rpcCode = -32600
 			} else {
-				result = map[string]any{"tools": Tools()}
+				result = map[string]any{"tools": tools}
 			}
 		case "tools/call":
 			if !initialized {
@@ -132,7 +137,7 @@ func Serve(in io.Reader, out io.Writer, invoke func(context.Context, Call) (any,
 				break
 			}
 			known := false
-			for _, t := range Tools() {
+			for _, t := range tools {
 				if t.Name == call.Name {
 					known = true
 					break
@@ -179,7 +184,11 @@ func Run() int {
 	}}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 90 * time.Second}
-	err := Serve(os.Stdin, os.Stdout, func(ctx context.Context, call Call) (any, error) {
+	tools := Tools()
+	if os.Getenv(MemberEnv) != "" {
+		tools = MemberTools()
+	}
+	err := Serve(os.Stdin, os.Stdout, tools, func(ctx context.Context, call Call) (any, error) {
 		b, _ := json.Marshal(call)
 		req, err := http.NewRequestWithContext(ctx, "POST", "http://workspace/call", strings.NewReader(string(b)))
 		if err != nil {

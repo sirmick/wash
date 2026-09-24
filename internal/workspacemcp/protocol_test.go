@@ -18,7 +18,7 @@ func TestProtocolDiscoveryAndToolErrors(t *testing.T) {
 `
 	var out bytes.Buffer
 	calls := 0
-	err := Serve(strings.NewReader(in), &out, func(_ context.Context, c Call) (any, error) {
+	err := Serve(strings.NewReader(in), &out, Tools(), func(_ context.Context, c Call) (any, error) {
 		calls++
 		if c.Name == "workspace_end" {
 			return nil, errors.New("not orchestrator")
@@ -51,7 +51,7 @@ func TestProtocolDiscoveryAndToolErrors(t *testing.T) {
 func TestNoInvocationBeforeInitializeOrForUnknownTool(t *testing.T) {
 	var out bytes.Buffer
 	called := false
-	err := Serve(strings.NewReader("{\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"workspace_configure\"}}\n"), &out, func(context.Context, Call) (any, error) { called = true; return nil, nil })
+	err := Serve(strings.NewReader("{\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"workspace_configure\"}}\n"), &out, Tools(), func(context.Context, Call) (any, error) { called = true; return nil, nil })
 	if err != nil || called {
 		t.Fatal(err, called)
 	}
@@ -62,7 +62,7 @@ func TestNoInvocationBeforeInitializeOrForUnknownTool(t *testing.T) {
 
 func TestInitializationAndAboutShareOperatingInstructions(t *testing.T) {
 	var out bytes.Buffer
-	err := Serve(strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n"), &out, func(context.Context, Call) (any, error) { t.Fatal("initialization invoked a tool"); return nil, nil })
+	err := Serve(strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n"), &out, Tools(), func(context.Context, Call) (any, error) { t.Fatal("initialization invoked a tool"); return nil, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestRemovedToolsAreRejectedBeforeDispatch(t *testing.T) {
 			enc := json.NewEncoder(&in)
 			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"})
 			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": Call{Name: name, Arguments: json.RawMessage(`{}`)}})
-			if err := Serve(&in, &out, func(context.Context, Call) (any, error) { t.Fatal("removed tool dispatched"); return nil, nil }); err != nil {
+			if err := Serve(&in, &out, Tools(), func(context.Context, Call) (any, error) { t.Fatal("removed tool dispatched"); return nil, nil }); err != nil {
 				t.Fatal(err)
 			}
 			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -127,5 +127,34 @@ func TestRemovedToolsAreRejectedBeforeDispatch(t *testing.T) {
 				t.Fatal(lines[1])
 			}
 		})
+	}
+}
+
+func TestMemberToolsLeaveOutOrchestratorOperations(t *testing.T) {
+	var in, out bytes.Buffer
+	enc := json.NewEncoder(&in)
+	_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+	_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+	_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": Call{Name: "workspace_configure", Arguments: json.RawMessage(`{}`)}})
+	if err := Serve(&in, &out, MemberTools(), func(context.Context, Call) (any, error) {
+		t.Fatal("orchestrator tool dispatched for a member")
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatal(out.String())
+	}
+	for name := range leadOnly {
+		if strings.Contains(lines[1], `"`+name+`"`) {
+			t.Fatalf("member lists %s", name)
+		}
+	}
+	if !strings.Contains(lines[1], `"member_update"`) || len(MemberTools()) != len(Tools())-len(leadOnly) {
+		t.Fatal(lines[1])
+	}
+	if !strings.Contains(lines[2], "Unknown tool") {
+		t.Fatal(lines[2])
 	}
 }
