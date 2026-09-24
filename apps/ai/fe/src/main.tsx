@@ -477,6 +477,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (e.kind === 'user') return '> ' + (e.text ?? '');
         if (e.kind === 'tool') return `[${e.tool_kind ?? 'tool'}] ${e.title ?? e.text ?? ''}`;
         if (e.kind === 'image') return `[image ${e.mime ?? 'image'}]`;
+        if (e.kind === 'decision') return `[${e.status === 'allow' ? 'allowed' : 'not approved'}: ${e.reason}] ${e.title} ${e.detail ?? ''}`.trimEnd();
         return e.text ?? '';
       })
       .join('\n\n');

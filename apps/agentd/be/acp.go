@@ -1722,21 +1722,9 @@ func noteSubject(s string) string {
 const noteSubjectMax = 80
 
 // decision puts wash's approval verdict in the transcript as its own event,
-// which the Agent window renders as a coloured row. The sentence in Text is
-// what it used to print, for consumers that only print text.
+// which the Agent window renders as a coloured row.
 func (h *hosted) decision(status, reason, tool, subject string) {
-	detail := noteSubject(subject)
-	text := "Not approved — " + reason + ": " + tool
-	if status == DecisionAllow {
-		text = "Auto-approved (" + reason + "): " + tool
-		if strings.HasPrefix(reason, "allowed once") {
-			text = "Allowed once (" + strings.TrimPrefix(reason, "allowed once, ") + "): " + tool
-		}
-	}
-	if detail != "" {
-		text += " " + detail
-	}
-	e := appendEvent(h.key, Event{Kind: EventDecision, Status: status, Title: tool, Detail: detail, Reason: reason, Text: text}, time.Now())
+	e := appendEvent(h.key, Event{Kind: EventDecision, Status: status, Title: tool, Detail: noteSubject(subject), Reason: reason}, time.Now())
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, e)
 	}

@@ -93,7 +93,7 @@ test('a workspace message renders a teammate body as Markdown and a human one li
 test('a decision event renders as a distinct approved or refused row', async () => {
   const { DecisionRow } = await import('./agent-session.tsx');
   const ok = render(() => (
-    <DecisionRow e={{ seq: 1, kind: 'decision', status: 'allow', title: 'Bash', detail: "python3 - <<'EOF' …", reason: 'yolo', text: 'Auto-approved (yolo): Bash …', at_ms: 0 }} />
+    <DecisionRow e={{ seq: 1, kind: 'decision', status: 'allow', title: 'Bash', detail: "python3 - <<'EOF' …", reason: 'yolo', at_ms: 0 }} />
   ));
   const row = ok.getByTestId('agent-decision');
   expect(row.dataset.status).toBe('allow');

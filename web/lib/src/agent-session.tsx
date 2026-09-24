@@ -446,7 +446,6 @@ export const DecisionRow: Component<{ e: AgentEvent }> = (p) => {
     <div
       data-testid="agent-decision"
       data-status={p.e.status}
-      title={p.e.text}
       style={{
         display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceSm}px`, 'min-width': 0,
         font: tokens.type.textSm, padding: `2px ${tokens.spaceSm}px`,

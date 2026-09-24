@@ -60,8 +60,7 @@ const (
 	EventThought = "thought"
 	// EventDecision is wash's own approval verdict on a tool call: Status is
 	// allow or cancelled, Title the tool, Detail its (shortened) subject,
-	// Reason why. Text is the whole sentence, for any consumer that only
-	// knows how to print text. Distinct from a message so a transcript can
+	// Reason why. Distinct from a message so a transcript can
 	// show a guard coming off (or holding) at a glance, and so these lines
 	// stay out of the conversation preview.
 	EventDecision = "decision"

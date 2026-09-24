@@ -1160,10 +1160,10 @@ func TestApprovalVerdictsAreDecisionEvents(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("decision events = %+v", snapshot(h.key))
 	}
-	if a := got[0]; a.Status != DecisionAllow || a.Title != "Bash" || a.Detail != "python3 - <<'EOF' …" || a.Reason != "yolo" || !strings.HasPrefix(a.Text, "Auto-approved (yolo): Bash") {
+	if a := got[0]; a.Status != DecisionAllow || a.Title != "Bash" || a.Detail != "python3 - <<'EOF' …" || a.Reason != "yolo" || a.Text != "" {
 		t.Errorf("allow = %+v", a)
 	}
-	if c := got[1]; c.Status != "cancelled" || c.Detail != "rm -rf build" || c.Reason != "no desktop was attached to ask" || !strings.HasPrefix(c.Text, "Not approved — ") {
+	if c := got[1]; c.Status != "cancelled" || c.Detail != "rm -rf build" || c.Reason != "no desktop was attached to ask" || c.Text != "" {
 		t.Errorf("cancelled = %+v", c)
 	}
 }
