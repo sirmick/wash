@@ -237,6 +237,49 @@ func TestQADocumentResumesFromFileWithoutStoreAndRetainsDecisions(t *testing.T) 
 		t.Fatal("restored decision cannot be answered")
 	}
 }
+
+// Stopping the orchestrator's session from the Agent controls ends its
+// workspace, as workspace_end would. Before, only the lead's turn ended: the
+// workspace stayed paused with no one able to lead it, holding the QA file, so
+// a new orchestrator's setup failed with "QA document is used by another
+// workspace". Observed live after a restart. A lead whose session never loaded
+// (a failed reopen) keeps its workspace for a later resume.
+func TestEndingTheLeadSessionEndsTheWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "QA.md")
+	state := filepath.Join(dir, "state.json")
+	s, _ := swarm.Open(state)
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "first", agent: "codex", cwd: dir}
+	setup := map[string]any{"workspace": map[string]string{"name": "Project"}, "qa_document": map[string]string{"path": path}}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+	s, err := swarm.Open(state) // the restart pauses the workspace
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws = &workspaceService{store: s}
+	ws.retired(h) // never loaded
+	if w := s.View(h.sessionID); w == nil || w.State != "paused" {
+		t.Fatalf("failed reopen ended the workspace: %+v", w)
+	}
+	h.sessionReady.Store(true)
+	ws.retired(h)
+	if w := s.View(h.sessionID); w != nil {
+		t.Fatalf("workspace survived its lead: %q", w.State)
+	}
+	for _, m := range s.Snapshot().Workspaces[0].Members {
+		if m.State != "ended" {
+			t.Fatalf("member %s left %q", m.Name, m.State)
+		}
+	}
+	next := &hosted{sessionID: "next", agent: "codex", cwd: dir}
+	if _, err := qaFileCall(t, ws, next, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestQADocumentFinalFailureRetriesAndNewRunTakesLatestHistory(t *testing.T) {
 	for _, reopen := range []bool{false, true} {
 		t.Run(fmt.Sprint(reopen), func(t *testing.T) {

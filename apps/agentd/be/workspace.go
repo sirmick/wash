@@ -354,43 +354,13 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		hostedMu.Unlock()
 		return map[string]any{"workspace": w, "approvals": workspaceApprovals(w), "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
 	case "workspace_end":
-		old := ws.store.View(sid)
-		if old == nil {
-			return map[string]any{"ended": true}, nil
-		}
-		err := ws.store.Mutate(sid, true, func(w *swarm.Workspace, _ *swarm.Member) error {
-			w.State = "ended"
-			for i := range w.Members {
-				w.Members[i].State = "ended"
-			}
-			for i := range w.Assignments {
-				if slices.Contains([]string{"assigned", "active", "blocked"}, w.Assignments[i].State) {
-					w.Assignments[i].State = "cancelled"
-				}
-			}
-			for i := range w.Messages {
-				if w.Messages[i].State == "dispatched" {
-					w.Messages[i].State = "uncertain"
-				}
-				if w.Messages[i].State == "queued" {
-					w.Messages[i].State = "cancelled"
-				}
-			}
-			return nil
-		})
+		old, err := ws.end(sid)
 		if err != nil {
 			return nil, err
 		}
-		if old != nil {
-			for _, m := range old.Members {
-				if m.ID != old.Lead {
-					if child := workspaceHosted(m.Session); child != nil {
-						child.retire()
-					}
-				}
-			}
+		if old == nil {
+			return map[string]any{"ended": true}, nil
 		}
-		ws.syncQADocuments()
 		// find() deliberately hides ended workspaces; report the final save
 		// explicitly, while failed exports keep retrying in the service loop.
 		return map[string]any{"ended": true, "qa_document_status": ws.qaDocumentStatus(old)}, nil
@@ -1046,8 +1016,53 @@ func workspaceLeadSession(w swarm.Workspace) string {
 	return ""
 }
 
+// end tears down the workspace the lead session leads: every member ends,
+// open work is cancelled, children's sessions retire and the QA file gets its
+// final save. It returns the workspace as it was, or nil if there was none.
+func (ws *workspaceService) end(lead string) (*swarm.Workspace, error) {
+	old := ws.store.View(lead)
+	if old == nil {
+		return nil, nil
+	}
+	err := ws.store.Mutate(lead, true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.State = "ended"
+		for i := range w.Members {
+			w.Members[i].State = "ended"
+		}
+		for i := range w.Assignments {
+			if slices.Contains([]string{"assigned", "active", "blocked"}, w.Assignments[i].State) {
+				w.Assignments[i].State = "cancelled"
+			}
+		}
+		for i := range w.Messages {
+			if w.Messages[i].State == "dispatched" {
+				w.Messages[i].State = "uncertain"
+			}
+			if w.Messages[i].State == "queued" {
+				w.Messages[i].State = "cancelled"
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range old.Members {
+		if m.ID != old.Lead {
+			if child := workspaceHosted(m.Session); child != nil {
+				child.retire()
+			}
+		}
+	}
+	ws.syncQADocuments()
+	return old, nil
+}
+
 // A user can end a session from the ordinary Agent controls too. Keep that
 // lifetime transition in workspace state rather than leaving a phantom member.
+// Ending the orchestrator's session ends its workspace: nothing else can lead
+// it, and a leaderless workspace kept its QA file and project claimed, so a
+// new orchestrator could not set up there.
 func (ws *workspaceService) retired(h *hosted) {
 	ws.captureUsage(h)
 	w := ws.store.View(h.sessionID)
@@ -1065,7 +1080,7 @@ func (ws *workspaceService) retired(h *hosted) {
 			continue
 		}
 		if m.ID == w.Lead {
-			err = ws.store.TurnEnded(h.sessionID, nil, true)
+			_, err = ws.end(h.sessionID)
 		} else {
 			err = ws.store.EndMember(workspaceLeadSession(*w), m.ID, true)
 		}
