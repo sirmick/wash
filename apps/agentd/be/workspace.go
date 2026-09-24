@@ -624,7 +624,7 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 		return nil, errors.New("unknown member")
 	}
 	if action == "member_end" {
-		if err := ws.store.EndMember(h.sessionID, id); err != nil {
+		if err := ws.store.EndMember(h.sessionID, id, false); err != nil {
 			return nil, err
 		}
 		if target := workspaceHosted(m.Session); target != nil {
@@ -1003,7 +1003,7 @@ func (ws *workspaceService) dispatch() {
 			}
 			if m.Retire {
 				h.turnMu.Unlock()
-				if err := ws.store.EndMember(workspaceLeadSession(w), m.ID); err == nil {
+				if err := ws.store.EndMember(workspaceLeadSession(w), m.ID, false); err == nil {
 					h.retire()
 				}
 				continue
@@ -1067,7 +1067,7 @@ func (ws *workspaceService) retired(h *hosted) {
 		if m.ID == w.Lead {
 			err = ws.store.TurnEnded(h.sessionID, nil, true)
 		} else {
-			err = ws.store.EndMember(workspaceLeadSession(*w), m.ID)
+			err = ws.store.EndMember(workspaceLeadSession(*w), m.ID, true)
 		}
 		break
 	}

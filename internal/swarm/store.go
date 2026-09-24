@@ -695,7 +695,13 @@ func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped b
 		return nil
 	})
 }
-func (s *Store) EndMember(session, id string) error {
+// EndMember ends a member. notify tells the lead with a lifecycle message,
+// which wakes it: right when the member ended outside the lead's control (the
+// human closed its session, its adapter exited), noise when the lead ended it
+// itself or an ephemeral member retired after delivering its result. Each
+// needless notice cost the orchestrator a turn, and five arrived at once when
+// it trimmed a team to save money.
+func (s *Store) EndMember(session, id string, notify bool) error {
 	return s.Mutate(session, true, func(w *Workspace, _ *Member) error {
 		if id == w.Lead {
 			return errors.New("use teardown_workspace to end the workspace")
@@ -708,7 +714,9 @@ func (s *Store) EndMember(session, id string) error {
 			return nil
 		}
 		m.State = "ended"
-		_, _ = AddMessage(w, m.ID, w.Lead, "lifecycle", m.Name+" ended.", "", "", "")
+		if notify {
+			_, _ = AddMessage(w, m.ID, w.Lead, "lifecycle", m.Name+" ended.", "", "", "")
+		}
 		for i := range w.Messages {
 			if w.Messages[i].Sender == id && w.Messages[i].Type == "decision_request" && w.Messages[i].State == "recorded" {
 				w.Messages[i].State = "cancelled"

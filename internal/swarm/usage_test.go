@@ -21,7 +21,7 @@ func TestUsageSurvivesRetirementAndDoesNotInvalidateCoordinationRevision(t *test
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.EndMember("lead", "worker"); err != nil {
+	if err = s.EndMember("lead", "worker", false); err != nil {
 		t.Fatal(err)
 	}
 	before := s.View("lead").Revision

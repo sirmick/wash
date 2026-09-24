@@ -193,7 +193,7 @@ func TestDelegateEndingCancelsItsDecisionsAndRoutesChildResultToLead(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.EndMember("lead-session", "worker"); err != nil {
+	if err = s.EndMember("lead-session", "worker", false); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Complete("child-session", assignment.ID, "Review complete", false); err != nil {
@@ -233,5 +233,37 @@ func TestStoppingTheLeadDoesNotPauseTheTeam(t *testing.T) {
 		if m.ID == "worker" && m.State != "paused" {
 			t.Fatalf("stopped member %q, want paused", m.State)
 		}
+	}
+}
+
+// The lead hears about a member ending only when it did not end it itself.
+func TestEndingAMemberNotifiesTheLeadOnlyWhenAsked(t *testing.T) {
+	s, w := fixture(t)
+	count := func() int {
+		n := 0
+		for _, m := range s.View("lead-session").Messages {
+			if m.Type == "lifecycle" && m.Recipient == w.Lead {
+				n++
+			}
+		}
+		return n
+	}
+	if err := s.EndMember("lead-session", "worker", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("lead-ended member sent %d notices", n)
+	}
+	if err := s.Mutate("lead-session", true, func(w *Workspace, _ *Member) error {
+		w.Members = append(w.Members, Member{ID: "w2", Name: "W2", Session: "w2-s", State: "available", Lifetime: "resident"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EndMember("lead-session", "w2", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("externally ended member sent %d notices, want 1", n)
 	}
 }
