@@ -225,3 +225,13 @@ test('a member waiting on a decision says the message box answers it', async () 
  await fireEvent.click(screen.getByTestId('workspace-member-lead'));
  expect(screen.getByTestId('workspace-member-answers').textContent).toContain('Fixed address or relocatable?');
 });
+
+test('a decision asked on a QA thread needs the owner once, not twice', () => {
+ const f=frame();
+ f.workspace!.qa=[{id:'Q1',package:'K5',title:'Clock source',assignee:'lead',state:'awaiting-owner',blocking:false,revision:2},{id:'Q2',package:'K5',title:'Tick rate',assignee:'lead',state:'awaiting-owner',blocking:false,revision:2}];
+ f.workspace!.messages=[{id:'d',sender:'lead',recipient:'human',type:'decision_request',body:'Which clock?',delivery:'recorded',thread_id:'Q1'}];
+ render(()=> <WorkspaceLayout frame={f} onAction={()=>{}}>Conversation</WorkspaceLayout>);
+ expect(screen.getAllByTestId('workspace-decision')).toHaveLength(1);
+ expect(screen.queryByText(/Owner question: Clock source/)).toBeNull();
+ expect(screen.getByText(/Owner question: Tick rate/)).toBeTruthy();
+});

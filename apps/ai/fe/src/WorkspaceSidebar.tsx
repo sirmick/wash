@@ -15,7 +15,7 @@ export interface WorkspaceMember {
 }
 export interface WorkspaceMessage {
   id: string; sender: string; recipient: string; type: string; body: string;
-  delivery: string; assignment_id?: string;
+  delivery: string; assignment_id?: string; thread_id?: string;
 }
 export interface QAThread { id: string; package: string; title: string; assignee: string; state: string; blocking: boolean; revision: number }
 export interface WorkspaceState {
@@ -57,7 +57,10 @@ export const WorkspaceSidebar: Component<{
   const [answers, setAnswers] = createSignal<Record<string, string>>({});
   const w = () => props.frame.workspace!;
   const questions = createMemo(() => w().messages.filter((m) => m.type === 'decision_request' && m.delivery === 'recorded'));
-  const needsAttention = () => (props.frame.approvals?.length ?? 0) + questions().length + (w().qa ?? []).filter(q => q.state === 'awaiting-owner').length + (props.frame.qa_document_status?.state === 'error' ? 1 : 0);
+  // A decision asked on a QA thread also puts the thread awaiting-owner; the
+  // decision form stands for both, so the thread is listed only without one.
+  const ownerThreads = createMemo(() => (w().qa ?? []).filter(q => q.state === 'awaiting-owner' && !questions().some(m => m.thread_id === q.id)));
+  const needsAttention = () => (props.frame.approvals?.length ?? 0) + questions().length + ownerThreads().length + (props.frame.qa_document_status?.state === 'error' ? 1 : 0);
   const label = (id: string) => id === 'human' ? 'You' : w().members.find((m) => m.id === id)?.name ?? id;
   const activity = (m: WorkspaceMember) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
   const usage = (m: WorkspaceMember) => props.frame.usage?.[m.id] ?? m.usage;
@@ -106,7 +109,7 @@ export const WorkspaceSidebar: Component<{
               {label(ask.member_id)} · Approval needed: {ask.tool} {ask.subject}
             </Button>
           )}</For>
-          <For each={(w().qa ?? []).filter(q => q.state === 'awaiting-owner')}>{q => (
+          <For each={ownerThreads()}>{q => (
             <Button onClick={() => props.onSelect(`qa:${q.id}`)}>{pkg(q.package)} · Owner question: {q.title}</Button>
           )}</For>
       <For each={questions()}>{(q) => (
