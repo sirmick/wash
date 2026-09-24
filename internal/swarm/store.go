@@ -625,7 +625,7 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 	resolved := func(id string) bool {
 		for _, a := range w.Assignments {
 			if a.ID == id {
-				return a.State == "completed" || a.State == "failed"
+				return a.State == "completed" || a.State == "failed" || a.State == "cancelled"
 			}
 		}
 		return true

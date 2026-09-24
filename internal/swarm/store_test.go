@@ -71,6 +71,45 @@ func TestTurnCarriesAtMostOneAsk(t *testing.T) {
 	}
 }
 
+// Ending a member cancels its assignment, and a cancelled assignment settles
+// a waiting set: the rest of the round must not be held forever.
+func TestWaitingSetSettlesWhenAMemberIsEnded(t *testing.T) {
+	s, w := fixture(t)
+	if err := s.Mutate("lead-session", true, func(w *Workspace, _ *Member) error {
+		w.Members = append(w.Members, Member{ID: "other", Session: "other-session", State: "available", Lifetime: "resident"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.Assign("lead-session", "worker", "Review", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.Assign("lead-session", "other", "Review", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Mutate("lead-session", false, func(_ *Workspace, m *Member) error {
+		m.WaitingOn = []string{a.ID, b.ID}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Complete("worker-session", a.ID, "OK", false); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.EndMember("lead-session", "other", false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Next("lead-session")
+	if err != nil || len(got) != 1 || got[0].Assignment != a.ID {
+		t.Fatalf("held after the set settled: %+v %v", got, err)
+	}
+	if lead := GetMember(s.View("lead-session"), w.Lead); len(lead.WaitingOn) != 0 {
+		t.Fatalf("waiting set not cleared: %v", lead.WaitingOn)
+	}
+}
+
 func TestInboxAcrossIdleAndRecovery(t *testing.T) {
 	s, w := fixture(t)
 	a, e := s.Assign("lead-session", "worker", "Build timers", "task-1")
