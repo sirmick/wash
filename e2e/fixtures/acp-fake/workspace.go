@@ -116,7 +116,8 @@ func workspaceScript(raw string) (string, bool) {
 			if msg.Body == "ASK_PERMISSION" {
 				return "", false
 			}
-			if msg.Assignment != "" && msg.Type == "instruction" && msg.Body == "WAIT_FOR_ANSWER" {
+			// A member's first turn is its brief, with the task at the end.
+			if msg.Assignment != "" && msg.Type == "instruction" && strings.HasSuffix(strings.TrimSpace(msg.Body), "WAIT_FOR_ANSWER") {
 				_, err := workspaceCall("message_send", map[string]any{"recipient": msg.Sender, "type": "question", "body": "Which clock?", "assignment_id": msg.Assignment})
 				if err != nil {
 					return err.Error(), true
