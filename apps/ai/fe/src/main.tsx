@@ -561,21 +561,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
         <span style={labelStyle}>folder</span>
         <div style={{ display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'stretch' }}>
-          <div
-            style={{
-              ...fieldStyle,
-              font: tokens.type.monoMd,
-              flex: 1,
-              'min-width': 0,
-              overflow: 'hidden',
-              'text-overflow': 'ellipsis',
-              'white-space': 'nowrap',
-              color: cwd() ? tokens.fg : tokens.fgDim,
-            }}
+          <Input
+            data-testid="ai-folder-input"
+            spellcheck={false}
+            placeholder="Home"
+            value={cwd()}
             title={cwd() || 'Home'}
-          >
-            {cwd() || 'Home'}
-          </div>
+            onInput={(e: InputEvent) => setCwd((e.currentTarget as HTMLInputElement).value)}
+            onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' && !starting()) { e.preventDefault(); start(); } }}
+            style={{ font: tokens.type.monoMd, flex: 1, 'min-width': 0 }}
+          />
           <Button onClick={() => setPicking(true)}>Choose…</Button>
         </div>
       </div>
@@ -1208,16 +1203,6 @@ const labelStyle = {
   'letter-spacing': '0.09em',
   'text-transform': 'uppercase' as const,
   color: tokens.fgDim,
-};
-
-const fieldStyle = {
-  background: tokens.bgInset,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': tokens.radiusMd,
-  padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
-  font: tokens.type.textMd,
-  color: tokens.fg,
-  outline: 'none',
 };
 
 defineWashApp('wash-app-ai', App);
