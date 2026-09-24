@@ -128,6 +128,30 @@ func TestTransactionRollsBackAndDeduplicatesAcrossRecovery(t *testing.T) {
 		t.Fatal("preview mutated state")
 	}
 }
+// A receipt belongs to its workspace: a new workspace on the same session
+// that reuses a request_id runs the call, and the ended one's receipts go.
+func TestReceiptsDoNotOutliveTheirWorkspace(t *testing.T) {
+	s, _, _ := qaStore(t)
+	calls := 0
+	invoke := func(*Store) (any, error) { calls++; return map[string]int{"call": calls}, nil }
+	raw := []byte(`{"request_id":"setup-1"}`)
+	if _, err := s.Transaction("lead", "workspace_configure", "setup-1", raw, false, invoke); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *Workspace, _ *Member) error { w.State = "ended"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Setup("lead", "codex", "/project", "Next", "/project", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Transaction("lead", "workspace_configure", "setup-1", raw, false, invoke); err != nil || calls != 2 {
+		t.Fatalf("replayed the ended workspace's result: calls=%d %v", calls, err)
+	}
+	if n := len(s.Snapshot().Receipts); n != 1 {
+		t.Fatalf("%d receipts, want only the live workspace's", n)
+	}
+}
+
 func TestQAResolutionWaitsForHumanAndCannotForgeOwner(t *testing.T) {
 	s, lead, _ := qaStore(t)
 	if err := qaChange(s, "writer-session", QAUpdate{ID: "q", Action: "open", Package: "K5", Title: "Question", Assignee: lead, Body: "Question"}); err != nil {

@@ -5,11 +5,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 // Receipt makes a retried logical operation return the original outcome. It is
 // stored in the same atomic snapshot as the mutation, including workspace setup.
+// It belongs to one workspace and goes when that workspace ends: shared across
+// workspaces, a new workspace's "setup-1" replayed the last one's result, and
+// receipts accumulated until every retry-safe call failed at the cap.
 type Receipt struct {
+	Workspace string          `json:"workspace"`
 	Session   string          `json:"session"`
 	Operation string          `json:"operation"`
 	Request   string          `json:"request"`
@@ -32,9 +37,13 @@ func (s *Store) Transaction(session, operation, request string, raw []byte, prev
 	encoded, _ := json.Marshal(normalized)
 	hash := sha256.Sum256(encoded)
 	digest := hex.EncodeToString(hash[:])
+	workspace := ""
+	if w, _ := find(&s.state, session); w != nil {
+		workspace = w.ID
+	}
 	if request != "" && !preview {
 		for _, r := range s.state.Receipts {
-			if r.Session == session && r.Operation == operation && r.Request == request {
+			if r.Workspace == workspace && r.Session == session && r.Operation == operation && r.Request == request {
 				if r.Digest != digest {
 					return nil, errors.New("request_id reused with different arguments")
 				}
@@ -58,8 +67,14 @@ func (s *Store) Transaction(session, operation, request string, raw []byte, prev
 		if err != nil {
 			return nil, err
 		}
-		staged.state.Receipts = append(staged.state.Receipts, Receipt{session, operation, request, digest, data})
+		if w, _ := find(&staged.state, session); w != nil {
+			workspace = w.ID
+		}
+		staged.state.Receipts = append(staged.state.Receipts, Receipt{workspace, session, operation, request, digest, data})
 	}
+	staged.state.Receipts = slices.DeleteFunc(staged.state.Receipts, func(r Receipt) bool {
+		return !slices.ContainsFunc(staged.state.Workspaces, func(w Workspace) bool { return w.ID == r.Workspace && w.State != "ended" })
+	})
 	data, err := json.Marshal(staged.state)
 	if err != nil {
 		return nil, err
