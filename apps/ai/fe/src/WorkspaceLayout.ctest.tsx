@@ -177,3 +177,23 @@ test('attention shows unselected teammate approvals, owner decisions and save fa
  setValue({...value(),approvals:[],qa_document_status:{state:'saved'},workspace:{...value().workspace!,messages:[]}});
  expect(screen.queryByTestId('workspace-attention')).toBeNull();
 });
+
+// Two levels instead of bare codes: members group under their package's
+// title, unpackaged ones first, and a role-only name gets its code on the tab.
+test('the team groups members under named packages', async () => {
+ const f = frame();
+ f.workspace!.packages = {CT1: {title: 'Console input-flood test'}};
+ f.workspace!.members.push(
+  {id:'ct1-impl',name:'Implementer',package:'CT1',role:'implementer',session_id:'s2',provider:'claude',lifetime:'resident',state:'available'},
+  {id:'g1-red',name:'Red team',package:'G1',role:'reviewer',session_id:'s3',provider:'claude',lifetime:'resident',state:'available'});
+ f.workspace!.qa = [{id:'q',package:'CT1',title:'Flake budget?',assignee:'lead',state:'open',blocking:false,revision:1}];
+ render(() => <WorkspaceLayout frame={f} onAction={vi.fn()}>Conversation</WorkspaceLayout>);
+ const sections = [...screen.getByTestId('workspace-sidebar').querySelectorAll('section[data-testid^="workspace-team-"]')].map(s => s.getAttribute('data-testid'));
+ expect(sections).toEqual(['workspace-team-coordination', 'workspace-team-CT1', 'workspace-team-G1']);
+ expect(screen.getByTestId('workspace-team-CT1').textContent).toContain('CT1 · Console input-flood test');
+ expect(screen.getByTestId('workspace-team-CT1').contains(screen.getByTestId('workspace-member-ct1-impl'))).toBe(true);
+ expect(screen.getByTestId('workspace-team-G1').textContent).toContain('G1');
+ expect(screen.getByTestId('workspace-question-q').textContent).toContain('CT1 · Console input-flood test');
+ await fireEvent.click(screen.getByTestId('workspace-member-ct1-impl'));
+ expect(screen.getByRole('tab', {name: /CT1 · Implementer/})).toBeTruthy();
+});

@@ -169,3 +169,25 @@ func TestApprovalProfileValidatesAndResolves(t *testing.T) {
 		t.Fatalf("member override ignored: %+v %v", got, err)
 	}
 }
+
+func TestPackagesNameCodesAndPatchByKey(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "state.json"))
+	if _, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	title := func(t string) *Package { return &Package{Title: t} }
+	if _, err := s.Configure("lead", ConfigurePatch{Packages: map[string]*Package{"CT1": title("Console input-flood test"), "G1": title("Clear review debt")}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Configure("lead", ConfigurePatch{Packages: map[string]*Package{"G1": nil}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.View("lead").Packages; len(got) != 1 || got["CT1"].Title != "Console input-flood test" {
+		t.Fatalf("packages = %+v", got)
+	}
+	for _, bad := range []map[string]*Package{{"has space": title("x")}, {"CT1": title("")}} {
+		if _, err := s.Configure("lead", ConfigurePatch{Packages: bad}); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+}

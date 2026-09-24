@@ -43,7 +43,13 @@ export const WorkspaceLayout: Component<{
   const ownMember = createMemo(() => workspace()?.members.find((m) => m.session_id === props.currentSessionID)?.id);
   const tabs = () => ['conversation', ...opened()];
   const label = (id: string) => id === 'conversation' ? 'Conversation' : id === 'plan' ? 'Plan' : id === 'qa' ? 'Questions'
-    : workspace()?.members.find((m) => m.id === id)?.name ?? id;
+    : memberTab(workspace()?.members.find((m) => m.id === id)) ?? id;
+  // Role-only names repeat across packages ("Implementer" twice), so a tab
+  // carries the package code unless the name already starts with it.
+  function memberTab(m?: { name: string; package?: string }) {
+    if (!m) return undefined;
+    return m.package && !m.name.startsWith(m.package) ? `${m.package} · ${m.name}` : m.name;
+  }
   const select = (id: string) => {
     if (id.startsWith('qa:')) {setQaFocus(id.slice(3));id='qa';}
     if (id === ownMember()) id = 'conversation';

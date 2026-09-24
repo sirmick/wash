@@ -37,6 +37,11 @@ type AgentProfile struct {
 	Thinking string            `json:"thinking,omitempty"`
 	Configs  map[string]string `json:"configs,omitempty"`
 }
+
+// Package is the human-facing description of a package code.
+type Package struct {
+	Title string `json:"title"`
+}
 type Usage struct {
 	Used int64 `json:"used"`
 	Size int64 `json:"size"`
@@ -111,7 +116,11 @@ type Workspace struct {
 	// often siblings of project_root as children of it, so a path-scoped
 	// rule cannot cover a fleet. Membership is the scope instead: these
 	// rules carry no Cwd, and agentpolicy's matcher is reused verbatim.
-	Approvals      []agentpolicy.Rule      `json:"approvals,omitempty"`
+	Approvals []agentpolicy.Rule `json:"approvals,omitempty"`
+	// Packages names each package code ("CT1") for people: the sidebar groups
+	// members and questions under "CT1 · Console input-flood test" instead of
+	// a bare code, and member names can shrink to their role.
+	Packages       map[string]Package      `json:"packages,omitempty"`
 	Profiles       map[string]AgentProfile `json:"profiles"`
 	DefaultProfile string                  `json:"default_profile"`
 	ID             string                  `json:"id"`

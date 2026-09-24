@@ -13,6 +13,7 @@ type ConfigurePatch struct {
 	MaxActive      *int                     `json:"max_active"`
 	MaxMembers     *int                     `json:"max_members"`
 	Profiles       map[string]*AgentProfile `json:"profiles"`
+	Packages       map[string]*Package      `json:"packages"`
 	DefaultProfile *string                  `json:"default_profile"`
 	Expected       *int64                   `json:"expected_revision"`
 }
@@ -110,6 +111,25 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		}
 		if len(w.Profiles) > 64 {
 			return errors.New("maximum 64 profiles")
+		}
+		for code, pkg := range p.Packages {
+			if !ValidProfileName(code) {
+				return errors.New("package code must be 1–80 ASCII letters, digits, underscores or hyphens")
+			}
+			if pkg == nil {
+				delete(w.Packages, code)
+				continue
+			}
+			if !ValidText(pkg.Title, 120) {
+				return fmt.Errorf("package %q: title must contain 1–120 bytes", code)
+			}
+			if w.Packages == nil {
+				w.Packages = map[string]Package{}
+			}
+			w.Packages[code] = *pkg
+		}
+		if len(w.Packages) > 64 {
+			return errors.New("maximum 64 packages")
 		}
 		if p.DefaultProfile != nil {
 			w.DefaultProfile = *p.DefaultProfile

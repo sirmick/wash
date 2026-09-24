@@ -10,6 +10,7 @@ export interface WorkspaceMember {
   usage?: WorkspaceUsage;
   profile?: string; launch_settings?: WorkspaceProfile; initial_configs?: Record<string, string>;
   id: string; name: string; provider: string; lifetime: string; state: string;
+  package?: string; role?: string;
   status?: string; emoji?: string; waiting?: string; session_id: string;
 }
 export interface WorkspaceMessage {
@@ -21,6 +22,7 @@ export interface WorkspaceState {
   qa?: QAThread[];
   qa_document?: {path: string; title?: string};
   profiles?: Record<string, WorkspaceProfile>; default_profile?: string;
+  packages?: Record<string, { title: string }>;
   id: string; name: string; state: string; revision: number; orchestrator: string;
   items: WorkspaceItem[]; members: WorkspaceMember[]; messages: WorkspaceMessage[];
   document?: { path: string; title?: string };
@@ -60,6 +62,22 @@ export const WorkspaceSidebar: Component<{
   const activity = (m: WorkspaceMember) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
   const usage = (m: WorkspaceMember) => props.frame.usage?.[m.id] ?? m.usage;
   const count = (n: number) => n.toLocaleString('en-US');
+  // "CT1 · Console input-flood test" where the orchestrator named it, the
+  // bare code otherwise: a code alone is what made the sidebar cryptic.
+  const pkg = (code: string) => { const t = w().packages?.[code]?.title; return t ? `${code} · ${t}` : code; };
+  // Two levels: members with no package (orchestrator, architect) first, then
+  // one group per package in first-seen order. Groups are keyed by code
+  // STRINGS and rows are the members' own objects, so a frame update keeps
+  // the rendered rows (a live activity dot) rather than rebuilding them.
+  const teamCodes = createMemo(() => {
+    const order: string[] = [];
+    for (const m of w().members) {
+      const code = m.package ?? '';
+      if (!order.includes(code)) order.push(code);
+    }
+    return order.sort((a, b) => (a === '' ? -1 : b === '' ? 1 : 0));
+  }, undefined, { equals: (a, b) => a.length === b.length && a.every((c, i) => c === b[i]) });
+  const membersOf = (code: string) => w().members.filter((m) => (m.package ?? '') === code);
   const heading = { font: tokens.type.titleSm, padding: `${tokens.spaceSm}px 0` };
   return (
     <aside data-testid="workspace-sidebar" aria-label="Agent workspace" style={{
@@ -89,7 +107,7 @@ export const WorkspaceSidebar: Component<{
             </Button>
           )}</For>
           <For each={(w().qa ?? []).filter(q => q.state === 'awaiting-owner')}>{q => (
-            <Button onClick={() => props.onSelect(`qa:${q.id}`)}>{q.package} · Owner question: {q.title}</Button>
+            <Button onClick={() => props.onSelect(`qa:${q.id}`)}>{pkg(q.package)} · Owner question: {q.title}</Button>
           )}</For>
       <For each={questions()}>{(q) => (
         <section data-testid="workspace-decision" style={{ padding: `${tokens.spaceSm}px 0` }}>
@@ -112,12 +130,19 @@ export const WorkspaceSidebar: Component<{
       </Button>
       <For each={(w().qa ?? []).filter(q => q.state !== 'resolved')}>{q => (
         <button data-wash-hit type="button" data-testid={`workspace-question-${q.id}`} onClick={() => props.onSelect(`qa:${q.id}`)} style={{ display: 'block', width: '100%', 'text-align': 'left', background: 'transparent', color: tokens.fg, border: 'none', padding: `${tokens.spaceSm}px` }}>
-          {q.blocking ? '⏳ ' : ''}{q.package} · {q.title}
+          {q.blocking ? '⏳ ' : ''}{q.title}
+          <small style={{ display: 'block', color: tokens.fgMuted }}>{pkg(q.package)}</small>
           <small style={{ display: 'block', color: tokens.fgMuted }}>{q.state} · {label(q.assignee)}</small>
         </button>
       )}</For>
       <div style={heading}>Team</div>
-      <For each={w().members}>{(m) => (
+      <For each={teamCodes()}>{(code) => (
+        <section data-testid={`workspace-team-${code || 'coordination'}`} aria-label={code ? pkg(code) : 'Coordination'}
+          style={{ 'margin-left': code ? `${tokens.spaceMd}px` : '0' }}>
+          <Show when={code}>
+            <div style={{ font: tokens.type.textMd, 'font-weight': 600, padding: `${tokens.spaceSm}px 0 0`, 'margin-left': `-${tokens.spaceMd}px` }}>{pkg(code)}</div>
+          </Show>
+          <For each={membersOf(code)}>{(m) => (
         <button data-wash-hit type="button" data-testid={`workspace-member-${m.id}`} onClick={() => props.onSelect(m.id)} style={{
           display: 'block', width: '100%', 'text-align': 'left', padding: `${tokens.spaceSm}px`,
           background: props.selected === m.id ? tokens.bgWindow : 'transparent', color: tokens.fg,
@@ -143,6 +168,8 @@ export const WorkspaceSidebar: Component<{
           <Show when={m.status}><div>{m.status}</div></Show>
           <Show when={m.waiting}><small style={{ color: tokens.fgMuted }}>{m.waiting}</small></Show>
         </button>
+          )}</For>
+        </section>
       )}</For>
       <details>
         <summary data-wash-hit style={heading}>Messages</summary>

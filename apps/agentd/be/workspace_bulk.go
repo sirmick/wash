@@ -402,7 +402,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		for _, key := range keys {
 			members[key] = swarm.GetMember(w, key).ID
 		}
-		return map[string]any{"workspace_id": w.ID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "profiles": w.Profiles, "default_profile": w.DefaultProfile, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
+		return map[string]any{"workspace_id": w.ID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "profiles": w.Profiles, "packages": w.Packages, "default_profile": w.DefaultProfile, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
 	})
 	if qaLocked {
 		ws.qaMu.Unlock()
