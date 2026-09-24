@@ -53,8 +53,13 @@ const historyFlush = 30 * time.Second
 type Session struct {
 	SessionID string `json:"session_id"`
 	Agent     string `json:"agent"`
-	Cwd       string `json:"cwd,omitempty"`
-	Dir       string `json:"dir,omitempty"`
+	// Connection is what a resume must launch through again; Stack and
+	// Tier are what the launcher defaults to next time (launchRecord).
+	Connection string `json:"connection,omitempty"`
+	Stack      string `json:"stack,omitempty"`
+	Tier       string `json:"tier,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Dir        string `json:"dir,omitempty"`
 	// Title is what this session was ABOUT, in the agent's own words —
 	// it names its sessions on session_info_update once it works out what
 	// the work is. "codex · mick" tells you nothing a week later; "Fix
@@ -130,12 +135,24 @@ var (
 	historySaved time.Time
 )
 
+// launchRecord is what history keeps about how a session started: the
+// adapter and connection a resume must use again, and the stack and tier the
+// launcher defaults to next time.
+type launchRecord struct {
+	Agent, Connection, Stack, Tier string
+}
+
+func (h *hosted) record() launchRecord {
+	return launchRecord{Agent: h.agent, Connection: h.connection, Stack: h.stack, Tier: h.tier}
+}
+
 // rememberSession records (or refreshes) a session. Called from the roster
 // path, so anything the roster can see is remembered — including sessions
 // that end by having their terminal killed, which never say goodbye.
 //
 // Returns true when something worth persisting changed.
-func rememberSession(agent, sessionID, cwd, title string, now time.Time) bool {
+func rememberSession(launch launchRecord, sessionID, cwd, title string, now time.Time) bool {
+	agent := launch.Agent
 	if sessionID == "" {
 		return false
 	}
@@ -157,6 +174,16 @@ func rememberSession(agent, sessionID, cwd, title string, now time.Time) bool {
 			changed = changed || history[i].Agent != agent
 			history[i].Agent = agent
 		}
+		// A resumed session knows its connection but not always its stack:
+		// only what it says replaces what was recorded.
+		for _, f := range []struct {
+			to *string
+			v  string
+		}{{&history[i].Connection, launch.Connection}, {&history[i].Stack, launch.Stack}, {&history[i].Tier, launch.Tier}} {
+			if f.v != "" && *f.to != f.v {
+				*f.to, changed = f.v, true
+			}
+		}
 		history[i].LastSeen = now.Unix()
 		// Move-to-front so the list reads most-recent-first.
 		s := history[i]
@@ -165,12 +192,15 @@ func rememberSession(agent, sessionID, cwd, title string, now time.Time) bool {
 		return changed
 	}
 	history = append([]Session{{
-		SessionID: sessionID,
-		Agent:     agent,
-		Cwd:       cwd,
-		Dir:       dirLabel(cwd),
-		Title:     title,
-		LastSeen:  now.Unix(),
+		SessionID:  sessionID,
+		Agent:      agent,
+		Connection: launch.Connection,
+		Stack:      launch.Stack,
+		Tier:       launch.Tier,
+		Cwd:        cwd,
+		Dir:        dirLabel(cwd),
+		Title:      title,
+		LastSeen:   now.Unix(),
 	}}, history...)
 	if len(history) > historyCap {
 		history = history[:historyCap]
@@ -247,7 +277,8 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 		c.Warn("Could not reopen that session", "wash has no record of it — not in its history and no transcript on disk.")
 		return
 	}
-	agent, cwd, sid := s.Agent, s.Cwd, s.SessionID
+	cwd, sid := s.Cwd, s.SessionID
+	launch := launchRecord{Agent: s.Agent, Connection: s.Connection, Stack: s.Stack, Tier: s.Tier}
 	// The live-session check above closes the eventual-consistency window after
 	// registration. This closes the earlier window: repeated clicks while the
 	// adapter is still starting must share the first loadSession rather than
@@ -262,7 +293,7 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 	// history, and the service must keep dispatching meanwhile.
 	go func() {
 		defer finishResume(sid)
-		hs, err := resumeHosted(agent, cwd, sid, c)
+		hs, err := resumeHosted(launch, cwd, sid, c)
 		if err != nil {
 			log.Printf("agentd: resume session=%s: %v", sid, err)
 			c.Warn("Could not reopen that session", err.Error())
@@ -298,13 +329,16 @@ func resolveResumeTarget(sessionID string) (Session, bool) {
 		return Session{}, false
 	}
 	return Session{
-		SessionID: m.SessionID,
-		Agent:     m.Agent,
-		Cwd:       m.Cwd,
-		Dir:       m.Dir,
-		Title:     m.Title,
-		UserTitle: m.UserTitle,
-		LastSeen:  sessionRecency(m) / 1000,
+		SessionID:  m.SessionID,
+		Agent:      m.Agent,
+		Connection: m.Connection,
+		Stack:      m.Stack,
+		Tier:       m.Tier,
+		Cwd:        m.Cwd,
+		Dir:        m.Dir,
+		Title:      m.Title,
+		UserTitle:  m.UserTitle,
+		LastSeen:   sessionRecency(m) / 1000,
 	}, m.Agent != ""
 }
 

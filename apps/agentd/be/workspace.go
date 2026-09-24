@@ -522,7 +522,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		}
 		hostedMu.Unlock()
 	}
-	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, workspaceLaunch{capability: settings.Capability, member: true, noSubagents: settings.Subagents == "deny"})
+	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, sessionLaunch{capability: settings.Capability, member: true, noSubagents: settings.Subagents == "deny"})
 	var initialConfigs map[string]string
 	if err == nil {
 		hostedMu.Lock()

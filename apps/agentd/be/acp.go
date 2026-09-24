@@ -74,7 +74,9 @@ type hosted struct {
 	// terminal tier's "<instance>:<channel>" so the two can never collide.
 	key   string
 	agent string
-	cwd   string
+	// connection, stack and tier are how it was launched (sessionLaunch).
+	connection, stack, tier string
+	cwd                     string
 
 	client *acp.Client
 	// authMethods is what the adapter said it offers, kept only so a
@@ -623,7 +625,7 @@ func (h *hosted) setState(state, reason string) {
 			r.Branch, r.Dirty = "", false
 			wantGit = h.cwd
 		}
-		remembered := rememberSession(h.agent, h.sessionID, h.cwd, h.title, now)
+		remembered := rememberSession(h.record(), h.sessionID, h.cwd, h.title, now)
 		if remembered {
 			historyDirty = true
 		}
@@ -819,7 +821,7 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 			// history when the session ended would be missing from
 			// exactly the sessions you most want to find again.
 			mutateState(func(s *State) {
-				if rememberSession(h.agent, h.sessionID, h.cwd, h.title, time.Now()) {
+				if rememberSession(h.record(), h.sessionID, h.cwd, h.title, time.Now()) {
 					historyDirty = true
 				}
 				s.Recent = publishHistory()

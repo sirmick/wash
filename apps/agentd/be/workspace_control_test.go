@@ -174,7 +174,7 @@ func TestSubagentsDenyRemovesClaudesAgentTool(t *testing.T) {
 	if _, err = noSubagentMetadata(acp.Implementation{Name: "codex-acp", Version: "1.13.0"}); err == nil {
 		t.Fatal("an adapter wash cannot restrict was accepted")
 	}
-	if _, err = startHostedCapability("codex", t.TempDir(), nil, workspaceLaunch{member: true, noSubagents: true}); err == nil || !strings.Contains(err.Error(), "no session started") {
+	if _, err = startHostedCapability("codex", t.TempDir(), nil, sessionLaunch{member: true, noSubagents: true}); err == nil || !strings.Contains(err.Error(), "no session started") {
 		t.Fatal("codex launched with subagents deny", err)
 	}
 	if err = swarm.ValidateProfile(swarm.AgentProfile{Provider: "claude", Subagents: "sometimes"}); err == nil {
@@ -209,7 +209,7 @@ func TestInterruptEndsTheTurnWithoutPausingTheMember(t *testing.T) {
 		toClientR, toClientW := io.Pipe()
 		h := &hosted{key: "acp:int", agent: "claude", sessionID: "impl-s", cwd: t.TempDir(), workspaceMember: true}
 		h.client = acp.NewClient(toClientR, toAgentW, h)
-		bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+		bindTranscript(h.key, h.sessionID, h.record(), h.cwd, time.Now())
 		h.register()
 		go func() {
 			sc := bufio.NewScanner(toAgentR)

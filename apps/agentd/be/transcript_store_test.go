@@ -62,7 +62,7 @@ func withStateDir(t *testing.T) string {
 func TestTranscriptPersistsAndLoadsBack(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "sess-a", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-a", launchRecord{Agent: "codex"}, "/tmp", now)
 
 	appendPrompt("acp:1", "hello", now)
 	appendEvent("acp:1", Event{Kind: EventMessage, Text: "hi back"}, now)
@@ -94,7 +94,7 @@ func TestTranscriptPersistsAndLoadsBack(t *testing.T) {
 func TestTranscriptUpdateFoldsToLastWrite(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "sess-b", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-b", launchRecord{Agent: "codex"}, "/tmp", now)
 
 	e := appendEvent("acp:1", Event{Kind: EventTool, ToolID: "t1", Title: "read", Status: "pending"}, now)
 	if _, ok := updateEvent("acp:1", e.Seq, func(ev *Event) { ev.Status = "completed" }); !ok {
@@ -156,7 +156,7 @@ func TestReconcileResumeKeepsTheRicherRecord(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 
 	// First run: three events under the original key.
-	bindTranscript("acp:1", "sess-c", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-c", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "one", now)
 	appendEvent("acp:1", Event{Kind: EventMessage, Text: "two"}, now)
 	appendEvent("acp:1", Event{Kind: EventMessage, Text: "three"}, now)
@@ -203,12 +203,12 @@ func TestReconcileResumePrefersAFullReplay(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
 
-	bindTranscript("acp:1", "sess-d", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-d", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "old", now)
 	waitForTranscriptWrites()
 
 	// The replay lands under the new key before reconcile runs.
-	bindTranscript("acp:2", "sess-d", "codex", "/tmp", now)
+	bindTranscript("acp:2", "sess-d", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:2", "replayed one", now)
 	appendEvent("acp:2", Event{Kind: EventMessage, Text: "replayed two"}, now)
 	reconcileResume("acp:2", "sess-d", "codex", "/tmp", now)
@@ -244,7 +244,7 @@ func TestReconcileResumePrefersAFullReplay(t *testing.T) {
 func TestLoadTranscriptSurvivesATruncatedLine(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "sess-e", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-e", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "kept", now)
 	waitForTranscriptWrites()
 
@@ -270,7 +270,7 @@ func TestLoadTranscriptSurvivesATruncatedLine(t *testing.T) {
 func TestTranscriptFileIsPrivate(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "sess-f", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-f", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "secret", now)
 	waitForTranscriptWrites()
 
@@ -295,7 +295,7 @@ func TestTranscriptFileIsPrivate(t *testing.T) {
 func TestListSessionMetaReadsTheRealID(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "has/slash", "codex", "/tmp", now)
+	bindTranscript("acp:1", "has/slash", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "x", now)
 	waitForTranscriptWrites()
 
@@ -312,7 +312,7 @@ func TestListSessionMetaReadsTheRealID(t *testing.T) {
 func TestReleaseTranscriptFreesMemoryButKeepsTheConversation(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "sess-g", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-g", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "still here", now)
 	appendEvent("acp:1", Event{Kind: EventMessage, Text: "and this"}, now)
 
@@ -352,7 +352,7 @@ func TestSnapshotUnknownKeyIsEmpty(t *testing.T) {
 func TestStreamedMessagePersistsEveryChunk(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "sess-h", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-h", launchRecord{Agent: "codex"}, "/tmp", now)
 
 	for _, chunk := range []string{"Hello ", "from ", "the fake agent."} {
 		appendUpdate("acp:1", acp.SessionUpdate{
@@ -381,7 +381,7 @@ func TestStreamedMessagePersistsEveryChunk(t *testing.T) {
 func TestSessionMetaCarriesModelAndEnding(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "sess-m", "codex", "/home/mick/wash", now)
+	bindTranscript("acp:1", "sess-m", launchRecord{Agent: "codex"}, "/home/mick/wash", now)
 	// Start-of-session summary: model known, ending not.
 	writeSummary("sess-m", transcriptSummary{
 		Agent: "codex", Model: "Claude Opus 4.5", Cwd: "/home/mick/wash", AtMS: now.UnixMilli(),
@@ -432,7 +432,7 @@ func TestSessionMetaCarriesModelAndEnding(t *testing.T) {
 func TestSessionMetaSurvivesASessionThatNeverEnded(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "sess-crash", "codex", "/tmp", now)
+	bindTranscript("acp:1", "sess-crash", launchRecord{Agent: "codex"}, "/tmp", now)
 	writeSummary("sess-crash", transcriptSummary{Agent: "codex", Model: "gpt-5", AtMS: now.UnixMilli()})
 	appendEvent("acp:1", Event{Kind: EventMessage, Text: "mid-sentence"}, now.Add(5*time.Minute))
 	waitForTranscriptWrites()
@@ -459,7 +459,7 @@ func TestListSessionMetaSortsByRecency(t *testing.T) {
 	withStateDir(t)
 	base := time.Unix(1_700_000_000, 0)
 	for i, id := range []string{"old", "newest", "middle"} {
-		bindTranscript("acp:"+id, id, "codex", "/tmp", base)
+		bindTranscript("acp:"+id, id, launchRecord{Agent: "codex"}, "/tmp", base)
 		at := base.Add(time.Duration(map[int]int{0: 1, 1: 30, 2: 10}[i]) * time.Minute)
 		appendEvent("acp:"+id, Event{Kind: EventMessage, Text: id}, at)
 	}
@@ -515,11 +515,11 @@ func TestHistoryQuerySearchesContentAndMetadata(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
 
-	bindTranscript("acp:1", "s-reconnect", "codex", "/home/mick/wash", now)
+	bindTranscript("acp:1", "s-reconnect", launchRecord{Agent: "codex"}, "/home/mick/wash", now)
 	writeSummary("s-reconnect", transcriptSummary{Agent: "codex", Model: "gpt-5", Cwd: "/home/mick/wash"})
 	appendPrompt("acp:1", "why does the banner race on reconnect", now)
 
-	bindTranscript("acp:2", "s-radio", "claude", "/home/mick/radio", now.Add(time.Minute))
+	bindTranscript("acp:2", "s-radio", launchRecord{Agent: "claude"}, "/home/mick/radio", now.Add(time.Minute))
 	writeSummary("s-radio", transcriptSummary{Agent: "claude", Model: "Claude Opus 4.5", Cwd: "/home/mick/radio",
 		Title: "Station list"})
 	appendPrompt("acp:2", "add somafm stations", now.Add(time.Minute))
@@ -563,7 +563,7 @@ func TestHistoryQuerySearchesContentAndMetadata(t *testing.T) {
 func TestHistoryRowsCarryBoundedRecentTranscriptPreview(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "s-preview", "codex", "/tmp", now)
+	bindTranscript("acp:1", "s-preview", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "first question", now)
 	appendEvent("acp:1", Event{Kind: EventMessage, Text: "first answer"}, now.Add(time.Second))
 	appendPrompt("acp:1", "latest "+strings.Repeat("detail ", 80), now.Add(2*time.Second))
@@ -590,7 +590,7 @@ func TestHistoryRowsCarryBoundedRecentTranscriptPreview(t *testing.T) {
 func TestHistorySearchIgnoresImageBytes(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "s-img", "codex", "/tmp", now)
+	bindTranscript("acp:1", "s-img", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendEvent("acp:1", Event{Kind: EventImage, Mime: "image/png", Text: "iVBORw0KGgoAAAANSUhEUg"}, now)
 	waitForTranscriptWrites()
 
@@ -617,11 +617,11 @@ func TestHistoryQueryRequiresEveryTermAcrossTheConversation(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
 
-	bindTranscript("acp:1", "s-both", "codex", "/tmp/a", now)
+	bindTranscript("acp:1", "s-both", launchRecord{Agent: "codex"}, "/tmp/a", now)
 	appendPrompt("acp:1", "the banner flickers on reconnect", now)
 	appendPrompt("acp:1", "and later: it is a race in the scheduler", now.Add(time.Minute))
 
-	bindTranscript("acp:2", "s-one", "codex", "/tmp/b", now.Add(time.Hour))
+	bindTranscript("acp:2", "s-one", launchRecord{Agent: "codex"}, "/tmp/b", now.Add(time.Hour))
 	appendPrompt("acp:2", "just a plain reconnect question", now.Add(time.Hour))
 	waitForTranscriptWrites()
 
@@ -645,7 +645,7 @@ func TestHistoryQueryRequiresEveryTermAcrossTheConversation(t *testing.T) {
 func TestHistoryQueryReturnsTheLineThatMatched(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "s-snip", "codex", "/tmp/a", now)
+	bindTranscript("acp:1", "s-snip", launchRecord{Agent: "codex"}, "/tmp/a", now)
 	appendPrompt("acp:1", "unrelated opening line", now)
 	appendPrompt("acp:1", "the quokka protocol is what broke the parser", now.Add(time.Minute))
 	waitForTranscriptWrites()
@@ -667,7 +667,7 @@ func TestHistoryQueryReturnsTheLineThatMatched(t *testing.T) {
 func TestMetadataMatchCarriesNoSnippet(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "s-meta", "codex", "/home/mick/radio", now)
+	bindTranscript("acp:1", "s-meta", launchRecord{Agent: "codex"}, "/home/mick/radio", now)
 	writeSummary("s-meta", transcriptSummary{Agent: "codex", Cwd: "/home/mick/radio", Title: "Station list"})
 	appendPrompt("acp:1", "nothing relevant here", now)
 	waitForTranscriptWrites()
@@ -687,7 +687,7 @@ func TestMetadataMatchCarriesNoSnippet(t *testing.T) {
 func TestSnippetIsOneTidyLine(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "s-code", "codex", "/tmp/a", now)
+	bindTranscript("acp:1", "s-code", launchRecord{Agent: "codex"}, "/tmp/a", now)
 	appendPrompt("acp:1", "```go\nfunc main() {\n\tprintln(\"quokka\")\n}\n```\n"+strings.Repeat("tail ", 200), now)
 	waitForTranscriptWrites()
 

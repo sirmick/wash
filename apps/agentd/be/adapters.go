@@ -201,12 +201,21 @@ func adapterByID(id string) (Adapter, bool) {
 // adapter is a stray child that outlives the desktop, which is the bug
 // class the child-process audit already cost us once.
 func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	return startHostedCapability(agentID, cwd, svcConn, workspaceLaunch{})
+	return startHostedCapability(agentID, cwd, svcConn, sessionLaunch{})
 }
 
-// workspaceLaunch is how a session starts for a workspace; the zero value is
-// an ordinary session, which may go on to lead one.
-type workspaceLaunch struct {
+// sessionLaunch is how a session starts: the connection it runs through,
+// the stack tier it was chosen from, and a workspace member's restrictions.
+// The zero value is an ordinary session on the adapter direct, which may go
+// on to lead a workspace.
+type sessionLaunch struct {
+	// connection names an agentpolicy.Connection for the adapter; "" is
+	// the adapter direct.
+	connection string
+	// stack and tier are where the session's settings came from, kept so
+	// History can say so and the launcher can default to the stack used
+	// last. They change nothing about the launch itself.
+	stack, tier string
 	// capability "reviewer" restricts the provider's tools (Claude only).
 	capability string
 	// member is a session launched into a workspace rather than one that
@@ -217,7 +226,7 @@ type workspaceLaunch struct {
 	noSubagents bool
 }
 
-func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch workspaceLaunch) (*hosted, error) {
+func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
 	h, err := dialAdapterCapability(agentID, cwd, svcConn, launch)
 	if err != nil {
 		return nil, err
@@ -237,7 +246,7 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch worksp
 	h.sessionID = res2.SessionID
 	// Name the transcript now: before the adapter answers there is no
 	// session id to file it under, and every event from here on persists.
-	bindTranscript(h.key, h.sessionID, agentID, h.cwd, time.Now())
+	bindTranscript(h.key, h.sessionID, h.record(), h.cwd, time.Now())
 	h.applyModes(res2.Modes)
 	h.register()
 	if workspaces != nil {
@@ -261,9 +270,9 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch worksp
 // dialAdapter launches an adapter and completes the handshake. Shared by
 // start and resume, which differ only in session/new vs session/load.
 func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	return dialAdapterCapability(agentID, cwd, svcConn, workspaceLaunch{})
+	return dialAdapterCapability(agentID, cwd, svcConn, sessionLaunch{})
 }
-func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch workspaceLaunch) (*hosted, error) {
+func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
 	capability := launch.capability
 	if capability != "" && (capability != "reviewer" || agentID != "claude") {
 		return nil, fmt.Errorf("capability %q unsupported by %s; no session started", capability, agentID)
@@ -296,8 +305,14 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch worksp
 	}
 	run := pol.Merge(agentID, agentpolicy.Launch{Command: bin, Args: args})
 	// Built-ins come first so an explicit agents.json environment entry is
-	// appended later and retains the documented user-wins precedence.
-	run.Env = append(a.builtinEnv(cfg), run.Env...)
+	// appended later and retains the documented user-wins precedence. The
+	// connection's environment is more specific than the adapter's, so it
+	// comes last of all.
+	connEnv, err := connectionEnv(pol, keyStore(), agentID, launch.connection)
+	if err != nil {
+		return nil, err
+	}
+	run.Env = append(append(a.builtinEnv(cfg), run.Env...), connEnv...)
 	cmd := exec.Command(run.Command, run.Args...)
 	cmd.Dir = cwd
 	// Added to the inherited environment, not substituted for it: an
@@ -332,7 +347,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch worksp
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
+	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, connection: launch.connection, stack: launch.stack, tier: launch.tier, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
 
 	// Only the injected coordination server is available to restricted reviewers.
 	if capability == "reviewer" {
@@ -582,10 +597,16 @@ func resolveCwd(cwd string) (string, error) {
 // notifications before it answers, so the transcript is repopulated by
 // the same handler that fills it live. The history comes back on screen,
 // rather than as a terminal scrolled to wherever it happened to be.
-func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
-	return resumeHostedCapability(agentID, cwd, sessionID, svcConn, savedWorkspaceLaunch(sessionID))
+//
+// It launches through the connection the session was started with: a
+// session opened on OpenRouter resumed on the adapter direct would come back
+// without the key, and without the models it was using.
+func resumeHosted(rec launchRecord, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
+	launch := savedWorkspaceLaunch(sessionID)
+	launch.connection, launch.stack, launch.tier = rec.Connection, rec.Stack, rec.Tier
+	return resumeHostedCapability(rec.Agent, cwd, sessionID, svcConn, launch)
 }
-func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, launch workspaceLaunch) (*hosted, error) {
+func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
 	h, err := dialAdapterCapability(agentID, cwd, svcConn, launch)
 	if err != nil {
 		return nil, err

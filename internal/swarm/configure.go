@@ -52,6 +52,9 @@ func ValidateProfile(p AgentProfile) error {
 	if !ValidText(p.Provider, 80) || strings.TrimSpace(p.Provider) != p.Provider {
 		return errors.New("profile requires a provider")
 	}
+	if p.Connection != "" && (!ValidText(p.Connection, 80) || strings.TrimSpace(p.Connection) != p.Connection) {
+		return errors.New("invalid connection")
+	}
 	if p.Model != "" && !ValidText(p.Model, 256) || p.Thinking != "" && !ValidText(p.Thinking, 80) {
 		return errors.New("invalid model or thinking value")
 	}

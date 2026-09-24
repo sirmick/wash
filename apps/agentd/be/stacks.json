@@ -1,0 +1,15 @@
+{
+  "connections": {
+    "opencode@openrouter": {
+      "adapter": "opencode",
+      "key": "openrouter",
+      "key_env": ["OPENROUTER_API_KEY"]
+    },
+    "claude@openrouter": {
+      "adapter": "claude",
+      "env": {"ANTHROPIC_BASE_URL": "https://openrouter.ai/api", "ANTHROPIC_API_KEY": ""},
+      "key": "openrouter",
+      "key_env": ["ANTHROPIC_AUTH_TOKEN"]
+    }
+  }
+}

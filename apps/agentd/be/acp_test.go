@@ -687,7 +687,7 @@ func TestAdapterExitFailsTheRowAndCancelsAsks(t *testing.T) {
 	// The adapter said something on stderr before dying.
 	_, _ = h.stderrTail().Write([]byte("fatal: token expired\n"))
 
-	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+	bindTranscript(h.key, h.sessionID, h.record(), h.cwd, time.Now())
 	h.register()
 	go h.watchExit()
 	// A terminal it owns.
@@ -788,7 +788,7 @@ func TestTurnErrorsReachTheTranscript(t *testing.T) {
 	h := &hosted{key: "acp:err", agent: "codex", sessionID: "sess-err", cwd: t.TempDir()}
 	h.client = acp.NewClient(toClientR, toAgentW, h)
 	t.Cleanup(func() { h.client.Close(); toAgentW.Close(); toClientW.Close() })
-	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+	bindTranscript(h.key, h.sessionID, h.record(), h.cwd, time.Now())
 	h.register()
 
 	// The "adapter": answer the prompt with an RPC error, the way a real
@@ -950,7 +950,7 @@ func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
 	withState(t, 1)
 	h := &hosted{key: "acp:q", agent: "codex", sessionID: "sess-q", cwd: t.TempDir(), idle: make(chan struct{}, 4)}
 	a := newScriptedAdapter(t, h)
-	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+	bindTranscript(h.key, h.sessionID, h.record(), h.cwd, time.Now())
 	h.register()
 
 	if h.submitPrompt(turn{text: "one"}) {
@@ -1012,7 +1012,7 @@ func TestStopDropsTheQueueAndSaysWhat(t *testing.T) {
 	withState(t, 1)
 	h := &hosted{key: "acp:qc", agent: "codex", sessionID: "sess-qc", cwd: t.TempDir(), idle: make(chan struct{}, 4)}
 	a := newScriptedAdapter(t, h)
-	bindTranscript(h.key, h.sessionID, h.agent, h.cwd, time.Now())
+	bindTranscript(h.key, h.sessionID, h.record(), h.cwd, time.Now())
 	h.register()
 
 	h.submitPrompt(turn{text: "first"})

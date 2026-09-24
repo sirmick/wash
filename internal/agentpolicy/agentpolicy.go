@@ -53,6 +53,16 @@ type Policy struct {
 	// MCPServers are offered to every session, on top of whatever an
 	// individual agent's entry adds.
 	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
+	// Connections add named ways to reach an adapter ("claude@openrouter"),
+	// replacing a built-in connection of the same name (see Connection).
+	Connections map[string]Connection `json:"connections,omitempty"`
+	// Stacks override the built-in stacks by key, tier by tier. Kept as raw
+	// JSON here: a stack's tiers are swarm.AgentProfile values, swarm
+	// imports this package, and agentd, which reads them, owns the check.
+	// Keeping them at all matters: Save rewrites the whole file, and a
+	// field this struct did not know would be dropped by the next "always
+	// allow" click.
+	Stacks map[string]json.RawMessage `json:"stacks,omitempty"`
 }
 
 // Rule is one line of the table.
@@ -297,6 +307,22 @@ type MCPServer struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+}
+
+// Connection is a named way to reach one adapter: the adapter plus the
+// environment it runs with. `agents` has one entry per adapter, so it cannot
+// say "Claude Code direct" and "Claude Code through OpenRouter" at once; a
+// connection can. The adapter itself, by its id, is the direct connection
+// and needs no entry.
+type Connection struct {
+	Adapter string `json:"adapter"`
+	// Env is added after the adapter's own `agents` env.
+	Env map[string]string `json:"env,omitempty"`
+	// Key names a secret in the key store (keys.json), and KeyEnv the
+	// variables it is given to. A connection whose key is not set cannot
+	// start anything.
+	Key    string   `json:"key,omitempty"`
+	KeyEnv []string `json:"key_env,omitempty"`
 }
 
 // Launch is how one adapter is actually started, after the built-in

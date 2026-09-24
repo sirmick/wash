@@ -59,8 +59,13 @@ type transcriptMeta struct {
 	Version   int    `json:"v"`
 	SessionID string `json:"session_id"`
 	Agent     string `json:"agent,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
-	StartedMS int64  `json:"started_ms"`
+	// Connection, Stack and Tier are the launchRecord: written once, in the
+	// head, where a resume finds them however long the transcript grew.
+	Connection string `json:"connection,omitempty"`
+	Stack      string `json:"stack,omitempty"`
+	Tier       string `json:"tier,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	StartedMS  int64  `json:"started_ms"`
 }
 
 const (
@@ -150,7 +155,7 @@ func safeFileName(s string) string {
 // bindTranscript ties a roster key to the session id its events persist
 // under, and writes the meta line. Called once the adapter has answered
 // with a session id — before that there is no name to file it under.
-func bindTranscript(key, sessionID, agent, cwd string, now time.Time) {
+func bindTranscript(key, sessionID string, launch launchRecord, cwd string, now time.Time) {
 	if key == "" || sessionID == "" {
 		return
 	}
@@ -175,7 +180,8 @@ func bindTranscript(key, sessionID, agent, cwd string, now time.Time) {
 	}
 	line, err := json.Marshal(transcriptMeta{
 		Kind: metaKind, Version: transcriptVer, SessionID: sessionID,
-		Agent: agent, Cwd: cwd, StartedMS: now.UnixMilli(),
+		Agent: launch.Agent, Connection: launch.Connection, Stack: launch.Stack, Tier: launch.Tier,
+		Cwd: cwd, StartedMS: now.UnixMilli(),
 	})
 	if err != nil {
 		return
@@ -642,12 +648,15 @@ func writeSummary(sessionID string, s transcriptSummary) {
 // transcript's head and tail without reading the conversation in
 // between — a history list must not cost the sum of every transcript.
 type SessionMeta struct {
-	SessionID string `json:"session_id"`
-	Agent     string `json:"agent,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
-	Dir       string `json:"dir,omitempty"`
-	Title     string `json:"title,omitempty"`
+	SessionID  string `json:"session_id"`
+	Agent      string `json:"agent,omitempty"`
+	Connection string `json:"connection,omitempty"`
+	Stack      string `json:"stack,omitempty"`
+	Tier       string `json:"tier,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Dir        string `json:"dir,omitempty"`
+	Title      string `json:"title,omitempty"`
 	// UserTitle is the person's name for the session, when they gave one.
 	// Title above is then the SAME string — the effective title, so every
 	// reader shows the name without knowing where it came from — and this
@@ -713,6 +722,7 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		if err := json.Unmarshal(head.Bytes(), &m); err == nil && m.Kind == metaKind {
 			out.SessionID = m.SessionID
 			out.Agent = m.Agent
+			out.Connection, out.Stack, out.Tier = m.Connection, m.Stack, m.Tier
 			out.Cwd = m.Cwd
 			out.Dir = dirLabel(m.Cwd)
 			out.StartedMS = m.StartedMS

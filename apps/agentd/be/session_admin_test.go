@@ -17,8 +17,8 @@ func TestRenameWinsEverywhereAndClearsBack(t *testing.T) {
 	reset()
 	t.Cleanup(resetHistory)
 
-	rememberSession("codex", "s-1", "/w", "Agent's own title", t0)
-	bindTranscript("acp:1", "s-1", "codex", "/w", t0)
+	rememberSession(launchRecord{Agent: "codex"}, "s-1", "/w", "Agent's own title", t0)
+	bindTranscript("acp:1", "s-1", launchRecord{Agent: "codex"}, "/w", t0)
 	waitForTranscriptWrites()
 
 	if _, err := renameSession("", "s-1", "Mine", t0.Add(time.Minute)); err != nil {
@@ -72,7 +72,7 @@ func TestRenameLiveSessionRepublishesRow(t *testing.T) {
 	h := &hosted{key: "acp:7", agent: "codex", sessionID: "s-7", cwd: "/w", title: "From the agent"}
 	h.register()
 	t.Cleanup(func() { h.retire() })
-	bindTranscript(h.key, h.sessionID, "codex", "/w", t0)
+	bindTranscript(h.key, h.sessionID, launchRecord{Agent: "codex"}, "/w", t0)
 
 	if r := waitRow(t, h.key, func(r Row) bool { return r.Title == "From the agent" }); r.Title != "From the agent" {
 		t.Fatalf("row before rename: %+v", r)
@@ -100,8 +100,8 @@ func TestDeleteStoredSessionRemovesFileAndEntry(t *testing.T) {
 	reset()
 	t.Cleanup(resetHistory)
 
-	rememberSession("codex", "s-gone", "/w", "", t0)
-	bindTranscript("acp:9", "s-gone", "codex", "/w", t0)
+	rememberSession(launchRecord{Agent: "codex"}, "s-gone", "/w", "", t0)
+	bindTranscript("acp:9", "s-gone", launchRecord{Agent: "codex"}, "/w", t0)
 	appendPrompt("acp:9", "hello", t0)
 	waitForTranscriptWrites()
 	path := transcriptPath("s-gone")
@@ -126,7 +126,7 @@ func TestDeleteStoredSessionRemovesFileAndEntry(t *testing.T) {
 	h := &hosted{key: "acp:10", agent: "codex", sessionID: "s-live", cwd: "/w"}
 	h.register()
 	t.Cleanup(func() { h.retire() })
-	bindTranscript(h.key, "s-live", "codex", "/w", t0)
+	bindTranscript(h.key, "s-live", launchRecord{Agent: "codex"}, "/w", t0)
 	waitForTranscriptWrites()
 	if err := deleteStoredSession("s-live"); err == nil {
 		t.Error("a live session was deleted")
@@ -147,7 +147,7 @@ func TestPruneStoredSessionsByAge(t *testing.T) {
 
 	now := time.Now()
 	mk := func(key, sid string, at time.Time) {
-		bindTranscript(key, sid, "codex", "/w", at)
+		bindTranscript(key, sid, launchRecord{Agent: "codex"}, "/w", at)
 		writeSummary(sid, transcriptSummary{EndedMS: at.UnixMilli(), EndReason: "ended", AtMS: at.UnixMilli()})
 	}
 	mk("acp:a", "old", now.Add(-48*time.Hour))

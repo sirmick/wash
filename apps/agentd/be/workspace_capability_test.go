@@ -33,7 +33,7 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 			t.Fatal("unverified adapter accepted", version)
 		}
 	}
-	if _, err = startHostedCapability("codex", t.TempDir(), nil, workspaceLaunch{capability: "reviewer", member: true}); err == nil {
+	if _, err = startHostedCapability("codex", t.TempDir(), nil, sessionLaunch{capability: "reviewer", member: true}); err == nil {
 		t.Fatal("unsupported adapter launched")
 	}
 	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))

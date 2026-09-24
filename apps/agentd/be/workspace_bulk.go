@@ -234,6 +234,14 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			if _, err := s.Setup(h.sessionID, h.agent, h.cwd, p.Workspace.Name, root, nil); err != nil {
 				return nil, err
 			}
+			// Resuming the orchestrator reads its launch settings like any
+			// member's, and must come back through the connection it runs on.
+			if err := s.Mutate(h.sessionID, true, func(_ *swarm.Workspace, lead *swarm.Member) error {
+				lead.LaunchSettings = &swarm.AgentProfile{Provider: h.agent, Connection: h.connection}
+				return nil
+			}); err != nil {
+				return nil, err
+			}
 		} else {
 			if p.Expected != nil && *p.Expected != current.Revision {
 				return nil, errors.New("workspace revision conflict; read current state")

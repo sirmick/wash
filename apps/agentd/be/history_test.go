@@ -17,15 +17,15 @@ func resetHistory() {
 // The list is "what could I put back", most recent first.
 func TestRememberSessionOrdersMostRecentFirst(t *testing.T) {
 	resetHistory()
-	rememberSession("claude", "s-1", "/home/mick/wash", "", t0)
-	rememberSession("claude", "s-2", "/home/mick/other", "", t0.Add(time.Minute))
-	rememberSession("codex", "s-3", "/tmp", "", t0.Add(2*time.Minute))
+	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/home/mick/wash", "", t0)
+	rememberSession(launchRecord{Agent: "claude"}, "s-2", "/home/mick/other", "", t0.Add(time.Minute))
+	rememberSession(launchRecord{Agent: "codex"}, "s-3", "/tmp", "", t0.Add(2*time.Minute))
 
 	if got := []string{history[0].SessionID, history[1].SessionID, history[2].SessionID}; got[0] != "s-3" {
 		t.Errorf("order = %v, want s-3 first", got)
 	}
 	// Touching an older session moves it back to the front.
-	rememberSession("claude", "s-1", "/home/mick/wash", "", t0.Add(3*time.Minute))
+	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/home/mick/wash", "", t0.Add(3*time.Minute))
 	if history[0].SessionID != "s-1" {
 		t.Errorf("touched session did not move to front: %+v", history)
 	}
@@ -38,16 +38,16 @@ func TestRememberSessionOrdersMostRecentFirst(t *testing.T) {
 // file dirty, or the service would write on every tick.
 func TestRememberSessionReportsRealChangesOnly(t *testing.T) {
 	resetHistory()
-	if !rememberSession("claude", "s-1", "/w", "", t0) {
+	if !rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w", "", t0) {
 		t.Error("a new session is a change")
 	}
-	if rememberSession("claude", "s-1", "/w", "", t0.Add(15*time.Second)) {
+	if rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w", "", t0.Add(15*time.Second)) {
 		t.Error("a keepalive reported a change")
 	}
-	if !rememberSession("claude", "s-1", "/w/other", "", t0.Add(30*time.Second)) {
+	if !rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w/other", "", t0.Add(30*time.Second)) {
 		t.Error("a moved directory is a change")
 	}
-	if rememberSession("", "", "/w", "", t0) {
+	if rememberSession(launchRecord{Agent: ""}, "", "/w", "", t0) {
 		t.Error("a session with no id was recorded")
 	}
 }
@@ -55,7 +55,7 @@ func TestRememberSessionReportsRealChangesOnly(t *testing.T) {
 func TestHistoryCapped(t *testing.T) {
 	resetHistory()
 	for i := 0; i < historyCap+10; i++ {
-		rememberSession("claude", "s-"+itoa(uint64(i)), "/w", "", t0.Add(time.Duration(i)*time.Second))
+		rememberSession(launchRecord{Agent: "claude"}, "s-"+itoa(uint64(i)), "/w", "", t0.Add(time.Duration(i)*time.Second))
 	}
 	if len(history) != historyCap {
 		t.Errorf("history holds %d, cap is %d", len(history), historyCap)
@@ -71,8 +71,8 @@ func TestHistoryCapped(t *testing.T) {
 func TestPublishHistoryMarksLiveSessions(t *testing.T) {
 	reset()
 	resetHistory()
-	rememberSession("claude", "live-1", "/w", "", t0)
-	rememberSession("claude", "dead-1", "/w", "", t0.Add(-time.Hour))
+	rememberSession(launchRecord{Agent: "claude"}, "live-1", "/w", "", t0)
+	rememberSession(launchRecord{Agent: "claude"}, "dead-1", "/w", "", t0.Add(-time.Hour))
 	put("i-1:1", Row{Key: "i-1:1", Agent: "claude", State: "working", SessionID: "live-1"}, t0, t0)
 
 	got := publishHistory()
@@ -93,8 +93,8 @@ func TestHistoryRoundTripsThroughDisk(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
 	resetHistory()
-	rememberSession("claude", "s-1", "/home/mick/wash", "", t0)
-	rememberSession("codex", "s-2", "/tmp", "", t0.Add(time.Minute))
+	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/home/mick/wash", "", t0)
+	rememberSession(launchRecord{Agent: "codex"}, "s-2", "/tmp", "", t0.Add(time.Minute))
 	saveHistory()
 
 	path := filepath.Join(dir, "wash", "agent-sessions.json")
@@ -132,7 +132,7 @@ func TestFlushHistoryDebounces(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
 	resetHistory()
-	rememberSession("claude", "s-1", "/w", "", t0)
+	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w", "", t0)
 	historyDirty = true
 	historySaved = time.Now()
 
@@ -261,7 +261,7 @@ func TestResumeResolvesFromTheStoreWhenHistoryMisses(t *testing.T) {
 	t.Cleanup(func() { history = nil })
 
 	proj := t.TempDir()
-	bindTranscript("acp:old", "old-sess", "claude", proj, time.Unix(1_700_000_000, 0))
+	bindTranscript("acp:old", "old-sess", launchRecord{Agent: "claude"}, proj, time.Unix(1_700_000_000, 0))
 	waitForTranscriptWrites()
 
 	got, ok := resolveResumeTarget("old-sess")

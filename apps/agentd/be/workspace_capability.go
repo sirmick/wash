@@ -101,7 +101,7 @@ func coordinationPermission(tc acp.ToolCall) bool {
 }
 
 // savedWorkspaceLaunch is what a reopened session was launched as.
-func savedWorkspaceLaunch(session string) workspaceLaunch {
+func savedWorkspaceLaunch(session string) sessionLaunch {
 	if workspaces != nil {
 		for _, w := range workspaces.store.Snapshot().Workspaces {
 			for _, m := range w.Members {
@@ -111,13 +111,14 @@ func savedWorkspaceLaunch(session string) workspaceLaunch {
 			}
 		}
 	}
-	return workspaceLaunch{}
+	return sessionLaunch{}
 }
 
 // memberLaunch is how member m of w is (re)started.
-func memberLaunch(w swarm.Workspace, m swarm.Member) workspaceLaunch {
-	l := workspaceLaunch{member: m.ID != w.Lead && m.State != "ended"}
+func memberLaunch(w swarm.Workspace, m swarm.Member) sessionLaunch {
+	l := sessionLaunch{member: m.ID != w.Lead && m.State != "ended"}
 	if m.LaunchSettings != nil {
+		l.connection = m.LaunchSettings.Connection
 		l.capability = m.LaunchSettings.Capability
 		l.noSubagents = m.LaunchSettings.Subagents == "deny"
 	}

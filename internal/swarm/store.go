@@ -31,11 +31,14 @@ type AgentProfile struct {
 	Capability string `json:"capability,omitempty"`
 	// Approval "auto" launches the member with host auto-approval on; ""
 	// and "ask" leave every unmatched tool call to the human.
-	Approval string            `json:"approval,omitempty"`
-	Provider string            `json:"provider"`
-	Model    string            `json:"model,omitempty"`
-	Thinking string            `json:"thinking,omitempty"`
-	Configs  map[string]string `json:"configs,omitempty"`
+	Approval string `json:"approval,omitempty"`
+	Provider string `json:"provider"`
+	// Connection names how the provider is reached ("opencode@openrouter");
+	// empty is the provider direct. agentd owns the list and checks it.
+	Connection string            `json:"connection,omitempty"`
+	Model      string            `json:"model,omitempty"`
+	Thinking   string            `json:"thinking,omitempty"`
+	Configs    map[string]string `json:"configs,omitempty"`
 	// Subagents "deny" removes the provider's own subagent tool, so the
 	// member's work stays in its transcript and the workspace's accounting.
 	// "" and "allow" leave it available.
