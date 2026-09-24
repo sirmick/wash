@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"path"
 	"sort"
@@ -26,12 +27,12 @@ const (
 // the 10-second sweep observes each checkout at most once every 30 seconds.
 const gitCacheTTL = 30 * time.Second
 
-var svc *sdk.StateService[State]
+var svc *sdk.StateService[agentproto.State]
 
 // row is the internal record: the public Row plus the bookkeeping the
 // sweep needs. Only ever touched inside svc.Mutate, which serializes it.
 type row struct {
-	Row
+	agentproto.Row
 	lastSeen time.Time
 	// stateSince is when the row entered its current state, kept as an
 	// absolute so SinceMS can be recomputed on every push.
@@ -45,7 +46,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-agentd ready instance=%s", instanceID)
 	bus := sdk.NewBus(c)
 	loadHistory()
-	initial := State{Recent: publishHistory(), HasDefaultPrompt: loadDefaultPrompt() != ""}
+	initial := agentproto.State{Version: agentproto.Version, Recent: publishHistory(), HasDefaultPrompt: loadDefaultPrompt() != ""}
 	refreshLaunchers(&initial)
 	svc = sdk.NewStateService(bus, initial)
 	controllerConn = c
@@ -137,7 +138,7 @@ func sweepLoop(c *sdk.Conn) {
 			now := time.Now()
 			var wantHold string
 			gitDirs := map[string]struct{}{}
-			mutateStateIf(func(s *State) bool {
+			mutateStateIf(func(s *agentproto.State) bool {
 				changed := false
 				for key, r := range rows {
 					if r.Cwd != "" {
@@ -194,8 +195,8 @@ func sweepLoop(c *sdk.Conn) {
 // Copy-on-write: StateService.Snapshot is a shallow copy, so the slice
 // handed out must be freshly built rather than mutated in place (the
 // race-gate rule from [[wash race gate]]).
-func publish(now time.Time) []Row {
-	out := make([]Row, 0, len(rows))
+func publish(now time.Time) []agentproto.Row {
+	out := make([]agentproto.Row, 0, len(rows))
 	for _, r := range rows {
 		pub := r.Row
 		pub.SinceMS = elapsedMS(r.stateSince, now)
@@ -212,7 +213,7 @@ func publish(now time.Time) []Row {
 // is blocked), then working, then idle-ish, then stale. Ties break on the
 // longest-waiting first, so the agent that has been stuck for five
 // minutes outranks the one that just asked.
-func sortRows(out []Row) {
+func sortRows(out []agentproto.Row) {
 	sort.SliceStable(out, func(i, j int) bool {
 		pi, pj := statePriority(out[i].State), statePriority(out[j].State)
 		if pi != pj {

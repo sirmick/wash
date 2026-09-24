@@ -28,6 +28,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,7 +131,7 @@ func saveDefaultPrompt(text string) error {
 // file directly, and the launcher then claims a prompt that isn't there
 // (or hides one that is) until agentd restarts. Re-reading a bounded file
 // every sweep is cheaper than that lie.
-func refreshDefaultPrompt(s *State) bool {
+func refreshDefaultPrompt(s *agentproto.State) bool {
 	has := loadDefaultPrompt() != ""
 	if has == s.HasDefaultPrompt {
 		return false

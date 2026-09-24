@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"maps"
 	"slices"
@@ -147,45 +148,19 @@ func resolveTier(pol agentpolicy.Policy, stack, tier string) (swarm.AgentProfile
 	return t, nil
 }
 
-// StackView is a stack as the launcher shows it.
-type StackView struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	// Available is every tier startable here; Note says why not.
-	Available bool       `json:"available"`
-	Note      string     `json:"note,omitempty"`
-	Tiers     []TierView `json:"tiers,omitempty"`
-}
-
-// TierView is one tier as the launcher shows it.
-type TierView struct {
-	Tier       string `json:"tier"`
-	Adapter    string `json:"adapter"`
-	Connection string `json:"connection,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Thinking   string `json:"thinking,omitempty"`
-	Capability string `json:"capability,omitempty"`
-	// ReadOnly is set on the review tier: "enforced" where the adapter's
-	// tools are restricted (Claude Code's reviewer capability), otherwise
-	// "instruction" — the reviewer is asked not to write, and could.
-	ReadOnly  string `json:"read_only,omitempty"`
-	Available bool   `json:"available"`
-	Note      string `json:"note,omitempty"`
-}
-
 // publishStacks is every stack with what this box can start, sorted by key
 // (anthropic, openai, openrouter, then the user's own).
-func publishStacks(pol agentpolicy.Policy, keys map[string]string) []StackView {
+func publishStacks(pol agentpolicy.Policy, keys map[string]string) []agentproto.StackView {
 	stacks, bad := loadStacks(pol)
 	ids := make([]string, 0, len(stacks))
 	for id := range stacks {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	out := make([]StackView, 0, len(ids))
+	out := make([]agentproto.StackView, 0, len(ids))
 	for _, id := range ids {
 		s := stacks[id]
-		v := StackView{ID: id, Name: s.Name, Available: true}
+		v := agentproto.StackView{ID: id, Name: s.Name, Available: true}
 		if v.Name == "" {
 			v.Name = id
 		}
@@ -196,7 +171,7 @@ func publishStacks(pol agentpolicy.Policy, keys map[string]string) []StackView {
 		}
 		for _, name := range tierNames {
 			t := s.Tiers[name]
-			tv := TierView{Tier: name, Adapter: t.Provider, Connection: t.Connection, Model: t.Model, Thinking: t.Thinking, Capability: t.Capability}
+			tv := agentproto.TierView{Tier: name, Adapter: t.Provider, Connection: t.Connection, Model: t.Model, Thinking: t.Thinking, Capability: t.Capability}
 			if name == "review" {
 				tv.ReadOnly = "instruction"
 				if t.Capability == "reviewer" {

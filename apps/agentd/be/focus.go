@@ -19,6 +19,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 
 	"github.com/sirmick/wash/pkg/sdk"
@@ -40,7 +41,7 @@ type focusReq struct {
 // Only a session still hosted gets one: a key for one that has gone would
 // buy a dead click, where an unkeyed toast still opens the Agent app with
 // the question visible in its roster pane.
-func askKey(a Ask) string {
+func askKey(a agentproto.Ask) string {
 	if lookupHosted(a.RowKey) == nil {
 		return ""
 	}
@@ -49,7 +50,7 @@ func askKey(a Ask) string {
 
 // askToastBody is what the toast says under the title. The question
 // itself, in the same words the roster row uses.
-func askToastBody(a Ask) string {
+func askToastBody(a agentproto.Ask) string {
 	if a.Subject == "" {
 		return a.Tool
 	}
@@ -59,7 +60,7 @@ func askToastBody(a Ask) string {
 // installAskToasts wires the ask queue's notify seam to this connection.
 // Called once, from onReady.
 func installAskToasts(c *sdk.Conn) {
-	setNotifyAsk(func(a Ask) {
+	setNotifyAsk(func(a agentproto.Ask) {
 		title := "Agent needs you"
 		if a.Agent != "" {
 			title = a.Agent + " needs you"

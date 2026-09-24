@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +14,9 @@ import (
 func TestApplyGitPublishesOnlyWhenBranchOrDirtyChanges(t *testing.T) {
 	oldRows, oldSvc := rows, svc
 	rows = map[string]*row{
-		"acp:1": {Row: Row{Key: "acp:1", Cwd: "/work", Branch: "main", Dirty: false}},
+		"acp:1": {Row: agentproto.Row{Key: "acp:1", Cwd: "/work", Branch: "main", Dirty: false}},
 	}
-	svc = new(sdk.StateService[State]) // applyGit uses the test mutation seam below
+	svc = new(sdk.StateService[agentproto.State]) // applyGit uses the test mutation seam below
 	pushes := countingState(t)
 	t.Cleanup(func() { rows, svc = oldRows, oldSvc })
 

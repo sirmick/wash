@@ -16,6 +16,7 @@ import {
   Menu,
   MenuItem,
   accentColor,
+  agentproto,
   applyScheme,
   defineWashApp,
   getPack,
@@ -23,7 +24,7 @@ import {
   washAssetUrl,
 } from '@wash/ui';
 import { PrivWidget, PrivUnlockOverlay } from '@wash/ui';
-import type { Pack, PrivReq, PrivUnlockState, RosterAsk, RosterRow } from '@wash/ui';
+import type { Pack, PrivReq, PrivUnlockState } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
 import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
@@ -51,7 +52,6 @@ import {
   rectIsLaid,
   sameKeys,
   stepSelection,
-  type AgentRecent,
   type AgentRecentAction,
   type PaletteEntry,
   type PointerSample,
@@ -396,14 +396,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // (docs/AGENT_TERM.md §7), forwarded by the session BE as agent.state.
   // Rows arrive pre-sorted (needs-input first); we only anchor each row's
   // elapsed clock locally, the way the terminal's own status line does.
-  const [agentRows, setAgentRows] = createSignal<RosterRow[]>([]);
+  const [agentRows, setAgentRows] = createSignal<agentproto.Row[]>([]);
   // Pending permission questions (docs/AGENT_TERM.md §12) ride the same
   // roster push. An agent blocked on a human is the one thing in the
   // sidebar worth opening the section for on its own.
-  const [agentAsks, setAgentAsks] = createSignal<RosterAsk[]>([]);
+  const [agentAsks, setAgentAsks] = createSignal<agentproto.Ask[]>([]);
+  const [agentProtocolError, setAgentProtocolError] = createSignal('');
   // agentd's session history (State.recent), newest first — the start
   // menu's Agent flyout. Same push as the roster.
-  const [agentRecent, setAgentRecent] = createSignal<AgentRecent[]>([]);
+  const [agentRecent, setAgentRecent] = createSignal<agentproto.Session[]>([]);
 
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
   // master volume), forwarded by the session BE as audio.state.
@@ -647,7 +648,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const playRecent = (e: RecentEntry) => {
     window.wash.sendAppMsg(props.instance, { kind: 'recent.play', app_id: e.app_id, name: e.name ?? '' });
   };
-  const openAgentRecent = (s: AgentRecent, action: AgentRecentAction) => {
+  const openAgentRecent = (s: agentproto.Session, action: AgentRecentAction) => {
     window.wash.sendAppMsg(props.instance, {
       kind: 'agent_open',
       action,
@@ -1182,14 +1183,19 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           // arrival (since_ms is elapsed at push time, so no cross-clock
           // comparison), and auto-expand when an agent first wants the
           // human — the one case worth pulling the section open.
-          const state = data.state as unknown as {
-            rows?: RosterRow[];
-            asks?: RosterAsk[];
-            recent?: AgentRecent[];
-          };
+          const state = data.state as unknown as agentproto.State | undefined;
+          // A protocol this desktop does not know is refused, visibly,
+          // rather than rendered half-right (docs/AGENT_PROTOCOL.md).
+          if (state && state.version !== agentproto.AGENT_PROTOCOL_VERSION) {
+            setAgentProtocolError(`Agent service protocol ${state.version} is not one this desktop knows (${agentproto.AGENT_PROTOCOL_VERSION}).`);
+            setAgentRows([]);
+            setAgentAsks([]);
+            return;
+          }
+          setAgentProtocolError('');
           setAgentRecent(Array.isArray(state?.recent) ? state.recent : []);
-          const next = (state?.rows ?? []) as RosterRow[];
-          const asks = (state?.asks ?? []) as RosterAsk[];
+          const next = (state?.rows ?? []) as agentproto.Row[];
+          const asks = (state?.asks ?? []) as agentproto.Ask[];
           const hadAsks = agentAsks().length > 0;
           setAgentAsks(asks);
           if (asks.length > 0 && !hadAsks) autoExpandSection('agents');
@@ -1669,6 +1675,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               on a human is the thing this rail exists to surface.
               agent_answer still routes through our own BE, because a
               shell-originated send carries no router-attested From. */}
+          <Show when={agentProtocolError()}>
+            <div data-testid="rail-agent-protocol-error" style={{ color: tokens.fgDanger, font: tokens.type.textSm, padding: '4px 8px' }}>
+              {agentProtocolError()}
+            </div>
+          </Show>
           <AgentAsks
             asks={agentAsks}
             onAnswer={(ask, decision, remember) =>

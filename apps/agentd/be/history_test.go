@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"encoding/json"
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,10 +74,10 @@ func TestPublishHistoryMarksLiveSessions(t *testing.T) {
 	resetHistory()
 	rememberSession(launchRecord{Agent: "claude"}, "live-1", "/w", "", t0)
 	rememberSession(launchRecord{Agent: "claude"}, "dead-1", "/w", "", t0.Add(-time.Hour))
-	put("i-1:1", Row{Key: "i-1:1", Agent: "claude", State: "working", SessionID: "live-1"}, t0, t0)
+	put("i-1:1", agentproto.Row{Key: "i-1:1", Agent: "claude", State: "working", SessionID: "live-1"}, t0, t0)
 
 	got := publishHistory()
-	byID := map[string]Session{}
+	byID := map[string]agentproto.Session{}
 	for _, s := range got {
 		byID[s.SessionID] = s
 	}
@@ -146,7 +147,7 @@ func TestFlushHistoryDebounces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("not flushed past the window: %v", err)
 	}
-	var out []Session
+	var out []agentproto.Session
 	if err := json.Unmarshal(data, &out); err != nil || len(out) != 1 {
 		t.Errorf("written file = %s (%v)", data, err)
 	}
@@ -159,7 +160,7 @@ func TestFlushHistoryDebounces(t *testing.T) {
 // serve both History views or they drift apart again — the menu hiding
 // what you wanted, the panel offering to duplicate what you had.
 func TestRosterIndexSeparatesLiveFromDetached(t *testing.T) {
-	idx := rosterIndex([]Row{
+	idx := rosterIndex([]agentproto.Row{
 		{Key: "acp:1", SessionID: "s-attached"},
 		{Key: "acp:2", SessionID: "s-detached", Detached: true},
 		{Key: "acp:3", SessionID: ""}, // a row with no agent session id yet
@@ -189,16 +190,16 @@ func TestRosterIndexSeparatesLiveFromDetached(t *testing.T) {
 // publishHistory is the menu's half of that predicate.
 func TestPublishHistoryMarksDetached(t *testing.T) {
 	reset()
-	history = []Session{
+	history = []agentproto.Session{
 		{SessionID: "s-gone", Agent: "codex", LastSeen: t0.Unix()},
 		{SessionID: "s-detached", Agent: "claude", LastSeen: t0.Unix()},
 		{SessionID: "s-attached", Agent: "claude", LastSeen: t0.Unix()},
 	}
 	t.Cleanup(func() { history = nil })
-	rows["acp:2"] = &row{Row: Row{Key: "acp:2", SessionID: "s-detached", Detached: true}}
-	rows["acp:3"] = &row{Row: Row{Key: "acp:3", SessionID: "s-attached"}}
+	rows["acp:2"] = &row{Row: agentproto.Row{Key: "acp:2", SessionID: "s-detached", Detached: true}}
+	rows["acp:3"] = &row{Row: agentproto.Row{Key: "acp:3", SessionID: "s-attached"}}
 
-	byID := map[string]Session{}
+	byID := map[string]agentproto.Session{}
 	for _, s := range publishHistory() {
 		byID[s.SessionID] = s
 	}
@@ -220,7 +221,7 @@ func TestRecentPublishCapIsSmallerThanTheStore(t *testing.T) {
 	t.Cleanup(func() { history = nil })
 	history = nil
 	for i := 0; i < historyCap; i++ {
-		history = append(history, Session{SessionID: "s-" + itoa(uint64(i)), LastSeen: t0.Unix() - int64(i)})
+		history = append(history, agentproto.Session{SessionID: "s-" + itoa(uint64(i)), LastSeen: t0.Unix() - int64(i)})
 	}
 	if got := len(publishHistory()); got != recentPublishCap {
 		t.Errorf("published %d entries, want %d — Recent goes to every subscriber on every mutate", got, recentPublishCap)
@@ -235,7 +236,7 @@ func TestRecentPublishCapIsSmallerThanTheStore(t *testing.T) {
 // it, and History must offer to RESUME it rather than "go to" a window
 // on a dead session.
 func TestRosterIndexTreatsAnExitedRowAsNotLive(t *testing.T) {
-	idx := rosterIndex([]Row{
+	idx := rosterIndex([]agentproto.Row{
 		{Key: "acp:1", SessionID: "alive", State: "working"},
 		{Key: "acp:2", SessionID: "dead", State: "failed", Reason: "exited"},
 		{Key: "acp:3", SessionID: "errored", State: "failed", Reason: "error"},
@@ -285,7 +286,7 @@ func TestResumeResolvesFromTheStoreWhenHistoryMisses(t *testing.T) {
 
 	// The in-memory entry wins when present — it may carry a cwd the
 	// session moved to after the header was written.
-	history = []Session{{SessionID: "old-sess", Agent: "codex", Cwd: "/elsewhere"}}
+	history = []agentproto.Session{{SessionID: "old-sess", Agent: "codex", Cwd: "/elsewhere"}}
 	got, _ = resolveResumeTarget("old-sess")
 	if got.Agent != "codex" || got.Cwd != "/elsewhere" {
 		t.Errorf("history entry did not take precedence: %+v", got)

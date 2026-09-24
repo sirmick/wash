@@ -139,7 +139,7 @@ test('sidebar width is keyboard resizable, bounded and remembered', async () => 
 test('QA opens in the main panel, refreshes live and approval controls address the selected teammate', async () => {
  const f=frame();f.workspace!.qa=[{id:'q1',package:'K5',title:'Wakeup bound',assignee:'lead',state:'open',blocking:true,revision:1}];f.qa_markdown='# Workspace QA\n\n## K5 · q1 — Wakeup bound\n\nAwaiting architect.';
  f.workspace!.qa_document={path:'/data/project/QA.md',title:'Project QA'};
- f.preview={member_id:'lead',events:[],asks:[{id:'approval-1',tool:'Read',subject:'workspace_get',age_ms:0}]};
+ f.preview={member_id:'lead',events:[],asks:[{id:'approval-1',agent:'claude',row_key:'acp:1',tool:'Read',subject:'workspace_get',age_ms:0}]};
  const [value,setValue]=createSignal(f);const onAction=vi.fn(),onAnswer=vi.fn();
  render(() => <WorkspaceLayout frame={value()} onAction={onAction} onAnswer={onAnswer}>Conversation</WorkspaceLayout>);
  await fireEvent.click(screen.getByTestId('workspace-question-q1'));
@@ -162,7 +162,7 @@ test('QA opens in the main panel, refreshes live and approval controls address t
 });
 
 test('attention shows unselected teammate approvals, owner decisions and save failures before the plan', async () => {
- const f=frame();f.approvals=[{id:'pending',member_id:'lead',tool:'Read',subject:'notes',age_ms:0}];
+ const f=frame();f.approvals=[{id:'pending',agent:'claude',row_key:'acp:1',member_id:'lead',tool:'Read',subject:'notes',age_ms:0}];
  f.workspace!.messages=[{id:'decision',sender:'lead',recipient:'human',type:'decision_request',body:'Choose?',delivery:'recorded'}];
  f.qa_document_status={state:'error',error:'disk full'};
  const [value,setValue]=createSignal(f);const onAction=vi.fn();

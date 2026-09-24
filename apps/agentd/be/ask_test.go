@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func resetAsks() {
 
 func addAsk(id, rowKey, tool string, asked time.Time) *pending {
 	p := &pending{
-		Ask:   Ask{ID: id, RowKey: rowKey, Tool: tool},
+		Ask:   agentproto.Ask{ID: id, RowKey: rowKey, Tool: tool},
 		asked: asked,
 		reply: func(string, string) error { return nil },
 	}
@@ -34,12 +35,12 @@ func addAsk(id, rowKey, tool string, asked time.Time) *pending {
 func withState(t *testing.T, subs int) {
 	t.Helper()
 	oldSubs, oldMutate := stateSubscribers, mutateStateIf
-	var st State
+	var st agentproto.State
 	var mu sync.Mutex
 	stateSubscribers = func() int { return subs }
 	// Stubbing the one seam covers mutateState too, which is defined in
 	// terms of it.
-	mutateStateIf = func(fn func(*State) bool) {
+	mutateStateIf = func(fn func(*agentproto.State) bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		fn(&st)
@@ -115,7 +116,7 @@ func TestNormalizeAnswer(t *testing.T) {
 func TestAsksAndRowsCoexist(t *testing.T) {
 	reset()
 	resetAsks()
-	put("i-1:1", Row{Key: "i-1:1", Agent: "claude", State: "working"}, t0, t0)
+	put("i-1:1", agentproto.Row{Key: "i-1:1", Agent: "claude", State: "working"}, t0, t0)
 	addAsk("a", "i-1:1", "Bash", t0.Add(-time.Second))
 
 	rows := publish(t0)
@@ -236,11 +237,11 @@ func TestAnsweredAskStopsItsTimer(t *testing.T) {
 func withVaryingState(t *testing.T, subs int) func(int) {
 	t.Helper()
 	oldSubs, oldMutate := stateSubscribers, mutateStateIf
-	var st State
+	var st agentproto.State
 	var mu sync.Mutex
 	n := subs
 	stateSubscribers = func() int { mu.Lock(); defer mu.Unlock(); return n }
-	mutateStateIf = func(fn func(*State) bool) {
+	mutateStateIf = func(fn func(*agentproto.State) bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		fn(&st)

@@ -4,11 +4,12 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { Connections, type KeyResult, type KeyView } from './Connections.tsx';
+import type { agentproto } from '@wash/ui';
+import { Connections, type KeyResult } from './Connections.tsx';
 
 afterEach(cleanup);
 
-const mount = (keys: KeyView[], results: Record<string, KeyResult> = {}) => {
+const mount = (keys: agentproto.KeyView[], results: Record<string, KeyResult> = {}) => {
   const saved: [string, string][] = [];
   const tested: [string, string][] = [];
   const r = render(() => (
@@ -17,8 +18,8 @@ const mount = (keys: KeyView[], results: Record<string, KeyResult> = {}) => {
   return { ...r, saved, tested };
 };
 
-const unset: KeyView = { id: 'openrouter', name: 'OpenRouter API key', set: false, testable: true };
-const stored: KeyView = { ...unset, set: true, hint: 'wxyz' };
+const unset: agentproto.KeyView = { id: 'openrouter', name: 'OpenRouter API key', set: false, testable: true };
+const stored: agentproto.KeyView = { ...unset, set: true, hint: 'wxyz' };
 
 test('the field is masked, and an unset key says so', () => {
   const { getByTestId, queryByTestId } = mount([unset]);

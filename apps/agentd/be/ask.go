@@ -17,6 +17,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"strings"
 	"sync/atomic"
@@ -96,42 +97,10 @@ const maxPendingPerRow = 3
 // producer supplies its own route at enqueue time (docs/AGENT_APP.md §4).
 type replyFn func(decision, why string) error
 
-// Ask is one question waiting for a human. It rides the roster's own
-// state push, so the sidebar needs no second subscription.
-type Ask struct {
-	// ID is agentd's handle for this question; the answer names it.
-	ID string `json:"id"`
-	// Agent / Tool / Subject are what the human reads: "claude wants to
-	// run `git push origin main`".
-	Agent   string `json:"agent"`
-	Tool    string `json:"tool"`
-	Subject string `json:"subject,omitempty"`
-	Cwd     string `json:"cwd,omitempty"`
-	Dir     string `json:"dir,omitempty"`
-	// SuggestedRule is what "Always allow" would write. Shown ON the
-	// button — what you clicked is what gets saved.
-	SuggestedRule string `json:"suggested_rule,omitempty"`
-	// RuleCwd is the directory that rule would be confined to, when it
-	// would be (agentpolicy.RuleScope): a Bash rule from one project must
-	// not buy the same command in every other checkout.
-	RuleCwd string `json:"rule_cwd,omitempty"`
-	// RowKey ties the question to its roster row (same "<instance>:<chan>"
-	// key for terminals; hosted sessions mint their own), so the sidebar
-	// can render it against the right agent.
-	RowKey string `json:"row_key"`
-	// WorkspaceName is set when the asking session is a workspace member,
-	// and is what lets the prompt offer "always, for this workspace"
-	// alongside the global "always". The ID is deliberately NOT sent: the
-	// answer names a scope, never a target (see the answer path).
-	WorkspaceName string `json:"workspace_name,omitempty"`
-	// AgeMS is how long it has been waiting, as of the push.
-	AgeMS int64 `json:"age_ms"`
-}
-
 // pending is the in-flight question plus the bookkeeping needed to answer
 // it. Guarded by svc.Mutate like the roster rows.
 type pending struct {
-	Ask
+	agentproto.Ask
 	// workspaceID is held here rather than on Ask because Ask is what the
 	// desktop sees. A client names the SCOPE it chose ("workspace"); the
 	// workspace it resolves to is this, decided when the question was
@@ -181,9 +150,9 @@ var (
 	// nothing a subscriber can see moved, and no snapshot is sent. See
 	// StateService.MutateIf — a narrating agent hits this several times a
 	// second, and the row it writes is usually the row already there.
-	mutateStateIf = func(fn func(*State) bool) {
+	mutateStateIf = func(fn func(*agentproto.State) bool) {
 		changed := false
-		svc.MutateIf(func(s *State) bool {
+		svc.MutateIf(func(s *agentproto.State) bool {
 			changed = fn(s)
 			return changed
 		})
@@ -195,8 +164,8 @@ var (
 	// seam above rather than beside it: two independent hooks are two
 	// things a test must remember to stub, and the one it forgets fails
 	// as a nil-pointer panic inside the SDK.
-	mutateState = func(fn func(*State)) {
-		mutateStateIf(func(s *State) bool { fn(s); return true })
+	mutateState = func(fn func(*agentproto.State)) {
+		mutateStateIf(func(s *agentproto.State) bool { fn(s); return true })
 	}
 	// policyRuleCount is how many rules the human has taught wash. One
 	// stat per question, the same price the hosted tier already pays to
@@ -222,12 +191,12 @@ var notifyAskFn atomic.Value // func(Ask)
 
 // setNotifyAsk installs the toast hook. Called once from onReady, and by
 // tests.
-func setNotifyAsk(f func(Ask)) { notifyAskFn.Store(f) }
+func setNotifyAsk(f func(agentproto.Ask)) { notifyAskFn.Store(f) }
 
 // notifyAsk fires the hook if one is installed. The default is silence:
 // the queue has to work before, and without, a connection.
-func notifyAsk(a Ask) {
-	if f, ok := notifyAskFn.Load().(func(Ask)); ok && f != nil {
+func notifyAsk(a agentproto.Ask) {
+	if f, ok := notifyAskFn.Load().(func(agentproto.Ask)); ok && f != nil {
 		f(a)
 	}
 }
@@ -250,7 +219,7 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 	// which is the desktop speaking for the person in front of it.
 	sdk.HandleFromVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req answerReq, _ wire.Sender) error {
 		var p *pending
-		mutateState(func(s *State) {
+		mutateState(func(s *agentproto.State) {
 			p = asks[req.ID]
 			if p == nil {
 				return
@@ -328,8 +297,8 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 		soft = askHardTTL
 	}
 	var over bool
-	var queued Ask
-	mutateState(func(s *State) {
+	var queued agentproto.Ask
+	mutateState(func(s *agentproto.State) {
 		if countForRow(spec.RowKey) >= maxPendingPerRow {
 			over = true
 			return
@@ -337,7 +306,7 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 		askSeq++
 		id := "ask-" + itoa(askSeq)
 		p := &pending{
-			Ask: Ask{
+			Ask: agentproto.Ask{
 				ID:            id,
 				Agent:         spec.Agent,
 				Tool:          spec.Tool,
@@ -407,7 +376,7 @@ func expireAsk(id string) {
 	// deadlock (pkg/sdk/stateservice.go). A count one instant stale is
 	// harmless here — the next timer window re-reads it.
 	watching := stateSubscribers()
-	mutateState(func(s *State) {
+	mutateState(func(s *agentproto.State) {
 		p = asks[id]
 		if p == nil {
 			return
@@ -450,7 +419,7 @@ func expireAsk(id string) {
 func cancelAsksFor(rowKey, why string) int {
 	var dropped []*pending
 	now := time.Now()
-	mutateStateIf(func(s *State) bool {
+	mutateStateIf(func(s *agentproto.State) bool {
 		for id, p := range asks {
 			if p.RowKey != rowKey {
 				continue
@@ -478,8 +447,8 @@ func cancelAsksFor(rowKey, why string) int {
 // publishAsks renders the pending list for the sidebar, oldest first —
 // the person waiting longest is the one to answer first. Called inside
 // Mutate; builds a fresh slice (copy-on-write, per the race gate).
-func publishAsks(now time.Time) []Ask {
-	out := make([]Ask, 0, len(asks))
+func publishAsks(now time.Time) []agentproto.Ask {
+	out := make([]agentproto.Ask, 0, len(asks))
 	for _, p := range asks {
 		a := p.Ask
 		a.AgeMS = elapsedMS(p.asked, now)

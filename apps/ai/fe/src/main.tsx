@@ -9,8 +9,8 @@ import { WorkspaceLayout } from './WorkspaceLayout';
 import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
 import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultStack, defaultCwd } from './default-stack.ts';
-import { Launcher, startMessage, DEFAULT_TIER, type Adapter, type LaunchForm, type StackView } from './Launcher.tsx';
-import { Connections, type KeyResult, type KeyView } from './Connections.tsx';
+import { Launcher, startMessage, DEFAULT_TIER, type LaunchForm } from './Launcher.tsx';
+import { Connections, type KeyResult } from './Connections.tsx';
 import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
 import { isManagerElement } from './role.ts';
@@ -18,44 +18,14 @@ import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
   Overlay, Select, Splitter,
-  applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
+  agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
-  AgentAsk, AgentEvent, AgentStatus, RosterAsk, RosterRow,
+  AgentEvent, AgentStatus,
 } from '@wash/ui';
 
-interface RecentSession {
-  session_id: string;
-  agent: string;
-  /** the stack it was started from — what the launcher defaults to */
-  stack?: string;
-  /** full working directory — what the launcher refills (N5b) */
-  cwd?: string;
-  /** short label for display ("wash"), not a path to start in */
-  dir?: string;
-  /** the agent's own one-line name for what the session was about — or
-   *  the person's, when they renamed it (agentd puts theirs here) */
-  title?: string;
-  last_seen: number;
-  /** running right now — in the roster above, not something to resume */
-  live?: boolean;
-  /** running, but with no window pointing at it: reattach, do not resume */
-  detached?: boolean;
-  /** the roster key a reattach names; present only while it has a row */
-  row_key?: string;
-}
-
-interface RosterState {
-  rows?: RosterRow[];
-  asks?: RosterAsk[];
-  adapters?: Adapter[];
-  stacks?: StackView[];
-  /** connection keys: set or not, never a value */
-  keys?: KeyView[];
-  recent?: RecentSession[];
-  /** a stored default prompt exists — the TEXT is fetched on demand */
-  has_default_prompt?: boolean;
-}
+/** The roster as this window holds it: empty until agentd's first push. */
+type RosterView = Partial<agentproto.State>;
 
 interface PersistedState {
   session_key?: string;
@@ -83,8 +53,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // One replay request in flight at a time; the snapshot clears it.
   let resyncPending = false;
   const [sessionKey, setSessionKey] = createSignal('');
-  const [roster, setRoster] = createSignal<RosterState>({});
+  const [roster, setRoster] = createSignal<RosterView>({});
   const [error, setError] = createSignal('');
+  const [protocolError, setProtocolError] = createSignal('');
   const [managerSplit, setManagerSplit] = createSignal(68);
   let managerBody!: HTMLDivElement;
 
@@ -315,8 +286,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         }
         break;
 
-      case 'roster':
-        setRoster((m.state as RosterState) ?? {});
+      case 'roster': {
+        // A protocol this window does not know is refused, visibly, rather
+        // than rendered half-right (docs/AGENT_PROTOCOL.md, Version).
+        const state = m.state as agentproto.State | undefined;
+        if (state && state.version !== agentproto.AGENT_PROTOCOL_VERSION) {
+          setProtocolError(`The agent service speaks protocol version ${state.version}; this window knows version ${agentproto.AGENT_PROTOCOL_VERSION}. Update Wash on both ends and reopen this window.`);
+          break;
+        }
+        setProtocolError('');
+        setRoster(state ?? {});
         // History is always on screen in the manager, so it must follow
         // the sessions agentd remembers: one started, ended, renamed or
         // detached changes what a row says and which verb it offers.
@@ -346,6 +325,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           }
         }
         break;
+      }
 
       case 'key_saved':
         setKeyResult(String(m.name ?? ''), m.error ? { ok: false, detail: String(m.error) } : { ok: true, detail: 'Saved.' });
@@ -441,7 +421,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const adapters = () => roster().adapters ?? [];
   const row = createMemo(() => (roster().rows ?? []).find((r) => r.key === sessionKey()));
-  const asks = createMemo<AgentAsk[]>(() =>
+  const asks = createMemo<agentproto.Ask[]>(() =>
     (roster().asks ?? []).filter((a) => a.row_key === sessionKey()),
   );
   // Questions on a row this window is not showing. The session pane above
@@ -450,7 +430,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // this window can answer them perfectly well. The gap is purely that the
   // roster pane can be closed, and a closed pane says nothing about what
   // is waiting behind it.
-  const offRowAsks = createMemo<AgentAsk[]>(() =>
+  const offRowAsks = createMemo<agentproto.Ask[]>(() =>
     (roster().asks ?? []).filter((a) => a.row_key !== sessionKey()),
   );
   const status = createMemo<AgentStatus>(() => {
@@ -1157,7 +1137,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </>
   );
 
-  return <Show when={role() === 'manager'} fallback={sessionView}>{managerView}</Show>;
+  return (
+    <Show
+      when={!protocolError()}
+      fallback={<div data-testid="ai-protocol-error" style={{ padding: `${tokens.spaceXl}px`, color: tokens.fgDanger, font: tokens.type.textMd }}>{protocolError()}</div>}
+    >
+      <Show when={role() === 'manager'} fallback={sessionView}>{managerView}</Show>
+    </Show>
+  );
 };
 
 defineWashApp('wash-app-ai', App);

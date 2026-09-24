@@ -212,6 +212,26 @@ check-interactive:
 check-names:
 	@./scripts/check-undefined-names.sh
 
+# gen-agent-protocol: the agentd protocol is written once, as Go structs in
+# internal/agentproto. This writes what is generated from them: the
+# TypeScript frontends import (web/lib/src/agent-protocol.gen.ts) and the
+# message reference in docs/AGENT_PROTOCOL.md. check-agent-protocol fails
+# when either is stale, so a changed message cannot ship with an old copy.
+AGENT_PROTO_TS  := web/lib/src/agent-protocol.gen.ts
+AGENT_PROTO_DOC := docs/AGENT_PROTOCOL.md
+.PHONY: gen-agent-protocol check-agent-protocol
+gen-agent-protocol:
+	@go run ./internal/agentproto/gen -ts $(AGENT_PROTO_TS) -doc $(AGENT_PROTO_DOC)
+check-agent-protocol:
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	 cp $(AGENT_PROTO_DOC) "$$tmp/doc.md"; \
+	 go run ./internal/agentproto/gen -ts "$$tmp/gen.ts" -doc "$$tmp/doc.md" || exit 1; \
+	 if ! cmp -s "$$tmp/gen.ts" $(AGENT_PROTO_TS) || ! cmp -s "$$tmp/doc.md" $(AGENT_PROTO_DOC); then \
+	   echo "check-agent-protocol: $(AGENT_PROTO_TS) or $(AGENT_PROTO_DOC) is stale vs internal/agentproto — run 'make gen-agent-protocol'"; \
+	   exit 1; \
+	 fi; \
+	 echo "check-agent-protocol: generated TypeScript and doc match internal/agentproto"
+
 # check-versions: the version single-source guard. The root VERSION file is the
 # master — the Makefile stamps it into every binary via -ldflags, and packaging
 # (run_matrix.sh / make-source-tarball.sh) now defaults its package version to
@@ -1092,6 +1112,7 @@ unit-test: test-app fe-unit component
 	$(MAKE) -s check-design
 	$(MAKE) -s check-interactive
 	$(MAKE) -s check-names
+	$(MAKE) -s check-agent-protocol
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 

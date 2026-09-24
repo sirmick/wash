@@ -3,6 +3,7 @@ package agentd
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"sync"
 	"time"
@@ -108,11 +109,11 @@ func releaseController(instance string) string {
 	return key
 }
 
-func sessionView(state State, key string) State {
-	out := State{}
+func sessionView(state agentproto.State, key string) agentproto.State {
+	out := agentproto.State{Version: agentproto.Version}
 	for _, r := range state.Rows {
 		if r.Key == key {
-			out.Rows = []Row{r}
+			out.Rows = []agentproto.Row{r}
 			break
 		}
 	}
@@ -124,9 +125,9 @@ func sessionView(state State, key string) State {
 	return out
 }
 
-func managerView(state State) State {
+func managerView(state agentproto.State) agentproto.State {
 	out := state
-	out.Rows = make([]Row, len(state.Rows))
+	out.Rows = make([]agentproto.Row, len(state.Rows))
 	teams := rowWorkspaces()
 	for i, row := range state.Rows {
 		row.Configs = nil
@@ -142,8 +143,8 @@ func managerView(state State) State {
 }
 
 // rowWorkspaces maps each live workspace session to its place in the team.
-func rowWorkspaces() map[string]*RowWorkspace {
-	out := map[string]*RowWorkspace{}
+func rowWorkspaces() map[string]*agentproto.RowWorkspace {
+	out := map[string]*agentproto.RowWorkspace{}
 	if workspaces == nil {
 		return out
 	}
@@ -159,7 +160,7 @@ func rowWorkspaces() map[string]*RowWorkspace {
 			if m.Session == "" || m.State == "ended" {
 				continue
 			}
-			out[m.Session] = &RowWorkspace{
+			out[m.Session] = &agentproto.RowWorkspace{
 				ID: w.ID, Name: w.Name, LeadSession: lead, Orchestrator: m.ID == w.Lead,
 				Member: m.Name, Role: m.Role, Package: m.Package, PackageTitle: w.Packages[m.Package].Title,
 			}
@@ -206,8 +207,8 @@ func controllerCount() int {
 var (
 	viewMu   sync.Mutex
 	viewSent = map[string][]byte{}
-	viewSend = func(instance string, msg map[string]any) {
-		_ = controllerConn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, msg)
+	viewSend = func(instance string, msg any) {
+		_ = agentproto.Send(controllerConn, wire.Recipient{InstanceID: instance}, msg)
 	}
 )
 
@@ -220,12 +221,12 @@ var (
 // session's bytes differ and the comparison suppressed almost nothing. The
 // FE anchors elapsed time on arrival and counts locally, so a view that
 // differs only in since_ms has nothing new to show.
-func sendViewLocked(instance, kind, key string, state State, force bool) {
-	msg := map[string]any{"kind": kind, "state": state}
+func sendViewLocked(instance, key string, state agentproto.State, force bool) {
+	var msg any = agentproto.ManagerState{State: state}
 	if key != "" {
-		msg["key"] = key
+		msg = agentproto.SessionState{Key: key, State: state}
 	}
-	b, err := json.Marshal(viewSignature(kind, key, state))
+	b, err := json.Marshal(viewSignature(key, state))
 	if err == nil && !force && bytes.Equal(viewSent[instance], b) {
 		return
 	}
@@ -235,17 +236,17 @@ func sendViewLocked(instance, kind, key string, state State, force bool) {
 	viewSend(instance, msg)
 }
 
-func viewSignature(kind, key string, state State) any {
-	rows := make([]Row, len(state.Rows))
+func viewSignature(key string, state agentproto.State) any {
+	rows := make([]agentproto.Row, len(state.Rows))
 	for i, r := range state.Rows {
 		r.SinceMS = 0
 		rows[i] = r
 	}
 	state.Rows = rows
 	return struct {
-		Kind, Key string
-		State     State
-	}{kind, key, state}
+		Key   string
+		State agentproto.State
+	}{key, state}
 }
 
 // sendView force-sends the view build returns. build runs UNDER viewMu:
@@ -253,13 +254,13 @@ func viewSignature(kind, key string, state State) any {
 // concurrent publish delivered first — a reloading controller then showed
 // a permission question as gone, and nothing corrected it until the row
 // next changed.
-func sendView(instance, kind, key string, build func(State) State) {
+func sendView(instance, key string, build func(agentproto.State) agentproto.State) {
 	if svc == nil {
 		return
 	}
 	viewMu.Lock()
 	defer viewMu.Unlock()
-	sendViewLocked(instance, kind, key, build(svc.Snapshot()), true)
+	sendViewLocked(instance, key, build(svc.Snapshot()), true)
 }
 
 func forgetView(instance string) {
@@ -288,11 +289,11 @@ func publishControllerViews() {
 	if len(managers) > 0 {
 		view := managerView(snap)
 		for _, instance := range managers {
-			sendViewLocked(instance, "manager_state", "", view, false)
+			sendViewLocked(instance, "", view, false)
 		}
 	}
 	for key, instance := range targets {
-		sendViewLocked(instance, "session_state", key, sessionView(snap, key), false)
+		sendViewLocked(instance, key, sessionView(snap, key), false)
 	}
 }
 
@@ -350,7 +351,7 @@ func registerControllerHandlers(bus *sdk.Bus) {
 		controllerState.Lock()
 		controllerState.managers[from.InstanceID] = struct{}{}
 		controllerState.Unlock()
-		sendView(from.InstanceID, "manager_state", "", managerView)
+		sendView(from.InstanceID, "", managerView)
 		return nil
 	})
 	sdk.HandleFromVoid(bus, "session_claim", func(conn *sdk.Conn, _ string, req transReq, from wire.Sender) error {
@@ -375,7 +376,7 @@ func registerControllerHandlers(bus *sdk.Bus) {
 		if workspaces != nil {
 			go workspaces.publish(true)
 		}
-		sendView(from.InstanceID, "session_state", req.Key, func(s State) State { return sessionView(s, req.Key) })
+		sendView(from.InstanceID, req.Key, func(s agentproto.State) agentproto.State { return sessionView(s, req.Key) })
 		return nil
 	})
 }

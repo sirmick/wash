@@ -3,6 +3,8 @@
 // apps) in with the app catalog. No DOM, no Solid — `node --test`-able.
 
 /** One recent record as the session BE ships it (launcher.state). */
+import type { agentproto } from '@wash/ui';
+
 export interface RecentEntry {
   /** the file or folder; empty for a name entry */
   path: string;
@@ -154,34 +156,16 @@ export const AGENTS_APP_ID = 'com.wash.agents';
  * search reach them); a flyout is for the last few. */
 export const RECENT_FLYOUT_CAP = 8;
 
-/** One agent session as agentd's roster push lists it (State.recent). */
-export interface AgentRecent {
-  session_id: string;
-  agent?: string;
-  cwd?: string;
-  dir?: string;
-  title?: string;
-  live?: boolean;
-  detached?: boolean;
-  row_key?: string;
-}
-
 export type AgentRecentAction = 'resume' | 'reattach' | 'focus' | 'none';
 
 /** The roster fields that say whether a session is running right now. */
-export interface AgentLiveRow {
-  key: string;
-  session_id?: string;
-  detached?: boolean;
-  state?: string;
-  reason?: string;
-}
+type LiveRow = Pick<agentproto.Row, 'key'> & Partial<Pick<agentproto.Row, 'session_id' | 'detached' | 'state' | 'reason'>>;
 
 /** A row whose adapter exited lingers on the roster (failed/exited, until
  * agentd's sweep drops it) so the failure is visible, but nothing is
  * running behind it. agentd's rosterIndex (apps/agentd/be/history.go)
  * skips these; so must the start menu, or it offers to focus a corpse. */
-export function rowIsDead(r: AgentLiveRow): boolean {
+export function rowIsDead(r: LiveRow): boolean {
   return r.state === 'failed' && r.reason === 'exited';
 }
 
@@ -192,7 +176,7 @@ export function rowIsDead(r: AgentLiveRow): boolean {
  * the verb. A session with no row is left as the history describes it; one
  * whose only rows are dead is not running, whatever the history last said
  * (it was published while the adapter was still up). */
-export function withLiveRows(agents: ReadonlyArray<AgentRecent>, rows: ReadonlyArray<AgentLiveRow>): AgentRecent[] {
+export function withLiveRows(agents: ReadonlyArray<agentproto.Session>, rows: ReadonlyArray<LiveRow>): agentproto.Session[] {
   return agents.map((s) => {
     const mine = rows.filter((r) => r.session_id && r.session_id === s.session_id);
     const row = mine.find((r) => !rowIsDead(r));
@@ -211,7 +195,7 @@ export function withLiveRows(agents: ReadonlyArray<AgentRecent>, rows: ReadonlyA
  * agent is 'restart' there — a fresh session in its folder, a choice the
  * History panel explains and this menu has no verb for — so it is left out
  * here rather than sent to a resume that cannot work. */
-export function agentRecentAction(s: AgentRecent): AgentRecentAction {
+export function agentRecentAction(s: agentproto.Session): AgentRecentAction {
   if (s.detached && s.row_key) return 'reattach';
   if (s.live && s.row_key) return 'focus';
   if (s.live) return 'none';
@@ -220,7 +204,7 @@ export function agentRecentAction(s: AgentRecent): AgentRecentAction {
 }
 
 /** The agent's own name for the session, else which agent and where. */
-export function agentRecentLabel(s: AgentRecent): string {
+export function agentRecentLabel(s: agentproto.Session): string {
   if (s.title) return s.title;
   const who = s.agent || 'agent';
   return s.dir ? `${who} · ${s.dir}` : who;
@@ -229,7 +213,7 @@ export function agentRecentLabel(s: AgentRecent): string {
 export type RecentItem =
   | { kind: 'path'; key: string; label: string; detail: string; icon: string; entry: RecentEntry }
   | { kind: 'station'; key: string; label: string; icon: string; entry: RecentEntry }
-  | { kind: 'agent'; key: string; label: string; detail: string; icon: string; session: AgentRecent; action: AgentRecentAction };
+  | { kind: 'agent'; key: string; label: string; detail: string; icon: string; session: agentproto.Session; action: AgentRecentAction };
 
 /** sameKeys is the equality for a keyed list's id memo: a push that
  * rebuilds every object but keeps the ids must not re-run the <For> over
@@ -271,9 +255,9 @@ const pathItem = (e: RecentEntry, icon: string): RecentItem => ({
  * no named row. Newest first, capped per group. */
 export function recentGroups(
   recent: ReadonlyArray<RecentEntry>,
-  agents: ReadonlyArray<AgentRecent>,
+  agents: ReadonlyArray<agentproto.Session>,
   appName: (appID: string) => string | undefined,
-  rows: ReadonlyArray<AgentLiveRow> = [],
+  rows: ReadonlyArray<LiveRow> = [],
   cap = RECENT_FLYOUT_CAP,
 ): RecentGroup[] {
   const newest = [...recent].sort((a, b) => b.at - a.at);

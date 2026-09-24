@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"strings"
 	"testing"
 	"time"
@@ -19,30 +20,30 @@ func TestHoldReasonSpeaksForRunningAgents(t *testing.T) {
 	}{
 		{
 			name:  "quiet roster lets the session go",
-			rows:  map[string]*row{"acp:1": {Row: Row{State: "done"}}},
+			rows:  map[string]*row{"acp:1": {Row: agentproto.Row{State: "done"}}},
 			empty: true,
 		},
 		{
 			name: "a working agent holds the session",
-			rows: map[string]*row{"acp:1": {Row: Row{State: "working"}}},
+			rows: map[string]*row{"acp:1": {Row: agentproto.Row{State: "working"}}},
 			want: "1 agent(s) working",
 		},
 		{
 			name: "an agent blocked on an absent human holds it too",
-			rows: map[string]*row{"acp:1": {Row: Row{State: "needs-input"}, stateSince: t0}},
+			rows: map[string]*row{"acp:1": {Row: agentproto.Row{State: "needs-input"}, stateSince: t0}},
 			want: "1 agent(s) waiting on you",
 		},
 		{
 			name: "both are reported, because both are reasons",
 			rows: map[string]*row{
-				"acp:1": {Row: Row{State: "working"}},
-				"acp:2": {Row: Row{State: "needs-input"}, stateSince: t0},
+				"acp:1": {Row: agentproto.Row{State: "working"}},
+				"acp:2": {Row: agentproto.Row{State: "needs-input"}, stateSince: t0},
 			},
 			want: "1 agent(s) working, 1 waiting on you",
 		},
 		{
 			name:  "a stale row is not a reason to stay up",
-			rows:  map[string]*row{"acp:1": {Row: Row{State: "stale"}}},
+			rows:  map[string]*row{"acp:1": {Row: agentproto.Row{State: "stale"}}},
 			empty: true,
 		},
 	}
@@ -71,7 +72,7 @@ func TestHoldReasonSpeaksForRunningAgents(t *testing.T) {
 // ceiling rather than a rule.
 func TestNeedsInputHoldExpires(t *testing.T) {
 	reset()
-	rows["acp:1"] = &row{Row: Row{State: "needs-input"}, stateSince: t0}
+	rows["acp:1"] = &row{Row: agentproto.Row{State: "needs-input"}, stateSince: t0}
 
 	if got := holdReason(t0.Add(needsInputHold - time.Minute)); !strings.Contains(got, "waiting on you") {
 		t.Errorf("inside the ceiling holdReason = %q, want a hold", got)

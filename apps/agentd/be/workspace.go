@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"io"
 	"log"
 	"maps"
@@ -959,7 +960,7 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (any, error)
 		if len(events) > 300 {
 			events = events[len(events)-300:]
 		}
-		pending := []Ask{}
+		pending := []agentproto.Ask{}
 		if svc != nil {
 			for _, ask := range svc.Snapshot().Asks {
 				if ask.RowKey == target.key {

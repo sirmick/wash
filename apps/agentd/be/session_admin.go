@@ -26,6 +26,7 @@ package agentd
 
 import (
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"time"
@@ -93,7 +94,7 @@ func renameSession(key, sessionID, title string, now time.Time) (string, error) 
 	if sessionID == "" {
 		return "", fmt.Errorf("no session to rename")
 	}
-	mutateState(func(s *State) {
+	mutateState(func(s *agentproto.State) {
 		if setUserTitle(sessionID, title) {
 			historyDirty = true
 		}

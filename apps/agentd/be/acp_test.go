@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/sirmick/wash/internal/agentproto"
 	"io"
 	"os"
 	"path/filepath"
@@ -256,7 +257,7 @@ func TestUnmatchedRequestReachesTheSharedQueue(t *testing.T) {
 	var p *pending
 	deadline := time.Now().Add(2 * time.Second)
 	for p == nil && time.Now().Before(deadline) {
-		mutateState(func(*State) {
+		mutateState(func(*agentproto.State) {
 			for _, q := range asks {
 				if q.RowKey == "acp:1" {
 					p = q
@@ -276,7 +277,7 @@ func TestUnmatchedRequestReachesTheSharedQueue(t *testing.T) {
 
 	// The human clicks Allow: the queue calls the producer's reply route,
 	// which is this session's channel rather than a wire address.
-	mutateState(func(*State) { delete(asks, p.ID) })
+	mutateState(func(*agentproto.State) { delete(asks, p.ID) })
 	if p.timer != nil {
 		p.timer.Stop()
 	}
@@ -358,7 +359,7 @@ func TestHostedSessionAsksEvenWithNoPolicyFile(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		var found bool
-		mutateState(func(*State) {
+		mutateState(func(*agentproto.State) {
 			for _, q := range asks {
 				if q.RowKey == "acp:1" {
 					found = true
@@ -393,7 +394,7 @@ func TestSweepLeavesHostedSessionsAlone(t *testing.T) {
 
 	// A row that has not been touched for well past the drop window.
 	stale := t0.Add(-dropAfter - time.Minute)
-	put("acp:1", Row{Key: "acp:1", Agent: "codex", State: "done"}, stale, stale)
+	put("acp:1", agentproto.Row{Key: "acp:1", Agent: "codex", State: "done"}, stale, stale)
 
 	if lookupHosted("acp:1") == nil {
 		t.Fatal("the session is not in the registry — the guard cannot fire")
@@ -594,7 +595,7 @@ func TestRetireEndsEverything(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		var found bool
-		mutateState(func(*State) { found = countForRow(h.key) > 0 })
+		mutateState(func(*agentproto.State) { found = countForRow(h.key) > 0 })
 		if found {
 			break
 		}
@@ -630,7 +631,7 @@ func TestRetireEndsEverything(t *testing.T) {
 	// The question is gone — from the queue and from the published state
 	// the rail renders.
 	var pendingForRow, published int
-	mutateState(func(s *State) {
+	mutateState(func(s *agentproto.State) {
 		pendingForRow = countForRow(h.key)
 		published = len(s.Asks)
 	})
@@ -706,7 +707,7 @@ func TestAdapterExitFailsTheRowAndCancelsAsks(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		var n int
-		mutateState(func(*State) { n = countForRow(h.key) })
+		mutateState(func(*agentproto.State) { n = countForRow(h.key) })
 		if n > 0 {
 			break
 		}
@@ -729,7 +730,7 @@ func TestAdapterExitFailsTheRowAndCancelsAsks(t *testing.T) {
 	}
 	var state, reason string
 	var asksLeft, published int
-	mutateState(func(s *State) {
+	mutateState(func(s *agentproto.State) {
 		if r := rows[h.key]; r != nil {
 			state, reason = r.State, r.Reason
 		}
@@ -917,14 +918,14 @@ func (a *scriptedAdapter) end(p promptSeen, stop string) {
 	_, _ = io.WriteString(a.out, `{"jsonrpc":"2.0","id":`+p.id.String()+`,"result":{"stopReason":"`+stop+`"}}`+"\n")
 }
 
-func waitRow(t *testing.T, key string, ok func(Row) bool) Row {
+func waitRow(t *testing.T, key string, ok func(agentproto.Row) bool) agentproto.Row {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
-	var last Row
+	var last agentproto.Row
 	for time.Now().Before(deadline) {
-		var r Row
+		var r agentproto.Row
 		var have bool
-		mutateState(func(*State) {
+		mutateState(func(*agentproto.State) {
 			if rr := rows[key]; rr != nil {
 				r, have = rr.Row, true
 			}
@@ -960,7 +961,7 @@ func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
 	if p1.text != "one" {
 		t.Fatalf("first prompt = %q", p1.text)
 	}
-	waitRow(t, h.key, func(r Row) bool { return r.State == "working" })
+	waitRow(t, h.key, func(r agentproto.Row) bool { return r.State == "working" })
 
 	// Mid-turn: queued, said so on the row, and NOT on the wire.
 	if !h.submitPrompt(turn{text: "two"}) {
@@ -969,7 +970,7 @@ func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
 	if !h.submitPrompt(turn{text: "three"}) {
 		t.Fatal("a second mid-turn prompt was not queued")
 	}
-	waitRow(t, h.key, func(r Row) bool { return r.Queued == 2 && r.State == "working" })
+	waitRow(t, h.key, func(r agentproto.Row) bool { return r.Queued == 2 && r.State == "working" })
 	a.none(t, 50*time.Millisecond)
 
 	// The turn ends: the queue drains in order, one turn at a time, with
@@ -979,7 +980,7 @@ func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
 	if p2.text != "two" {
 		t.Fatalf("second turn = %q, want the first queued prompt", p2.text)
 	}
-	waitRow(t, h.key, func(r Row) bool { return r.Queued == 1 && r.State == "working" })
+	waitRow(t, h.key, func(r agentproto.Row) bool { return r.Queued == 1 && r.State == "working" })
 	a.none(t, 50*time.Millisecond)
 	a.end(p2, "end_turn")
 	p3 := a.next(t)
@@ -987,7 +988,7 @@ func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
 		t.Fatalf("third turn = %q", p3.text)
 	}
 	a.end(p3, "end_turn")
-	waitRow(t, h.key, func(r Row) bool { return r.State == "done" && r.Queued == 0 })
+	waitRow(t, h.key, func(r agentproto.Row) bool { return r.State == "done" && r.Queued == 0 })
 	waitIdle(t, h)
 
 	// The transcript records each prompt when it was SENT, in order — not
@@ -1018,10 +1019,10 @@ func TestStopDropsTheQueueAndSaysWhat(t *testing.T) {
 	h.submitPrompt(turn{text: "first"})
 	p1 := a.next(t)
 	h.submitPrompt(turn{text: "never sent"})
-	waitRow(t, h.key, func(r Row) bool { return r.Queued == 1 })
+	waitRow(t, h.key, func(r agentproto.Row) bool { return r.Queued == 1 })
 
 	a.end(p1, "cancelled")
-	waitRow(t, h.key, func(r Row) bool { return r.State == "done" && r.Reason == "cancelled" && r.Queued == 0 })
+	waitRow(t, h.key, func(r agentproto.Row) bool { return r.State == "done" && r.Reason == "cancelled" && r.Queued == 0 })
 	waitIdle(t, h)
 	a.none(t, 80*time.Millisecond)
 
@@ -1050,7 +1051,7 @@ func TestStopDropsTheQueueAndSaysWhat(t *testing.T) {
 	// turn still open when the pipes close would fail on a goroutine the
 	// test no longer owns and write into the real (nil) state service.
 	a.end(p, "end_turn")
-	waitRow(t, h.key, func(r Row) bool { return r.State == "done" && r.Reason == "end_turn" })
+	waitRow(t, h.key, func(r agentproto.Row) bool { return r.State == "done" && r.Reason == "end_turn" })
 	waitIdle(t, h)
 }
 

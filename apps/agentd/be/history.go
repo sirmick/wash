@@ -15,6 +15,7 @@ package agentd
 
 import (
 	"encoding/json"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"path/filepath"
@@ -49,51 +50,6 @@ const recentPublishCap = 15
 // directory) writes immediately.
 const historyFlush = 30 * time.Second
 
-// Session is one remembered agent session.
-type Session struct {
-	SessionID string `json:"session_id"`
-	Agent     string `json:"agent"`
-	// Connection is what a resume must launch through again; Stack and
-	// Tier are what the launcher defaults to next time (launchRecord).
-	Connection string `json:"connection,omitempty"`
-	Stack      string `json:"stack,omitempty"`
-	Tier       string `json:"tier,omitempty"`
-	Cwd        string `json:"cwd,omitempty"`
-	Dir        string `json:"dir,omitempty"`
-	// Title is what this session was ABOUT, in the agent's own words —
-	// it names its sessions on session_info_update once it works out what
-	// the work is. "codex · mick" tells you nothing a week later; "Fix
-	// the reconnect banner race" does.
-	Title string `json:"title,omitempty"`
-	// UserTitle is the name a PERSON gave the session (session_admin.go).
-	// When set it is what publishHistory puts in Title; the agent's own
-	// title stays here underneath so clearing the user's falls back to it.
-	UserTitle string `json:"user_title,omitempty"`
-	// LastSeen is unix seconds — an absolute the FE renders as "2h ago",
-	// and the only field a keepalive touches.
-	LastSeen int64 `json:"last_seen"`
-	// Live is set on the way out to the FE: a session whose agent is
-	// running right now is in the roster above, so the Recent list greys
-	// it rather than offering to resume what is already here.
-	Live bool `json:"live,omitempty"`
-	// Detached is a live session with no window pointing at it.
-	//
-	// Live and REACHABLE are not the same thing, and treating them as one
-	// is what made the History menu useless in exactly the case you open
-	// it for. agent_detach sets the flag and closes the window but never
-	// retires the row, so a detached session is still "live" — and the
-	// menu, which hides live sessions to avoid offering to duplicate a
-	// running one, hid the one thing you were trying to get back.
-	//
-	// A detached session is not something to resume. It is something to
-	// reattach to, which is a different verb with a different outcome.
-	Detached bool `json:"detached,omitempty"`
-	// RowKey is the roster key this session is running as, present only
-	// while it has a row. Reattach is key-addressed, not session-id
-	// addressed, so the menu needs this to offer the verb at all.
-	RowKey string `json:"row_key,omitempty"`
-}
-
 // rosterState is what the roster knows about one stored session id.
 type rosterState struct {
 	Live     bool
@@ -111,7 +67,7 @@ type rosterState struct {
 // and the panel did not, so one of them hid sessions you wanted and the
 // other offered to duplicate ones you already had. The presentation may
 // differ; the predicate may not.
-func rosterIndex(rs []Row) map[string]rosterState {
+func rosterIndex(rs []agentproto.Row) map[string]rosterState {
 	out := map[string]rosterState{}
 	for _, r := range rs {
 		if r.SessionID == "" {
@@ -130,7 +86,7 @@ func rosterIndex(rs []Row) map[string]rosterState {
 }
 
 var (
-	history      []Session
+	history      []agentproto.Session
 	historyDirty bool
 	historySaved time.Time
 )
@@ -191,7 +147,7 @@ func rememberSession(launch launchRecord, sessionID, cwd, title string, now time
 		history[0] = s
 		return changed
 	}
-	history = append([]Session{{
+	history = append([]agentproto.Session{{
 		SessionID:  sessionID,
 		Agent:      agent,
 		Connection: launch.Connection,
@@ -212,13 +168,13 @@ func rememberSession(launch launchRecord, sessionID, cwd, title string, now time
 // about each entry: running-and-attached (offering to resume it would be
 // offering to duplicate it), running-but-detached (offer to reattach), or
 // gone (offer to resume).
-func publishHistory() []Session {
-	live := make([]Row, 0, len(rows))
+func publishHistory() []agentproto.Session {
+	live := make([]agentproto.Row, 0, len(rows))
 	for _, r := range rows {
 		live = append(live, r.Row)
 	}
 	idx := rosterIndex(live)
-	out := make([]Session, 0, len(history))
+	out := make([]agentproto.Session, 0, len(history))
 	for _, s := range history {
 		st := idx[s.SessionID]
 		s.Live, s.Detached, s.RowKey = st.Live, st.Detached, st.RowKey
@@ -317,7 +273,7 @@ func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
 // fallback — and a failed resume that forgets the slice entry no longer
 // leaves a permanently dead row, because the next click resolves from
 // the file again.
-func resolveResumeTarget(sessionID string) (Session, bool) {
+func resolveResumeTarget(sessionID string) (agentproto.Session, bool) {
 	for i := range history {
 		if history[i].SessionID == sessionID {
 			s := history[i]
@@ -326,9 +282,9 @@ func resolveResumeTarget(sessionID string) (Session, bool) {
 	}
 	m, ok := readSessionMeta(transcriptPath(sessionID))
 	if !ok || m.SessionID != sessionID {
-		return Session{}, false
+		return agentproto.Session{}, false
 	}
-	return Session{
+	return agentproto.Session{
 		SessionID:  m.SessionID,
 		Agent:      m.Agent,
 		Connection: m.Connection,
@@ -437,7 +393,7 @@ func forgetSession(sessionID string) {
 	if !changed {
 		return
 	}
-	mutateState(func(s *State) { s.Recent = publishHistory() })
+	mutateState(func(s *agentproto.State) { s.Recent = publishHistory() })
 	saveHistory()
 }
 
@@ -469,7 +425,7 @@ func loadHistory() {
 	if err != nil {
 		return
 	}
-	var out []Session
+	var out []agentproto.Session
 	if err := json.Unmarshal(data, &out); err != nil {
 		log.Printf("agentd: history unreadable, starting empty: %v", err)
 		return

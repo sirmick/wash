@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"path/filepath"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func resetControllersForTest() {
 }
 
 func TestManagerViewOmitsSessionOnlyCollections(t *testing.T) {
-	state := State{Rows: []Row{{Key: "k", Configs: []Config{{ID: "model"}}, Commands: []Command{{Name: "review"}}, Modes: []Mode{{ID: "plan"}}, Roots: []string{"/work"}}}}
+	state := agentproto.State{Rows: []agentproto.Row{{Key: "k", Configs: []agentproto.Config{{ID: "model"}}, Commands: []agentproto.Command{{Name: "review"}}, Modes: []agentproto.Mode{{ID: "plan"}}, Roots: []string{"/work"}}}}
 	got := managerView(state)
 	if len(got.Rows) != 1 || len(got.Rows[0].Configs) != 0 || len(got.Rows[0].Commands) != 0 || len(got.Rows[0].Modes) != 0 {
 		t.Fatalf("manager view retained session-only data: %#v", got)
@@ -49,7 +50,7 @@ func TestManagerViewPlacesMembersUnderTheirOrchestrator(t *testing.T) {
 	old := workspaces
 	workspaces = &workspaceService{store: s}
 	defer func() { workspaces = old }()
-	got := managerView(State{Rows: []Row{{Key: "a", SessionID: "lead-s"}, {Key: "b", SessionID: "impl-s"}, {Key: "c", SessionID: "gone-s"}, {Key: "d"}}})
+	got := managerView(agentproto.State{Rows: []agentproto.Row{{Key: "a", SessionID: "lead-s"}, {Key: "b", SessionID: "impl-s"}, {Key: "c", SessionID: "gone-s"}, {Key: "d"}}})
 	lead, impl := got.Rows[0].Workspace, got.Rows[1].Workspace
 	if lead == nil || !lead.Orchestrator || lead.LeadSession != "lead-s" || lead.ID != w.ID {
 		t.Fatalf("orchestrator row: %#v", lead)
@@ -99,11 +100,11 @@ func TestControllerLaunchReservationCoalesces(t *testing.T) {
 }
 
 func TestSessionViewContainsOnlyRequestedSession(t *testing.T) {
-	state := State{
-		Rows:     []Row{{Key: "k1", Title: "one"}, {Key: "k2", Title: "two"}},
-		Asks:     []Ask{{ID: "a1", RowKey: "k1"}, {ID: "a2", RowKey: "k2"}},
-		Recent:   []Session{{SessionID: "history"}},
-		Adapters: []Adapter{{ID: "codex"}},
+	state := agentproto.State{
+		Rows:     []agentproto.Row{{Key: "k1", Title: "one"}, {Key: "k2", Title: "two"}},
+		Asks:     []agentproto.Ask{{ID: "a1", RowKey: "k1"}, {ID: "a2", RowKey: "k2"}},
+		Recent:   []agentproto.Session{{SessionID: "history"}},
+		Adapters: []agentproto.Adapter{{ID: "codex"}},
 	}
 	got := sessionView(state, "k2")
 	if len(got.Rows) != 1 || got.Rows[0].Key != "k2" || len(got.Asks) != 1 || got.Asks[0].ID != "a2" {
@@ -120,7 +121,7 @@ func TestControllerViewsSendOnlyWhatChanged(t *testing.T) {
 	resetControllersForTest()
 	oldSend, oldSvc, oldConn := viewSend, svc, controllerConn
 	sent := map[string]int{}
-	viewSend = func(instance string, _ map[string]any) { sent[instance]++ }
+	viewSend = func(instance string, _ any) { sent[instance]++ }
 	viewMu.Lock()
 	viewSent = map[string][]byte{}
 	viewMu.Unlock()
@@ -134,9 +135,9 @@ func TestControllerViewsSendOnlyWhatChanged(t *testing.T) {
 
 	// A zero service holds state without a bus; MutateIf returning false
 	// writes it without trying to publish.
-	svc = new(sdk.StateService[State])
-	svc.MutateIf(func(s *State) bool {
-		s.Rows = []Row{{Key: "k1", Title: "one"}, {Key: "k2", Title: "two"}}
+	svc = new(sdk.StateService[agentproto.State])
+	svc.MutateIf(func(s *agentproto.State) bool {
+		s.Rows = []agentproto.Row{{Key: "k1", Title: "one"}, {Key: "k2", Title: "two"}}
 		return false
 	})
 	controllerConn = &sdk.Conn{}
@@ -151,8 +152,8 @@ func TestControllerViewsSendOnlyWhatChanged(t *testing.T) {
 	if sent["i1"] != 1 || sent["i2"] != 1 {
 		t.Fatalf("unchanged publish re-sent views: %v", sent)
 	}
-	svc.MutateIf(func(s *State) bool {
-		s.Rows = []Row{{Key: "k1", Title: "one"}, {Key: "k2", Title: "renamed"}}
+	svc.MutateIf(func(s *agentproto.State) bool {
+		s.Rows = []agentproto.Row{{Key: "k1", Title: "one"}, {Key: "k2", Title: "renamed"}}
 		return false
 	})
 	publishControllerViews()
@@ -161,8 +162,8 @@ func TestControllerViewsSendOnlyWhatChanged(t *testing.T) {
 	}
 	// A row's age alone is not news: publish() restamps every row's since_ms
 	// on every rebuild, so ignoring it is what lets the comparison work.
-	svc.MutateIf(func(s *State) bool {
-		s.Rows = []Row{{Key: "k1", Title: "one", SinceMS: 5000}, {Key: "k2", Title: "renamed", SinceMS: 7000}}
+	svc.MutateIf(func(s *agentproto.State) bool {
+		s.Rows = []agentproto.Row{{Key: "k1", Title: "one", SinceMS: 5000}, {Key: "k2", Title: "renamed", SinceMS: 7000}}
 		return false
 	})
 	publishControllerViews()
@@ -170,7 +171,7 @@ func TestControllerViewsSendOnlyWhatChanged(t *testing.T) {
 		t.Fatalf("an age-only change re-sent views: %v", sent)
 	}
 	// A claim or subscribe is a request for the current view and always answers.
-	sendView("i1", "session_state", "k1", func(s State) State { return sessionView(s, "k1") })
+	sendView("i1", "k1", func(s agentproto.State) agentproto.State { return sessionView(s, "k1") })
 	if sent["i1"] != 2 {
 		t.Fatalf("forced view not sent: %v", sent)
 	}

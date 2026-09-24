@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,7 +135,7 @@ func TestDefaultPromptIsNotAppliedToOrdinaryPrompts(t *testing.T) {
 // agentd, which is what refreshDefaultPrompt gives the sweep.
 func TestHandEditedDefaultPromptReachesTheFlag(t *testing.T) {
 	path := withConfigDir(t)
-	var s State
+	var s agentproto.State
 
 	if refreshDefaultPrompt(&s) {
 		t.Error("no file, but the flag moved")
@@ -178,7 +179,7 @@ func TestWhitespaceOnlyDefaultPromptIsNotAdvertised(t *testing.T) {
 	if err := os.WriteFile(path, []byte("\n\t \n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var s State
+	var s agentproto.State
 	if refreshDefaultPrompt(&s) || s.HasDefaultPrompt {
 		t.Error("whitespace is advertised as a default prompt")
 	}

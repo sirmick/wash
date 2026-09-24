@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"encoding/json"
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,7 +151,7 @@ func TestPublishStacksGreysWhatCannotStart(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", dir)
-	views := map[string]StackView{}
+	views := map[string]agentproto.StackView{}
 	for _, v := range publishStacks(agentpolicy.Policy{}, nil) {
 		views[v.ID] = v
 	}
@@ -183,7 +184,7 @@ func TestRefreshLaunchersPushesOnlyChanges(t *testing.T) {
 	old := keyStore
 	keyStore = func() map[string]string { return keys }
 	t.Cleanup(func() { keyStore = old })
-	var s State
+	var s agentproto.State
 	if !refreshLaunchers(&s) || len(s.Stacks) != 3 {
 		t.Fatalf("first refresh: %+v", s.Stacks)
 	}

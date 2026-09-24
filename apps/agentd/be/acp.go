@@ -22,6 +22,7 @@ package agentd
 import (
 	"context"
 	"encoding/json"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"reflect"
 	"strings"
@@ -409,7 +410,7 @@ func (h *hosted) retire() {
 	// lifetime, which on a long-lived box is every transcript it ever saw.
 	releaseTranscript(h.key)
 	now := time.Now()
-	mutateState(func(s *State) {
+	mutateState(func(s *agentproto.State) {
 		delete(rows, h.key)
 		s.Rows = publish(now)
 		s.Recent = publishHistory()
@@ -526,7 +527,7 @@ func (h *hosted) watchExit() {
 	// The history write happens INSIDE the state lock: this goroutine is
 	// not the bus goroutine, and the history slice and its dirty flag are
 	// otherwise only touched from there or under Mutate.
-	mutateState(func(s *State) {
+	mutateState(func(s *agentproto.State) {
 		s.Recent = publishHistory()
 		saveHistory()
 	})
@@ -580,7 +581,7 @@ func (h *hosted) setState(state, reason string) {
 	now := time.Now()
 	var wantGit string
 	var changed bool
-	mutateStateIf(func(s *State) bool {
+	mutateStateIf(func(s *agentproto.State) bool {
 		r := rows[h.key]
 		if r == nil {
 			// A session being ended has had its row deleted by retire;
@@ -685,7 +686,7 @@ func (h *hosted) applyConfigs(in []acp.ConfigOption) {
 // state — used when only the detached flag moved.
 func (h *hosted) republish() {
 	now := time.Now()
-	mutateStateIf(func(s *State) bool {
+	mutateStateIf(func(s *agentproto.State) bool {
 		r := rows[h.key]
 		if r == nil {
 			return false
@@ -734,7 +735,7 @@ func (h *hosted) shownTitle() string {
 // milliseconds. Comparing it would defeat every dedupe — which is also
 // why the elapsed clock is refreshed by the 10s sweep rather than by
 // whatever happens to touch a row next.
-func sameRow(a, b Row) bool {
+func sameRow(a, b agentproto.Row) bool {
 	a.SinceMS, b.SinceMS = 0, 0
 	return reflect.DeepEqual(a, b)
 }
@@ -820,7 +821,7 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 			// Remembered immediately: a title that only reached the
 			// history when the session ended would be missing from
 			// exactly the sessions you most want to find again.
-			mutateState(func(s *State) {
+			mutateState(func(s *agentproto.State) {
 				if rememberSession(h.record(), h.sessionID, h.cwd, h.title, time.Now()) {
 					historyDirty = true
 				}
@@ -1269,7 +1270,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		log.Printf("agentd: default prompt saved bytes=%d", len(stored))
 		// Republish so every window's launcher agrees about whether one
 		// is set — including the window that did not make the change.
-		mutateState(func(s *State) { s.HasDefaultPrompt = stored != "" })
+		mutateState(func(s *agentproto.State) { s.HasDefaultPrompt = stored != "" })
 		if from.InstanceID == "" {
 			return nil
 		}
@@ -1549,28 +1550,28 @@ type configReq struct {
 
 // publicConfigs / publicCommands copy for the wire (copy-on-write: a
 // snapshot may outlive this call).
-func publicConfigs(in []acp.ConfigOption) []Config {
+func publicConfigs(in []acp.ConfigOption) []agentproto.Config {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]Config, 0, len(in))
+	out := make([]agentproto.Config, 0, len(in))
 	for _, o := range in {
-		vals := make([]ConfigValue, 0, len(o.Options))
+		vals := make([]agentproto.ConfigValue, 0, len(o.Options))
 		for _, v := range o.Options {
-			vals = append(vals, ConfigValue{Value: v.Value, Name: v.Name, Description: v.Description})
+			vals = append(vals, agentproto.ConfigValue{Value: v.Value, Name: v.Name, Description: v.Description})
 		}
-		out = append(out, Config{ID: o.ID, Name: o.Name, Description: o.Description, Current: o.CurrentValue, Values: vals})
+		out = append(out, agentproto.Config{ID: o.ID, Name: o.Name, Description: o.Description, Current: o.CurrentValue, Values: vals})
 	}
 	return out
 }
 
-func publicCommands(in []acp.AvailableCommand) []Command {
+func publicCommands(in []acp.AvailableCommand) []agentproto.Command {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]Command, 0, len(in))
+	out := make([]agentproto.Command, 0, len(in))
 	for _, c := range in {
-		out = append(out, Command{Name: c.Name, Description: c.Description})
+		out = append(out, agentproto.Command{Name: c.Name, Description: c.Description})
 	}
 	return out
 }
@@ -1582,13 +1583,13 @@ type modeReq struct {
 
 // publicModes copies the mode list for the wire (copy-on-write: a
 // snapshot may outlive this call).
-func publicModes(in []acp.SessionMode) []Mode {
+func publicModes(in []acp.SessionMode) []agentproto.Mode {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]Mode, 0, len(in))
+	out := make([]agentproto.Mode, 0, len(in))
 	for _, m := range in {
-		out = append(out, Mode{ID: m.ID, Name: m.Name, Description: m.Description})
+		out = append(out, agentproto.Mode{ID: m.ID, Name: m.Name, Description: m.Description})
 	}
 	return out
 }

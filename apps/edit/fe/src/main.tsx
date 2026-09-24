@@ -16,24 +16,10 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Tab, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { InsertedDraft } from '@wash/ui';
-import type { AgentAsk, AgentEvent, AgentStatus, TerminalAPI } from '@wash/ui';
+import type { AgentEvent, AgentStatus, TerminalAPI, agentproto } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
 
 // One roster row as agentd publishes it; only the fields this pane reads.
-interface AgentRow {
-  key: string;
-  agent?: string;
-  state?: string;
-  dir?: string;
-  title?: string;
-  used?: number;
-  size?: number;
-  mode?: string;
-  modes?: { id: string; name: string; description?: string }[];
-  configs?: AgentStatus['configs'];
-  commands?: { name: string; description?: string }[];
-  yolo?: boolean;
-}
 import {
   joinPath, baseName, parentPath,
   createBus,
@@ -420,7 +406,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // outside TermTab so an arriving event does not replace the tab object
   // and remount the pane.
   const [agentEvents, setAgentEvents] = createSignal<Record<string, AgentEvent[]>>({});
-  const [agentRoster, setAgentRoster] = createSignal<{ rows?: AgentRow[]; asks?: AgentAsk[]; adapters?: { id: string; name?: string }[] }>({});
+  const [agentRoster, setAgentRoster] = createSignal<{ rows?: agentproto.Row[]; asks?: agentproto.Ask[]; adapters?: { id: string; name?: string }[] }>({});
   const [agentMenu, setAgentMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [termOpen, setTermOpen] = createSignal(false);
   const [editPct, setEditPct] = createSignal(70);
@@ -1821,7 +1807,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       return;
     }
     if (m.kind === 'agent.state') {
-      setAgentRoster((m.state ?? {}) as { rows?: AgentRow[]; asks?: AgentAsk[] });
+      setAgentRoster((m.state ?? {}) as { rows?: agentproto.Row[]; asks?: agentproto.Ask[] });
       return;
     }
     // Terminal lifecycle messages: term.opened pairs the
@@ -1986,7 +1972,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       commands: r?.commands, yolo: r?.yolo,
     };
   };
-  const agentAsksFor = (key: string): AgentAsk[] =>
+  const agentAsksFor = (key: string): agentproto.Ask[] =>
     (agentRoster().asks ?? []).filter((a) => (a as { row_key?: string }).row_key === key);
 
   const closeTerm = (id: string) => {

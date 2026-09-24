@@ -1,7 +1,7 @@
-import type { RosterRow } from '@wash/ui';
+import type { agentproto } from '@wash/ui';
 
 export interface UsageRosterState {
-  rows?: RosterRow[];
+  rows?: agentproto.Row[] | null;
 }
 
 interface UsagePatchRow {

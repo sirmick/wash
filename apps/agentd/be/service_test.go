@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"testing"
 	"time"
 )
@@ -14,7 +15,7 @@ func reset() {
 }
 
 // put installs a roster row with explicit clocks.
-func put(key string, r Row, lastSeen, stateSince time.Time) {
+func put(key string, r agentproto.Row, lastSeen, stateSince time.Time) {
 	rows[key] = &row{Row: r, lastSeen: lastSeen, stateSince: stateSince}
 }
 
@@ -23,11 +24,11 @@ func put(key string, r Row, lastSeen, stateSince time.Time) {
 // a state the longest wait wins.
 func TestPublishSortsByAttention(t *testing.T) {
 	reset()
-	put("a:1", Row{Key: "a:1", Agent: "claude", State: "working"}, t0, t0.Add(-30*time.Second))
-	put("a:2", Row{Key: "a:2", Agent: "claude", State: "done"}, t0, t0.Add(-5*time.Second))
-	put("a:3", Row{Key: "a:3", Agent: "aider", State: "needs-input"}, t0, t0.Add(-10*time.Second))
-	put("a:4", Row{Key: "a:4", Agent: "codex", State: "needs-input"}, t0, t0.Add(-90*time.Second))
-	put("a:5", Row{Key: "a:5", Agent: "amp", State: "running"}, t0, t0.Add(-time.Second))
+	put("a:1", agentproto.Row{Key: "a:1", Agent: "claude", State: "working"}, t0, t0.Add(-30*time.Second))
+	put("a:2", agentproto.Row{Key: "a:2", Agent: "claude", State: "done"}, t0, t0.Add(-5*time.Second))
+	put("a:3", agentproto.Row{Key: "a:3", Agent: "aider", State: "needs-input"}, t0, t0.Add(-10*time.Second))
+	put("a:4", agentproto.Row{Key: "a:4", Agent: "codex", State: "needs-input"}, t0, t0.Add(-90*time.Second))
+	put("a:5", agentproto.Row{Key: "a:5", Agent: "amp", State: "running"}, t0, t0.Add(-time.Second))
 
 	got := publish(t0)
 	want := []string{"a:4", "a:3", "a:1", "a:5", "a:2"}
@@ -50,13 +51,13 @@ func TestPublishSortsByAttention(t *testing.T) {
 // dropped — "the terminal stopped answering" is information.
 func TestPublishRendersStale(t *testing.T) {
 	reset()
-	put("a:1", Row{Key: "a:1", Agent: "claude", State: "working", Stale: true}, t0, t0.Add(-time.Minute))
+	put("a:1", agentproto.Row{Key: "a:1", Agent: "claude", State: "working", Stale: true}, t0, t0.Add(-time.Minute))
 	got := publish(t0)
 	if len(got) != 1 || got[0].State != "stale" {
 		t.Fatalf("got %+v, want one stale row", got)
 	}
 	// …and it sorts last, behind everything live.
-	put("a:2", Row{Key: "a:2", Agent: "claude", State: "done"}, t0, t0)
+	put("a:2", agentproto.Row{Key: "a:2", Agent: "claude", State: "done"}, t0, t0)
 	got = publish(t0)
 	if got[len(got)-1].Key != "a:1" {
 		t.Errorf("stale row is not last: %+v", got)
@@ -81,7 +82,7 @@ func TestSweepAges(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			reset()
 			now := t0.Add(c.age)
-			put("a:1", Row{Key: "a:1", Agent: "claude", State: "working"}, t0, t0)
+			put("a:1", agentproto.Row{Key: "a:1", Agent: "claude", State: "working"}, t0, t0)
 
 			// The sweep's body, without the ticker/StateService around it.
 			for key, r := range rows {

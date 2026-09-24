@@ -7,17 +7,8 @@
 // only by the owner.
 
 import { For, Show, createSignal, type Component } from 'solid-js';
-import { Button, Input, tokens } from '@wash/ui';
+import { Button, Input, tokens, type agentproto } from '@wash/ui';
 import { labelStyle } from './Launcher.tsx';
-
-export interface KeyView {
-  id: string;
-  name: string;
-  set: boolean;
-  /** a stored key's last four characters */
-  hint?: string;
-  testable?: boolean;
-}
 
 /** The last save or test outcome for one key. */
 export interface KeyResult {
@@ -27,7 +18,7 @@ export interface KeyResult {
 }
 
 export const Connections: Component<{
-  keys: KeyView[];
+  keys: agentproto.KeyView[];
   results: Record<string, KeyResult>;
   onSave: (id: string, value: string) => void;
   onTest: (id: string, value: string) => void;

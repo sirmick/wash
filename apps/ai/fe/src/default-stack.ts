@@ -11,18 +11,13 @@
 // Pure decision kernel on purpose — main.tsx applies it once, so a user who
 // deliberately picks something else is not fought by the next roster push.
 
-export interface StackChoice {
-  id: string;
-  available: boolean;
-}
+/** agentd's `recent` list is newest first. */
+import type { agentproto } from '@wash/ui';
 
-/** One row of agentd's `recent` list; newest first. */
-export interface RecentChoice {
-  stack?: string;
-  cwd?: string;
-}
-
-export function defaultStack(stacks: StackChoice[], recent: RecentChoice[] = []): string {
+export function defaultStack(
+  stacks: Pick<agentproto.StackView, 'id' | 'available'>[],
+  recent: Pick<agentproto.Session, 'stack' | 'cwd'>[] = [],
+): string {
   const usable = stacks.filter((s) => s.available);
   if (usable.length === 0) return '';
   // A stack that can no longer start (its key cleared, its adapter
@@ -39,7 +34,7 @@ export function defaultStack(stacks: StackChoice[], recent: RecentChoice[] = [])
  * last. '' means "leave it empty", which the form renders as Home — the
  * right answer on a machine with no history rather than a guess.
  */
-export function defaultCwd(recent: RecentChoice[] = []): string {
+export function defaultCwd(recent: Pick<agentproto.Session, 'stack' | 'cwd'>[] = []): string {
   for (const r of recent) {
     if (r.cwd) return r.cwd;
   }

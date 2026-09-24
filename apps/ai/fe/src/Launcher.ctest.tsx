@@ -5,17 +5,18 @@
 import { test, expect, afterEach } from 'vitest';
 import { createSignal } from 'solid-js';
 import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { Launcher, launchBlocker, startMessage, type Adapter, type LaunchForm, type StackView } from './Launcher.tsx';
+import type { agentproto } from '@wash/ui';
+import { Launcher, launchBlocker, startMessage, type LaunchForm } from './Launcher.tsx';
 
 afterEach(cleanup);
 
-const adapters: Adapter[] = [
+const adapters: agentproto.Adapter[] = [
   { id: 'codex', name: 'Codex', available: false, note: 'needs codex-acp on PATH' },
   { id: 'claude', name: 'Claude Code', available: true },
   { id: 'opencode', name: 'OpenCode', available: true },
 ];
 
-const tiers = (adapter: string, over: Partial<StackView['tiers']> = [], extra: Record<string, unknown> = {}) =>
+const tiers = (adapter: string, over: Partial<agentproto.StackView['tiers']> = [], extra: Record<string, unknown> = {}) =>
   ['frontier', 'coding', 'review', 'small'].map((tier, i) => ({
     tier,
     adapter,
@@ -24,9 +25,9 @@ const tiers = (adapter: string, over: Partial<StackView['tiers']> = [], extra: R
     ...(tier === 'review' ? { read_only: adapter === 'claude' ? 'enforced' : 'instruction' } : {}),
     ...extra,
     ...(over?.[i] ?? {}),
-  })) as StackView['tiers'];
+  })) as agentproto.StackView['tiers'];
 
-const stacks: StackView[] = [
+const stacks: agentproto.StackView[] = [
   { id: 'anthropic', name: 'All Anthropic', available: true, tiers: tiers('claude') },
   { id: 'openai', name: 'All OpenAI', available: false, note: 'Codex: needs codex-acp on PATH', tiers: tiers('codex', [], { available: false, note: 'Codex: needs codex-acp on PATH' }) },
   {
@@ -35,7 +36,7 @@ const stacks: StackView[] = [
   },
 ];
 
-const mount = (initial: Partial<LaunchForm> = {}, over: { stacks?: StackView[] } = {}) => {
+const mount = (initial: Partial<LaunchForm> = {}, over: { stacks?: agentproto.StackView[] } = {}) => {
   const [form, setForm] = createSignal<LaunchForm>({ stack: 'anthropic', tier: 'frontier', agent: '', model: '', cwd: '', ...initial });
   const started: Record<string, string>[] = [];
   const r = render(() => (

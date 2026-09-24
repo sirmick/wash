@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { RosterRow } from '@wash/ui';
+import type { agentproto } from '@wash/ui';
 import { applyUsagePatch } from './usage-patch.ts';
 
 test('usage patches update only named rows with the latest counters', () => {
-  const a = { key: 'acp:1', used: 1, size: 10 } as RosterRow;
-  const b = { key: 'acp:2', used: 2, size: 20 } as RosterRow;
+  const a = { key: 'acp:1', used: 1, size: 10 } as agentproto.Row;
+  const b = { key: 'acp:2', used: 2, size: 20 } as agentproto.Row;
   const state = { rows: [a, b], recent: ['kept'] };
 
   const next = applyUsagePatch(state, [

@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"sort"
 	"sync"
 	"time"
@@ -47,7 +48,7 @@ func (h *hosted) setUsage(used, size int64) {
 	hostedMu.Unlock()
 
 	now := time.Now()
-	mutateStateIf(func(s *State) bool {
+	mutateStateIf(func(s *agentproto.State) bool {
 		r := rows[h.key]
 		if r == nil {
 			return false

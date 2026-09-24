@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -160,7 +161,7 @@ func TestOutsideEveryRootAsksAndAnAllowLetsItThroughOnce(t *testing.T) {
 
 	// Answer it the way the desktop does: by id, through the queue.
 	p := waitForAsk(t, h.key)
-	mutateState(func(st *State) { delete(asks, p.ID) })
+	mutateState(func(st *agentproto.State) { delete(asks, p.ID) })
 	if err := p.reply(DecisionAllow, ReasonDesktop); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +181,7 @@ func waitForAsk(t *testing.T, rowKey string) *pending {
 	t.Helper()
 	for i := 0; i < 200; i++ {
 		var found *pending
-		mutateState(func(*State) {
+		mutateState(func(*agentproto.State) {
 			for _, p := range asks {
 				if p.RowKey == rowKey {
 					found = p

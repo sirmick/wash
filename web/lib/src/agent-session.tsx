@@ -11,6 +11,7 @@
 // agentd's queue, but a change to a file is the one thing a person must
 // be able to read WITHOUT leaving the conversation to go and find it.
 
+import type * as agentproto from './agent-protocol.gen';
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
@@ -89,21 +90,6 @@ export interface PromptBlock {
 }
 
 /** A permission question waiting on this session. */
-export interface AgentAsk {
-  id: string;
-  tool: string;
-  subject?: string;
-  suggested_rule?: string;
-  /** the directory the rule is confined to, when it is (Bash: per project) */
-  rule_cwd?: string;
-  /** set when the asking session is a workspace member: the name of that
-   *  workspace, which is what the third "always" answer is scoped to. A
-   *  per-directory rule has to be re-answered by every member, because each
-   *  works in its own worktree. */
-  workspace_name?: string;
-  age_ms: number;
-}
-
 /** What the status line shows. */
 export interface AgentStatus {
   agent?: string;
@@ -124,11 +110,11 @@ export interface AgentStatus {
   title?: string;
   /** the agent's active approval preset, and what it offers */
   mode?: string;
-  modes?: { id: string; name: string; description?: string }[];
+  modes?: agentproto.Mode[];
   /** the agent's generic settings: model, reasoning effort, plan mode… */
-  configs?: AgentConfig[];
+  configs?: agentproto.Config[];
   /** the agent's own slash commands */
-  commands?: { name: string; description?: string }[];
+  commands?: agentproto.Command[];
   /** folders allowed beyond `dir` (agentd roots.go). Shown in the status
    *  bar because the whole hazard of widening a session is forgetting
    *  that you did. */
@@ -143,17 +129,9 @@ export interface AgentStatus {
   queued?: number;
 }
 
-export interface AgentConfig {
-  id: string;
-  name: string;
-  description?: string;
-  current?: string;
-  values?: { value: string; name: string; description?: string }[];
-}
-
 export interface AgentSessionProps {
   events: () => AgentEvent[];
-  asks?: () => AgentAsk[];
+  asks?: () => agentproto.Ask[];
   status?: () => AgentStatus;
   /** Send a prompt, with whatever the composer had attached to it.
    *  Absent while the session is not ready. */
@@ -500,7 +478,7 @@ export const Collaboration: Component<{ text: string }> = (p) => {
 
 /** A pending question, rendered inline as a second view of agentd's queue. */
 const AskRow: Component<{
-  ask: AgentAsk;
+  ask: agentproto.Ask;
   /** only the row a keystroke would answer advertises the shortcut */
   keyed?: boolean;
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;

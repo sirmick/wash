@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"testing"
 	"time"
@@ -13,13 +14,13 @@ import (
 func countingState(t *testing.T) *int {
 	t.Helper()
 	oldSubs, oldMutate := stateSubscribers, mutateStateIf
-	var st State
+	var st agentproto.State
 	var mu sync.Mutex
 	n := 0
 	stateSubscribers = func() int { return 1 }
 	// Counts PUSHES, not calls: a mutation that reports nothing changed
 	// is exactly the one that must not reach a subscriber.
-	mutateStateIf = func(fn func(*State) bool) {
+	mutateStateIf = func(fn func(*agentproto.State) bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		if fn(&st) {
@@ -81,11 +82,11 @@ func TestARowChangeStillPublishes(t *testing.T) {
 // roster pushes.
 func TestUsageCoalescesLatestWithoutRosterPush(t *testing.T) {
 	oldRows := rows
-	rows = map[string]*row{"acp:1": {Row: Row{Key: "acp:1"}}}
-	var st State
+	rows = map[string]*row{"acp:1": {Row: agentproto.Row{Key: "acp:1"}}}
+	var st agentproto.State
 	fullPushes := 0
 	oldMutate := mutateStateIf
-	mutateStateIf = func(fn func(*State) bool) {
+	mutateStateIf = func(fn func(*agentproto.State) bool) {
 		if fn(&st) {
 			fullPushes++
 		}

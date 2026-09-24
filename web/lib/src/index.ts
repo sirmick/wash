@@ -48,13 +48,11 @@ export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
 export { Markdown, parseBlocks, parseInline } from './markdown';
 export type { MarkdownProps, Align } from './markdown';
 export { AgentSession } from './agent-session';
-export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus, AgentConfig, PromptBlock, InsertedDraft } from './agent-session';
+export type { AgentSessionProps, AgentEvent, AgentStatus, PromptBlock, InsertedDraft } from './agent-session';
 export { applyAgentEvent, mergeAgentEvents, utf8Len } from './agent-events';
 export type { ApplyResult } from './agent-events';
 // The roster (docs/SIDEBAR.md M2): com.wash.ai's list pane, and the
-// desktop rail's Agents section until M2c retires that use. Types are
-// Roster* rather than Agent* because agent-session already owns AgentAsk
-// (a narrower ask) and AgentSession (the component).
+// desktop rail's questions. Its types are agentproto's (below).
 export { AgentAsks, AgentRoster, stateColor, stateLabel, fmtElapsed, fmtAgo } from './agent-roster';
 // The one agent-state vocabulary (docs/AGENT_MESSENGER.md M5): four
 // surfaces render it, so it lives here rather than in any one of them.
@@ -85,7 +83,10 @@ export type { PrivWidgetProps, PrivReq, PrivStatus, PrivKind } from './priv-queu
 export { PrivUnlockOverlay } from './priv-unlock';
 export type { PrivUnlockOverlayProps, PrivUnlockState } from './priv-unlock';
 export { b64encode, b64decode, encryptPassword } from './priv-crypto';
-export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
+export type { AgentRosterProps } from './agent-roster';
+// The agentd protocol, generated from internal/agentproto (docs/AGENT_PROTOCOL.md).
+// A namespace, like the Go package: agentproto.Row, agentproto.State, …
+export * as agentproto from './agent-protocol.gen';
 export { defineWashApp } from './define-app';
 export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS, WASH_SCROLL_HIDDEN_CLASS } from './scrollbars';
 export { ensureHitStyles, HIT_ATTR } from './hit';

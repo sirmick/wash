@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"io"
 	"log"
 	"os"
@@ -41,26 +42,23 @@ import (
 // `initialize` by now is not going to.
 const initTimeout = 30 * time.Second
 
-// Adapter is one way to reach an agent over ACP.
-type Adapter struct {
+// adapterDef is one way to reach an agent over ACP: how to launch it.
+// Probe turns it into the agentproto.Adapter the launcher shows.
+type adapterDef struct {
 	// ID is what the launcher and the roster call this agent.
-	ID string `json:"id"`
+	ID string
 	// Name is what a human reads.
-	Name string `json:"name"`
+	Name string
 	// Command / Args launch the adapter when it is installed as a binary.
-	Command string   `json:"-"`
-	Args    []string `json:"-"`
+	Command string
+	Args    []string
 	// Package is the npm package to fall back to via npx when Command is
 	// not on PATH. Empty means there is no fallback.
-	Package string `json:"-"`
-	// Note explains a greyed row: why this one cannot be used here.
-	Note string `json:"note,omitempty"`
-	// Available is filled in by Probe.
-	Available bool `json:"available"`
+	Package string
 }
 
 // adapters is the table. Order is launcher order.
-var adapters = []Adapter{
+var adapters = []adapterDef{
 	{
 		ID:      "codex",
 		Name:    "Codex",
@@ -116,7 +114,7 @@ var npxLaunchMu sync.Mutex
 //
 // OpenCode is told to ask for permission (opencodePermissions), configured
 // command or not: approvals are wash's to see, not an implementation detail.
-func (a Adapter) builtinEnv(cfg agentpolicy.AgentConfig) []string {
+func (a adapterDef) builtinEnv(cfg agentpolicy.AgentConfig) []string {
 	if a.ID == "opencode" {
 		return []string{"OPENCODE_CONFIG_CONTENT=" + opencodePermissions}
 	}
@@ -136,7 +134,7 @@ func (a Adapter) builtinEnv(cfg agentpolicy.AgentConfig) []string {
 // launch resolves how to actually start an adapter: its own binary if
 // installed, else npx with the package. Returns ok=false when neither is
 // possible, with a note a human can act on.
-func (a Adapter) launch() (cmd string, args []string, note string, ok bool) {
+func (a adapterDef) launch() (cmd string, args []string, note string, ok bool) {
 	return a.launchWith(agentpolicy.AgentConfig{})
 }
 
@@ -146,7 +144,7 @@ func (a Adapter) launch() (cmd string, args []string, note string, ok bool) {
 // running a package from the registry instead would be the opposite of
 // what they asked for. It is still resolved through PATH, so a bare name
 // works as well as an absolute path.
-func (a Adapter) launchWith(cfg agentpolicy.AgentConfig) (cmd string, args []string, note string, ok bool) {
+func (a adapterDef) launchWith(cfg agentpolicy.AgentConfig) (cmd string, args []string, note string, ok bool) {
 	if cfg.Command != "" {
 		p, err := exec.LookPath(cfg.Command)
 		if err != nil {
@@ -171,12 +169,11 @@ func (a Adapter) launchWith(cfg agentpolicy.AgentConfig) (cmd string, args []str
 
 // Probe reports which adapters this box can actually launch. Cheap enough
 // to call on every sweep — it is a PATH lookup per row.
-func Probe(pol agentpolicy.Policy) []Adapter {
-	out := make([]Adapter, 0, len(adapters))
+func Probe(pol agentpolicy.Policy) []agentproto.Adapter {
+	out := make([]agentproto.Adapter, 0, len(adapters))
 	for _, a := range adapters {
 		_, _, note, ok := a.launchWith(pol.AgentFor(a.ID))
-		a.Available, a.Note = ok, note
-		out = append(out, a)
+		out = append(out, agentproto.Adapter{ID: a.ID, Name: a.Name, Note: note, Available: ok})
 	}
 	return out
 }
@@ -185,7 +182,7 @@ func Probe(pol agentpolicy.Policy) []Adapter {
 // adapters installed or removed, agents.json edited, a key set or cleared.
 // Re-read on every sweep, like the default prompt, because each of those
 // can happen outside wash. Reports whether anything changed.
-func refreshLaunchers(s *State) bool {
+func refreshLaunchers(s *agentproto.State) bool {
 	pol, keys := hostedPolicy(), keyStore()
 	adapters, stacks, keyViews := Probe(pol), publishStacks(pol, keys), publishKeys(pol, keys)
 	if reflect.DeepEqual(adapters, s.Adapters) && reflect.DeepEqual(stacks, s.Stacks) && reflect.DeepEqual(keyViews, s.Keys) {
@@ -201,13 +198,13 @@ func refreshLaunchers(s *State) bool {
 	return true
 }
 
-func adapterByID(id string) (Adapter, bool) {
+func adapterByID(id string) (adapterDef, bool) {
 	for _, a := range adapters {
 		if a.ID == id {
 			return a, true
 		}
 	}
-	return Adapter{}, false
+	return adapterDef{}, false
 }
 
 // sessionLaunch is how a session starts: the connection it runs through,

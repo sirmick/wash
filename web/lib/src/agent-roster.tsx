@@ -20,65 +20,7 @@ import { For, Show, createMemo, createSignal } from 'solid-js';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { tokens } from './tokens';
 import { agentStateColor, agentStateLabel } from './agent-status';
-import type { AgentConfig } from './agent-session';
-
-export interface RosterRow {
-  key: string;
-  agent: string;
-  /** running | working | needs-input | done | stale */
-  state: string;
-  reason?: string;
-  /** still running, no window pointing at it — clicking opens one */
-  detached?: boolean;
-  /** prompts waiting for the current turn to end (sent in order after it) */
-  queued?: number;
-  session_id?: string;
-  /** the agent's own name for this session, when it has one */
-  title?: string;
-  /** bounded recent human/agent lines, manager view only */
-  preview?: string;
-  cwd?: string;
-  dir?: string;
-  branch?: string;
-  dirty?: boolean;
-  /** elapsed in this state as of the push; anchored locally by the App */
-  since_ms: number;
-  // The rest of what agentd publishes per row (apps/agentd/be/app.go).
-  // The rail never read these; com.wash.ai's status line and Session menu
-  // do, which is why they belong on the shared type rather than on a
-  // near-duplicate one in the app.
-  /** the agent's context accounting, from its usage_update */
-  used?: number;
-  size?: number;
-  /** the agent's active approval preset, and what it offers */
-  mode?: string;
-  modes?: { id: string; name: string; description?: string }[];
-  /** wash answering this session's permission questions on its own */
-  yolo?: boolean;
-  /** the agent's generic settings block (model, reasoning effort, …) */
-  configs?: AgentConfig[];
-  /** the agent's own slash commands */
-  commands?: { name: string; description?: string }[];
-  /** folders this session may reach BEYOND its cwd (agentd roots.go).
-   *  Present so every surface showing a session can say how wide it is —
-   *  a session with three extra roots is a different thing from one
-   *  confined to its own folder. */
-  roots?: string[];
-  /** the session's place in a workspace team (manager view only): members
-   *  list under the row whose session_id is lead_session */
-  workspace?: RosterWorkspace;
-}
-
-export interface RosterWorkspace {
-  id: string;
-  name: string;
-  lead_session: string;
-  orchestrator?: boolean;
-  member: string;
-  role?: string;
-  package?: string;
-  package_title?: string;
-}
+import type * as agentproto from './agent-protocol.gen';
 
 /** A team entry under an orchestrator: a package heading or a member row. */
 type TeamEntry = { pkg: string; label: string } | { key: string };
@@ -90,10 +32,10 @@ type TeamEntry = { pkg: string; label: string } | { key: string };
  * by name: a stable order, where the attention sort would reshuffle it on
  * every state change. Questions stay at the top of the pane either way.
  */
-export function rosterTeams(rows: RosterRow[]): { top: string[]; teams: Map<string, TeamEntry[]> } {
+export function rosterTeams(rows: agentproto.Row[]): { top: string[]; teams: Map<string, TeamEntry[]> } {
   const leads = new Map<string, string>();
   for (const r of rows) if (r.workspace?.orchestrator && r.session_id) leads.set(r.session_id, r.key);
-  const members = new Map<string, RosterRow[]>();
+  const members = new Map<string, agentproto.Row[]>();
   const top: string[] = [];
   for (const r of rows) {
     const lead = r.workspace && !r.workspace.orchestrator ? leads.get(r.workspace.lead_session) : undefined;
@@ -123,39 +65,9 @@ export function rosterTeams(rows: RosterRow[]): { top: string[]; teams: Map<stri
 }
 
 /** A permission question waiting for a human (docs/AGENT_TERM.md §12). */
-export interface RosterAsk {
-  id: string;
-  agent: string;
-  tool: string;
-  subject?: string;
-  cwd?: string;
-  dir?: string;
-  /** what "Always allow" would write — shown ON the button */
-  suggested_rule?: string;
-  /** the directory that rule is confined to, when it is (Bash rules are
-   *  per project; read-only tools are not) */
-  rule_cwd?: string;
-  /** the workspace this session belongs to, when it belongs to one — what
-   *  the workspace-scoped "always" answer covers */
-  workspace_name?: string;
-  row_key: string;
-  age_ms: number;
-}
-
 /** A remembered agent session (docs/AGENT_TERM.md §13). */
-export interface RosterSession {
-  session_id: string;
-  agent: string;
-  cwd?: string;
-  dir?: string;
-  /** unix seconds */
-  last_seen: number;
-  /** running right now — it's in the roster above, so don't offer resume */
-  live?: boolean;
-}
-
 export interface AgentRosterProps {
-  rows: () => RosterRow[];
+  rows: () => agentproto.Row[];
   /** local clock anchor per row key, so elapsed keeps counting between pushes */
   startedAt: (key: string) => number;
   /** ticking "now" from the App, so every row's clock advances together */
@@ -163,33 +75,33 @@ export interface AgentRosterProps {
   /** activate a row. The host decides what that means: the desktop rail
    *  went to the owning terminal; com.wash.ai points its detail pane at
    *  the session. */
-  onActivate: (row: RosterRow) => void;
+  onActivate: (row: agentproto.Row) => void;
   /** the session the host is currently showing, marked as current */
   activeKey?: () => string;
   /** a detached session is still running with no window — open one */
-  onReattach?: (row: RosterRow) => void;
+  onReattach?: (row: agentproto.Row) => void;
   /** permission questions waiting on the human */
-  asks?: () => RosterAsk[];
+  asks?: () => agentproto.Ask[];
   /** answer one: decision allow|deny, remember writes the named rule */
-  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
+  onAnswer?: (ask: agentproto.Ask, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
   // recent / onResume / onCopyID used to live here. They went with
   // RecentRow: the roster answers "what is running", and reopening
   // something that ISN'T is com.wash.ai's History menu and HistoryPanel,
   // which can search transcripts and carry metadata a roster row cannot.
   /** let the window go, keep the session running */
-  onDetach?: (row: RosterRow) => void;
+  onDetach?: (row: agentproto.Row) => void;
   /** end the current turn; the session stays available */
-  onCancel?: (row: RosterRow) => void;
+  onCancel?: (row: agentproto.Row) => void;
   /** end the session and its adapter process */
-  onStop?: (row: RosterRow) => void;
+  onStop?: (row: agentproto.Row) => void;
   /** give the session a name of your own; the host opens its dialog */
-  onRename?: (row: RosterRow) => void;
+  onRename?: (row: agentproto.Row) => void;
   /** allow the session another folder; the host opens its file picker */
-  onAddRoot?: (row: RosterRow) => void;
+  onAddRoot?: (row: agentproto.Row) => void;
   /** open a terminal in the session's working directory */
-  onOpenTerminal?: (row: RosterRow) => void;
-  onOpenFileManager?: (row: RosterRow) => void;
-  onOpenTextEditor?: (row: RosterRow) => void;
+  onOpenTerminal?: (row: agentproto.Row) => void;
+  onOpenFileManager?: (row: agentproto.Row) => void;
+  onOpenTextEditor?: (row: agentproto.Row) => void;
 }
 
 // stateColor / stateLabel are thin adapters over the shared vocabulary in
@@ -202,7 +114,7 @@ export function stateColor(state: string): string {
   return agentStateColor(state);
 }
 
-export function stateLabel(row: RosterRow): string {
+export function stateLabel(row: agentproto.Row): string {
   return agentStateLabel(row.state, row.reason);
 }
 
@@ -229,8 +141,8 @@ export function fmtElapsed(ms: number): string {
  * going back to the rail.
  */
 export const AgentAsks: Component<{
-  asks: () => RosterAsk[];
-  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
+  asks: () => agentproto.Ask[];
+  onAnswer?: (ask: agentproto.Ask, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
 }> = (props) => (
   <For each={props.asks()}>
     {(a) => <AskRow ask={a} onAnswer={(d, r, scope) => props.onAnswer?.(a, d, r, scope)} />}
@@ -373,7 +285,7 @@ export function fmtAgo(nowMS: number, unixSec: number): string {
 // and the three answers. "Always allow" names the exact rule it will write
 // — what you clicked is what gets saved.
 const AskRow: Component<{
-  ask: RosterAsk;
+  ask: agentproto.Ask;
   onAnswer: (decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
 }> = (props) => {
   const what = () => {
@@ -485,7 +397,7 @@ const AskBtn: Component<{
 );
 
 const AgentRowView: Component<{
-  row: RosterRow;
+  row: agentproto.Row;
   /** 1 for a member listed under its orchestrator */
   depth?: number;
   /** how many members list under this orchestrator row */

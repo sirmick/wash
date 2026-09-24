@@ -9,35 +9,7 @@
 // model?, cwd} and agentd resolves it.
 
 import { Show, createMemo, type Component, type JSX } from 'solid-js';
-import { Button, Input, Select, tokens } from '@wash/ui';
-
-export interface Adapter {
-  id: string;
-  name: string;
-  available: boolean;
-  note?: string;
-}
-
-export interface StackTier {
-  tier: string;
-  adapter: string;
-  connection?: string;
-  model?: string;
-  thinking?: string;
-  capability?: string;
-  /** review tier only: whether read-only is enforced or merely asked for */
-  read_only?: 'enforced' | 'instruction';
-  available: boolean;
-  note?: string;
-}
-
-export interface StackView {
-  id: string;
-  name: string;
-  available: boolean;
-  note?: string;
-  tiers?: StackTier[];
-}
+import { Button, Input, Select, tokens, type agentproto } from '@wash/ui';
 
 export interface LaunchForm {
   stack: string;
@@ -65,7 +37,7 @@ export function startMessage(f: LaunchForm): Record<string, string> {
 }
 
 /** Whether the form can start anything, and if not, why. */
-export function launchBlocker(f: LaunchForm, stacks: StackView[], adapters: Adapter[]): string {
+export function launchBlocker(f: LaunchForm, stacks: agentproto.StackView[], adapters: agentproto.Adapter[]): string {
   const stack = stacks.find((s) => s.id === f.stack);
   const tier = stack?.tiers?.find((t) => t.tier === (f.tier || DEFAULT_TIER));
   // Another adapter replaces the tier outright, so only it has to start.
@@ -83,8 +55,8 @@ function tierLabel(t: string): string {
 }
 
 export const Launcher: Component<{
-  stacks: StackView[];
-  adapters: Adapter[];
+  stacks: agentproto.StackView[];
+  adapters: agentproto.Adapter[];
   form: LaunchForm;
   onForm: (patch: Partial<LaunchForm>) => void;
   onStart: () => void;

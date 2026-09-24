@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"testing"
 	"time"
@@ -12,16 +13,16 @@ import (
 // putting anything on screen.
 
 // withNotify records the toasts the ask queue raises.
-func withNotify(t *testing.T) *[]Ask {
+func withNotify(t *testing.T) *[]agentproto.Ask {
 	t.Helper()
-	old, _ := notifyAskFn.Load().(func(Ask))
+	old, _ := notifyAskFn.Load().(func(agentproto.Ask))
 	// Recorded under a lock: an ask raised by ANOTHER test's still-running
 	// goroutine (the hosted tier blocks inside RequestPermission until its
 	// question is answered) would otherwise append concurrently with this
 	// test reading the slice.
 	var mu sync.Mutex
-	var got []Ask
-	setNotifyAsk(func(a Ask) {
+	var got []agentproto.Ask
+	setNotifyAsk(func(a agentproto.Ask) {
 		mu.Lock()
 		defer mu.Unlock()
 		got = append(got, a)
@@ -101,11 +102,11 @@ func TestReArmingDoesNotReToast(t *testing.T) {
 func TestAskToastBody(t *testing.T) {
 	cases := []struct {
 		name string
-		ask  Ask
+		ask  agentproto.Ask
 		want string
 	}{
-		{"tool and subject", Ask{Tool: "Bash", Subject: "git push origin main"}, "Bash git push origin main"},
-		{"tool alone", Ask{Tool: "WebFetch"}, "WebFetch"},
+		{"tool and subject", agentproto.Ask{Tool: "Bash", Subject: "git push origin main"}, "Bash git push origin main"},
+		{"tool alone", agentproto.Ask{Tool: "WebFetch"}, "WebFetch"},
 	}
 	for _, c := range cases {
 		if got := askToastBody(c.ask); got != c.want {
@@ -128,13 +129,13 @@ func TestAskKeyOnlyForSessionsThisServiceCanOpen(t *testing.T) {
 		hostedMu.Unlock()
 	})
 
-	if got := askKey(Ask{RowKey: "acp:1"}); got != "acp:1" {
+	if got := askKey(agentproto.Ask{RowKey: "acp:1"}); got != "acp:1" {
 		t.Errorf("hosted ask key = %q, want %q", got, "acp:1")
 	}
-	if got := askKey(Ask{RowKey: "i-7:3"}); got != "" {
+	if got := askKey(agentproto.Ask{RowKey: "i-7:3"}); got != "" {
 		t.Errorf("terminal-tier ask key = %q, want empty", got)
 	}
-	if got := askKey(Ask{RowKey: "acp:404"}); got != "" {
+	if got := askKey(agentproto.Ask{RowKey: "acp:404"}); got != "" {
 		t.Errorf("key for a session that is gone = %q, want empty", got)
 	}
 }

@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"testing"
 	"time"
@@ -74,14 +75,14 @@ func TestRenameLiveSessionRepublishesRow(t *testing.T) {
 	t.Cleanup(func() { h.retire() })
 	bindTranscript(h.key, h.sessionID, launchRecord{Agent: "codex"}, "/w", t0)
 
-	if r := waitRow(t, h.key, func(r Row) bool { return r.Title == "From the agent" }); r.Title != "From the agent" {
+	if r := waitRow(t, h.key, func(r agentproto.Row) bool { return r.Title == "From the agent" }); r.Title != "From the agent" {
 		t.Fatalf("row before rename: %+v", r)
 	}
 	sid, err := renameSession(h.key, "", "Renamed by hand", t0)
 	if err != nil || sid != "s-7" {
 		t.Fatalf("rename: sid=%q err=%v", sid, err)
 	}
-	waitRow(t, h.key, func(r Row) bool { return r.Title == "Renamed by hand" })
+	waitRow(t, h.key, func(r agentproto.Row) bool { return r.Title == "Renamed by hand" })
 
 	// The end-of-session summary restates it.
 	h.noteSession("ended", t0.Add(time.Hour))

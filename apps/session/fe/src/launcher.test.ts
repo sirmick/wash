@@ -4,6 +4,7 @@
 //
 // Run: node --test --conditions=browser apps/session/fe/src/launcher.test.ts
 
+import type { agentproto } from '@wash/ui';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 
@@ -27,9 +28,11 @@ import {
   sameKeys,
   stepSelection,
   withLiveRows,
-  type AgentRecent,
   type RecentEntry,
 } from './launcher.ts';
+
+// A remembered session with only the fields a test cares about.
+const sess = (o: Partial<agentproto.Session> & { session_id: string }): agentproto.Session => ({ agent: '', last_seen: 0, ...o });
 
 const apps = [
   { id: 'com.wash.term', name: 'Terminal', icon: 'terminal' },
@@ -121,17 +124,17 @@ test('recentMatches and the palette never offer a name entry — a station has n
 });
 
 test('agentRecentAction agrees with the Agents history list: reattach, focus, skip, resume', () => {
-  assert.equal(agentRecentAction({ session_id: 's', detached: true, live: true, row_key: 'acp:1' }), 'reattach');
-  assert.equal(agentRecentAction({ session_id: 's', live: true, row_key: 'acp:1' }), 'focus');
-  assert.equal(agentRecentAction({ session_id: 's', live: true }), 'none');
-  assert.equal(agentRecentAction({ session_id: 's', agent: 'codex', detached: true }), 'resume');
-  assert.equal(agentRecentAction({ session_id: 's', agent: 'codex' }), 'resume');
+  assert.equal(agentRecentAction(sess({ session_id: 's', detached: true, live: true, row_key: 'acp:1' })), 'reattach');
+  assert.equal(agentRecentAction(sess({ session_id: 's', live: true, row_key: 'acp:1' })), 'focus');
+  assert.equal(agentRecentAction(sess({ session_id: 's', live: true })), 'none');
+  assert.equal(agentRecentAction(sess({ session_id: 's', agent: 'codex', detached: true })), 'resume');
+  assert.equal(agentRecentAction(sess({ session_id: 's', agent: 'codex' })), 'resume');
   // History says "restart" for a session that lost its agent; the start
   // menu has no such verb, so it offers nothing rather than a doomed resume.
-  assert.equal(agentRecentAction({ session_id: 's' }), 'none');
+  assert.equal(agentRecentAction(sess({ session_id: 's' })), 'none');
   // A running one is still reachable without it.
-  assert.equal(agentRecentAction({ session_id: 's', live: true, row_key: 'acp:1' }), 'focus');
-  const groups = recentGroups([], [{ session_id: 'lost' }, { session_id: 'kept', agent: 'codex' }], () => undefined);
+  assert.equal(agentRecentAction(sess({ session_id: 's', live: true, row_key: 'acp:1' })), 'focus');
+  const groups = recentGroups([], [sess({ session_id: 'lost' }), sess({ session_id: 'kept', agent: 'codex' })], () => undefined);
   assert.deepEqual(groups[2].items.map((i) => i.key), ['a:kept']);
 });
 
@@ -152,9 +155,9 @@ test('recentMatches lists a path once, as its newest entry, whichever apps recor
 });
 
 test('agentRecentLabel prefers the session title, else agent and folder', () => {
-  assert.equal(agentRecentLabel({ session_id: 's', title: 'Fix the banner', agent: 'codex', dir: 'wash' }), 'Fix the banner');
-  assert.equal(agentRecentLabel({ session_id: 's', agent: 'codex', dir: 'wash' }), 'codex · wash');
-  assert.equal(agentRecentLabel({ session_id: 's' }), 'agent');
+  assert.equal(agentRecentLabel(sess({ session_id: 's', title: 'Fix the banner', agent: 'codex', dir: 'wash' })), 'Fix the banner');
+  assert.equal(agentRecentLabel(sess({ session_id: 's', agent: 'codex', dir: 'wash' })), 'codex · wash');
+  assert.equal(agentRecentLabel(sess({ session_id: 's' })), 'agent');
 });
 
 test('recentGroups: Files, Edit, Agent, Radio always, then other apps with files', () => {
@@ -163,9 +166,9 @@ test('recentGroups: Files, Edit, Agent, Radio always, then other apps with files
     { path: '', name: 'Groove Salad', app_id: 'com.wash.radio', at: 5 },
     { path: '', name: 'Drone Zone', app_id: 'com.wash.radio', at: 6 },
   ];
-  const agents: AgentRecent[] = [
-    { session_id: 'live-no-row', live: true },
-    { session_id: 'done', agent: 'codex', dir: 'wash' },
+  const agents: agentproto.Session[] = [
+    sess({ session_id: 'live-no-row', live: true }),
+    sess({ session_id: 'done', agent: 'codex', dir: 'wash' }),
   ];
   const name = (id: string) => apps.find((a) => a.id === id)?.name;
   const groups = recentGroups(store, agents, (id) => (id === 'com.wash.imageview' ? 'Image Viewer' : name(id)));
@@ -196,10 +199,10 @@ test('recentGroups: empty named groups still show, and each flyout is capped', (
 
 test('withLiveRows: the roster, not the lagging history flags, picks the verb', () => {
   // History still says "live with a window"; the roster row says detached.
-  const stale: AgentRecent[] = [
-    { session_id: 's1', live: true, row_key: 'acp:1' },
-    { session_id: 's2', live: true, row_key: 'acp:2' },
-    { session_id: 's3' },
+  const stale: agentproto.Session[] = [
+    sess({ session_id: 's1', live: true, row_key: 'acp:1' }),
+    sess({ session_id: 's2', live: true, row_key: 'acp:2' }),
+    sess({ session_id: 's3' }),
   ];
   const rows = [
     { key: 'acp:1', session_id: 's1', detached: true },
@@ -219,10 +222,10 @@ test('withLiveRows: the roster, not the lagging history flags, picks the verb', 
 });
 
 test('withLiveRows: an exited adapter\'s lingering row is not a running session', () => {
-  const hist: AgentRecent[] = [
+  const hist: agentproto.Session[] = [
     // History published while the adapter was up.
-    { session_id: 'crashed', agent: 'codex', live: true, row_key: 'acp:1' },
-    { session_id: 'restarted', agent: 'codex' },
+    sess({ session_id: 'crashed', agent: 'codex', live: true, row_key: 'acp:1' }),
+    sess({ session_id: 'restarted', agent: 'codex' }),
   ];
   const rows = [
     { key: 'acp:1', session_id: 'crashed', state: 'failed', reason: 'exited' },
@@ -236,7 +239,7 @@ test('withLiveRows: an exited adapter\'s lingering row is not a running session'
   assert.equal(agentRecentAction(fixed[1]), 'focus');
   assert.equal(fixed[1].row_key, 'acp:3');
   // A failed row for another reason still has a session behind it.
-  const other = withLiveRows([{ session_id: 's', agent: 'codex' }], [{ key: 'acp:9', session_id: 's', state: 'failed', reason: 'auth' }]);
+  const other = withLiveRows([sess({ session_id: 's', agent: 'codex' })], [{ key: 'acp:9', session_id: 's', state: 'failed', reason: 'auth' }]);
   assert.equal(agentRecentAction(other[0]), 'focus');
 });
 

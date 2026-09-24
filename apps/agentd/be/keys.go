@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"io"
 	"log"
 	"net/http"
@@ -25,16 +26,6 @@ import (
 // the one allowed to set or test a key.
 const agentsAppID = "com.wash.agents"
 
-// KeyView is a key as the launcher shows it.
-type KeyView struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Set  bool   `json:"set"`
-	// Hint is the stored key's last four characters.
-	Hint     string `json:"hint,omitempty"`
-	Testable bool   `json:"testable,omitempty"`
-}
-
 // knownKeys is every key a connection can name: the described ones, and any
 // a user's connection names, so a key for a connection of one's own can be
 // set from the same screen.
@@ -51,11 +42,11 @@ func knownKeys(pol agentpolicy.Policy) map[string]keySpec {
 	return out
 }
 
-func publishKeys(pol agentpolicy.Policy, keys map[string]string) []KeyView {
+func publishKeys(pol agentpolicy.Policy, keys map[string]string) []agentproto.KeyView {
 	specs := knownKeys(pol)
-	out := make([]KeyView, 0, len(specs))
+	out := make([]agentproto.KeyView, 0, len(specs))
 	for id, spec := range specs {
-		v := KeyView{ID: id, Name: spec.Name, Set: keys[id] != "", Testable: spec.TestURL != ""}
+		v := agentproto.KeyView{ID: id, Name: spec.Name, Set: keys[id] != "", Testable: spec.TestURL != ""}
 		if v.Set {
 			v.Hint = agentpolicy.KeyHint(keys[id])
 		}
@@ -127,7 +118,7 @@ func registerKeyHandlers(bus *sdk.Bus) {
 			reply["error"] = err.Error()
 		} else {
 			log.Printf("agentd: key %s set=%v", req.Name, strings.TrimSpace(req.Value) != "")
-			mutateState(func(s *State) { refreshLaunchers(s) })
+			mutateState(func(s *agentproto.State) { refreshLaunchers(s) })
 		}
 		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, reply)
 	})

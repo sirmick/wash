@@ -7,11 +7,12 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
-import { AgentRoster, rosterTeams, fmtAgo, fmtElapsed, stateColor, stateLabel, type RosterAsk, type RosterRow } from './agent-roster.tsx';
+import { AgentRoster, rosterTeams, fmtAgo, fmtElapsed, stateColor, stateLabel } from './agent-roster.tsx';
+import type * as agentproto from './agent-protocol.gen';
 
 afterEach(cleanup);
 
-const row = (over: Partial<RosterRow> = {}): RosterRow => ({
+const row = (over: Partial<agentproto.Row> = {}): agentproto.Row => ({
   key: 'i-1:5',
   agent: 'claude',
   state: 'working',
@@ -117,7 +118,7 @@ test('fmtElapsed reads like a status line', () => {
 
 // ---- M6: the question rows (docs/AGENT_TERM.md §12) ----
 
-const ask = (over: Partial<RosterAsk> = {}): RosterAsk => ({
+const ask = (over: Partial<agentproto.Ask> = {}): agentproto.Ask => ({
   id: 'ask-1',
   agent: 'claude',
   tool: 'Bash',
@@ -146,7 +147,7 @@ test('a pending question renders what the agent wants and three ways out', () =>
 
 test('each button answers with its own decision + remember flag', () => {
   const seen: string[] = [];
-  const onAnswer = (_a: RosterAsk, d: string, r: boolean) => seen.push(`${d}:${r}`);
+  const onAnswer = (_a: agentproto.Ask, d: string, r: boolean) => seen.push(`${d}:${r}`);
   const { getByTestId, unmount } = render(() => (
     <AgentRoster rows={() => []} startedAt={at} now={() => 0} onActivate={noop} asks={() => [ask()]} onAnswer={onAnswer} />
   ));
@@ -485,7 +486,7 @@ test('verbs: Open terminal here needs a cwd, and hands the host the row', () => 
 // menu on that row closed itself under the cursor a beat after each turn.
 test('a row survives being re-sent as a new object, and its open menu with it', async () => {
   const { createSignal } = await import('solid-js');
-  const [rows, setRows] = createSignal<RosterRow[]>([row({ key: 'a', used: 1 })]);
+  const [rows, setRows] = createSignal<agentproto.Row[]>([row({ key: 'a', used: 1 })]);
   const { getByTestId } = render(() => (
     <AgentRoster rows={rows} startedAt={at} now={() => 0} onActivate={noop} onDetach={noop} />
   ));
@@ -532,7 +533,7 @@ test('picking a verb from the row menu does not also activate the row', () => {
 });
 
 test('team: members nest under their orchestrator, grouped by package, and say whose they are', () => {
-  const ws = (over: Partial<NonNullable<RosterRow['workspace']>>) => ({ id: 'w', name: 'Redoubt', lead_session: 'lead-s', member: '', ...over });
+  const ws = (over: Partial<NonNullable<agentproto.Row['workspace']>>) => ({ id: 'w', name: 'Redoubt', lead_session: 'lead-s', member: '', ...over });
   const rows = [
     // Attention order from agentd: a member needing input sorts first.
     row({ key: 'rev', state: 'needs-input', session_id: 'rev-s', workspace: ws({ member: 'reviewer', package: 'K5', package_title: 'Timer' }) }),

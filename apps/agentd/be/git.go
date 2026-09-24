@@ -11,6 +11,7 @@ package agentd
 
 import (
 	"context"
+	"github.com/sirmick/wash/internal/agentproto"
 	"os/exec"
 	"strings"
 	"sync"
@@ -131,7 +132,7 @@ func applyGit(cwd string, info gitInfo) {
 		return
 	}
 	now := time.Now()
-	mutateStateIf(func(s *State) bool {
+	mutateStateIf(func(s *agentproto.State) bool {
 		changed := false
 		for _, r := range rows {
 			if r.Cwd != cwd {

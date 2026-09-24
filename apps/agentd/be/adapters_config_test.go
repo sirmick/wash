@@ -20,7 +20,7 @@ func TestLaunchWithHonoursAConfiguredCommand(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	a := Adapter{ID: "codex", Command: "codex-acp", Package: "@x/codex-acp", Args: []string{"--acp"}}
+	a := adapterDef{ID: "codex", Command: "codex-acp", Package: "@x/codex-acp", Args: []string{"--acp"}}
 
 	cmd, args, note, ok := a.launchWith(agentpolicy.AgentConfig{Command: bin})
 	if !ok || cmd != bin {

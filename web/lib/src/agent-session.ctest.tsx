@@ -273,7 +273,7 @@ test('a prompt is recallable before agentd has echoed it back', () => {
 });
 
 test('Stop is offered while a question is pending, and Esc is the same verb', () => {
-  const asks = [{ id: 'a1', tool: 'Bash', subject: 'rm -rf /', age_ms: 0 }];
+  const asks = [{ id: 'a1', agent: 'claude', row_key: 'acp:1', tool: 'Bash', subject: 'rm -rf /', age_ms: 0 }];
   let cancels = 0;
   const { container } = render(() => (
     <AgentSession
