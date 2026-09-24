@@ -60,15 +60,6 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 		if len(ids) > 1 {
 			return "", fmt.Errorf("ambiguous %s options; use explicit configs instead", category)
 		}
-		fallbacks := []string{"model"}
-		if category == "thought_level" {
-			fallbacks = []string{"thought_level", "reasoning_effort", "thinking"}
-		}
-		for _, id := range fallbacks {
-			if find(id) != nil {
-				return id, nil
-			}
-		}
 		return "", fmt.Errorf("adapter does not expose %s; inspect workspace_get config_options", category)
 	}
 	semantic := func(category, value string) error {
@@ -93,7 +84,7 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 	slices.Sort(ids)
 	// A caller may use the raw model option instead of the semantic shortcut.
 	for _, id := range ids {
-		if option := find(id); option != nil && (option.Category == "model" || option.ID == "model") {
+		if option := find(id); option != nil && option.Category == "model" {
 			if err := apply(id, pending[id]); err != nil {
 				return nil, err
 			}
@@ -137,7 +128,7 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 func restoreWorkspaceSession(settings swarm.AgentProfile, options []acp.ConfigOption, set func(string, string) ([]acp.ConfigOption, error)) (skipped []string, err error) {
 	offered := func(category, value string) bool {
 		for _, o := range options {
-			if o.Category != category && !(category == "model" && o.ID == "model") {
+			if o.Category != category {
 				continue
 			}
 			return len(o.Options) == 0 || slices.ContainsFunc(o.Options, func(v acp.ConfigOptionValue) bool { return v.Value == value })

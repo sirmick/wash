@@ -64,7 +64,7 @@ const (
 	// show a guard coming off (or holding) at a glance, and so these lines
 	// stay out of the conversation preview.
 	EventDecision = "decision"
-	EventTool    = "tool"
+	EventTool     = "tool"
 	// EventUser is what the human typed. ACP has a user_message_chunk
 	// variant, but an agent does not echo the prompt its client just sent
 	// it — so a transcript built purely from notifications shows the
