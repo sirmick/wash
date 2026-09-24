@@ -437,6 +437,8 @@ const hintStyle: JSX.CSSProperties = {
  *  to be ordinary transcript prose ("Auto-approved (yolo): Bash …"), which
  *  read like the agent talking and hid the one thing worth seeing: that the
  *  guard was off, or that something was refused. */
+const clipped: JSX.CSSProperties = { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', 'min-width': 0 };
+
 export const DecisionRow: Component<{ e: AgentEvent }> = (p) => {
   const allowed = () => p.e.status === 'allow';
   const label = () => allowed()
@@ -447,22 +449,25 @@ export const DecisionRow: Component<{ e: AgentEvent }> = (p) => {
       data-testid="agent-decision"
       data-status={p.e.status}
       style={{
-        display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceSm}px`, 'min-width': 0,
+        display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceSm}px`, 'min-width': 0, overflow: 'hidden',
         font: tokens.type.textSm, padding: `2px ${tokens.spaceSm}px`,
         'border-left': `3px solid ${allowed() ? tokens.fgSuccess : tokens.borderDanger}`,
         background: allowed() ? 'transparent' : tokens.bgDenied,
         'border-radius': tokens.radiusSm,
       }}
     >
-      <span style={{ color: allowed() ? tokens.fgSuccess : tokens.fgDanger, 'font-weight': 600, 'white-space': 'nowrap' }}>
+      <span style={{ color: allowed() ? tokens.fgSuccess : tokens.fgDanger, 'font-weight': 600, 'white-space': 'nowrap', 'flex-shrink': 0 }}>
         {allowed() ? '✓' : '✕'} {label()}
       </span>
-      <span style={{ font: tokens.type.monoSm, 'font-weight': 600, color: tokens.fg, 'white-space': 'nowrap' }}>{p.e.title}</span>
+      {/* Every text part shrinks to an ellipsis, the full text on hover. The
+          title and reason could not: a long command or rule name ran past the
+          conversation column, under a workspace's sidebar. */}
+      <span title={p.e.title} style={{ ...clipped, font: tokens.type.monoSm, 'font-weight': 600, color: tokens.fg }}>{p.e.title}</span>
       <Show when={p.e.detail}>
-        <span style={{ font: tokens.type.monoSm, color: tokens.fgMuted, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', 'min-width': 0 }}>{p.e.detail}</span>
+        <span title={p.e.detail} style={{ ...clipped, font: tokens.type.monoSm, color: tokens.fgMuted, flex: '1 1 auto' }}>{p.e.detail}</span>
       </Show>
       <Show when={p.e.reason}>
-        <span style={{ color: tokens.fgDim, 'white-space': 'nowrap', 'margin-left': 'auto' }}>{p.e.reason}</span>
+        <span title={p.e.reason} style={{ ...clipped, color: tokens.fgDim, 'margin-left': 'auto' }}>{p.e.reason}</span>
       </Show>
     </div>
   );
