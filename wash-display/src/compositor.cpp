@@ -223,6 +223,7 @@ struct Server {
 #ifdef WASH_DISPLAY_XWAYLAND
     struct wlr_xwayland* xwayland = nullptr;
     struct wl_listener new_xwayland_surface;
+    struct wl_listener xwayland_ready;
 #endif
 
     WireConn* conn = nullptr;
@@ -233,11 +234,17 @@ struct Server {
 // X11 windows): one wash window id, its video channel, and the pooled
 // capture+WebP encoder. Both Toplevel and XSurface embed one so the
 // frame path is written once. (Defined before Toplevel, which embeds it.)
-// Pointer focus + last position, compositor-thread-only. A motion to a new
-// surface re-enters the seat pointer there; buttons/axis without a fresh
-// motion reuse the last position. (Declared up here so toplevel_map can
-// anchor a menu-fallback popover at the pointer; defined once, used below.)
-static struct wlr_surface* g_ptr_surface = nullptr;
+// Last pointer position, compositor-thread-only. Buttons/axis without a
+// fresh motion reuse it. (Declared up here so toplevel_map can anchor a
+// menu-fallback popover at the pointer; defined once, used below.)
+//
+// There is deliberately NO private "which surface did we last enter" cache:
+// wlr_seat_pointer_enter already de-dups a repeated enter (it returns early
+// when focused_surface == surface), and a private cache goes wrong under an
+// xdg_popup grab — the grab REFUSES an enter for a foreign client (clears
+// focus instead), so a cache that recorded the enter as done would never
+// re-enter that window after the menu closed (REVIEW-DISPLAY-2026-09 #11).
+// sway calls notify_enter on every motion for the same reason.
 static double g_ptr_x = 0.0, g_ptr_y = 0.0;
 // The wash window the pointer is currently over (0 if over a popup), so a
 // cursor-shape change can be routed to that window's video channel (M4).
@@ -274,6 +281,16 @@ struct WindowSink {
     uint32_t popover_chan = 0;   // video-popup channel on popover_parent
     uint32_t popover_parent = 0; // parent toplevel's wash win
     int popover_off_x = 0, popover_off_y = 0; // anchor in parent canvas coords
+
+    // The browser viewport expressed in this window's canvas (xdg window-
+    // geometry) coordinates, as last reported by the FE with an input batch.
+    // This is the box a popup must stay inside (REVIEW-DISPLAY-2026-09 #9):
+    // the overlay is position:fixed in the browser, so "on-screen" means the
+    // browser viewport, not the virtual output — and the compositor cannot
+    // know where the wash window sits without being told. Unset until the
+    // first batch; popup_unconstrain then falls back to the virtual output.
+    bool vp_valid = false;
+    int vp_x = 0, vp_y = 0, vp_w = 0, vp_h = 0;
 };
 
 // --- window-command registry + cross-thread queue ------------------
@@ -371,6 +388,23 @@ static void sink_open(WindowSink& s, WireConn* conn, const std::string& title,
             wlr_log(WLR_INFO, "wash-display: win=%u video channel=%u", s.win, s.video_chan);
         else
             wlr_log(WLR_INFO, "wash-display: win=%u no video channel yet (no shell?)", s.win);
+    }
+}
+
+// sink_ensure_channel (re)opens the per-window video channel when the sink
+// has none. A window mapped while no browser shell was bound got
+// channel.open.err "no shell attached" from the router and previously stayed
+// silent forever — nothing retried when a shell attached
+// (REVIEW-DISPLAY-2026-09 #4). The router→app window commands (focus /
+// resize / force_frame) all imply a shell is now looking at the window, so
+// they are the retry points. Blocking round-trip; compositor thread only.
+static void sink_ensure_channel(WindowSink& s, WireConn* conn) {
+    if (!s.win || s.video_chan || !conn) return;
+    s.video_chan = conn->open_video_channel(s.win);
+    if (s.video_chan) {
+        s.reset_delta(); // the shell never saw a frame: next capture is full
+        wlr_log(WLR_INFO, "wash-display: win=%u video channel=%u (late open)",
+                s.win, s.video_chan);
     }
 }
 
@@ -493,12 +527,28 @@ static uint64_t tree_signature(struct wlr_surface* root) {
     return sig_mix(a.h, a.count);
 }
 
+// Popup / popover / X11 override-redirect surfaces we stream as overlays,
+// keyed by video-popup channel (defined with the popup code below; declared
+// here for output_frame's frame-done pass).
+static void overlay_send_frame_done(struct timespec* now);
+
 void output_frame(struct wl_listener* listener, void* /*data*/) {
     Output* out = wl_container_of(listener, out, frame);
     wlr_scene_output_commit(out->scene_output, nullptr);
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     wlr_scene_output_send_frame_done(out->scene_output, &now);
+
+    // Overlay surfaces (xdg_popups, menu-fallback popovers, X11 override-
+    // redirect) get their frame callbacks HERE, independent of the scene: the
+    // scene only sends frame_done to buffers whose box overlaps the virtual
+    // output, and a popup is scened at the root at its own geometry offset,
+    // so a menu flipped above/left of its window (negative coords) or past
+    // the output edge painted once and then froze waiting for a callback that
+    // never came (REVIEW-DISPLAY-2026-09 #10). A duplicate send for a popup
+    // the scene already served is harmless (callbacks are one-shot). The
+    // overlay commit handlers schedule an output frame so this runs.
+    overlay_send_frame_done(&now);
 
     // M7: capture each xdg window whose surface tree changed since the last
     // output frame. This is the capture driver for Wayland toplevels (the
@@ -734,6 +784,10 @@ void toplevel_request_maximize(struct wl_listener* listener, void* /*data*/) {
     wlr_xdg_toplevel_set_size(t->xdg_toplevel,
                               on ? output_logical_w() : 0,
                               on ? output_logical_h() : 0);
+    // Tell the WM too, so the wash frame maximizes with the guest instead of
+    // a screen-sized surface landing in an unmaximized frame.
+    if (t->sink.win && t->server && t->server->conn)
+        t->server->conn->report_window_state(t->sink.win, on ? "maximized" : "normal");
 }
 
 // toplevel_request_move: the guest asks for an interactive move (its CSD
@@ -906,6 +960,25 @@ struct PopupTarget {
 };
 static std::map<uint32_t, PopupTarget> g_popup_reg;
 
+static void send_frame_done_cb(struct wlr_surface* s, int, int, void* data) {
+    wlr_surface_send_frame_done(s, static_cast<struct timespec*>(data));
+}
+// overlay_send_frame_done: frame callbacks for every overlay surface (see
+// output_frame for why the scene's own pass isn't enough).
+static void overlay_send_frame_done(struct timespec* now) {
+    for (auto& [chan, tgt] : g_popup_reg) {
+        (void)chan;
+        if (tgt.surface) wlr_surface_for_each_surface(tgt.surface, send_frame_done_cb, now);
+    }
+}
+
+// overlay_schedule_frame asks the virtual output for a frame after an overlay
+// surface committed, so output_frame's frame-done pass (above) runs even when
+// the commit damaged nothing inside the output box (an off-output popup).
+static void overlay_schedule_frame(Server* srv) {
+    for (auto* o : srv->outputs) wlr_output_schedule_frame(o);
+}
+
 // Active popup pointer-grabs (M8d). A menu (xdg_popup with a grab, or an X11
 // override-redirect menu) OWNS the pointer while open: input over the PARENT
 // window must reach the menu so a click-outside dismisses it and motion keeps
@@ -1004,6 +1077,7 @@ static void popover_send_geometry(Toplevel* t) {
 
 static void popover_send_frame(Toplevel* t) {
     if (!t->sink.popover_chan) return;
+    overlay_schedule_frame(t->server);
     struct wlr_surface* surface = t->xdg_toplevel->base->surface;
     // Full surface + preserve alpha, exactly like an xdg_popup: a menu's
     // shadow/rounded corners ride the alpha, and overlay-local input maps 1:1.
@@ -1102,8 +1176,26 @@ static bool popup_root_and_offset(struct wlr_xdg_popup* popup, uint32_t* root_wi
         if (!pxs) return false;
         if (pxs->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
             Toplevel* t = static_cast<Toplevel*>(pxs->data);
-            if (!t || !t->sink.win) return false;
-            *root_win = t->sink.win;
+            if (!t) return false;
+            if (t->sink.popover && t->sink.popover_parent) {
+                // The parent is a menu-fallback popover (a Qt programmatic
+                // menu mapped as a parented toplevel): its submenus arrive
+                // as real xdg_popups parented to it. Chain them onto the
+                // popover's OWN parent window: the popover's full surface
+                // sits at popover_off in that window's canvas, and popup
+                // geometry is relative to the popover's window-geometry
+                // origin (= surface origin + its xdg geometry). Previously
+                // these were dropped as "no mapped root toplevel"
+                // (REVIEW-DISPLAY-2026-09 #13).
+                struct wlr_box pg{};
+                wlr_xdg_surface_get_geometry(pxs, &pg);
+                x += t->sink.popover_off_x + pg.x;
+                y += t->sink.popover_off_y + pg.y;
+                *root_win = t->sink.popover_parent;
+            } else {
+                if (!t->sink.win) return false;
+                *root_win = t->sink.win;
+            }
             // The capture sends the FULL popup surface, INCLUDING its CSD
             // shadow margin, so shift by the popup's own window-geometry origin
             // — wlroots' scene helper positions the surface at -geo.x,-geo.y
@@ -1138,17 +1230,53 @@ static void popup_send_geometry(Popup* p) {
     p->server->conn->write_channel(p->chan, (const uint8_t*)s.data(), s.size());
 }
 
+// popup_root_toplevel walks the parent chain to the owning toplevel (through
+// intermediate popups). Null if the chain doesn't end at a Toplevel.
+static Toplevel* popup_root_toplevel(struct wlr_xdg_popup* popup) {
+    struct wlr_xdg_popup* p = popup;
+    for (int guard = 0; guard < 16 && p; guard++) {
+        struct wlr_surface* parent = p->parent;
+        if (!parent) return nullptr;
+        struct wlr_xdg_surface* pxs = wlr_xdg_surface_try_from_wlr_surface(parent);
+        if (!pxs) return nullptr;
+        if (pxs->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL)
+            return static_cast<Toplevel*>(pxs->data);
+        if (pxs->role != WLR_XDG_SURFACE_ROLE_POPUP) return nullptr;
+        p = pxs->popup;
+    }
+    return nullptr;
+}
+
+// popup_unconstrain keeps a menu on-screen: GTK/Qt rely on the compositor's
+// constraint_adjustment (flip/slide) for edge avoidance, and the FE overlay is
+// position:fixed in the BROWSER — so "on-screen" is the browser viewport, which
+// the FE reports per window in canvas coords (WindowSink::vp_*). wlroots wants
+// the box in the root toplevel's SURFACE coordinate space (wlr_xdg_shell.h),
+// and our canvas origin is the window-geometry origin, so add geo.x/geo.y.
+// Before the FE has reported a viewport (or for a popover-rooted chain), fall
+// back to the virtual output — still offset by geo, which the old {0,0,W,H}
+// box got wrong by the CSD shadow margin (REVIEW-DISPLAY-2026-09 #9; sway's
+// popup_unconstrain adds view->geometry.x the same way).
+//
+// Runs on the popup's INITIAL commit (before the first configure, like
+// labwc), so the very first placement is already constrained; the map-time
+// call this replaces produced one misplaced frame + a reconfigure.
+static void popup_unconstrain(Popup* p) {
+    Toplevel* t = popup_root_toplevel(p->popup);
+    if (!t || !t->xdg_toplevel) return;
+    struct wlr_box geo{};
+    wlr_xdg_surface_get_geometry(t->xdg_toplevel->base, &geo);
+    struct wlr_box box;
+    if (!t->sink.popover && t->sink.vp_valid && t->sink.vp_w > 0 && t->sink.vp_h > 0) {
+        box = {t->sink.vp_x + geo.x, t->sink.vp_y + geo.y, t->sink.vp_w, t->sink.vp_h};
+    } else {
+        box = {geo.x, geo.y, output_logical_w(), output_logical_h()};
+    }
+    wlr_xdg_popup_unconstrain_from_box(p->popup, &box);
+}
+
 void popup_map(struct wl_listener* listener, void* /*data*/) {
     Popup* p = wl_container_of(listener, p, map);
-    // Constrain the popup to the virtual output so a menu opened near the
-    // bottom/right edge flips/slides to stay on-screen. GTK/Qt rely on the
-    // compositor for edge avoidance via constraint_adjustment; with no
-    // unconstrain call the popup keeps its natural placement and the FE overlay
-    // (position:fixed) extends past the browser viewport → unreachable menu
-    // items (REVIEW-X11-WAYLAND #7a). The reconfigure lands on the next commit;
-    // popup_commit recomputes + re-sends the geometry.
-    struct wlr_box out_box = {0, 0, output_logical_w(), output_logical_h()};
-    wlr_xdg_popup_unconstrain_from_box(p->popup, &out_box);
     uint32_t root = 0;
     int ox = 0, oy = 0;
     if (!popup_root_and_offset(p->popup, &root, &ox, &oy)) {
@@ -1187,7 +1315,12 @@ void popup_unmap(struct wl_listener* listener, void* /*data*/) {
 
 void popup_commit(struct wl_listener* listener, void* /*data*/) {
     Popup* p = wl_container_of(listener, p, commit);
+    if (p->popup->base->initial_commit) {
+        popup_unconstrain(p); // before the first configure goes out
+        return;
+    }
     if (!p->chan) return;
+    overlay_schedule_frame(p->server);
     // Reposition (reactive popups) → resend geometry.
     uint32_t root = 0;
     int ox = 0, oy = 0;
@@ -1216,6 +1349,9 @@ void popup_commit(struct wl_listener* listener, void* /*data*/) {
 
 void popup_destroy(struct wl_listener* listener, void* /*data*/) {
     Popup* p = wl_container_of(listener, p, destroy);
+    // Normally unmap already popped the grab; a destroy without unmap must
+    // not leave a dangling surface pointer in the grab stack.
+    pop_popup_grab(p->popup->base->surface);
     if (p->chan) {
         g_popup_reg.erase(p->chan);
         std::string s = json{{"close", true}}.dump();
@@ -1320,6 +1456,10 @@ struct XSurface {
     struct wl_listener commit;
     struct wl_listener destroy;
     struct wl_listener request_configure;
+    struct wl_listener request_fullscreen;
+    struct wl_listener request_maximize;
+    struct wl_listener request_minimize;
+    struct wl_listener set_geometry;
     struct wl_listener set_title;
     bool surface_listeners = false; // map/unmap/commit currently wired
 
@@ -1331,33 +1471,70 @@ struct XSurface {
     bool is_popup = false;
     uint32_t popup_chan = 0;
     int sent_x = 0, sent_y = 0;
+    XSurface* popup_parent = nullptr; // the toplevel the overlay is drawn on
 };
 
-// The most-recently-mapped normal X toplevel — the fallback parent for an
-// override-redirect menu that doesn't set transient-for.
-static XSurface* g_active_x_toplevel = nullptr;
+// Mapped normal (non-override-redirect) X toplevels in map order. The
+// override-redirect parent resolution below prefers the transient-for chain,
+// then a toplevel of the same X client (pid), then keyboard focus, and only
+// then the most recently mapped one (the old sole rule, which parented a
+// second app's menus onto whichever window mapped last —
+// REVIEW-DISPLAY-2026-09 #7).
+static std::vector<XSurface*> g_x_toplevels;
+static std::vector<XSurface*> g_x_surfaces; // every live XSurface (popups too)
+static void x_toplevel_mapped(XSurface* x) {
+    g_x_toplevels.erase(std::remove(g_x_toplevels.begin(), g_x_toplevels.end(), x),
+                        g_x_toplevels.end());
+    g_x_toplevels.push_back(x);
+}
+static void x_toplevel_gone(XSurface* x) {
+    g_x_toplevels.erase(std::remove(g_x_toplevels.begin(), g_x_toplevels.end(), x),
+                        g_x_toplevels.end());
+}
+
+// X atoms for _NET_WM_WINDOW_TYPE checks. The connection is (re)made on
+// every Xwayland `ready` (xwayland_ready below) and the cache cleared:
+// lazy Xwayland exits 10s after its last client and restarts on the next,
+// and the old code kept a static connection from the FIRST X server — every
+// intern after a restart returned NONE, was cached forever, and all type
+// checks failed from then on (REVIEW-DISPLAY-2026-09 #2). sway/labwc intern
+// on `ready` for the same reason. Note our own xcb connection counts as an
+// X client, so with it open Xwayland's lazy exit never fires; that is also
+// what sway's lazy mode does.
+static xcb_connection_t* g_xcb = nullptr;
+static std::map<std::string, xcb_atom_t> g_atom_cache;
 
 static xcb_atom_t xatom(const char* name) {
-    static xcb_connection_t* conn = nullptr;
-    static std::map<std::string, xcb_atom_t> cache;
-    auto it = cache.find(name);
-    if (it != cache.end()) return it->second;
-    if (!conn) {
-        conn = xcb_connect(nullptr, nullptr);
-        if (!conn || xcb_connection_has_error(conn)) {
-            if (conn) xcb_disconnect(conn);
-            conn = nullptr;
-            cache[name] = static_cast<xcb_atom_t>(XCB_ATOM_NONE);
-            return static_cast<xcb_atom_t>(XCB_ATOM_NONE);
-        }
-    }
+    auto it = g_atom_cache.find(name);
+    if (it != g_atom_cache.end()) return it->second;
+    if (!g_xcb || xcb_connection_has_error(g_xcb)) return static_cast<xcb_atom_t>(XCB_ATOM_NONE);
     xcb_intern_atom_cookie_t cookie =
-        xcb_intern_atom(conn, 0, (uint16_t)std::strlen(name), name);
-    xcb_intern_atom_reply_t* reply = xcb_intern_atom_reply(conn, cookie, nullptr);
-    xcb_atom_t atom = reply ? reply->atom : static_cast<xcb_atom_t>(XCB_ATOM_NONE);
+        xcb_intern_atom(g_xcb, 0, (uint16_t)std::strlen(name), name);
+    xcb_intern_atom_reply_t* reply = xcb_intern_atom_reply(g_xcb, cookie, nullptr);
+    if (!reply) return static_cast<xcb_atom_t>(XCB_ATOM_NONE); // don't cache a failure
+    xcb_atom_t atom = reply->atom;
     free(reply);
-    cache[name] = atom;
+    g_atom_cache[name] = atom;
     return atom;
+}
+
+void xwayland_ready(struct wl_listener* listener, void* /*data*/) {
+    Server* s = wl_container_of(listener, s, xwayland_ready);
+    if (g_xcb) xcb_disconnect(g_xcb);
+    g_atom_cache.clear();
+    g_xcb = xcb_connect(s->xwayland ? s->xwayland->display_name : nullptr, nullptr);
+    if (!g_xcb || xcb_connection_has_error(g_xcb)) {
+        wlr_log(WLR_ERROR, "wash-display: xcb connect to Xwayland failed; window types unknown");
+        if (g_xcb) xcb_disconnect(g_xcb);
+        g_xcb = nullptr;
+        return;
+    }
+    // Pre-intern the types we classify on so a menu's first map doesn't pay
+    // a round trip per atom.
+    for (const char* a : {"_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", "_NET_WM_WINDOW_TYPE_POPUP_MENU",
+                          "_NET_WM_WINDOW_TYPE_COMBO", "_NET_WM_WINDOW_TYPE_MENU"})
+        xatom(a);
+    wlr_log(WLR_INFO, "wash-display: Xwayland ready, atoms interned (%zu)", g_atom_cache.size());
 }
 
 static bool xsurface_has_type(struct wlr_xwayland_surface* xs, const char* type) {
@@ -1371,25 +1548,47 @@ static bool xsurface_has_type(struct wlr_xwayland_surface* xs, const char* type)
 
 static bool xsurface_takes_pointer_grab(struct wlr_xwayland_surface* xs) {
     if (!xs) return false;
-    // Toolkits also use override-redirect windows for passive helper UI.
-    // Those surfaces must render as overlays, but must not steal all future
-    // parent-window input. Menus/combo dropdowns are the pointer-owning cases.
-    if (xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_TOOLTIP") ||
-        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_NOTIFICATION") ||
-        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_DND") ||
-        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_SPLASH") ||
-        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_UTILITY")) {
-        return false;
+    // Only an EXPLICIT menu type redirects the parent window's pointer into
+    // the overlay. Toolkits use override-redirect for lots of passive helper
+    // UI (tooltips, notifications, Steam/Wine/Electron/Java helper windows),
+    // and the old "untyped ⇒ grab" default made the parent window dead while
+    // any of those was mapped (REVIEW-DISPLAY-2026-09 #3) — wlroots' own
+    // classifier (wlr_xwayland_or_surface_wants_focus) treats untyped as a
+    // normal window. A real untyped X menu (Xt/Motif/xterm) still works: it
+    // holds an X pointer grab INSIDE Xwayland, which routes the parent's
+    // press to the menu client as an outside-click, the way sway relies on.
+    return xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU") ||
+           xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_POPUP_MENU") ||
+           xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_COMBO") ||
+           xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_MENU");
+}
+
+// xpopup_resolve_parent picks the wash window an override-redirect X window
+// is drawn on: (1) the nearest mapped non-popup ancestor via transient-for
+// (a submenu's transient-for is its parent MENU, so walk up), (2) the most
+// recently mapped toplevel of the same X client (GTK submenus set no
+// transient-for), (3) the X toplevel holding keyboard focus, (4) the most
+// recently mapped toplevel. X root coords are one space, so the offset math
+// (menu.xy − parent.xy) is unchanged whichever parent is chosen.
+static XSurface* xpopup_resolve_parent(XSurface* x, Server* srv) {
+    for (struct wlr_xwayland_surface* xs = x->xsurf->parent; xs; xs = xs->parent) {
+        auto* p = static_cast<XSurface*>(xs->data);
+        if (p && !p->is_popup && p->sink.win) return p;
     }
-    if (xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU") ||
-        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_POPUP_MENU") ||
-        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_COMBO") ||
-        xsurface_has_type(xs, "_NET_WM_WINDOW_TYPE_MENU")) {
-        return true;
+    for (auto it = g_x_toplevels.rbegin(); it != g_x_toplevels.rend(); ++it) {
+        if ((*it)->sink.win && (*it)->xsurf && (*it)->xsurf->pid == x->xsurf->pid) return *it;
     }
-    // Preserve legacy behavior for untyped override-redirect popups: older
-    // clients may still use them as real grabbed menus.
-    return true;
+    if (srv && srv->seat) {
+        if (struct wlr_surface* f = srv->seat->keyboard_state.focused_surface) {
+            if (struct wlr_xwayland_surface* fx = wlr_xwayland_surface_try_from_wlr_surface(f)) {
+                auto* p = static_cast<XSurface*>(fx->data);
+                if (p && !p->is_popup && p->sink.win) return p;
+            }
+        }
+    }
+    for (auto it = g_x_toplevels.rbegin(); it != g_x_toplevels.rend(); ++it)
+        if ((*it)->sink.win) return *it;
+    return nullptr;
 }
 
 // xpopup_send_geometry writes the offset control frame (< 45 bytes JSON).
@@ -1404,24 +1603,20 @@ static void xpopup_send_geometry(XSurface* x) {
 // the menu's X-root position minus the parent's (X shares one root coord
 // space, so this is the offset within the parent window's content frame).
 static bool xpopup_map(XSurface* x) {
-    XSurface* parent = nullptr;
-    if (x->xsurf->parent && x->xsurf->parent->data)
-        parent = static_cast<XSurface*>(x->xsurf->parent->data);
-    if (!parent || parent->is_popup || !parent->sink.win)
-        parent = g_active_x_toplevel;
+    XSurface* parent = xpopup_resolve_parent(x, x->server);
     if (!parent || !parent->sink.win) {
         wlr_log(WLR_INFO, "wash-display: X11 override-redirect with no parent toplevel — dropping");
         return false;
     }
-    uint32_t w = x->xsurf->width  > 0 ? (uint32_t)x->xsurf->width  : 1;
-    uint32_t h = x->xsurf->height > 0 ? (uint32_t)x->xsurf->height : 1;
-    wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
-                                   (uint16_t)w, (uint16_t)h);
+    // (No configure here: an override-redirect window owns its geometry, and
+    // re-sending its current values was a no-op round trip — sway/labwc never
+    // configure unmanaged windows at map.)
     x->popup_chan = x->server->conn->open_channel_kind(parent->sink.win, "video-popup");
     if (!x->popup_chan) {
         wlr_log(WLR_INFO, "wash-display: X11 popup channel open failed (no shell?)");
         return false;
     }
+    x->popup_parent = parent;
     x->sent_x = x->xsurf->x - parent->xsurf->x;
     x->sent_y = x->xsurf->y - parent->xsurf->y;
     xpopup_send_geometry(x);
@@ -1436,12 +1631,85 @@ static bool xpopup_map(XSurface* x) {
 }
 
 static void xpopup_close(XSurface* x) {
+    x->popup_parent = nullptr;
     if (!x->popup_chan) return;
     pop_popup_grab(x->xsurf->surface);
     g_popup_reg.erase(x->popup_chan);
     std::string s = json{{"close", true}}.dump();
     x->server->conn->write_channel(x->popup_chan, (const uint8_t*)s.data(), s.size());
     x->popup_chan = 0;
+}
+
+// xsurface_set_geometry: xwm emits this on every X-side move/resize. For an
+// override-redirect overlay the offset was previously frozen at map time, so
+// a tooltip following the pointer, a GTK menu that scrolls/relayouts, or a
+// Chromium autocomplete that resizes stayed drawn at its first position
+// (REVIEW-DISPLAY-2026-09 #6, set_geometry half; sway/labwc reposition the
+// unmanaged node here). Toplevels need nothing: the next commit's capture
+// reports the new size.
+void xsurface_set_geometry(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, set_geometry);
+    if (!x->is_popup || !x->popup_chan || !x->popup_parent || !x->popup_parent->xsurf) return;
+    int nx = x->xsurf->x - x->popup_parent->xsurf->x;
+    int ny = x->xsurf->y - x->popup_parent->xsurf->y;
+    if (nx == x->sent_x && ny == x->sent_y) return;
+    x->sent_x = nx;
+    x->sent_y = ny;
+    xpopup_send_geometry(x);
+    for (auto& g : g_popup_grabs) {
+        if (g.surface == x->xsurf->surface) { g.off_x = nx; g.off_y = ny; }
+    }
+}
+
+// X11 state requests. xwm flips the surface's state flag (and rewrites
+// _NET_WM_STATE) BEFORE emitting these, so without a handler an mpv/SDL/game
+// window believed it was fullscreen but never got the ConfigureNotify to
+// screen size — and SDL waits for that (REVIEW-DISPLAY-2026-09 #6). sway:
+// container_set_fullscreen + arrange; labwc: view_set_fullscreen. Here the
+// output IS the screen: configure to it, and mirror the state to the wash
+// window so the frame follows. Leaving the state restores the pre-state size
+// xwm saved.
+static void xsurface_apply_screen_state(XSurface* x, bool on, const char* what) {
+    struct wlr_xwayland_surface* xs = x->xsurf;
+    if (!xs) return;
+    if (on) {
+        wlr_xwayland_surface_configure(xs, xs->x, xs->y,
+                                       (uint16_t)output_logical_w(), (uint16_t)output_logical_h());
+    } else {
+        uint16_t w = xs->saved_width  > 0 ? xs->saved_width  : (uint16_t)xs->width;
+        uint16_t h = xs->saved_height > 0 ? xs->saved_height : (uint16_t)xs->height;
+        wlr_xwayland_surface_configure(xs, xs->x, xs->y, w, h);
+    }
+    if (x->sink.win && x->server && x->server->conn)
+        x->server->conn->report_window_state(x->sink.win, on ? "maximized" : "normal");
+    wlr_log(WLR_INFO, "wash-display: X11 %s win=%u %s -> %dx%d", what, x->sink.win,
+            on ? "on" : "off", on ? output_logical_w() : (int)xs->saved_width,
+            on ? output_logical_h() : (int)xs->saved_height);
+}
+
+void xsurface_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, request_fullscreen);
+    if (!x->xsurf || x->is_popup) return;
+    bool on = x->xsurf->fullscreen;
+    wlr_xwayland_surface_set_fullscreen(x->xsurf, on);
+    xsurface_apply_screen_state(x, on, "fullscreen");
+}
+
+void xsurface_request_maximize(struct wl_listener* listener, void* /*data*/) {
+    XSurface* x = wl_container_of(listener, x, request_maximize);
+    if (!x->xsurf || x->is_popup) return;
+    bool on = x->xsurf->maximized_vert && x->xsurf->maximized_horz;
+    wlr_xwayland_surface_set_maximized(x->xsurf, on);
+    xsurface_apply_screen_state(x, on, "maximize");
+}
+
+void xsurface_request_minimize(struct wl_listener* listener, void* data) {
+    XSurface* x = wl_container_of(listener, x, request_minimize);
+    auto* ev = static_cast<struct wlr_xwayland_minimize_event*>(data);
+    if (!x->xsurf || x->is_popup) return;
+    wlr_xwayland_surface_set_minimized(x->xsurf, ev->minimize);
+    if (x->sink.win && x->server && x->server->conn)
+        x->server->conn->report_window_state(x->sink.win, ev->minimize ? "minimized" : "normal");
 }
 
 void xsurface_map(struct wl_listener* listener, void* /*data*/) {
@@ -1459,11 +1727,26 @@ void xsurface_map(struct wl_listener* listener, void* /*data*/) {
     // own requested geometry so they paint at the expected dimensions.
     wlr_xwayland_surface_configure(x->xsurf, x->xsurf->x, x->xsurf->y,
                                    (uint16_t)w, (uint16_t)h);
+    // ICCCM size hints → wash min/max, so the shell clamps interactive resize
+    // like it does for xdg toplevels (a fixed-size X dialog no longer
+    // rubber-bands) — REVIEW-DISPLAY-2026-09 #8; sway reads the same fields.
+    uint32_t min_w = 0, min_h = 0, max_w = 0, max_h = 0;
+    if (const xcb_size_hints_t* sh = x->xsurf->size_hints) {
+        if (sh->flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) {
+            if (sh->min_width > 0) min_w = (uint32_t)sh->min_width;
+            if (sh->min_height > 0) min_h = (uint32_t)sh->min_height;
+        }
+        if (sh->flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) {
+            if (sh->max_width > 0) max_w = (uint32_t)sh->max_width;
+            if (sh->max_height > 0) max_h = (uint32_t)sh->max_height;
+        }
+    }
     // X11 clients (xclock, etc.) don't draw CSD — keep the wash frame so
     // they have a titlebar to move/close (M8: only Wayland is chromeless).
-    sink_open(x->sink, x->server->conn, ttl, w, h, /*chromeless=*/false);
+    sink_open(x->sink, x->server->conn, ttl, w, h, /*chromeless=*/false,
+              min_w, min_h, max_w, max_h);
     register_win(x->sink.win, WinRef::X11, x);
-    g_active_x_toplevel = x; // fallback parent for override-redirect menus
+    x_toplevel_mapped(x); // candidate parent for override-redirect menus
 }
 
 void xsurface_unmap(struct wl_listener* listener, void* /*data*/) {
@@ -1473,7 +1756,7 @@ void xsurface_unmap(struct wl_listener* listener, void* /*data*/) {
         x->is_popup = false;
         return;
     }
-    if (g_active_x_toplevel == x) g_active_x_toplevel = nullptr;
+    x_toplevel_gone(x);
     unregister_win(x->sink.win);
     sink_close(x->sink, x->server->conn);
 }
@@ -1482,6 +1765,7 @@ void xsurface_commit(struct wl_listener* listener, void* /*data*/) {
     XSurface* x = wl_container_of(listener, x, commit);
     if (x->is_popup) {
         if (!x->popup_chan) return;
+        overlay_schedule_frame(x->server);
         if (!x->sink.cap.capture(x->xsurf->surface, x->server->renderer, 0, 0, 0, 0,
                                  false, /*preserve_alpha=*/true, output_scale())) return;
         if (!x->sink.enc_ready || x->sink.enc.width() != x->sink.cap.width() ||
@@ -1530,7 +1814,7 @@ void xsurface_dissociate(struct wl_listener* listener, void* /*data*/) {
         xpopup_close(x);
         x->is_popup = false;
     } else {
-        if (g_active_x_toplevel == x) g_active_x_toplevel = nullptr;
+        x_toplevel_gone(x);
         unregister_win(x->sink.win);
         sink_close(x->sink, x->server->conn);
     }
@@ -1542,15 +1826,25 @@ void xsurface_destroy(struct wl_listener* listener, void* /*data*/) {
     if (x->is_popup) {
         xpopup_close(x);
     } else {
-        if (g_active_x_toplevel == x) g_active_x_toplevel = nullptr;
+        x_toplevel_gone(x);
         unregister_win(x->sink.win);
         sink_close(x->sink, x->server->conn);
     }
+    // Overlays that named this surface as their parent must not keep a
+    // dangling pointer (their own unmap normally comes first, but a crashing
+    // client can destroy in any order).
+    for (auto* other : g_x_surfaces)
+        if (other->popup_parent == x) other->popup_parent = nullptr;
+    g_x_surfaces.erase(std::remove(g_x_surfaces.begin(), g_x_surfaces.end(), x), g_x_surfaces.end());
     xsurface_drop_surface_listeners(x);
     wl_list_remove(&x->associate.link);
     wl_list_remove(&x->dissociate.link);
     wl_list_remove(&x->destroy.link);
     wl_list_remove(&x->request_configure.link);
+    wl_list_remove(&x->request_fullscreen.link);
+    wl_list_remove(&x->request_maximize.link);
+    wl_list_remove(&x->request_minimize.link);
+    wl_list_remove(&x->set_geometry.link);
     wl_list_remove(&x->set_title.link);
     delete x;
 }
@@ -1585,6 +1879,7 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
     auto* x = new XSurface();
     x->server = server;
     x->xsurf = xsurf;
+    g_x_surfaces.push_back(x);
     // Lets an override-redirect menu resolve its parent toplevel's wash win
     // via xsurf->parent->data (xpopup_map).
     xsurf->data = x;
@@ -1600,6 +1895,14 @@ void server_new_xwayland_surface(struct wl_listener* listener, void* data) {
     wl_signal_add(&xsurf->events.destroy, &x->destroy);
     x->request_configure.notify = xsurface_request_configure;
     wl_signal_add(&xsurf->events.request_configure, &x->request_configure);
+    x->request_fullscreen.notify = xsurface_request_fullscreen;
+    wl_signal_add(&xsurf->events.request_fullscreen, &x->request_fullscreen);
+    x->request_maximize.notify = xsurface_request_maximize;
+    wl_signal_add(&xsurf->events.request_maximize, &x->request_maximize);
+    x->request_minimize.notify = xsurface_request_minimize;
+    wl_signal_add(&xsurf->events.request_minimize, &x->request_minimize);
+    x->set_geometry.notify = xsurface_set_geometry;
+    wl_signal_add(&xsurf->events.set_geometry, &x->set_geometry);
     x->set_title.notify = xsurface_set_title;
     wl_signal_add(&xsurf->events.set_title, &x->set_title);
 }
@@ -1794,6 +2097,23 @@ static void inject_input(const json& data) {
     uint32_t t = (uint32_t)now_ms();
     bool ptr_touched = false;
 
+    // The FE reports the browser viewport in this window's canvas coords with
+    // each batch (popup edge-avoidance needs it; see popup_unconstrain).
+    if (g_ptr_win && data.contains("vp") && data["vp"].is_object()) {
+        const json& vp = data["vp"];
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        auto it = g_win_reg.find(g_ptr_win);
+        if (it != g_win_reg.end()) {
+            if (WindowSink* s = winref_sink(it->second)) {
+                s->vp_x = vp.value("x", 0);
+                s->vp_y = vp.value("y", 0);
+                s->vp_w = vp.value("w", 0);
+                s->vp_h = vp.value("h", 0);
+                s->vp_valid = s->vp_w > 0 && s->vp_h > 0;
+            }
+        }
+    }
+
     // Pointer focus follows the actual (sub)surface under the cursor, not just
     // the root toplevel. Clients like Chromium/Electron render dropdowns,
     // <select> popups and other interactive content into wl_subsurfaces; we
@@ -1802,23 +2122,32 @@ static void inject_input(const json& data) {
     // on the wrong surface and the child widget never sees it — the omnibox
     // "click does nothing, keyboard works" bug. g_ptr_x/g_ptr_y stay in the
     // resolved-target's local space (root toplevel / popup); cx/cy carry the
-    // descended child-local coords for the current event.
+    // descended child-local coords for the current event. notify_enter on
+    // every event: wlroots de-dups, and an active popup grab may legitimately
+    // refuse the enter (see the g_ptr_x comment).
     double cx = 0, cy = 0;
     auto focus_child = [&](double rx, double ry) -> struct wlr_surface* {
         double sx = 0, sy = 0;
         struct wlr_surface* child = wlr_surface_surface_at(surface, rx, ry, &sx, &sy);
         if (!child) { child = surface; sx = rx; sy = ry; } // over a margin / no input region
-        if (g_ptr_surface != child) {
-            wlr_seat_pointer_notify_enter(seat, child, sx, sy);
-            g_ptr_surface = child;
-        }
+        wlr_seat_pointer_notify_enter(seat, child, sx, sy);
         cx = sx; cy = sy;
         return child;
     };
 
     for (const auto& e : data["events"]) {
         const std::string ev = e.value("ev", std::string());
-        if (ev == "motion") {
+        if (ev == "leave") {
+            // The pointer left the window's canvas (FE pointerleave). Send the
+            // wl_pointer.leave a real compositor would, so hover highlights
+            // and tooltips don't stick — but only if the seat's pointer focus
+            // is actually inside THIS window's surface tree.
+            struct wlr_surface* f = seat->pointer_state.focused_surface;
+            if (f && wlr_surface_get_root_surface(f) == wlr_surface_get_root_surface(surface)) {
+                wlr_seat_pointer_notify_clear_focus(seat);
+                ptr_touched = true;
+            }
+        } else if (ev == "motion") {
             double x = e.value("x", 0.0) + coord_dx, y = e.value("y", 0.0) + coord_dy;
             g_ptr_x = x;
             g_ptr_y = y;
@@ -1904,6 +2233,10 @@ void handle_cursor_shape(struct wl_listener* listener, void* data) {
     Server* s = wl_container_of(listener, s, cursor_shape_request);
     auto* ev = static_cast<struct wlr_cursor_shape_manager_v1_request_set_shape_event*>(data);
     if (ev->device_type != WLR_CURSOR_SHAPE_MANAGER_V1_DEVICE_TYPE_POINTER) return;
+    // Only the client that currently has pointer focus may set the cursor
+    // (sway/labwc do the same check); otherwise any client holding a
+    // cursor-shape device could restyle the hovered window's cursor.
+    if (!s->seat || ev->seat_client != s->seat->pointer_state.focused_client) return;
     if (!g_ptr_win) return; // pointer over a popup (v1: skip) or nothing
     uint32_t chan = win_video_chan(g_ptr_win);
     if (!chan) return;
@@ -1961,9 +2294,15 @@ void handle_set_selection(struct wl_listener* listener, void* /*data*/) {
 
     int fds[2];
     if (pipe(fds) != 0) return;
-    // Hand the write end to the owner; it fills it asynchronously.
+    // Hand the write end to the owner; it fills it asynchronously. The
+    // callee OWNS that fd from here (wlr_data_device.h: "sends the data over
+    // the passed file descriptor, then close it"): a Wayland client source
+    // closes it right after marshalling, and xwm's X11 source STORES it and
+    // writes later from its own event source. Closing it here too was a
+    // double close — and for the X11 leg it closed the fd xwm was about to
+    // write to, so the transfer went into whatever reused that number and
+    // wash saw EOF/a stall (REVIEW-DISPLAY-2026-09 #1). Do not close fds[1].
     wlr_data_source_send(src, chosen, fds[1]);
-    close(fds[1]);
     int rfd = fds[0];
     WireConn* conn = s->conn;
     std::thread([conn, washmime, rfd] {
@@ -2002,7 +2341,13 @@ void handle_set_selection(struct wl_listener* listener, void* /*data*/) {
         close(rfd);
         // Only publish a fully-received selection; a stalled/aborted read
         // must not paste a truncated clipboard.
-        if (complete && conn && !buf.empty()) conn->clipboard_set(washmime, buf);
+        if (complete && conn && !buf.empty()) {
+            conn->clipboard_set(washmime, buf);
+            // The e2e asserts this line (not the "mime=" one above, which is
+            // logged before the bytes arrive) — it proves the transfer itself.
+            wlr_log(WLR_INFO, "wash-display: clipboard guest->wash stored %zu bytes mime=%s",
+                    buf.size(), washmime.c_str());
+        }
     }).detach();
 }
 
@@ -2146,6 +2491,10 @@ static void apply_win_cmd(const WinCmd& c) {
     // Focus is generic across surface kinds: set/clear the seat's keyboard
     // focus so injected keys land in (only) the focused window's surface.
     // Router-authoritative (DISPLAY.md §6) — the WM decides who has focus.
+    // Any router→app command for a window means a shell is looking at it: if
+    // the window mapped while no shell was bound, this is where its video
+    // channel finally opens (sink_ensure_channel).
+    if (WindowSink* s = winref_sink(ref)) sink_ensure_channel(*s, winref_server(ref)->conn);
     if (c.t == "window.focus" || c.t == "window.unfocus") {
         Server* srv = winref_server(ref);
         struct wlr_surface* surface = winref_surface(ref);
@@ -2161,6 +2510,11 @@ static void apply_win_cmd(const WinCmd& c) {
             auto* x = static_cast<XSurface*>(ref.ptr);
             if (x && x->xsurf) {
                 wlr_xwayland_surface_activate(x->xsurf, active);
+                // xwm maps every new window at the BOTTOM of the X stack and
+                // never raises it; sway/labwc restack ABOVE on focus so X-side
+                // picking by root coords (all our X toplevels overlap at their
+                // own requested origin) favours the focused window.
+                if (active) wlr_xwayland_surface_restack(x->xsurf, nullptr, XCB_STACK_MODE_ABOVE);
             }
         }
 #endif
@@ -2171,14 +2525,18 @@ static void apply_win_cmd(const WinCmd& c) {
                                                kb ? kb->keycodes : nullptr,
                                                kb ? kb->num_keycodes : 0,
                                                kb ? &kb->modifiers : nullptr);
-            } else {
-                wlr_seat_keyboard_notify_clear_focus(srv->seat);
-                // Also drop pointer focus: no pointer-leave is otherwise sent
-                // when the cursor leaves the wash window, so hover highlights
-                // and tooltips stick (REVIEW-X11-WAYLAND #9). Reset g_ptr_surface
-                // so the next motion re-enters cleanly.
-                wlr_seat_pointer_notify_clear_focus(srv->seat);
-                g_ptr_surface = nullptr;
+            } else if (surface) {
+                // Clear focus only if THIS window holds it (sway/labwc guard
+                // the same way): an unfocus for window A must not strip a
+                // focus that already moved to B, and must not send a pointer
+                // leave to whatever window the pointer is actually over
+                // (REVIEW-DISPLAY-2026-09 #12). wlroots sends the leave to the
+                // old surface itself when focus moves elsewhere.
+                if (srv->seat->keyboard_state.focused_surface == surface)
+                    wlr_seat_keyboard_notify_clear_focus(srv->seat);
+                struct wlr_surface* pf = srv->seat->pointer_state.focused_surface;
+                if (pf && wlr_surface_get_root_surface(pf) == surface)
+                    wlr_seat_pointer_notify_clear_focus(srv->seat);
             }
         }
         return;
@@ -2511,6 +2869,10 @@ int run_compositor(WireConn& conn) {
         server.new_xwayland_surface.notify = server_new_xwayland_surface;
         wl_signal_add(&server.xwayland->events.new_surface,
                       &server.new_xwayland_surface);
+        // Fires on every (re)start of the lazy X server: rebuild our xcb
+        // connection + atom cache there (see xatom).
+        server.xwayland_ready.notify = xwayland_ready;
+        wl_signal_add(&server.xwayland->events.ready, &server.xwayland_ready);
         // Point X clients (including a WASH_DISPLAY_EXEC guest) at our X
         // server; display_name is assigned at create time even in lazy mode.
         setenv("DISPLAY", server.xwayland->display_name, 1);

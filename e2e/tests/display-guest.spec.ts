@@ -31,7 +31,7 @@ function pyGtkMissing(): string | null {
   }
 }
 
-test.use({ routerOpts: { apps: ['session', 'term', 'display'], showHidden: true } });
+test.use({ routerOpts: { apps: ['session', 'term', 'display', 'test'], showHidden: true } });
 
 for (const backend of ['wayland', 'x11'] as const) {
   test.describe(`GTK guest (${backend})`, () => {
@@ -88,15 +88,28 @@ for (const backend of ['wayland', 'x11'] as const) {
       await router.waitForLog(/wash-display: inject win=\d+ button left/, 10_000);
 
       // Press 'c' → the guest copies its sentinel to the toolkit clipboard,
-      // which the compositor bridges into wash's clipboard. The Wayland
-      // selection bridge is ours and asserted here; the X11 leg rides
-      // wlroots' xwm X→Wayland selection sync (covered by the M2 contract
-      // test) and is lazy, so we don't gate the x11 variant on it.
+      // which the compositor bridges into wash's clipboard. Assert the
+      // "stored N bytes" line, not the "mime=" one: the latter is logged
+      // BEFORE the bytes are read, so it passed while the X11 leg was
+      // silently broken by a double-closed pipe fd (the compositor closed
+      // the write end wlroots' xwm was about to write to —
+      // docs/Review-findings-display.md #1). Both backends now prove the
+      // full transfer: the 21-byte sentinel must arrive intact.
       await win.click(); // refocus the window (the menu took the pointer)
       await page.keyboard.press('c');
-      if (backend === 'wayland') {
-        await router.waitForLog(/wash-display: clipboard guest->wash mime=/, 10_000);
-      }
+      await router.waitForLog(/wash-display: clipboard guest->wash mime=/, 10_000);
+      // Behavioral proof: read wash's clipboard back through a hidden test-app
+      // instance (the same clipboard_get the §7 contract test uses) and
+      // compare the bytes — the guest's SENTINEL must have arrived intact.
+      const reader = await router.controlRequest({ t: 'launch', app_id: 'com.wash.test' });
+      const readerInst = reader.instance_id as string;
+      await expect
+        .poll(async () => {
+          const got = await router.sendAppMsg(readerInst, { kind: 'clipboard_get', id: `cg-${backend}` });
+          return got.type === 'clipboard_get_ok' ? String(got.text) : '';
+        }, { timeout: 10_000 })
+        .toBe('wash-clip-sentinel-42');
+      await router.waitForLog(/wash-display: clipboard guest->wash stored 21 bytes mime=text\/plain/, 10_000);
     });
   });
 }
