@@ -125,7 +125,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if err := decodeWorkspace(p.Document, &doc); err != nil {
 			return nil, err
 		}
-		path, err := confine("Read", doc.Path)
+		path := doc.Path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		path, err := confine("Read", path)
 		if err != nil {
 			return nil, err
 		}

@@ -513,21 +513,42 @@ func TestWaitingSetDeliversOneBatchAndStaleTasksAreDropped(t *testing.T) {
 	if got, _ := s.Next("r1-s"); len(got) != 0 {
 		t.Fatalf("completed task dispatched again: %+v", got)
 	}
+	// r2 answers a QA question before reporting: the answer waits with the
+	// results instead of waking the lead on its own.
+	if err := s.Mutate("r2-s", false, func(w *swarm.Workspace, m *swarm.Member) error {
+		_, err := swarm.AddMessage(w, m.ID, w.Lead, "answer", "Covered in QA", "", "", "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Complete("r2-s", ids[1], "OK with notes", false); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.Next("lead"); len(got) != 0 {
 		t.Fatalf("lead woken before the set resolved: %+v", got)
 	}
+	// A question still wakes the lead at once, and the set stays held.
+	if err := s.Mutate("r3-s", false, func(w *swarm.Workspace, m *swarm.Member) error {
+		_, err := swarm.AddMessage(w, m.ID, w.Lead, "question", "Scope?", "", "", "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Next("lead"); len(got) != 1 || got[0].Type != "question" {
+		t.Fatalf("question delivery = %+v", got)
+	}
+	if err := s.TurnEnded("lead", nil, false); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Complete("r3-s", ids[2], "BLOCK", false); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Next("lead")
-	if len(got) != 3 {
-		t.Fatalf("batch = %+v, want the three results together", got)
+	if len(got) != 4 {
+		t.Fatalf("batch = %+v, want r2's answer and the three results together", got)
 	}
 	origin, body := inboxDisplay(got, func(m swarm.Message) string { return m.Sender })
-	if origin != "3 results" || !strings.Contains(body, "#### r3") || !strings.Contains(body, "BLOCK") {
+	if origin != "4 messages" || !strings.Contains(body, "#### r3") || !strings.Contains(body, "BLOCK") {
 		t.Fatalf("display %q / %q", origin, body)
 	}
 	if lead := swarm.GetMember(s.View("lead"), w.Lead); len(lead.WaitingOn) != 0 {

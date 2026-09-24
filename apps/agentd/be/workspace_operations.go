@@ -243,7 +243,7 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			// A reporting call cannot create an assignment as a side effect.
 			for _, u := range p.Results {
 				if u.Action != "complete" && u.Action != "fail" {
-					return nil, errors.New("assignment_results only accepts complete/fail")
+					return nil, errors.New("assignment_results only accepts complete/fail; create assignments with assignment_update")
 				}
 			}
 			results, err := applyAssignments(s, h, p.Results)

@@ -550,8 +550,7 @@ func (s *Store) Complete(session, id, body string, failed bool) error {
 }
 
 // Next persists dispatch before ACP submission and returns the batch one turn
-// delivers: normally one message, or every held result of a waiting set once
-// the whole set has resolved. Caller must reserve the session's turn first. A
+// delivers: everything queued that is not held for a waiting set. Caller must reserve the session's turn first. A
 // crash between those operations is deliberately an uncertain delivery.
 func (s *Store) Next(session string) ([]Message, error) {
 	st := s.Snapshot()
@@ -561,7 +560,7 @@ func (s *Store) Next(session string) ([]Message, error) {
 	}
 	// Decide on the snapshot first: Mutate bumps the workspace revision, and
 	// most calls here find nothing to deliver.
-	if batch, stale := pickDelivery(w, m); len(batch) == 0 && len(stale) == 0 {
+	if batch, stale, _ := pickDelivery(w, m); len(batch) == 0 && len(stale) == 0 {
 		return nil, nil
 	}
 	var out []Message
@@ -569,7 +568,7 @@ func (s *Store) Next(session string) ([]Message, error) {
 		if w.State != "active" || m.State != "available" || m.Retire {
 			return nil
 		}
-		batch, stale := pickDelivery(w, m)
+		batch, stale, setDone := pickDelivery(w, m)
 		// An instruction for an assignment already resolved is never sent.
 		for _, i := range stale {
 			w.Messages[i].State = "cancelled"
@@ -579,7 +578,7 @@ func (s *Store) Next(session string) ([]Message, error) {
 		}
 		m.Waiting = ""
 		m.WaitingFor = ""
-		if first := w.Messages[batch[0]]; first.Type == "result" && slices.Contains(m.WaitingOn, first.Assignment) {
+		if setDone {
 			m.WaitingOn = nil
 		}
 		for j := range w.Assignments {
@@ -611,9 +610,18 @@ func (s *Store) Next(session string) ([]Message, error) {
 // then used to dispatch the same task again ("late duplicate delivery"), one
 // wasted turn per member.
 //
-// Held: results for a WaitingOn set that has not fully resolved. When it has,
-// all of that set's queued results go out together.
-func pickDelivery(w *Workspace, m *Member) (batch, stale []int) {
+// Held: while a WaitingOn set has not fully resolved, its results and the
+// answers and progress of the members doing it. A reviewer answering a QA
+// question and then reporting its result used to wake the orchestrator twice,
+// and the early answer overtook other members' held results. Questions still
+// wake at once. When the set resolves, everything held goes out together.
+//
+// Everything else queued goes out in the same turn, in order: one message
+// per turn woke the orchestrator for each in turn. A member's turn stops
+// before a second ask (an instruction or question): members run on cheaper
+// models, which drop or blur the second of two tasks in one prompt. The
+// orchestrator takes every ask at once.
+func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 	resolved := func(id string) bool {
 		for _, a := range w.Assignments {
 			if a.ID == id {
@@ -622,11 +630,17 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int) {
 		}
 		return true
 	}
-	setDone := len(m.WaitingOn) > 0
+	setDone = len(m.WaitingOn) > 0
+	var doers []string
 	for _, id := range m.WaitingOn {
 		setDone = setDone && resolved(id)
+		for _, a := range w.Assignments {
+			if a.ID == id {
+				doers = append(doers, a.Member)
+			}
+		}
 	}
-	first := -1
+	asked, cut := false, false
 	for i, msg := range w.Messages {
 		if msg.Recipient != m.ID || msg.State != "queued" {
 			continue
@@ -639,24 +653,21 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int) {
 			}
 			continue
 		}
-		inSet := msg.Type == "result" && slices.Contains(m.WaitingOn, msg.Assignment)
-		if inSet {
-			if setDone {
-				batch = append(batch, i)
-			}
+		held := msg.Type == "result" && slices.Contains(m.WaitingOn, msg.Assignment) ||
+			(msg.Type == "answer" || msg.Type == "progress") && slices.Contains(doers, msg.Sender)
+		if held && !setDone || cut {
 			continue
 		}
-		if first < 0 {
-			first = i
+		if m.ID != w.Lead && (msg.Type == "instruction" || msg.Type == "question") {
+			if asked {
+				cut = true
+				continue
+			}
+			asked = true
 		}
+		batch = append(batch, i)
 	}
-	if len(batch) > 0 {
-		return batch, stale
-	}
-	if first >= 0 {
-		return []int{first}, stale
-	}
-	return nil, stale
+	return batch, stale, setDone
 }
 
 func (s *Store) TurnEnded(session string, messageIDs []string, failed bool) error {

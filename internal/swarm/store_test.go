@@ -28,6 +28,49 @@ func fixture(t *testing.T) (*Store, *Workspace) {
 	}
 	return s, w
 }
+
+// A member's turn carries everything queued in order, but at most one ask: a
+// second instruction waits for the next turn, with whatever came after it.
+// The orchestrator gets every ask at once.
+func TestTurnCarriesAtMostOneAsk(t *testing.T) {
+	s, w := fixture(t)
+	if _, e := s.Send("lead-session", "worker", "answer", "Main moved; rebase first", "", "", ""); e != nil {
+		t.Fatal(e)
+	}
+	a, e := s.Assign("lead-session", "worker", "Build timers", "task-1")
+	if e != nil {
+		t.Fatal(e)
+	}
+	// One active assignment per member, so the second ask is a plain
+	// instruction.
+	b, e := s.Send("lead-session", "worker", "instruction", "Also rebase onto main", "", "", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Send("lead-session", "worker", "answer", "Use the monotonic clock", "", "", ""); e != nil {
+		t.Fatal(e)
+	}
+	first, e := s.Next("worker-session")
+	if e != nil || len(first) != 2 || first[1].Assignment != a.ID {
+		t.Fatalf("first turn = %+v %v", first, e)
+	}
+	if e = s.TurnEnded("worker-session", []string{first[0].ID, first[1].ID}, false); e != nil {
+		t.Fatal(e)
+	}
+	second, e := s.Next("worker-session")
+	if e != nil || len(second) != 2 || second[0].ID != b.ID || second[1].Type != "answer" {
+		t.Fatalf("second turn = %+v %v", second, e)
+	}
+	for _, q := range []string{"Which clock?", "Rebase or merge?"} {
+		if _, e = s.Send("worker-session", w.Lead, "question", q, "", "", ""); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if lead, e := s.Next("lead-session"); e != nil || len(lead) != 2 {
+		t.Fatalf("orchestrator turn = %+v %v", lead, e)
+	}
+}
+
 func TestInboxAcrossIdleAndRecovery(t *testing.T) {
 	s, w := fixture(t)
 	a, e := s.Assign("lead-session", "worker", "Build timers", "task-1")

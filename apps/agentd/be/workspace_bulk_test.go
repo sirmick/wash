@@ -195,6 +195,10 @@ func TestConfigureInsideApprovedRootDoesNotAsk(t *testing.T) {
 	if err := call(map[string]any{"preview": true, "document": map[string]string{"path": filepath.Join(project, "docs", "PLAN.md")}, "qa_document": map[string]string{"path": filepath.Join(project, "docs", "QA.md")}, "members": member(filepath.Join(project, ".worktrees", "k5"))}); err != nil {
 		t.Fatalf("path inside the approved root asked: %v", err)
 	}
+	// Relative paths are the project root's, not the orchestrator's cwd.
+	if err := call(map[string]any{"preview": true, "document": map[string]string{"path": "docs/PLAN.md"}, "qa_document": map[string]string{"path": "docs/QA.md"}}); err != nil {
+		t.Fatalf("relative paths under the project root: %v", err)
+	}
 	// Outside the root is still a question — here refused, as nobody is home.
 	if err := call(map[string]any{"preview": true, "members": member(base)}); err == nil {
 		t.Fatal("a member cwd outside the project root was accepted without asking")

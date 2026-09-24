@@ -1534,8 +1534,8 @@ func inboxTurn(batch []swarm.Message, label func(swarm.Message) string) turn {
 }
 
 // inboxDisplay is the origin line and body a transcript shows for a batch:
-// one message as itself; several (a review round's results) as "N results"
-// with a heading per sender.
+// one message as itself; several (a review round's results, say) as
+// "N messages" with a heading per sender.
 func inboxDisplay(batch []swarm.Message, label func(swarm.Message) string) (origin, body string) {
 	if len(batch) == 1 {
 		return label(batch[0]), batch[0].Body
@@ -1544,5 +1544,5 @@ func inboxDisplay(batch []swarm.Message, label func(swarm.Message) string) (orig
 	for i, msg := range batch {
 		parts[i] = "#### " + label(msg) + "\n\n" + msg.Body
 	}
-	return fmt.Sprintf("%d results", len(batch)), strings.Join(parts, "\n\n")
+	return fmt.Sprintf("%d messages", len(batch)), strings.Join(parts, "\n\n")
 }
