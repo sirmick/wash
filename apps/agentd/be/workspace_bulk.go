@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/swarm"
@@ -432,34 +434,78 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	if err := json.Unmarshal(encoded, &receipt); err != nil {
 		return nil, err
 	}
+	// Launches run one after another (npx launches queue anyway) and can
+	// outlast the bridge's 90s request timeout. Tied to the request, the
+	// client's disconnect cancelled every later launch mid-setup. They run
+	// detached; the call reports what finished within launchWait, and a
+	// launch that fails after that tells the orchestrator itself.
+	var mu sync.Mutex
 	outcomes := map[string]any{}
-	for _, key := range keys {
-		w := ws.store.View(h.sessionID)
-		if w == nil || w.ID != receipt.WorkspaceID {
-			outcomes[key] = map[string]string{"state": "ended"}
-			continue
-		}
-		m := swarm.GetMember(w, receipt.Members[key])
-		if m == nil {
-			continue
-		}
-		if m.State == "pending" {
-			_, startErr := ws.spawn(ctx, h, m.ID)
-			if startErr != nil {
-				state := "ended"
-				if current := swarm.GetMember(ws.store.View(h.sessionID), m.ID); current != nil {
-					state = current.State
-				}
-				outcomes[key] = map[string]string{"state": state, "error": startErr.Error()}
-				continue
+	replied := false
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		launchCtx := context.WithoutCancel(ctx)
+		for _, key := range keys {
+			outcome := ws.launchOutcome(launchCtx, h, receipt.WorkspaceID, receipt.Members[key], key)
+			mu.Lock()
+			late := replied
+			if outcome != nil && !late {
+				outcomes[key] = outcome
+			}
+			mu.Unlock()
+			if failed, ok := outcome.(map[string]string); late && ok && failed["error"] != "" {
+				_ = ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, _ *swarm.Member) error {
+					_, err := swarm.AddMessage(w, receipt.Members[key], w.Lead, "lifecycle", key+" failed to launch: "+failed["error"]+". Resume it with member_control.", "", "", "")
+					return err
+				})
+				ws.signal()
 			}
 		}
-		current := ws.store.View(h.sessionID)
-		if current != nil {
-			outcomes[key] = swarm.GetMember(current, key)
+	}()
+	select {
+	case <-done:
+	case <-time.After(launchWait):
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	replied = true
+	for _, key := range keys {
+		if _, ok := outcomes[key]; !ok {
+			outcomes[key] = map[string]string{"state": "starting", "note": "still launching; a failure will be sent to you"}
 		}
 	}
 	return map[string]any{"receipt": result, "launches": outcomes}, nil
+}
+
+// launchWait bounds how long workspace_configure waits for its launches,
+// inside the bridge's 90s request timeout.
+var launchWait = 60 * time.Second
+
+// launchOutcome launches a pending member and reports its state, or nil when
+// it no longer exists.
+func (ws *workspaceService) launchOutcome(ctx context.Context, h *hosted, workspaceID, id, key string) any {
+	w := ws.store.View(h.sessionID)
+	if w == nil || w.ID != workspaceID {
+		return map[string]string{"state": "ended"}
+	}
+	m := swarm.GetMember(w, id)
+	if m == nil {
+		return nil
+	}
+	if m.State == "pending" {
+		if _, err := ws.spawn(ctx, h, m.ID); err != nil {
+			state := "ended"
+			if current := swarm.GetMember(ws.store.View(h.sessionID), m.ID); current != nil {
+				state = current.State
+			}
+			return map[string]string{"state": state, "error": err.Error()}
+		}
+	}
+	if current := ws.store.View(h.sessionID); current != nil {
+		return swarm.GetMember(current, key)
+	}
+	return nil
 }
 func knownProvider(provider string) error {
 	for _, a := range adapters {
