@@ -217,3 +217,11 @@ test('a member brief renders as Markdown above its turns, on a divider that reme
  await fireEvent.keyDown(divider, {key:'End'});
  expect(divider.getAttribute('aria-valuenow')).toBe('85');
 });
+
+test('a member waiting on a decision says the message box answers it', async () => {
+ const f = frame();
+ f.workspace!.messages = [{id:'d1',sender:'lead',recipient:'human',type:'decision_request',body:'Fixed address or relocatable?',delivery:'recorded'}];
+ render(() => <WorkspaceLayout frame={f} onAction={vi.fn()}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-member-lead'));
+ expect(screen.getByTestId('workspace-member-answers').textContent).toContain('Fixed address or relocatable?');
+});

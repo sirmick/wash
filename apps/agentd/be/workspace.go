@@ -729,28 +729,57 @@ func (ws *workspaceService) answer(h *hosted, raw json.RawMessage) (any, error) 
 		for i := range w.Messages {
 			q := &w.Messages[i]
 			if q.ID == a.ID && q.Type == "decision_request" && q.State == "recorded" {
-				target := q.Sender
-				q.State = "answered"
-				reply, err := swarm.AddMessage(w, "human", target, "decision_response", a.Body, a.ID, "", "")
-				if err == nil && q.Thread != "" {
-					err = swarm.LinkQA(w, q.Thread, reply)
-				}
-				return err
+				return answerDecision(w, q, a.Body)
 			}
 		}
 		return errors.New("decision no longer pending")
 	})
 	return map[string]any{"id": a.ID}, err
 }
+
+// answerDecision records the human's answer to a decision request and links
+// it into the request's QA thread, which is what lets that thread leave
+// awaiting-owner and be resolved.
+func answerDecision(w *swarm.Workspace, q *swarm.Message, body string) error {
+	q.State = "answered"
+	reply, err := swarm.AddMessage(w, "human", q.Sender, "decision_response", body, q.ID, "", "")
+	if err == nil && q.Thread != "" {
+		err = swarm.LinkQA(w, q.Thread, reply)
+	}
+	return err
+}
+
+// pendingDecision is the oldest decision request member is still waiting on
+// the human for, or nil.
+func pendingDecision(w *swarm.Workspace, member string) *swarm.Message {
+	for i := range w.Messages {
+		if q := &w.Messages[i]; q.Type == "decision_request" && q.State == "recorded" && q.Sender == member {
+			return q
+		}
+	}
+	return nil
+}
 func (ws *workspaceService) humanMessage(h *hosted, raw json.RawMessage) (any, error) {
 	a, err := parseWorkspaceArgs(raw)
 	if err != nil {
 		return nil, err
 	}
+	answered := ""
 	err = ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, _ *swarm.Member) error {
+		// Writing to a member that is waiting on a decision IS the answer:
+		// sent as a plain instruction it left the decision recorded, so its
+		// QA thread stayed awaiting-owner and could not be resolved.
+		if q := pendingDecision(w, a.Recipient); q != nil {
+			answered = q.ID
+			return answerDecision(w, q, a.Body)
+		}
 		_, err := swarm.AddMessage(w, "human", a.Recipient, "instruction", a.Body, "", "", "")
 		return err
 	})
+	if answered != "" {
+		ws.syncQADocuments()
+		return map[string]any{"ok": true, "answered": answered}, err
+	}
 	return map[string]any{"ok": true}, err
 }
 func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (any, error) {

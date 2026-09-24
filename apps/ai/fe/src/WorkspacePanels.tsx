@@ -107,6 +107,13 @@ export const WorkspaceMemberPanel: Component<{
           </div>
           <div style={{ 'min-height': 0 }}><AgentSession events={events} asks={asks} onAnswer={props.onAnswer} hideComposer /></div>
           </div>
+          {/* A member waiting on a decision takes the next message as its
+              answer (oldest first), linked into the decision's QA thread. */}
+          <Show when={w().messages.find((q) => q.type === 'decision_request' && q.delivery === 'recorded' && q.sender === m().id)}>{(q) => (
+            <div data-testid="workspace-member-answers" style={{ color: tokens.fgMuted, font: tokens.type.textSm, padding: `${tokens.spaceSm}px 0`, 'overflow-wrap': 'anywhere' }}>
+              Your message answers {m().name}'s decision: {q().body}
+            </div>
+          )}</Show>
           <textarea aria-label={`Message ${m().name}`} value={draft()} onInput={(e) => setDraft(e.currentTarget.value)} style={{ width: '100%', 'box-sizing': 'border-box' }} />
           <Button disabled={!draft().trim() || m().state === 'ended'} onClick={() => { props.onAction('member_message', { recipient: m().id, body: draft() }); setDraft(''); }}>Send message</Button>
         </section>
