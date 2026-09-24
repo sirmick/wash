@@ -70,6 +70,28 @@ func TestCodexFallbackUsesTheInstalledCodex(t *testing.T) {
 	}
 }
 
+// OpenCode edits and runs commands in its folder without asking unless told
+// otherwise, so wash always tells it to ask, whatever command launches it.
+func TestOpenCodeIsToldToAskForPermission(t *testing.T) {
+	a, ok := adapterByID("opencode")
+	if !ok {
+		t.Fatal("no opencode adapter")
+	}
+	want := []string{"OPENCODE_CONFIG_CONTENT=" + opencodePermissions}
+	for _, cfg := range []agentpolicy.AgentConfig{{}, {Command: "my-opencode"}} {
+		if got := a.builtinEnv(cfg); !reflect.DeepEqual(got, want) {
+			t.Errorf("builtin env with %+v = %v, want %v", cfg, got, want)
+		}
+	}
+	// agents.json's env is appended after the built-in one, so a person who
+	// sets their own OPENCODE_CONFIG_CONTENT still wins.
+	p := agentpolicy.Policy{Agents: map[string]agentpolicy.AgentConfig{"opencode": {Env: map[string]string{"OPENCODE_CONFIG_CONTENT": "{}"}}}}
+	env := append(a.builtinEnv(agentpolicy.AgentConfig{}), p.Merge("opencode", agentpolicy.Launch{}).Env...)
+	if env[len(env)-1] != "OPENCODE_CONFIG_CONTENT={}" {
+		t.Errorf("user env does not come last: %v", env)
+	}
+}
+
 // wash's config shape (env as a map, because a person writes it) becomes
 // ACP's (name/value objects), in a stable order.
 func TestACPMCPServersConversion(t *testing.T) {

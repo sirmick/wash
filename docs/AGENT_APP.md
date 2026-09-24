@@ -144,6 +144,70 @@ hand. Read its types; hand-roll the client.
   official Claude Agent SDK. Renamed from `@zed-industries/claude-code-acp`,
   which now only prints a deprecation warning.
 - **Gemini CLI, Copilot CLI** — native ACP, no adapter.
+- **OpenCode** — native ACP (`opencode acp`), npm package `opencode-ai`.
+  See below.
+
+### OpenCode, verified 2026-09-24 (OpenCode 1.18.32)
+
+Run against `internal/acp` with a scratch probe and the conformance test
+(`WASH_ACP_ADAPTER='opencode acp'`).
+
+- **The model is an ACP config option.** `session/new` returns `model`
+  (category `model`, type select) and `mode` (`build` | `plan`). Setting
+  `model` with `session/set_config_option` works, so
+  `configureWorkspaceSession` sets it like any other adapter's; no config
+  file or environment workaround is needed. After a model change an
+  `effort` option (category `thought_level`) appears, and it **resets to
+  `low`**, so a launch that cares must set it. Every OpenRouter model
+  checked offers `low | high | max | default` (Opus also `medium | xhigh`).
+- **The model list depends on credentials.** Without any key it lists only
+  OpenCode's free Zen models (`opencode/big-pickle`, the default).
+  With `OPENROUTER_API_KEY` in its environment it lists 770
+  `openrouter/<id>` models, including OpenRouter's self-updating
+  `openrouter/~vendor/family-latest` aliases. The list is not checked
+  against the key, so a wrong key surfaces on the first prompt.
+- **Presets are not accepted.** `openrouter/@preset/<name>` fails with
+  `model not found`: the option is a closed select.
+- **`OPENCODE_CONFIG_CONTENT`** is read as an extra config layer (JSON). It
+  could set `model` at launch, but ACP makes that unnecessary. Wash uses it
+  for permissions (next point).
+- **Permissions: by default OpenCode does not ask.** Edits and shell
+  commands inside the session folder ran with no
+  `session/request_permission` at all; only paths outside the folder asked
+  (kind `other`, `rawInput.filepath` / `rawInput.command`). Wash therefore
+  launches it with
+  `OPENCODE_CONFIG_CONTENT={"permission":{"edit":"ask","bash":"ask"}}`
+  (`adapters.go`, `opencodePermissions`). Asked, a command arrives as kind
+  `execute` with `rawInput.command`, the shape `toolRequest` already turns
+  into `Bash(…)`. An edit arrives as kind `edit` with the path as its title
+  (`rawInput.filepath`, lower case, so the title fallback supplies the
+  subject). Options are `once` / `always` / `reject` with the standard
+  kinds, so the approval queue and "Always allow" work unchanged.
+- **It does not use wash's `fs/*` or `terminal/*`**, although both are
+  advertised: it reads, writes and runs commands itself. The session-cwd
+  confinement of `acpfs.go` and `acpterm.go` therefore does not apply;
+  approvals are the only gate.
+- **Usage reaches the status bar.** It sends `usage_update` with `used`,
+  `size` and `cost` (the last is ignored), which agentd already reads.
+- `loadSession: true`. `authMethods` lists `opencode-login` even when
+  sessions open fine, as codex-acp does.
+- **Not yet verified: real work on OpenRouter models.** No OpenRouter key
+  was available, so edit-and-test turns on DeepSeek V4 Pro and GLM-5.3 have
+  not been run. The permission, usage and model-switch results above came
+  from the free default model and a dummy key.
+
+Model options offered by the other adapters on the same day, which the
+stacks' defaults (`apps/agentd/be/stacks.json`) are chosen from:
+
+| Adapter | `model` values | effort option |
+|---|---|---|
+| claude-agent-acp 0.81.2 | `default`, `opus[1m]`, `claude-fable-5-1[1m]`, `sonnet`, `haiku` | `effort`: default…max; **none for `haiku`** |
+| codex-acp 1.13.1 | `gpt-6-astra` (frontier), `gpt-6-sol` (workhorse), `gpt-6-luna` (fast), `gpt-5.6-*`, `gpt-5.5` | `reasoning_effort`: low…max (+`ultra` except luna); resets to `low` |
+
+Claude Code's short names (`sonnet`, `haiku`, `opus[1m]`) follow new
+releases; Fable 5.1 and every Codex model are pinned IDs. Codex's `read-only`
+mode still asks rather than refusing ("Always ask to edit external files"),
+so it does not make a reviewer read-only.
 
 **So Node is a prerequisite for the managed tier as a whole**, not just for
 Claude, and the "Codex first because its adapter is static" argument does

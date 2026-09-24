@@ -81,7 +81,22 @@ var adapters = []Adapter{
 		// Gemini speaks ACP natively rather than through an adapter.
 		Args: []string{"--experimental-acp"},
 	},
+	{
+		ID:      "opencode",
+		Name:    "OpenCode",
+		Command: "opencode",
+		// Native ACP, like Gemini; the npm package ships the binary.
+		Args:    []string{"acp"},
+		Package: "opencode-ai",
+	},
 }
+
+// opencodePermissions makes OpenCode ask before it edits a file or runs a
+// command. Its default is to do both inside the session folder without
+// asking (verified 2026-09-24, OpenCode 1.18.32), so no approval ever
+// reached wash's queue. Asked, it sends session/request_permission with
+// kind "execute" and rawInput.command, the same shape Claude sends.
+const opencodePermissions = `{"permission":{"edit":"ask","bash":"ask"}}`
 
 // npx installs and launches through one shared cache. Two cold launches can
 // otherwise observe each other's half-populated dependency tree: one of the
@@ -90,11 +105,20 @@ var adapters = []Adapter{
 // lock only through adapter initialization; live sessions remain concurrent.
 var npxLaunchMu sync.Mutex
 
-// builtinEnv points codex-acp at the Codex the user already installed. Without
-// this it resolves its bundled @openai/codex dependency from npx's transient
-// cache, needlessly depending on a second copy and its platform package.
-// User-configured adapters keep complete control of their own environment.
+// builtinEnv is the environment wash adds before agents.json's, which is
+// appended after it and so wins.
+//
+// codex-acp is pointed at the Codex the user already installed. Without this
+// it resolves its bundled @openai/codex dependency from npx's transient
+// cache, needlessly depending on a second copy and its platform package. A
+// configured codex command keeps complete control of its own environment.
+//
+// OpenCode is told to ask for permission (opencodePermissions), configured
+// command or not: approvals are wash's to see, not an implementation detail.
 func (a Adapter) builtinEnv(cfg agentpolicy.AgentConfig) []string {
+	if a.ID == "opencode" {
+		return []string{"OPENCODE_CONFIG_CONTENT=" + opencodePermissions}
+	}
 	if a.ID != "codex" || cfg.Command != "" {
 		return nil
 	}
