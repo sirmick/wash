@@ -428,6 +428,31 @@ const hintStyle: JSX.CSSProperties = {
   'margin-left': `${tokens.spaceXs}px`,
 };
 
+/** A workspace inbox message: "<sender> · <type>", a blank line, the body.
+ *  A teammate's body is agent-authored Markdown, the same as the agent's own
+ *  prose, and was showing its ** and lists raw. A human's stays literal, for
+ *  the reason the user row gives: Markdown would eat what they meant to type.
+ *  The origin line becomes a small header instead of the body's first line. */
+export const Collaboration: Component<{ text: string }> = (p) => {
+  const split = () => {
+    const i = p.text.indexOf('\n\n');
+    return i < 0 ? { origin: '', body: p.text } : { origin: p.text.slice(0, i), body: p.text.slice(i + 2) };
+  };
+  const fromHuman = () => split().origin.startsWith('human ·');
+  return (
+    <div data-testid="agent-collaboration" style={{ 'white-space': 'normal' }}>
+      <Show when={split().origin}>
+        <div style={{ font: tokens.type.monoSm, color: tokens.fgMuted, 'margin-bottom': `${tokens.spaceXs}px` }}>
+          {split().origin}
+        </div>
+      </Show>
+      <Show when={!fromHuman()} fallback={<div style={{ 'white-space': 'pre-wrap' }}>{split().body}</div>}>
+        <Markdown text={split().body} />
+      </Show>
+    </div>
+  );
+};
+
 /** A pending question, rendered inline as a second view of agentd's queue. */
 const AskRow: Component<{
   ask: AgentAsk;
@@ -945,7 +970,11 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                 {/* Agent-authored prose is Markdown; what you typed is literal.
                     Rendering your own prompt as Markdown would eat the
                     asterisks and backticks you meant to send. */}
-                <Show when={e.kind === 'message' || e.kind === 'thought'} fallback={<>{e.text}</>}>
+                <Show when={e.kind === 'message' || e.kind === 'thought'} fallback={
+                  <Show when={e.kind === 'collaboration'} fallback={<>{e.text}</>}>
+                    <Collaboration text={e.text ?? ''} />
+                  </Show>
+                }>
                   <Markdown text={e.text ?? ''} />
                 </Show>
               </div>

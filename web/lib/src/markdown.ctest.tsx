@@ -70,3 +70,21 @@ test('Markdown lists numbered with repeated ones count forward while streaming',
  const {container}=render(()=><Markdown text={'1. First\n\n1. Second\n\n1. Third\n\n'}/>);
  expect(container.textContent).toBe('1.First2.Second3.Third');
 });
+
+// A teammate's inbox message rendered its Markdown raw (seen live: a
+// "**Delivered:**" report). A human's message stays literal.
+test('a workspace message renders a teammate body as Markdown and a human one literally', async () => {
+  const { Collaboration } = await import('./agent-session.tsx');
+  const teammate = render(() => (
+    <Collaboration text={'G1 implementer (b2e9) · result\n\n**Delivered:** 6 files\n\n- one\n- two'} />
+  ));
+  expect(teammate.container.querySelector('strong')?.textContent).toBe('Delivered:');
+  expect(teammate.container.textContent).toContain('•one');
+  expect(teammate.container.textContent).not.toContain('- one');
+  expect(teammate.container.textContent).toContain('G1 implementer (b2e9) · result');
+  expect(teammate.container.textContent).not.toContain('**');
+  cleanup();
+  const human = render(() => <Collaboration text={'human · decision_response\n\ngo with **A**'} />);
+  expect(human.container.querySelector('strong')).toBeNull();
+  expect(human.container.textContent).toContain('go with **A**');
+});
