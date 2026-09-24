@@ -370,3 +370,45 @@ func TestQADocumentActiveOwnershipAndMalformedCheckpointAreAtomic(t *testing.T) 
 		t.Fatal("damaged original overwritten")
 	}
 }
+
+// A workspace whose orchestrator is not running (its reopen failed, or Wash
+// restarted and nobody resumed it) held its QA file with no session able to
+// end it, so a new orchestrator could not set up there. Any session other
+// than a member ends it by ID; a running one it cannot touch.
+func TestWorkspaceEndByIDEndsAStaleWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "QA.md")
+	s, _ := swarm.Open(filepath.Join(dir, "state.json"))
+	ws := &workspaceService{store: s}
+	stale := &hosted{sessionID: "stale", agent: "codex", cwd: dir}
+	setup := map[string]any{"workspace": map[string]string{"name": "Project"}, "qa_document": map[string]string{"path": path}}
+	if _, err := qaFileCall(t, ws, stale, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+	old := s.View(stale.sessionID)
+	next := &hosted{sessionID: "next", agent: "codex", cwd: dir}
+	if _, err := qaFileCall(t, ws, next, "workspace_configure", setup); err == nil || !strings.Contains(err.Error(), old.ID) {
+		t.Fatalf("conflict does not name the holder: %v", err)
+	}
+	if _, err := qaFileCall(t, ws, next, "workspace_end", map[string]any{"workspace_id": old.ID[:4]}); err == nil {
+		t.Fatal("ended by a short prefix")
+	}
+	hostedMu.Lock()
+	hostedAll["stale"] = stale
+	hostedMu.Unlock()
+	if _, err := qaFileCall(t, ws, next, "workspace_end", map[string]any{"workspace_id": old.ID}); err == nil {
+		t.Fatal("ended a running workspace")
+	}
+	hostedMu.Lock()
+	delete(hostedAll, "stale")
+	hostedMu.Unlock()
+	if _, err := qaFileCall(t, ws, next, "workspace_end", map[string]any{"workspace_id": old.ID[:8]}); err != nil {
+		t.Fatal(err)
+	}
+	if w := s.View(stale.sessionID); w != nil {
+		t.Fatalf("stale workspace survived: %q", w.State)
+	}
+	if _, err := qaFileCall(t, ws, next, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+}

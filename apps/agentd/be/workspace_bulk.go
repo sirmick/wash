@@ -174,6 +174,9 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if !swarm.ValidText(m.Name, 120) || !swarm.ValidText(m.Instructions, 30000) || !slices.Contains([]string{"resident", "ephemeral"}, m.Lifetime) || m.Lifetime == "ephemeral" && !swarm.ValidText(m.Task, 32768) || len(m.Task) > 32768 {
 			return nil, errors.New("invalid member definition")
 		}
+		if len(memberBrief(swarm.Member{ID: swarm.ID(), Instructions: m.Instructions, InitialTask: m.Task}, swarm.ID())) > 32768 {
+			return nil, errors.New("instructions and task together exceed 32 KiB: a member receives them as one first message; put detail in a file it can read")
+		}
 		if m.Package != "" && !swarm.ValidProfileName(m.Package) || !slices.Contains([]string{"", "architect", "implementer", "reviewer"}, m.Role) {
 			return nil, errors.New("invalid member package/role")
 		}
@@ -247,7 +250,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if qaDoc != nil {
 					for _, other := range allWorkspaces {
 						if other.ID != w.ID && other.State != "ended" && other.QADocument != nil && (other.QADocument.Path == qaDoc.Path || qaRestore != nil && qaRestore.DocumentID != "" && qaOwner(&other) == qaRestore.DocumentID) {
-							return errors.New("QA document is used by another workspace")
+							return fmt.Errorf("QA document is used by workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", other.ID, other.Name, other.ID)
 						}
 					}
 				}

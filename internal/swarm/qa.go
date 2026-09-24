@@ -325,7 +325,7 @@ func (s *Store) ClaimQADocument(session string) error {
 			old := &st.Workspaces[i]
 			if old.ID != w.ID && old.QADocument != nil && (old.QADocument.Path == w.QADocument.Path || w.QADocumentID != "" && (old.QADocumentID == w.QADocumentID || old.ID == w.QADocumentID)) {
 				if old.State != "ended" {
-					return errors.New("QA document belongs to another active workspace")
+					return fmt.Errorf("QA document belongs to active workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", old.ID, old.Name, old.ID)
 				}
 				old.QADocument = nil
 			}

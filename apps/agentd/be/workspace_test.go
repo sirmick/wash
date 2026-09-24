@@ -584,3 +584,28 @@ func TestResultCCIsANonWakingCopy(t *testing.T) {
 		t.Fatalf("cc woke the implementer: %+v", got)
 	}
 }
+
+// A member's role and initial task are one first message. Sent as two, the
+// role went out alone and was taken as the go-ahead: an implementer whose
+// task said "PLAN FIRST, no code yet" had started coding before it read it.
+// Without a task the role says to wait rather than leaving it open.
+func TestMemberBriefCarriesTheTaskOrSaysWait(t *testing.T) {
+	m := swarm.Member{ID: "m1", Instructions: "You implement K5.", InitialTask: "PLAN FIRST, no code yet."}
+	withTask := memberBrief(m, "a1")
+	if !strings.HasPrefix(withTask, "You implement K5.") || !strings.Contains(withTask, "## Your assignment (a1)") || !strings.HasSuffix(withTask, "PLAN FIRST, no code yet.") || strings.Contains(withTask, "no assignment yet") {
+		t.Fatalf("brief with task: %q", withTask)
+	}
+	m.InitialTask = ""
+	if idle := memberBrief(m, ""); !strings.Contains(idle, "Do not start work") || strings.Contains(idle, "Your assignment (") {
+		t.Fatalf("brief without task: %q", idle)
+	}
+	dir := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(dir, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex", cwd: dir}
+	member := map[string]any{"name": "Impl", "provider": "codex", "lifetime": "resident", "instructions": strings.Repeat("i", 20000), "task": strings.Repeat("t", 20000)}
+	_, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "P"}, "members": map[string]any{"impl": member}, "preview": true})
+	if err == nil || !strings.Contains(err.Error(), "together exceed") {
+		t.Fatalf("oversized brief accepted: %v", err)
+	}
+}

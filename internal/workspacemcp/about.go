@@ -2,7 +2,7 @@ package workspacemcp
 
 import "github.com/sirmick/wash/internal/version"
 
-const APIVersion = "3.1.0"
+const APIVersion = "3.2.0"
 
 // Instructions is shared by discovery and MCP initialization. Describe only the
 // implemented API and keep provider-independent discovery consistent.

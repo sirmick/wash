@@ -1,6 +1,6 @@
 # Bulk workspace MCP contract
 
-Implemented API 3.1.0, 2026-09-24. This supersedes the incremental v1 catalog in
+Implemented API 3.2.0, 2026-09-24. This supersedes the incremental v1 catalog in
 [the original design](AGENT_SWARM.md). New discovery advertises exactly eleven
 tools. Removed v1 operations return Unknown tool; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
@@ -21,13 +21,23 @@ available, with what the turn carried delivered; `pause` still also stops dispat
 member `subagents:"deny"` removes Claude's own Agent/Task tool at launch and on resume; adapters
 wash cannot restrict fail to launch.
 
+API 3.2 lets a session end a stale workspace. `workspace_end` with `workspace_id` (the full ID or
+a unique prefix of at least 8) ends another open workspace whose orchestrator session is not
+running in Wash, e.g. one whose reopen failed and that still holds its QA file. The orchestrator
+of a workspace, or a session in none, may do this; a member may not, and a workspace whose
+orchestrator is running is refused. A QA-file conflict names the holding workspace and this call.
+A member's role instructions and initial task are now one first message, with the task under
+`## Your assignment (<id>)`; together they must fit the 32 KiB message limit, checked at configure.
+Sent as two, the role went out alone and was taken as the go-ahead before the task's "plan first"
+arrived. A member launched without a task is told to wait for its assignment.
+
 ## Eleven tools
 
 | Tool | Responsibility |
 | --- | --- |
 | `workspace_get` | Compact team view by default; `view:state` full JSON; `view:about` discovery; `view:qa` threads/generated Markdown |
 | `workspace_configure` | Atomic setup/patch: profiles, settings, keyed member reservations, plan, document |
-| `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history |
+| `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history; `workspace_id` ends a stale workspace |
 | `member_control` | Pause/resume/interrupt/end IDs, keys or a package; orchestrator `configure` of live settings; per-member outcomes |
 | `member_update` | Atomic own status/emoji/waiting, results and QA updates |
 | `message_send` | One message or an atomic batch; optional QA opening/thread linkage |
@@ -219,7 +229,8 @@ member tab, where existing human controls answer the request.
 `internal/workspacemcp/about.go` owns the concise Instructions string shared by MCP
 initialization and about. It covers discovery, bulk reconciliation, keyed launches, resident
 lifetimes, QA, human decisions/approvals, waiting, uncertain delivery and deliberate teardown.
-Children additionally receive their supplied role instructions and a short membership suffix;
+Children additionally receive, as one first message, their supplied role instructions, a short
+membership suffix and their initial task (or, without one, an instruction to wait for it);
 every inbox turn has a server-authored identity prefix and serialized attributed message.
 Children have fresh provider context, not the parent's transcript or launcher default prompt.
 See [Redoubt's complete operating example](examples/redoubt-workspace.md).

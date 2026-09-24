@@ -271,6 +271,7 @@ type workspaceArgs struct {
 	After           string `json:"after"`
 	IncludeMessages bool   `json:"include_messages"`
 	Limit           int    `json:"limit"`
+	Workspace       string `json:"workspace_id"`
 }
 
 func parseWorkspaceArgs(raw json.RawMessage) (workspaceArgs, error) {
@@ -361,6 +362,13 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		hostedMu.Unlock()
 		return map[string]any{"workspace": w, "approvals": workspaceApprovals(w), "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
 	case "workspace_end":
+		if a.Workspace != "" {
+			lead, err := ws.staleLead(sid, a.Workspace)
+			if err != nil {
+				return nil, err
+			}
+			sid = lead
+		}
 		old, err := ws.end(sid)
 		if err != nil {
 			return nil, err
@@ -555,18 +563,19 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		v.AutoApprove = autoApprove
 		v.State = "available"
 		member = *v
-		// Queue the role before assignments, using the same durable dispatch and
-		// concurrency limits as every later inbox turn.
-		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", member.Instructions+"\n\nYou are member "+member.ID+" in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Resident package workers remain available for fixes until the orchestrator ends them.", "", "", "")
-		if e != nil {
-			return e
-		}
+		// The role and the initial task are one message, so the first turn
+		// carries both. As two, the role went out alone and its reader took
+		// it as the go-ahead: an implementer whose task said "PLAN FIRST, no
+		// code yet" was already coding when the task arrived. Queued like
+		// every later inbox turn, under the same concurrency limits.
+		assignment := ""
 		if member.InitialTask != "" {
 			task := swarm.Assignment{ID: swarm.ID(), Assigner: v.Creator, Member: v.ID, Text: member.InitialTask, State: "assigned"}
 			w.Assignments = append(w.Assignments, task)
 			initialAssignment = &task
-			_, e = swarm.AddMessage(w, v.Creator, v.ID, "instruction", member.InitialTask, "", task.ID, "")
+			assignment = task.ID
 		}
+		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", memberBrief(member, assignment), "", assignment, "")
 		return e
 	})
 	if err != nil {
@@ -585,6 +594,16 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 	}
 	return member, nil
 }
+// memberBrief is a member's first message: its role, how a workspace member
+// works, and its initial task (assignment), or, without one, to wait for it.
+func memberBrief(m swarm.Member, assignment string) string {
+	brief := m.Instructions + "\n\nYou are member " + m.ID + " in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Resident package workers remain available for fixes until the orchestrator ends them."
+	if assignment == "" {
+		return brief + "\n\nYou have no assignment yet. Do not start work: set waiting with member_update and end your turn. Your assignment arrives as a message."
+	}
+	return brief + "\n\n## Your assignment (" + assignment + ")\n\nFollow it as written, including any limit it sets on what to do first.\n\n" + m.InitialTask
+}
+
 func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id string) (any, error) {
 	w := ws.store.View(h.sessionID)
 	if w == nil {
@@ -1193,6 +1212,58 @@ func (ws *workspaceService) end(lead string) (*swarm.Workspace, error) {
 	}
 	ws.syncQADocuments()
 	return old, nil
+}
+
+// staleLead is the orchestrator session of the workspace id names (in full or
+// by a unique prefix of at least 8), for workspace_end to end from another
+// session. Only a workspace whose orchestrator is not running in Wash: a lead
+// whose reopen failed leaves its workspace paused and holding its QA file,
+// and nothing could end it short of editing wash's store by hand. A member
+// cannot end workspaces; its own orchestrator decides that.
+func (ws *workspaceService) staleLead(caller, id string) (string, error) {
+	if own := ws.store.View(caller); own != nil {
+		if self := workspaceMember(own, caller); self == nil || self.ID != own.Lead {
+			return "", errors.New("orchestrator operation")
+		}
+		if own.ID == id {
+			return caller, nil
+		}
+	}
+	if len(id) < 8 {
+		return "", errors.New("workspace_id needs at least 8 characters")
+	}
+	var found []swarm.Workspace
+	for _, w := range ws.store.Snapshot().Workspaces {
+		if w.State != "ended" && strings.HasPrefix(w.ID, id) {
+			found = append(found, w)
+		}
+	}
+	if len(found) == 0 {
+		return "", errors.New("no open workspace with that ID")
+	}
+	if len(found) > 1 {
+		return "", errors.New("workspace_id prefix is ambiguous; give the full ID")
+	}
+	lead := workspaceLeadSession(found[0])
+	if lead == caller {
+		return caller, nil
+	}
+	if lead == "" {
+		return "", errors.New("workspace has no orchestrator session")
+	}
+	if workspaceHosted(lead) != nil {
+		return "", errors.New("workspace " + found[0].ID + " is running in Wash; its orchestrator ends it")
+	}
+	return lead, nil
+}
+
+func workspaceMember(w *swarm.Workspace, session string) *swarm.Member {
+	for i := range w.Members {
+		if w.Members[i].Session == session && w.Members[i].State != "ended" {
+			return &w.Members[i]
+		}
+	}
+	return nil
 }
 
 // A user can end a session from the ordinary Agent controls too. Keep that
