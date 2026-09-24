@@ -101,11 +101,13 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 		}
 		// GUI-only operations retain human attribution. Never expose this route in MCP.
 		go func() {
-			var result any
+			// Only member_inspect's answer is read: the other operations'
+			// effects reach the window through the next frame.
+			var transcript *agentproto.WorkspaceTranscript
 			var err error
 			switch req.Name {
 			case "decision_response":
-				result, err = ws.answer(h, req.Arguments)
+				_, err = ws.answer(h, req.Arguments)
 			case "member_open":
 				var a struct {
 					ID string `json:"member_id"`
@@ -140,6 +142,7 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 						break
 					}
 					args, _ := json.Marshal(map[string]any{"action": "resume", "member_ids": []string{a.Member}})
+					var result any
 					result, err = ws.call(context.Background(), lead, workspacemcp.Call{Name: "member_control", Arguments: args})
 					// Surface this single member's failure in the GUI, even though
 					// bulk process controls return errors in individual outcomes.
@@ -161,13 +164,13 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 					}
 				}
 			case "member_message":
-				result, err = ws.humanMessage(h, req.Arguments)
+				_, err = ws.humanMessage(h, req.Arguments)
 			case "member_inspect":
 				var a workspaceArgs
 				a, err = parseWorkspaceArgs(req.Arguments)
 				if err == nil {
 					if a.Member != "" {
-						result, err = ws.inspect(h, req.Arguments)
+						transcript, err = ws.inspect(h, req.Arguments)
 					}
 					if err == nil {
 						ws.mu.Lock()
@@ -178,11 +181,11 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 			default:
 				err = errors.New("unknown workspace UI operation")
 			}
-			e := ""
+			reply := agentproto.WorkspaceResult{Key: h.key, Operation: req.Name, Transcript: transcript}
 			if err != nil {
-				e = err.Error()
+				reply.Error = err.Error()
 			}
-			_ = c.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{"kind": "workspace_result", "key": h.key, "operation": req.Name, "result": result, "error": e})
+			_ = agentproto.Send(c, wire.Recipient{InstanceID: from.InstanceID}, reply)
 			ws.signal()
 			ws.publish(false)
 		}()
@@ -938,7 +941,7 @@ func (ws *workspaceService) humanMessage(h *hosted, raw json.RawMessage) (any, e
 	}
 	return map[string]any{"ok": true}, err
 }
-func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (any, error) {
+func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (*agentproto.WorkspaceTranscript, error) {
 	a, err := parseWorkspaceArgs(raw)
 	if err != nil {
 		return nil, err
@@ -964,7 +967,7 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (any, error)
 				}
 			}
 		}
-		return map[string]any{"member_id": m.ID, "events": events, "asks": pending}, nil
+		return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Asks: pending}, nil
 	}
 	events, err := loadTranscript(m.Session)
 	if err != nil {
@@ -976,7 +979,7 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (any, error)
 	if events == nil {
 		events = []agentproto.Event{}
 	}
-	return map[string]any{"member_id": m.ID, "events": events, "note": "Archived conversation; reopen through Agent History to resume."}, nil
+	return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Note: "Archived conversation; reopen through Agent History to resume."}, nil
 }
 func readWorkspaceDocument(path string) (string, error) {
 	info, err := os.Lstat(path)
@@ -1039,7 +1042,7 @@ func (ws *workspaceService) publish(force bool) {
 			sessionID = h.sessionID
 		}
 		w := ws.store.View(sessionID)
-		msg := map[string]any{"kind": "workspace_state", "key": key, "workspace": w}
+		frame := agentproto.WorkspaceState{Key: key, Workspace: w}
 		if w != nil {
 			ws.mu.Lock()
 			selected := ws.previews[key]
@@ -1047,36 +1050,38 @@ func (ws *workspaceService) publish(force bool) {
 			if selected != "" && h != nil {
 				raw, _ := json.Marshal(workspaceArgs{Member: selected})
 				if preview, err := ws.inspect(h, raw); err == nil {
-					msg["preview"] = preview
+					frame.Preview = preview
 				}
 			}
-			activity, detail, usage := workspaceRuntime(w)
-			msg["activity"], msg["activity_detail"], msg["usage"] = activity, detail, usage
-			msg["approvals"] = workspaceApprovals(w)
-			msg["qa_markdown"] = swarm.QAMarkdown(w)
-			msg["qa_document_status"] = ws.qaDocumentStatus(w)
+			frame.Activity, frame.ActivityDetail, frame.Usage = workspaceRuntime(w)
+			frame.Approvals = workspaceApprovals(w)
+			frame.QAMarkdown = swarm.QAMarkdown(w)
+			status := ws.qaDocumentStatus(w)
+			frame.QADocumentStatus = &status
 			qaSummary(w)
 			if w.Document != nil {
 				text, err := readWorkspaceDocument(w.Document.Path)
-				msg["document_text"] = text
+				frame.DocumentText = text
 				if err != nil {
-					msg["document_error"] = err.Error()
+					frame.DocumentError = err.Error()
 				}
 			}
 		}
-		b, _ := json.Marshal(msg)
+		// Compared and diffed without a sequence: two frames that say the
+		// same thing are the same frame, whichever number each would carry.
+		b, _ := json.Marshal(frame)
 		if !force && string(ws.views[instance]) == string(b) {
 			continue
 		}
 		sequence := ws.sequences[instance] + 1
-		outgoing := msg
+		frame.Sequence = sequence
+		var outgoing any = frame
 		if !force {
 			if patch := workspacePatch(ws.views[instance], b, ws.sequences[instance], sequence); patch != nil {
-				outgoing = patch
+				outgoing = *patch
 			}
 		}
-		outgoing["sequence"] = sequence
-		if err := ws.conn.SendAppMsgToBulk(wire.Recipient{InstanceID: instance}, outgoing); err == nil {
+		if err := agentproto.Send(ws.conn, wire.Recipient{InstanceID: instance}, outgoing); err == nil {
 			ws.views[instance] = b
 			ws.sequences[instance] = sequence
 		}

@@ -3,67 +3,23 @@ import type { Component } from 'solid-js';
 import { Button, Markdown, tokens, agentActivityLabel, agentActivityColor, agentActivityPulses } from '@wash/ui';
 import type { agentproto } from '@wash/ui';
 
-export interface WorkspaceItem { id: string; text: string; emoji?: string; state: string; revision: number }
-export interface WorkspaceProfile { capability?: string; provider: string; model?: string; thinking?: string; configs?: Record<string, string> }
-export interface WorkspaceUsage { used: number; size: number }
-export interface WorkspaceMember {
-  usage?: WorkspaceUsage;
-  profile?: string; launch_settings?: WorkspaceProfile; initial_configs?: Record<string, string>;
-  id: string; name: string; provider: string; lifetime: string; state: string;
-  package?: string; role?: string;
-  status?: string; emoji?: string; waiting?: string; session_id: string;
-}
-export interface WorkspaceMessage {
-  id: string; sender: string; recipient: string; type: string; body: string;
-  delivery: string; assignment_id?: string; thread_id?: string;
-}
-export interface QAThread { id: string; package: string; title: string; assignee: string; state: string; blocking: boolean; revision: number }
-export interface WorkspaceState {
-  qa?: QAThread[];
-  qa_document?: {path: string; title?: string};
-  profiles?: Record<string, WorkspaceProfile>; default_profile?: string;
-  packages?: Record<string, { title: string }>;
-  id: string; name: string; state: string; revision: number; orchestrator: string;
-  items: WorkspaceItem[]; members: WorkspaceMember[]; messages: WorkspaceMessage[];
-  document?: { path: string; title?: string };
-  assignments: { id: string; member_id: string; text: string; state: string; result?: string }[];
-}
-export interface WorkspaceFrame {
-  sequence?: number;
-  qa_markdown?: string;
-  qa_document_status?: {path?: string; state: string; error?: string};
-  approvals?: (agentproto.Ask & {member_id: string})[];
-  preview?: { member_id: string; events: agentproto.Event[]; asks?: agentproto.Ask[]; note?: string };
-  workspace: WorkspaceState | null;
-  activity?: Record<string, string>;
-  activity_detail?: Record<string, string>;
-  usage?: Record<string, WorkspaceUsage>;
-  document_text?: string;
-  document_error?: string;
-}
-export interface WorkspaceResult {
-  operation: string;
-  result?: { member_id?: string; events?: agentproto.Event[]; asks?: agentproto.Ask[]; note?: string };
-  error?: string;
-}
-
 export const WorkspaceSidebar: Component<{
-  frame: WorkspaceFrame;
-  result?: WorkspaceResult;
+  frame: agentproto.WorkspaceState;
+  result?: agentproto.WorkspaceResult;
   selected: string;
   onSelect: (id: string) => void;
   onAction: (name: string, args: Record<string, unknown>) => void;
 }> = (props) => {
   const [answers, setAnswers] = createSignal<Record<string, string>>({});
   const w = () => props.frame.workspace!;
-  const questions = createMemo(() => w().messages.filter((m) => m.type === 'decision_request' && m.delivery === 'recorded'));
+  const questions = createMemo(() => (w().messages ?? []).filter((m) => m.type === 'decision_request' && m.delivery === 'recorded'));
   // A decision asked on a QA thread also puts the thread awaiting-owner; the
   // decision form stands for both, so the thread is listed only without one.
   const ownerThreads = createMemo(() => (w().qa ?? []).filter(q => q.state === 'awaiting-owner' && !questions().some(m => m.thread_id === q.id)));
   const needsAttention = () => (props.frame.approvals?.length ?? 0) + questions().length + ownerThreads().length + (props.frame.qa_document_status?.state === 'error' ? 1 : 0);
-  const label = (id: string) => id === 'human' ? 'You' : w().members.find((m) => m.id === id)?.name ?? id;
-  const activity = (m: WorkspaceMember) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
-  const usage = (m: WorkspaceMember) => props.frame.usage?.[m.id] ?? m.usage;
+  const label = (id: string) => id === 'human' ? 'You' : (w().members ?? []).find((m) => m.id === id)?.name ?? id;
+  const activity = (m: agentproto.Member) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
+  const usage = (m: agentproto.Member) => props.frame.usage?.[m.id] ?? m.usage;
   const count = (n: number) => n.toLocaleString('en-US');
   // "CT1 · Console input-flood test" where the orchestrator named it, the
   // bare code otherwise: a code alone is what made the sidebar cryptic.
@@ -74,13 +30,13 @@ export const WorkspaceSidebar: Component<{
   // the rendered rows (a live activity dot) rather than rebuilding them.
   const teamCodes = createMemo(() => {
     const order: string[] = [];
-    for (const m of w().members) {
+    for (const m of (w().members ?? [])) {
       const code = m.package ?? '';
       if (!order.includes(code)) order.push(code);
     }
     return order.sort((a, b) => (a === '' ? -1 : b === '' ? 1 : 0));
   }, undefined, { equals: (a, b) => a.length === b.length && a.every((c, i) => c === b[i]) });
-  const membersOf = (code: string) => w().members.filter((m) => (m.package ?? '') === code);
+  const membersOf = (code: string) => (w().members ?? []).filter((m) => (m.package ?? '') === code);
   const heading = { font: tokens.type.titleSm, padding: `${tokens.spaceSm}px 0` };
   return (
     <aside data-testid="workspace-sidebar" aria-label="Agent workspace" style={{
@@ -123,7 +79,7 @@ export const WorkspaceSidebar: Component<{
         </section>
       </Show>
       <Button data-testid="workspace-plan-link" onClick={() => props.onSelect('plan')}>
-        Plan · {w().items.filter((item) => item.state === 'done').length}/{w().items.length}
+        Plan · {(w().items ?? []).filter((item) => item.state === 'done').length}/{(w().items ?? []).length}
       </Button>
       <Show when={w().document}>
         <Button onClick={() => props.onSelect('plan')}>{w().document?.title || 'Project document'}</Button>
@@ -176,7 +132,7 @@ export const WorkspaceSidebar: Component<{
       )}</For>
       <details>
         <summary data-wash-hit style={heading}>Messages</summary>
-        <For each={w().messages.slice(-80)}>{(msg) => (
+        <For each={(w().messages ?? []).slice(-80)}>{(msg) => (
           <div style={{ padding: `${tokens.spaceSm}px 0`, 'overflow-wrap': 'anywhere' }}>
             <small>{label(msg.sender)} → {label(msg.recipient)} · {msg.type} · {msg.delivery}</small>
             <div style={{ 'white-space': 'pre-wrap' }}>{msg.body}</div>

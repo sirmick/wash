@@ -1,18 +1,18 @@
+import type { agentproto } from '@wash/ui';
 import { For, Show, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { AgentSession, Button, Markdown, Splitter, tokens } from '@wash/ui';
-import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
 
 export type WorkspaceAction = (name: string, args: Record<string, unknown>) => void;
 const heading = { font: tokens.type.titleSm, padding: `${tokens.spaceSm}px 0` };
 
-export const WorkspacePlan: Component<{ frame: WorkspaceFrame }> = (props) => {
+export const WorkspacePlan: Component<{ frame: agentproto.WorkspaceState }> = (props) => {
   const w = () => props.frame.workspace!;
   return <section data-testid="workspace-plan" style={{ height: '100%', overflow: 'auto', padding: `${tokens.spaceMd}px`, 'box-sizing': 'border-box' }}>
-      <Show when={w().items.length}>
+      <Show when={(w().items ?? []).length}>
         <div style={heading}>Plan</div>
         <ol style={{ margin: 0, padding: 0, 'list-style': 'none' }}>
-          <For each={w().items}>{(item) => (
+          <For each={(w().items ?? [])}>{(item) => (
             <li data-testid={`workspace-item-${item.id}`} style={{ padding: `${tokens.spaceSm}px 0`, display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'baseline' }}>
               <span aria-hidden="true">{item.emoji || ({ pending: '○', active: '◉', blocked: '⏳', done: '✓' }[item.state])}</span>
               <span style={{ flex: 1, 'overflow-wrap': 'anywhere' }}>{item.text}</span>
@@ -46,24 +46,24 @@ const savedMemberSplit = () => {
 };
 
 export const WorkspaceMemberPanel: Component<{
-  frame: WorkspaceFrame; result?: WorkspaceResult; memberID: string;
+  frame: agentproto.WorkspaceState; result?: agentproto.WorkspaceResult; memberID: string;
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
   draft: string; onDraft: (draft: string) => void; onAction: WorkspaceAction;
 }> = (props) => {
   const w = () => props.frame.workspace!;
-  const member = () => w().members.find((m) => m.id === props.memberID);
+  const member = () => (w().members ?? []).find((m) => m.id === props.memberID);
   const draft = () => props.draft;
   const setDraft = (text: string) => props.onDraft(text);
-  const events = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.events
-    : props.result?.operation === 'member_inspect' && props.result.result?.member_id === props.memberID ? props.result.result.events ?? [] : [];
-  const asks = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.asks ?? [] : props.result?.operation === 'member_inspect' && props.result.result?.member_id === props.memberID ? props.result.result.asks ?? [] : [];
+  const events = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.events ?? []
+    : props.result?.operation === 'member_inspect' && props.result.transcript?.member_id === props.memberID ? props.result.transcript.events ?? [] : [];
+  const asks = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.asks ?? [] : props.result?.operation === 'member_inspect' && props.result.transcript?.member_id === props.memberID ? props.result.transcript.asks ?? [] : [];
   let panes!: HTMLDivElement;
   const [split, setSplit] = createSignal(savedMemberSplit());
   const persistSplit = () => {
     try { localStorage.setItem(MEMBER_SPLIT_KEY, String(split())); } catch { /* storage can be disabled */ }
   };
   const previewNote = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.note
-    : props.result?.operation === 'member_inspect' && props.result.result?.member_id === props.memberID ? props.result.result.note : undefined;
+    : props.result?.operation === 'member_inspect' && props.result.transcript?.member_id === props.memberID ? props.result.transcript.note : undefined;
   return <div style={{ height: '100%', 'min-height': 0, padding: `${tokens.spaceMd}px`, 'box-sizing': 'border-box' }}>
       <Show when={member()}>{(m) => (
         <section data-testid="workspace-member-detail" style={{ height: '100%', display: 'flex', 'flex-direction': 'column', 'min-height': 0 }}>
@@ -83,7 +83,7 @@ export const WorkspaceMemberPanel: Component<{
           </Show>
           <Show when={m().state === 'paused' || m().state === 'failed'}><Button onClick={() => props.onAction('member_resume', { member_id: m().id })}>Resume member</Button></Show>
           <Button disabled={m().state === 'ended'} onClick={() => props.onAction('member_open', { member_id: m().id })}>Open Agent window</Button>
-          <For each={w().assignments.filter((a) => a.member_id === m().id)}>{(a) => (
+          <For each={(w().assignments ?? []).filter((a) => a.member_id === m().id)}>{(a) => (
             <section data-testid={`workspace-assignment-${a.id}`} style={{ 'margin-top': `${tokens.spaceMd}px` }}>
               <div style={{ color: tokens.fgMuted, font: tokens.type.textSm }}>Assignment · {a.state}</div>
               <Markdown text={a.text} />
@@ -109,7 +109,7 @@ export const WorkspaceMemberPanel: Component<{
           </div>
           {/* A member waiting on a decision takes the next message as its
               answer (oldest first), linked into the decision's QA thread. */}
-          <Show when={w().messages.find((q) => q.type === 'decision_request' && q.delivery === 'recorded' && q.sender === m().id)}>{(q) => (
+          <Show when={(w().messages ?? []).find((q) => q.type === 'decision_request' && q.delivery === 'recorded' && q.sender === m().id)}>{(q) => (
             <div data-testid="workspace-member-answers" style={{ color: tokens.fgMuted, font: tokens.type.textSm, padding: `${tokens.spaceSm}px 0`, 'overflow-wrap': 'anywhere' }}>
               Your message answers {m().name}'s decision: {q().body}
             </div>

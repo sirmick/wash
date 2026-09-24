@@ -104,6 +104,9 @@ edit by hand.
 | `default_prompt` | [`DefaultPrompt`](#defaultprompt) | the asker | interactive | The stored default prompt. |
 | `transcript_snapshot` | [`TranscriptSnapshot`](#transcriptsnapshot) | the subscribing instance | bulk, keyed | A session's history, in bounded frames. |
 | `transcript_event` | [`TranscriptEvent`](#transcriptevent) | every watcher of the session | bulk, keyed | One transcript event, new or changed; streamed text arrives as appended deltas. |
+| `workspace_state` | [`WorkspaceState`](#workspacestate) | the session's controller | bulk, keyed | The whole workspace sidebar frame. |
+| `workspace_patch` | [`WorkspacePatch`](#workspacepatch) | the session's controller | bulk, keyed | What changed in the frame since the frame with sequence base. |
+| `workspace_result` | [`WorkspaceResult`](#workspaceresult) | the acting controller | interactive, keyed | The outcome of a workspace_action. |
 
 ### Types
 
@@ -180,6 +183,21 @@ AgentHistory searches the stored sessions: their metadata and, with a query, the
 |---|---|---|
 | `query?` | `string` |  |
 | `limit?` | `number` | Limit bounds the answer; 0 and anything above 200 mean 200. |
+
+#### AgentProfile
+
+AgentProfile describes launch settings and an optional enforced capability profile.
+
+| Field | Type | |
+|---|---|---|
+| `capability?` | `string` |  |
+| `approval?` | `string` | Approval "auto" launches the member with host auto-approval on; "" and "ask" leave every unmatched tool call to the human. |
+| `provider` | `string` |  |
+| `connection?` | `string` | Connection names how the provider is reached ("opencode@openrouter"); empty is the provider direct. agentd owns the list and checks it. |
+| `model?` | `string` |  |
+| `thinking?` | `string` |  |
+| `configs?` | `Record<string, string>` |  |
+| `subagents?` | `string` | Subagents "deny" removes the provider's own subagent tool, so the member's work stays in its transcript and the workspace's accounting. "" and "allow" leave it available. |
 
 #### AgentPrompt
 
@@ -340,6 +358,17 @@ Ask is one question waiting for a human.
 | `workspace_name?` | `string` | WorkspaceName is set when the asking session is a workspace member, and is what lets the prompt offer "always, for this workspace" alongside the global "always". The ID is deliberately NOT sent: the answer names a scope, never a target (see the answer path). |
 | `age_ms` | `number` | AgeMS is how long it has been waiting, as of the push. |
 
+#### Assignment
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `assigner` | `string` |  |
+| `member_id` | `string` |  |
+| `text` | `string` |  |
+| `state` | `string` |  |
+| `result?` | `string` |  |
+
 #### Command
 
 Command is one slash command the agent offers.
@@ -384,6 +413,13 @@ Detach tells a session's controller window that the session was detached elsewhe
 | Field | Type | |
 |---|---|---|
 | `key` | `string` |  |
+
+#### Document
+
+| Field | Type | |
+|---|---|---|
+| `path` | `string` |  |
+| `title` | `string` |  |
 
 #### Event
 
@@ -434,6 +470,16 @@ HistoryPruned answers AgentPrune: how many sessions went.
 |---|---|---|
 | `deleted` | `number` |  |
 
+#### Item
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `text` | `string` |  |
+| `emoji?` | `string` |  |
+| `state` | `string` |  |
+| `revision` | `number` |  |
+
 #### KeySaved
 
 KeySaved answers AgentSetKey.
@@ -473,6 +519,56 @@ ManagerState is the Agents manager's view of the roster: every row with its tran
 |---|---|---|
 | `state` | `State` |  |
 
+#### Member
+
+| Field | Type | |
+|---|---|---|
+| `key?` | `string` |  |
+| `package?` | `string` |  |
+| `role?` | `string` |  |
+| `instructions?` | `string` |  |
+| `initial_task?` | `string` |  |
+| `usage?` | `Usage` |  |
+| `profile?` | `string` |  |
+| `tier?` | `string` | Tier is the stack tier the member was launched from, resolved into LaunchSettings at reservation like a profile. |
+| `launch_settings?` | `AgentProfile` |  |
+| `initial_configs?` | `Record<string, string>` |  |
+| `adjusted_configs?` | `Record<string, string>` | Adjusted are settings the orchestrator changed on the live member (member_control configure), applied over LaunchSettings on every resume. Kept apart so the keyed launch definition stays as declared. |
+| `auto_approve?` | `boolean` | AutoApprove is whether host auto-approval is on for this member now: set from Approval at launch, and by the human's toggle afterwards. Kept here, not on the session, so a restart (which pauses rather than ends a member) does not silently switch it off; it ends with the workspace, never outliving the job it was granted for. |
+| `id` | `string` |  |
+| `name` | `string` |  |
+| `provider` | `string` |  |
+| `cwd` | `string` |  |
+| `session_id` | `string` |  |
+| `creator` | `string` |  |
+| `lifetime` | `string` |  |
+| `state` | `string` |  |
+| `status?` | `string` |  |
+| `emoji?` | `string` |  |
+| `waiting?` | `string` |  |
+| `waiting_for?` | `string` |  |
+| `waiting_on?` | `string[]` | WaitingOn is a set of assignments this member created and is waiting for as a whole: their results are held and delivered together in one turn once every one has completed or failed. One wake-up per review round instead of one per reviewer. |
+| `status_updated_at?` | `number` |  |
+| `can_spawn` | `boolean` |  |
+| `retire?` | `boolean` |  |
+
+#### Message
+
+| Field | Type | |
+|---|---|---|
+| `thread_id?` | `string` |  |
+| `id` | `string` |  |
+| `swarm_id` | `string` |  |
+| `sender` | `string` |  |
+| `recipient` | `string` |  |
+| `type` | `string` |  |
+| `body` | `string` |  |
+| `reply_to?` | `string` |  |
+| `assignment_id?` | `string` |  |
+| `request_id?` | `string` |  |
+| `delivery` | `string` |  |
+| `created_at` | `number` |  |
+
 #### Mode
 
 Mode is one approval/sandbox preset an agent offers.
@@ -482,6 +578,14 @@ Mode is one approval/sandbox preset an agent offers.
 | `id` | `string` |  |
 | `name` | `string` |  |
 | `description?` | `string` |  |
+
+#### Package
+
+Package is the human-facing description of a package code.
+
+| Field | Type | |
+|---|---|---|
+| `title` | `string` |  |
 
 #### PreviewPatch
 
@@ -511,6 +615,44 @@ PromptAttachment is one attachment on its way to an ACP content block.
 | `data?` | `string` |  |
 | `path?` | `string` | File: an absolute path, confined against the session cwd before it becomes a resource_link. |
 | `name?` | `string` |  |
+
+#### QADocumentStatus
+
+QADocumentStatus is where the workspace's QA file stands on disk.
+
+| Field | Type | |
+|---|---|---|
+| `path` | `string` |  |
+| `state` | `string` | State is unconfigured \| pending \| saved \| error. |
+| `error?` | `string` |  |
+| `updated_at?` | `number` |  |
+
+#### QAEvent
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `author` | `string` |  |
+| `kind` | `string` |  |
+| `body` | `string` |  |
+| `message_id?` | `string` |  |
+| `created_at` | `number` |  |
+
+#### QAThread
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `package` | `string` |  |
+| `title` | `string` |  |
+| `creator` | `string` |  |
+| `assignee` | `string` |  |
+| `state` | `string` |  |
+| `blocking` | `boolean` |  |
+| `revision` | `number` |  |
+| `decision_refs` | `string[] \| null` |  |
+| `evidence?` | `string` |  |
+| `events` | `QAEvent[] \| null` |  |
 
 #### RosterState
 
@@ -565,6 +707,16 @@ RowWorkspace is one session's place in a workspace team.
 | `role?` | `string` |  |
 | `package?` | `string` |  |
 | `package_title?` | `string` |  |
+
+#### Rule
+
+Rule is one line of the table.
+
+| Field | Type | |
+|---|---|---|
+| `match` | `string` | Match is `Tool` or `Tool(pattern)`. |
+| `decision` | `string` | Decision is allow \| deny \| ask. |
+| `cwd?` | `string` | Cwd scopes the rule to requests at or under this directory. |
 
 #### Session
 
@@ -636,11 +788,9 @@ StackView is a stack as the launcher shows it.
 
 #### State
 
-State is the public roster.
-
 | Field | Type | |
 |---|---|---|
-| `version` | `number` | Version is always the package's Version (see above). |
+| `version` | `number` |  |
 | `rows` | `Row[] \| null` |  |
 | `asks?` | `Ask[]` | Asks are permission questions waiting for a human (§12). They ride the roster's own push so the sidebar needs no second subscription. |
 | `recent?` | `Session[]` | Recent is the remembered session history (§13) — what a reboot or a closed window would otherwise have cost you. |
@@ -705,6 +855,13 @@ Unsubscribe stops a Subscribe.
 
 No fields.
 
+#### Usage
+
+| Field | Type | |
+|---|---|---|
+| `used` | `number` |  |
+| `size` | `number` |  |
+
 #### UsagePatch
 
 UsagePatch updates rows' context accounting (Row.Used, Row.Size), coalesced to at most one send per 500ms.
@@ -723,6 +880,36 @@ UsageRow is one row's counters.
 | `used` | `number` |  |
 | `size` | `number` |  |
 
+#### Workspace
+
+| Field | Type | |
+|---|---|---|
+| `qa_original_hash?` | `string` |  |
+| `qa_document_id?` | `string` |  |
+| `qa_preamble?` | `string` |  |
+| `qa_authors?` | `Record<string, string>` |  |
+| `qa_document?` | `Document` |  |
+| `qa` | `QAThread[] \| null` |  |
+| `approvals?` | `Rule[]` | Approvals apply to every member of this workspace, whatever its cwd. Members work in worktrees the orchestrator chooses, and those are as often siblings of project_root as children of it, so a path-scoped rule cannot cover a fleet. Membership is the scope instead: these rules carry no Cwd, and agentpolicy's matcher is reused verbatim. |
+| `packages?` | `Record<string, Package>` | Packages names each package code ("CT1") for people: the sidebar groups members and questions under "CT1 · Console input-flood test" instead of a bare code, and member names can shrink to their role. |
+| `profiles` | `Record<string, AgentProfile> \| null` |  |
+| `default_profile` | `string` |  |
+| `stack?` | `string` | Stack is where members' tiers come from: set from the orchestrator's own stack at setup, changeable with workspace_configure.stack. |
+| `id` | `string` |  |
+| `name` | `string` |  |
+| `project_root` | `string` |  |
+| `orchestrator` | `string` |  |
+| `state` | `string` |  |
+| `revision` | `number` |  |
+| `plan_revision` | `number` |  |
+| `max_active` | `number` |  |
+| `max_members` | `number` |  |
+| `items` | `Item[] \| null` |  |
+| `document?` | `Document` |  |
+| `members` | `Member[] \| null` |  |
+| `assignments` | `Assignment[] \| null` |  |
+| `messages` | `Message[] \| null` |  |
+
 #### WorkspaceAction
 
 WorkspaceAction is a human's action in the workspace sidebar.
@@ -733,6 +920,40 @@ WorkspaceAction is a human's action in the workspace sidebar.
 | `name` | `string` | Name is the operation: decision_response \| member_open \| member_resume \| member_message \| member_inspect. |
 | `arguments` | `unknown` |  |
 
+#### WorkspaceApproval
+
+WorkspaceApproval is a member's question waiting for the human.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `member_id` | `string` |  |
+| `tool` | `string` |  |
+| `subject` | `string` |  |
+
+#### WorkspaceItemsPatch
+
+WorkspaceItemsPatch changes the plan: items replaced or added, ids removed, and the new order when it changed.
+
+| Field | Type | |
+|---|---|---|
+| `upsert` | `Item[] \| null` |  |
+| `remove` | `string[] \| null` |  |
+| `order?` | `string[]` |  |
+
+#### WorkspacePatch
+
+WorkspacePatch changes a WorkspaceState: the frame fields and workspace fields that changed (null removes one), and the plan items by id.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `base` | `number` |  |
+| `sequence` | `number` |  |
+| `frame` | `Record<string, unknown> \| null` | Frame holds changed WorkspaceState fields by their JSON name. |
+| `workspace` | `Record<string, unknown> \| null` | Workspace holds changed swarm.Workspace fields, except items. |
+| `items?` | `WorkspaceItemsPatch` |  |
+
 #### WorkspaceRefresh
 
 WorkspaceRefresh asks for the session's workspace frame again.
@@ -740,5 +961,46 @@ WorkspaceRefresh asks for the session's workspace frame again.
 | Field | Type | |
 |---|---|---|
 | `key` | `string` |  |
+
+#### WorkspaceResult
+
+WorkspaceResult answers a WorkspaceAction.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `operation` | `string` |  |
+| `error?` | `string` |  |
+| `transcript?` | `WorkspaceTranscript` | Transcript answers member_inspect. |
+
+#### WorkspaceState
+
+WorkspaceState is the whole sidebar frame for an orchestrator's (or a member's) Agent window.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `sequence` | `number` | Sequence numbers this frame; a patch names the sequence it applies to. |
+| `workspace` | `Workspace \| null` | Workspace is the workspace this session belongs to, or null when it belongs to none (the sidebar is then not shown). |
+| `preview?` | `WorkspaceTranscript` | Preview is the transcript of the member the window has selected. |
+| `activity?` | `Record<string, string>` | Activity and ActivityDetail are each member's live activity (by member id): thinking, tool use, responding, waiting, … |
+| `activity_detail?` | `Record<string, string>` |  |
+| `usage?` | `Record<string, Usage>` | Usage is each member's context accounting, by member id. |
+| `approvals?` | `WorkspaceApproval[]` | Approvals are the members' questions waiting for the human. |
+| `qa_markdown?` | `string` | QAMarkdown is the QA document as it is written to disk. |
+| `qa_document_status?` | `QADocumentStatus` |  |
+| `document_text?` | `string` | DocumentText is the registered plan document's text, or DocumentError why it could not be read. |
+| `document_error?` | `string` |  |
+
+#### WorkspaceTranscript
+
+WorkspaceTranscript is a member's recent transcript: the selected member's preview, or member_inspect's answer.
+
+| Field | Type | |
+|---|---|---|
+| `member_id` | `string` |  |
+| `events` | `Event[] \| null` |  |
+| `asks?` | `Ask[]` | Asks are the member's questions waiting for the human, when it runs. |
+| `note?` | `string` | Note says what the transcript is when it is not live: an ended member's archive. |
 
 <!-- END GENERATED -->

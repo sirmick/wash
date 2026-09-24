@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,16 +16,10 @@ import (
 	"github.com/sirmick/wash/internal/swarm"
 )
 
-type qaDocumentStatus struct {
-	Path    string `json:"path"`
-	State   string `json:"state"`
-	Error   string `json:"error,omitempty"`
-	Updated int64  `json:"updated_at,omitempty"`
-}
 type qaFileState struct {
 	Digest [32]byte
 	Info   os.FileInfo
-	Status qaDocumentStatus
+	Status agentproto.QADocumentStatus
 }
 
 func qaFileMarker(id string) string { return "<!-- wash-workspace-qa: " + id + " -->" }
@@ -167,7 +162,7 @@ func (ws *workspaceService) syncQADocuments() {
 		if prior.Status.State == "saved" && prior.Digest == digest && statErr == nil && info.Mode().IsRegular() && prior.Info != nil && os.SameFile(info, prior.Info) && info.ModTime() == prior.Info.ModTime() && info.Size() == prior.Info.Size() {
 			continue
 		}
-		next := qaFileState{Digest: digest, Status: qaDocumentStatus{Path: w.QADocument.Path, State: "saved", Updated: time.Now().UnixMilli()}}
+		next := qaFileState{Digest: digest, Status: agentproto.QADocumentStatus{Path: w.QADocument.Path, State: "saved", Updated: time.Now().UnixMilli()}}
 		if err := writeQAFile(&w); err != nil {
 			next.Status.State = "error"
 			next.Status.Error = err.Error()
@@ -181,14 +176,14 @@ func (ws *workspaceService) syncQADocuments() {
 		ws.qaFiles[w.ID] = next
 	}
 }
-func (ws *workspaceService) qaDocumentStatus(w *swarm.Workspace) qaDocumentStatus {
+func (ws *workspaceService) qaDocumentStatus(w *swarm.Workspace) agentproto.QADocumentStatus {
 	if w == nil || w.QADocument == nil {
-		return qaDocumentStatus{State: "unconfigured"}
+		return agentproto.QADocumentStatus{State: "unconfigured"}
 	}
 	ws.qaMu.Lock()
 	defer ws.qaMu.Unlock()
 	if file, ok := ws.qaFiles[w.ID]; ok && file.Status.Path == w.QADocument.Path {
 		return file.Status
 	}
-	return qaDocumentStatus{Path: w.QADocument.Path, State: "pending"}
+	return agentproto.QADocumentStatus{Path: w.QADocument.Path, State: "pending"}
 }

@@ -4,9 +4,8 @@
 // stores.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
+import { applyWorkspacePatch } from './workspace-patch';
 import { WorkspaceLayout } from './WorkspaceLayout';
-import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
 import { HistoryPanel, historyAction, historySignature } from './HistoryPanel.tsx';
 import { defaultStack, defaultCwd } from './default-stack.ts';
 import { Launcher, startMessage, DEFAULT_TIER, type LaunchForm } from './Launcher.tsx';
@@ -43,8 +42,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     isManagerElement(props.host.tagName) ? 'manager' : 'session',
   );
   const [events, setEvents] = createSignal<agentproto.Event[]>([]);
-  const [workspaceFrame, setWorkspaceFrame] = createSignal<WorkspaceFrame>({ workspace: null });
-  const [workspaceResult, setWorkspaceResult] = createSignal<WorkspaceResult>();
+  const [workspaceFrame, setWorkspaceFrame] = createSignal<agentproto.WorkspaceState>({ kind: 'workspace_state', key: '', sequence: 0, workspace: null });
+  const [workspaceResult, setWorkspaceResult] = createSignal<agentproto.WorkspaceResult>();
   // One replay request in flight at a time; the snapshot clears it.
   let resyncPending = false;
   const [sessionKey, setSessionKey] = createSignal('');
@@ -175,17 +174,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
       case 'workspace_state':
-        if (!staleTranscript(m)) setWorkspaceFrame(m as unknown as WorkspaceFrame);
+        if (!staleTranscript(m)) setWorkspaceFrame(m as unknown as agentproto.WorkspaceState);
         break;
       case 'workspace_patch':
         if (!staleTranscript(m)) {
-          const next = applyWorkspacePatch(workspaceFrame(), m as unknown as WorkspacePatch);
+          const next = applyWorkspacePatch(workspaceFrame(), m as unknown as agentproto.WorkspacePatch);
           if (next) setWorkspaceFrame(next);
           else send({ kind: 'workspace_refresh' });
         }
         break;
       case 'workspace_result':
-        if (!staleTranscript(m)) setWorkspaceResult(m as unknown as WorkspaceResult);
+        if (!staleTranscript(m)) setWorkspaceResult(m as unknown as agentproto.WorkspaceResult);
         break;
       case 'role':
         setRole(m.role === 'manager' ? 'manager' : 'session');

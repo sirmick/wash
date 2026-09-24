@@ -1,7 +1,8 @@
+import type { agentproto } from '@wash/ui';
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, untrack } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Splitter, Tab, Markdown, tokens } from '@wash/ui';
-import { WorkspaceSidebar, type WorkspaceFrame, type WorkspaceResult } from './WorkspaceSidebar';
+import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { WorkspaceMemberPanel, WorkspacePlan, type WorkspaceAction } from './WorkspacePanels';
 
 const MIN_SPLIT = 35;
@@ -18,7 +19,7 @@ const savedSplit = () => {
 /** Navigation never replaces the owning session: keeping it mounted preserves
  * its draft, attachments, pending questions and transcript across workspace tabs. */
 export const WorkspaceLayout: Component<{
-  frame: WorkspaceFrame; result?: WorkspaceResult; currentSessionID?: string;
+  frame: agentproto.WorkspaceState; result?: agentproto.WorkspaceResult; currentSessionID?: string;
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
   onAction: WorkspaceAction; children: JSX.Element;
 }> = (props) => {
@@ -40,10 +41,10 @@ export const WorkspaceLayout: Component<{
   });
   const [drafts, setDrafts] = createSignal<Record<string, string>>({});
   const workspace = () => props.frame.workspace;
-  const ownMember = createMemo(() => workspace()?.members.find((m) => m.session_id === props.currentSessionID)?.id);
+  const ownMember = createMemo(() => (workspace()?.members ?? []).find((m) => m.session_id === props.currentSessionID)?.id);
   const tabs = () => ['conversation', ...opened()];
   const label = (id: string) => id === 'conversation' ? 'Conversation' : id === 'plan' ? 'Plan' : id === 'qa' ? 'Questions'
-    : memberTab(workspace()?.members.find((m) => m.id === id)) ?? id;
+    : memberTab((workspace()?.members ?? []).find((m) => m.id === id)) ?? id;
   // Role-only names repeat across packages ("Implementer" twice), so a tab
   // carries the package code unless the name already starts with it.
   function memberTab(m?: { name: string; package?: string }) {

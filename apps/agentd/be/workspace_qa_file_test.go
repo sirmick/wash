@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,7 +173,7 @@ func TestQADocumentProtectsExistingFilesAndReportsWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.(map[string]any)["qa_document_status"].(qaDocumentStatus).State != "error" {
+	if result.(map[string]any)["qa_document_status"].(agentproto.QADocumentStatus).State != "error" {
 		t.Fatal(result)
 	}
 	if len(s.View("lead").QA) != 1 {
@@ -308,7 +309,7 @@ func TestQADocumentFinalFailureRetriesAndNewRunTakesLatestHistory(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if end.(map[string]any)["qa_document_status"].(qaDocumentStatus).State != "error" {
+			if end.(map[string]any)["qa_document_status"].(agentproto.QADocumentStatus).State != "error" {
 				t.Fatal(end)
 			}
 			if err = os.Remove(path); err != nil {

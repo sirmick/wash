@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
 	"log"
 	"slices"
@@ -126,8 +127,8 @@ func (ws *workspaceService) captureUsage(h *hosted) {
 }
 
 // Pending approvals for every teammate, independent of the selected preview.
-func workspaceApprovals(w *swarm.Workspace) []map[string]any {
-	out := []map[string]any{}
+func workspaceApprovals(w *swarm.Workspace) []agentproto.WorkspaceApproval {
+	out := []agentproto.WorkspaceApproval{}
 	if svc == nil {
 		return out
 	}
@@ -139,7 +140,7 @@ func workspaceApprovals(w *swarm.Workspace) []map[string]any {
 	}
 	for _, ask := range svc.Snapshot().Asks {
 		if id := byKey[ask.RowKey]; id != "" {
-			out = append(out, map[string]any{"id": ask.ID, "member_id": id, "tool": ask.Tool, "subject": ask.Subject})
+			out = append(out, agentproto.WorkspaceApproval{ID: ask.ID, MemberID: id, Tool: ask.Tool, Subject: ask.Subject})
 		}
 	}
 	return out

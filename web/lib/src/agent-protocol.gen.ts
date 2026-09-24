@@ -88,6 +88,31 @@ export interface AgentHistory {
   limit?: number;
 }
 
+/** AgentProfile describes launch settings and an optional enforced capability profile. */
+export interface AgentProfile {
+  capability?: string;
+  /**
+   * Approval "auto" launches the member with host auto-approval on; ""
+   * and "ask" leave every unmatched tool call to the human.
+   */
+  approval?: string;
+  provider: string;
+  /**
+   * Connection names how the provider is reached ("opencode@openrouter");
+   * empty is the provider direct. agentd owns the list and checks it.
+   */
+  connection?: string;
+  model?: string;
+  thinking?: string;
+  configs?: Record<string, string>;
+  /**
+   * Subagents "deny" removes the provider's own subagent tool, so the
+   * member's work stays in its transcript and the workspace's accounting.
+   * "" and "allow" leave it available.
+   */
+  subagents?: string;
+}
+
 /**
  * AgentPrompt is another turn on a live session. Sent while a turn runs,
  * it is queued and sent when the turn ends.
@@ -296,6 +321,15 @@ export interface Ask {
   age_ms: number;
 }
 
+export interface Assignment {
+  id: string;
+  assigner: string;
+  member_id: string;
+  text: string;
+  state: string;
+  result?: string;
+}
+
 /** Command is one slash command the agent offers. */
 export interface Command {
   name: string;
@@ -330,6 +364,11 @@ export interface DefaultPrompt {
 export interface Detach {
   kind: 'detach';
   key: string;
+}
+
+export interface Document {
+  path: string;
+  title: string;
 }
 
 /**
@@ -406,6 +445,14 @@ export interface HistoryPruned {
   deleted: number;
 }
 
+export interface Item {
+  id: string;
+  text: string;
+  emoji?: string;
+  state: string;
+  revision: number;
+}
+
 /** KeySaved answers AgentSetKey. */
 export interface KeySaved {
   kind: 'key_saved';
@@ -441,11 +488,84 @@ export interface ManagerState {
   state: State;
 }
 
+export interface Member {
+  key?: string;
+  package?: string;
+  role?: string;
+  instructions?: string;
+  initial_task?: string;
+  usage?: Usage;
+  profile?: string;
+  /**
+   * Tier is the stack tier the member was launched from, resolved into
+   * LaunchSettings at reservation like a profile.
+   */
+  tier?: string;
+  launch_settings?: AgentProfile;
+  initial_configs?: Record<string, string>;
+  /**
+   * Adjusted are settings the orchestrator changed on the live member
+   * (member_control configure), applied over LaunchSettings on every
+   * resume. Kept apart so the keyed launch definition stays as declared.
+   */
+  adjusted_configs?: Record<string, string>;
+  /**
+   * AutoApprove is whether host auto-approval is on for this member now:
+   * set from Approval at launch, and by the human's toggle afterwards.
+   * Kept here, not on the session, so a restart (which pauses rather
+   * than ends a member) does not silently switch it off; it ends with
+   * the workspace, never outliving the job it was granted for.
+   */
+  auto_approve?: boolean;
+  id: string;
+  name: string;
+  provider: string;
+  cwd: string;
+  session_id: string;
+  creator: string;
+  lifetime: string;
+  state: string;
+  status?: string;
+  emoji?: string;
+  waiting?: string;
+  waiting_for?: string;
+  /**
+   * WaitingOn is a set of assignments this member created and is waiting
+   * for as a whole: their results are held and delivered together in one
+   * turn once every one has completed or failed. One wake-up per review
+   * round instead of one per reviewer.
+   */
+  waiting_on?: string[];
+  status_updated_at?: number;
+  can_spawn: boolean;
+  retire?: boolean;
+}
+
+export interface Message {
+  thread_id?: string;
+  id: string;
+  swarm_id: string;
+  sender: string;
+  recipient: string;
+  type: string;
+  body: string;
+  reply_to?: string;
+  assignment_id?: string;
+  request_id?: string;
+  delivery: string;
+  created_at: number;
+}
+
 /** Mode is one approval/sandbox preset an agent offers. */
 export interface Mode {
   id: string;
   name: string;
   description?: string;
+}
+
+/** Package is the human-facing description of a package code. */
+export interface Package {
+  title: string;
 }
 
 /**
@@ -478,6 +598,38 @@ export interface PromptAttachment {
    */
   path?: string;
   name?: string;
+}
+
+/** QADocumentStatus is where the workspace's QA file stands on disk. */
+export interface QADocumentStatus {
+  path: string;
+  /** State is unconfigured | pending | saved | error. */
+  state: string;
+  error?: string;
+  updated_at?: number;
+}
+
+export interface QAEvent {
+  id: string;
+  author: string;
+  kind: string;
+  body: string;
+  message_id?: string;
+  created_at: number;
+}
+
+export interface QAThread {
+  id: string;
+  package: string;
+  title: string;
+  creator: string;
+  assignee: string;
+  state: string;
+  blocking: boolean;
+  revision: number;
+  decision_refs: string[] | null;
+  evidence?: string;
+  events: QAEvent[] | null;
 }
 
 /**
@@ -609,6 +761,16 @@ export interface RowWorkspace {
   role?: string;
   package?: string;
   package_title?: string;
+}
+
+/** Rule is one line of the table. */
+export interface Rule {
+  /** Match is `Tool` or `Tool(pattern)`. */
+  match: string;
+  /** Decision is allow | deny | ask. */
+  decision: string;
+  /** Cwd scopes the rule to requests at or under this directory. */
+  cwd?: string;
 }
 
 /** Session is one remembered agent session. */
@@ -749,13 +911,7 @@ export interface StackView {
   tiers?: TierView[];
 }
 
-/**
- * State is the public roster. Rows are pre-sorted for display: the agents
- * waiting on a human first, then the ones working, then everything else —
- * the sidebar is a queue of things to attend to, not a table.
- */
 export interface State {
-  /** Version is always the package's Version (see above). */
   version: number;
   rows: Row[] | null;
   /**
@@ -863,6 +1019,11 @@ export interface Unsubscribe {
   kind: 'unsubscribe';
 }
 
+export interface Usage {
+  used: number;
+  size: number;
+}
+
 /**
  * UsagePatch updates rows' context accounting (Row.Used, Row.Size),
  * coalesced to at most one send per 500ms.
@@ -879,6 +1040,50 @@ export interface UsageRow {
   size: number;
 }
 
+export interface Workspace {
+  qa_original_hash?: string;
+  qa_document_id?: string;
+  qa_preamble?: string;
+  qa_authors?: Record<string, string>;
+  qa_document?: Document;
+  qa: QAThread[] | null;
+  /**
+   * Approvals apply to every member of this workspace, whatever its cwd.
+   * Members work in worktrees the orchestrator chooses, and those are as
+   * often siblings of project_root as children of it, so a path-scoped
+   * rule cannot cover a fleet. Membership is the scope instead: these
+   * rules carry no Cwd, and agentpolicy's matcher is reused verbatim.
+   */
+  approvals?: Rule[];
+  /**
+   * Packages names each package code ("CT1") for people: the sidebar groups
+   * members and questions under "CT1 · Console input-flood test" instead of
+   * a bare code, and member names can shrink to their role.
+   */
+  packages?: Record<string, Package>;
+  profiles: Record<string, AgentProfile> | null;
+  default_profile: string;
+  /**
+   * Stack is where members' tiers come from: set from the orchestrator's
+   * own stack at setup, changeable with workspace_configure.stack.
+   */
+  stack?: string;
+  id: string;
+  name: string;
+  project_root: string;
+  orchestrator: string;
+  state: string;
+  revision: number;
+  plan_revision: number;
+  max_active: number;
+  max_members: number;
+  items: Item[] | null;
+  document?: Document;
+  members: Member[] | null;
+  assignments: Assignment[] | null;
+  messages: Message[] | null;
+}
+
 /** WorkspaceAction is a human's action in the workspace sidebar. */
 export interface WorkspaceAction {
   kind: 'workspace_action';
@@ -891,10 +1096,110 @@ export interface WorkspaceAction {
   arguments: unknown;
 }
 
+/** WorkspaceApproval is a member's question waiting for the human. */
+export interface WorkspaceApproval {
+  id: string;
+  member_id: string;
+  tool: string;
+  subject: string;
+}
+
+/**
+ * WorkspaceItemsPatch changes the plan: items replaced or added, ids
+ * removed, and the new order when it changed.
+ */
+export interface WorkspaceItemsPatch {
+  upsert: Item[] | null;
+  remove: string[] | null;
+  order?: string[];
+}
+
+/**
+ * WorkspacePatch changes a WorkspaceState: the frame fields and workspace
+ * fields that changed (null removes one), and the plan items by id. It
+ * applies to the frame with sequence Base; a frontend holding another asks
+ * for the whole frame again (workspace_refresh).
+ */
+export interface WorkspacePatch {
+  kind: 'workspace_patch';
+  key: string;
+  base: number;
+  sequence: number;
+  /** Frame holds changed WorkspaceState fields by their JSON name. */
+  frame: Record<string, unknown> | null;
+  /** Workspace holds changed swarm.Workspace fields, except items. */
+  workspace: Record<string, unknown> | null;
+  items?: WorkspaceItemsPatch;
+}
+
 /** WorkspaceRefresh asks for the session's workspace frame again. */
 export interface WorkspaceRefresh {
   kind: 'workspace_refresh';
   key: string;
+}
+
+/** WorkspaceResult answers a WorkspaceAction. */
+export interface WorkspaceResult {
+  kind: 'workspace_result';
+  key: string;
+  operation: string;
+  error?: string;
+  /** Transcript answers member_inspect. */
+  transcript?: WorkspaceTranscript;
+}
+
+/**
+ * WorkspaceState is the whole sidebar frame for an orchestrator's (or a
+ * member's) Agent window. Sent in full on refresh and when a patch cannot
+ * apply; otherwise changes arrive as WorkspacePatch.
+ */
+export interface WorkspaceState {
+  kind: 'workspace_state';
+  key: string;
+  /** Sequence numbers this frame; a patch names the sequence it applies to. */
+  sequence: number;
+  /**
+   * Workspace is the workspace this session belongs to, or null when it
+   * belongs to none (the sidebar is then not shown).
+   */
+  workspace: Workspace | null;
+  /** Preview is the transcript of the member the window has selected. */
+  preview?: WorkspaceTranscript;
+  /**
+   * Activity and ActivityDetail are each member's live activity (by
+   * member id): thinking, tool use, responding, waiting, …
+   */
+  activity?: Record<string, string>;
+  activity_detail?: Record<string, string>;
+  /** Usage is each member's context accounting, by member id. */
+  usage?: Record<string, Usage>;
+  /** Approvals are the members' questions waiting for the human. */
+  approvals?: WorkspaceApproval[];
+  /** QAMarkdown is the QA document as it is written to disk. */
+  qa_markdown?: string;
+  qa_document_status?: QADocumentStatus;
+  /**
+   * DocumentText is the registered plan document's text, or
+   * DocumentError why it could not be read.
+   */
+  document_text?: string;
+  document_error?: string;
+}
+
+/**
+ * WorkspaceTranscript is a member's recent transcript: the selected
+ * member's preview, or member_inspect's answer.
+ */
+export interface WorkspaceTranscript {
+  member_id: string;
+  events: Event[] | null;
+  /** Asks are the member's questions waiting for the human, when it runs. */
+  asks?: Ask[];
+  /**
+   * Note says what the transcript is when it is not live: an ended
+   * member's archive.
+   */
+  note?: string;
 }
 
 /** Every request, discriminated by kind. */
@@ -943,5 +1248,8 @@ export type AgentdPush =
   | Detach
   | DefaultPrompt
   | TranscriptSnapshot
-  | TranscriptEvent;
+  | TranscriptEvent
+  | WorkspaceState
+  | WorkspacePatch
+  | WorkspaceResult;
 export type AgentdPushKind = AgentdPush['kind'];
