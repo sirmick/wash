@@ -221,23 +221,17 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				Reply  string   `json:"reply_to,omitempty"`
 				Until  []string `json:"until_assignments,omitempty"`
 			} `json:"waiting,omitempty"`
-			Acknowledge []string           `json:"acknowledge,omitempty"`
-			Results     []assignmentChange `json:"assignment_results,omitempty"`
-			QA          []swarm.QAUpdate   `json:"qa_updates,omitempty"`
-			Request     string             `json:"request_id,omitempty"`
+			Results []assignmentChange `json:"assignment_results,omitempty"`
+			QA      []swarm.QAUpdate   `json:"qa_updates,omitempty"`
+			Request string             `json:"request_id,omitempty"`
 		}
 		if err := decodeWorkspace(c.Arguments, &p); err != nil {
 			return nil, err
 		}
-		if len(p.QA) > 100 || len(p.Acknowledge) > 100 {
-			return nil, errors.New("maximum 100 QA updates/acknowledgments")
+		if len(p.QA) > 100 {
+			return nil, errors.New("maximum 100 QA updates")
 		}
 		return ws.store.Transaction(h.sessionID, c.Name, p.Request, c.Arguments, false, func(s *swarm.Store) (any, error) {
-			for _, id := range p.Acknowledge {
-				if err := s.Acknowledge(h.sessionID, id); err != nil {
-					return nil, err
-				}
-			}
 			// A reporting call cannot create an assignment as a side effect.
 			for _, u := range p.Results {
 				if u.Action != "complete" && u.Action != "fail" {
@@ -321,25 +315,6 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				out["instruction"] = "Finish your turn now; Wash wakes you for new messages. Do not poll."
 			}
 			return out, nil
-		})
-	case "inbox_ack":
-		var p struct {
-			IDs     []string `json:"ids"`
-			Request string   `json:"request_id,omitempty"`
-		}
-		if err := decodeWorkspace(c.Arguments, &p); err != nil {
-			return nil, err
-		}
-		if len(p.IDs) < 1 || len(p.IDs) > 100 {
-			return nil, errors.New("acknowledge 1–100 IDs")
-		}
-		return ws.store.Transaction(h.sessionID, c.Name, p.Request, c.Arguments, false, func(s *swarm.Store) (any, error) {
-			for _, id := range p.IDs {
-				if err := s.Acknowledge(h.sessionID, id); err != nil {
-					return nil, err
-				}
-			}
-			return map[string]any{"acknowledged": p.IDs}, nil
 		})
 	case "assignment_update":
 		var p struct {

@@ -374,9 +374,19 @@ func GetMember(w *Workspace, id string) *Member {
 	}
 	return nil
 }
+
+// ReportLimit bounds a result, and a member's message to the orchestrator.
+// Either stays in the receiver's context and is re-read on every later turn,
+// and the orchestrator's context is the workspace's largest cost: like a
+// subagent's summary, a report says what happened and points at the detail.
+const ReportLimit = 2000
+
 func AddMessage(w *Workspace, from, to, kind, body, reply, assignment, request string) (*Message, error) {
 	if !ValidText(body, 32768) {
 		return nil, errors.New("message body must contain 1–32768 bytes")
+	}
+	if len(body) > ReportLimit && (kind == "result" || to == w.Lead && from != w.Lead && GetMember(w, from) != nil) {
+		return nil, fmt.Errorf("a %s to the orchestrator or assigner is at most %d bytes (got %d): it is re-read on every later turn; summarize, and put the detail in the QA thread or a file it can open", kind, ReportLimit, len(body))
 	}
 	if len(w.Messages) >= 10000 {
 		return nil, errors.New("workspace message limit reached")
@@ -538,8 +548,9 @@ func (s *Store) Next(session string) ([]Message, error) {
 			return nil
 		}
 		batch, stale := pickDelivery(w, m)
+		// An instruction for an assignment already resolved is never sent.
 		for _, i := range stale {
-			w.Messages[i].State = "acknowledged"
+			w.Messages[i].State = "cancelled"
 		}
 		if len(batch) == 0 {
 			return nil
@@ -626,26 +637,6 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int) {
 	return nil, stale
 }
 
-func (s *Store) Acknowledge(session, id string) error {
-	return s.Mutate(session, false, func(w *Workspace, m *Member) error {
-		for i := range w.Messages {
-			v := &w.Messages[i]
-			if v.ID == id {
-				if v.Recipient != m.ID {
-					return errors.New("message belongs to another member")
-				}
-				// A queued message counts: a member may read it with inbox_read
-				// before wash dispatches it, act on it, and say so.
-				if v.State != "queued" && v.State != "delivered" && v.State != "dispatched" && v.State != "acknowledged" && v.State != "recorded" {
-					return errors.New("message not delivered")
-				}
-				v.State = "acknowledged"
-				return nil
-			}
-		}
-		return errors.New("unknown message")
-	})
-}
 func (s *Store) TurnEnded(session string, messageIDs []string, failed bool) error {
 	return s.turnEnded(session, messageIDs, failed, false)
 }
@@ -695,6 +686,7 @@ func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped b
 		return nil
 	})
 }
+
 // EndMember ends a member. notify tells the lead with a lifecycle message,
 // which wakes it: right when the member ended outside the lead's control (the
 // human closed its session, its adapter exited), noise when the lead ended it

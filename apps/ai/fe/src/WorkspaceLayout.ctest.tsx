@@ -197,3 +197,23 @@ test('the team groups members under named packages', async () => {
  await fireEvent.click(screen.getByTestId('workspace-member-ct1-impl'));
  expect(screen.getByRole('tab', {name: /CT1 · Implementer/})).toBeTruthy();
 });
+
+test('a member brief renders as Markdown above its turns, on a divider that remembers its place', async () => {
+ localStorage.removeItem('wash.agent.workspace.member.split');
+ const f = frame();
+ f.workspace!.assignments = [{id:'a1',member_id:'lead',text:'## Timer\nUse a **monotonic** clock.',state:'completed',result:'- done\n- tests pass'}];
+ render(() => <WorkspaceLayout frame={f} onAction={vi.fn()}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-member-lead'));
+ const brief = screen.getByTestId('workspace-assignment-a1');
+ expect(brief.textContent).toContain('monotonic');
+ expect(brief.textContent).not.toContain('**');
+ expect(brief.textContent).not.toContain('## ');
+ const panes = screen.getByTestId('workspace-member-panes');
+ expect(panes.style.gridTemplateRows).toContain('35fr');
+ const divider = screen.getByTestId('workspace-member-splitter');
+ await fireEvent.keyDown(divider, {key:'ArrowDown'});
+ expect(panes.style.gridTemplateRows).toContain('37fr');
+ expect(localStorage.getItem('wash.agent.workspace.member.split')).toBe('37');
+ await fireEvent.keyDown(divider, {key:'End'});
+ expect(divider.getAttribute('aria-valuenow')).toBe('85');
+});

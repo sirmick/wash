@@ -173,9 +173,11 @@ Waiting consumes no polling turns and holds no blocking MCP call open. A residen
 session can remain available with no assignment. Progress events are available
 through status/inbox reads and accompany the next actionable delivery.
 
-Track accepted, queued, dispatched, and acknowledged delivery separately. An
-explicit acknowledgment records that the recipient recognized a message; it does
-not prove the requested work happened. If a crash leaves dispatch uncertain, show
+Track accepted, queued, dispatched, and delivered separately. A message is
+delivered when the turn that carried it ends cleanly; there is no separate
+acknowledgment, which cost every member one more full-context request per
+wake-up and proved nothing the turn's end did not. Delivery does not prove the
+requested work happened. If a crash leaves dispatch uncertain, show
 that uncertainty and retain the message. Do not promise exactly-once execution or
 silently repeat a potentially mutating assignment.
 
@@ -185,7 +187,7 @@ One service in agentd implements the operations. The GUI calls the same service
 through Wash app messages. A bundled stdio MCP bridge exposes it to hosted agents.
 Do not add a separate workflow daemon or make MCP bridge processes own the swarm.
 
-Exactly twelve operations are advertised and accepted; removed v1 names fail with
+Exactly eleven operations are advertised and accepted; removed v1 names fail with
 Unknown tool. There are no compatibility aliases. See the full schemas and examples
 in [the bulk MCP contract](AGENT_SWARM_BULK.md).
 
@@ -193,7 +195,7 @@ in [the bulk MCP contract](AGENT_SWARM_BULK.md).
 | --- | --- |
 | `workspace_get`, `workspace_configure`, `workspace_end` | Discover/read, atomically configure, explicitly detach |
 | `member_control`, `member_update` | Lifecycle controls and combined status/results/waiting/QA reporting |
-| `message_send`, `inbox_read`, `inbox_ack`, `message_retry` | Attributed messages and durable inbox delivery |
+| `message_send`, `inbox_read`, `message_retry` | Attributed messages and durable inbox delivery |
 | `assignment_update` | Create assignments or report results |
 | `decision_request`, `flash_message` | Human decisions and desktop notifications |
 

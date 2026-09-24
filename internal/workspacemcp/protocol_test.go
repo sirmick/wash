@@ -94,9 +94,9 @@ func TestInitializationAndAboutShareOperatingInstructions(t *testing.T) {
 }
 
 func TestRemovedToolsAreRejectedBeforeDispatch(t *testing.T) {
-	removed := []string{"setup_workspace", "swarm_status", "teardown_workspace", "member_spawn", "member_pause", "member_resume", "member_end", "member_wait", "member_set_status", "message_ack", "assignment_create", "assignment_complete", "assignment_fail", "plan_get", "plan_set", "plan_add_item", "plan_update_item", "plan_remove_item", "plan_reorder", "document_set", "document_clear"}
-	if len(Tools()) != 12 {
-		t.Fatalf("want exactly twelve tools, got %d", len(Tools()))
+	removed := []string{"inbox_ack", "setup_workspace", "swarm_status", "teardown_workspace", "member_spawn", "member_pause", "member_resume", "member_end", "member_wait", "member_set_status", "message_ack", "assignment_create", "assignment_complete", "assignment_fail", "plan_get", "plan_set", "plan_add_item", "plan_update_item", "plan_remove_item", "plan_reorder", "document_set", "document_clear"}
+	if len(Tools()) != 11 {
+		t.Fatalf("want exactly eleven tools, got %d", len(Tools()))
 	}
 	for _, name := range removed {
 		t.Run(name, func(t *testing.T) {

@@ -1,11 +1,17 @@
 # Bulk workspace MCP contract
 
-Implemented API 2.2.0, 2026-09-23. This supersedes the incremental v1 catalog in
-[the original design](AGENT_SWARM.md). New discovery advertises exactly twelve
+Implemented API 3.0.0, 2026-09-24. This supersedes the incremental v1 catalog in
+[the original design](AGENT_SWARM.md). New discovery advertises exactly eleven
 tools. Removed v1 operations return Unknown tool; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
 
-## Twelve tools
+API 3 removed `inbox_ack` and `member_update.acknowledge`: a message is delivered when the
+turn carrying it ends cleanly, so acknowledging was an extra full-context request per wake-up.
+Results, and a member's messages to the orchestrator, are summaries of at most 2000 bytes
+(`swarm.ReportLimit`): they are re-read on every later turn of the receiver, so detail goes
+in the QA thread or a file.
+
+## Eleven tools
 
 | Tool | Responsibility |
 | --- | --- |
@@ -13,10 +19,9 @@ compatibility handlers. Agent instructions and examples use the surface below. N
 | `workspace_configure` | Atomic setup/patch: profiles, settings, keyed member reservations, plan, document |
 | `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history |
 | `member_control` | Pause/resume/end IDs, keys or a package; per-member outcomes |
-| `member_update` | Atomic own status/emoji/waiting, acknowledgments, results and QA updates |
+| `member_update` | Atomic own status/emoji/waiting, results and QA updates |
 | `message_send` | One message or an atomic batch; optional QA opening/thread linkage |
-| `inbox_read` | Paginated caller inbox |
-| `inbox_ack` | Atomic message acknowledgment batch |
+| `inbox_read` | Paginated caller inbox history |
 | `message_retry` | Explicit reconciliation/retry of uncertain delivery |
 | `assignment_update` | Atomic create/complete/fail batch |
 | `decision_request` | Actual human choice, optionally linked to QA |
@@ -56,8 +61,8 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
 - Configuration and member reservations commit atomically. Processes start afterward,
   with separate `launches` outcomes. Check each; launch failure does not undo config.
   Explicit member_control resume can retry a failed reserved launch.
-- `request_id` deduplicates identical configuration, reporting, message, assignment,
-  acknowledgment and decision requests. Receipts persist with state. Reusing an ID
+- `request_id` deduplicates identical configuration, reporting, message, assignment
+  and decision requests. Receipts persist with state. Reusing an ID
   with different arguments fails. Preview does not consume a request ID. The config
   receipt is the original commit; launch outcomes reflect current state.
 - Bulk store changes either all persist or none do. Process controls return per-member
@@ -77,7 +82,7 @@ Completing an assignment leaves residents available. Ephemeral members retire af
 assignment and turn finish. Explicit `member_control` ends package residents at acceptance
 or abandonment. Limits count idle residents; they do not consume model turns while waiting.
 
-`member_update` can acknowledge messages, complete assignments, update status and set
+`member_update` can complete assignments, update status and set
 `waiting:{reason,...}` together. `waiting.until_assignments` lists assignments the caller
 created: their results are held and delivered together, in one turn, once the last one
 completes or fails, so a review round wakes the orchestrator once rather than once per

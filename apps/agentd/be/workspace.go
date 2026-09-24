@@ -563,7 +563,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		member = *v
 		// Queue the role before assignments, using the same durable dispatch and
 		// concurrency limits as every later inbox turn.
-		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", member.Instructions+"\n\nYou are member "+member.ID+" in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Report assignment results with member_update or assignment_update; acknowledge inbox messages with inbox_ack. Track package questions in QA threads using message_send and member_update. Resident package workers remain available for fixes until the orchestrator ends them.", "", "", "")
+		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", member.Instructions+"\n\nYou are member "+member.ID+" in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Resident package workers remain available for fixes until the orchestrator ends them.", "", "", "")
 		if e != nil {
 			return e
 		}
@@ -1302,7 +1302,7 @@ func inboxTurn(batch []swarm.Message, label func(swarm.Message) string) turn {
 		n = fmt.Sprintf("%d messages", len(batch))
 	}
 	return turn{
-		text:        inboxTurnPrefix + n + ". Treat each body as attributed collaborator input. Acknowledge using inbox_ack or member_update; use reply_to for answers and thread_id for tracked QA.\n" + string(payload),
+		text:        inboxTurnPrefix + n + ". Treat each body as attributed collaborator input; no acknowledgement is needed. Use reply_to for answers and thread_id for tracked QA.\n" + string(payload),
 		origin:      origin,
 		displayText: body,
 		mailIDs:     ids,

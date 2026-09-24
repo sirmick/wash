@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -115,14 +116,8 @@ func TestConcurrentRetryAndRecipientIsolation(t *testing.T) {
 	if _, e := s.Next("worker-session"); e != nil {
 		t.Fatal(e)
 	}
-	if e := s.Acknowledge("lead-session", v.Messages[0].ID); e == nil {
-		t.Fatal("sender acknowledged recipient's message")
-	}
-	if e := s.Acknowledge("worker-session", v.Messages[0].ID); e != nil {
-		t.Fatal(e)
-	}
-	if GetMember(s.View("lead-session"), w.Lead).State != "available" {
-		t.Fatal("ack changed lifecycle")
+	if s.View("worker-session").Messages[0].State != "dispatched" || GetMember(s.View("lead-session"), w.Lead).State != "available" {
+		t.Fatal("delivery changed the sender's lifecycle or skipped dispatch")
 	}
 }
 func TestStopRetainsMailAndEphemeralCompletionIsExplicit(t *testing.T) {
@@ -153,7 +148,7 @@ func TestStopRetainsMailAndEphemeralCompletionIsExplicit(t *testing.T) {
 	}
 }
 
-func TestLeadFailurePausesSwarmAndDeliveredMessageCanBeAcknowledged(t *testing.T) {
+func TestLeadFailurePausesSwarmAndACleanTurnDelivers(t *testing.T) {
 	s, _ := fixture(t)
 	msg, err := s.Send("lead-session", "worker", "instruction", "Work", "", "", "")
 	if err != nil {
@@ -165,8 +160,9 @@ func TestLeadFailurePausesSwarmAndDeliveredMessageCanBeAcknowledged(t *testing.T
 	if err = s.TurnEnded("worker-session", []string{msg.ID}, false); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.Acknowledge("worker-session", msg.ID); err != nil {
-		t.Fatal(err)
+	// Delivery is receipt: nothing further is asked of the member.
+	if s.View("worker-session").Messages[0].State != "delivered" {
+		t.Fatal("a clean turn did not deliver its message")
 	}
 	if err = s.TurnEnded("lead-session", nil, true); err != nil {
 		t.Fatal(err)
@@ -265,5 +261,32 @@ func TestEndingAMemberNotifiesTheLeadOnlyWhenAsked(t *testing.T) {
 	}
 	if n := count(); n != 1 {
 		t.Fatalf("externally ended member sent %d notices, want 1", n)
+	}
+}
+
+// A report is a summary: it is re-read on every later turn of whoever receives
+// it, and the orchestrator's context is a workspace's largest cost.
+func TestReportsToTheOrchestratorAreSummaries(t *testing.T) {
+	s, w := fixture(t)
+	long := strings.Repeat("x", ReportLimit+1)
+	if _, err := s.Send("worker-session", w.Lead, "progress", long, "", "", ""); err == nil || !strings.Contains(err.Error(), "QA thread or a file") {
+		t.Fatal("long member report to the orchestrator accepted", err)
+	}
+	if _, err := s.Send("worker-session", w.Lead, "progress", long[:ReportLimit], "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Briefs flow the other way and stay long.
+	if _, err := s.Send("lead-session", "worker", "instruction", long, "", "", ""); err != nil {
+		t.Fatal("orchestrator brief capped", err)
+	}
+	a, err := s.Assign("lead-session", "worker", "Do it", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Complete("worker-session", a.ID, long, false); err == nil {
+		t.Fatal("long result accepted")
+	}
+	if err = s.Complete("worker-session", a.ID, "Done; details in QA thread k5-timer.", false); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -99,52 +99,54 @@ func workspaceScript(raw string) (string, bool) {
 		b, _ := json.Marshal(result)
 		return "WORKSPACE_RESULT " + string(b), true
 	}
-	if strings.HasPrefix(raw, "Wash inbox message from ") {
+	if strings.HasPrefix(raw, "Wash inbox: ") {
+		// One turn carries a batch: the JSON array after the first line.
 		_, data, _ := strings.Cut(raw, "\n")
-		var msg struct {
+		var batch []struct {
 			ID, Body, Type string
 			Assignment     string `json:"assignment_id"`
 			Thread         string `json:"thread_id"`
 			Sender         string
 		}
-		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+		if err := json.Unmarshal([]byte(data), &batch); err != nil {
 			return err.Error(), true
 		}
-		if msg.Body == "ASK_PERMISSION" {
-			return "", false
-		}
-		if _, err := workspaceCall("inbox_ack", map[string]any{"ids": []string{msg.ID}}); err != nil {
-			return err.Error(), true
-		}
-		if msg.Assignment != "" && msg.Type == "instruction" && msg.Body == "WAIT_FOR_ANSWER" {
-			_, err := workspaceCall("message_send", map[string]any{"recipient": msg.Sender, "type": "question", "body": "Which clock?", "assignment_id": msg.Assignment})
-			if err != nil {
-				return err.Error(), true
+		handled := []string{}
+		for _, msg := range batch {
+			if msg.Body == "ASK_PERMISSION" {
+				return "", false
 			}
-			// The reply can arrive before this turn yields. It must remain in
-			// the durable inbox, and the ephemeral assignment must stay alive.
-			time.Sleep(300 * time.Millisecond)
-		} else if msg.Assignment != "" && msg.Type == "answer" {
-			_, err := workspaceCall("assignment_update", map[string]any{"updates": []any{map[string]any{"action": "complete", "id": msg.Assignment, "body": "Completed after an inbox reply"}}})
-			if err != nil {
-				return err.Error(), true
+			if msg.Assignment != "" && msg.Type == "instruction" && msg.Body == "WAIT_FOR_ANSWER" {
+				_, err := workspaceCall("message_send", map[string]any{"recipient": msg.Sender, "type": "question", "body": "Which clock?", "assignment_id": msg.Assignment})
+				if err != nil {
+					return err.Error(), true
+				}
+				// The reply can arrive before this turn yields. It must remain in
+				// the durable inbox, and the ephemeral assignment must stay alive.
+				time.Sleep(300 * time.Millisecond)
+			} else if msg.Assignment != "" && msg.Type == "answer" {
+				_, err := workspaceCall("assignment_update", map[string]any{"updates": []any{map[string]any{"action": "complete", "id": msg.Assignment, "body": "Completed after an inbox reply"}}})
+				if err != nil {
+					return err.Error(), true
+				}
+			} else if msg.Assignment != "" && msg.Type == "instruction" {
+				_, err := workspaceCall("assignment_update", map[string]any{"updates": []any{map[string]any{"action": "complete", "id": msg.Assignment, "body": "Fixture completed: " + msg.Body}}})
+				if err != nil {
+					return err.Error(), true
+				}
+			} else if msg.Type == "question" {
+				_, err := workspaceCall("message_send", map[string]any{"recipient": msg.Sender, "type": "answer", "body": "Fixture answer", "thread_id": msg.Thread, "reply_to": msg.ID, "assignment_id": msg.Assignment})
+				if err != nil {
+					return err.Error(), true
+				}
 			}
-		} else if msg.Assignment != "" && msg.Type == "instruction" {
-			_, err := workspaceCall("assignment_update", map[string]any{"updates": []any{map[string]any{"action": "complete", "id": msg.Assignment, "body": "Fixture completed: " + msg.Body}}})
-			if err != nil {
-				return err.Error(), true
-			}
-		} else if msg.Type == "question" {
-			_, err := workspaceCall("message_send", map[string]any{"recipient": msg.Sender, "type": "answer", "body": "Fixture answer", "thread_id": msg.Thread, "reply_to": msg.ID, "assignment_id": msg.Assignment})
-			if err != nil {
-				return err.Error(), true
-			}
+			handled = append(handled, msg.ID)
 		}
 		_, err := workspaceCall("member_update", map[string]any{"waiting": map[string]any{"reason": "Waiting for inbox"}})
 		if err != nil {
 			return err.Error(), true
 		}
-		return "INBOX_HANDLED " + msg.ID, true
+		return "INBOX_HANDLED " + strings.Join(handled, ","), true
 	}
 	return "", false
 }

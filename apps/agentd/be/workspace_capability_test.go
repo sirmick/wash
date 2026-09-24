@@ -76,7 +76,7 @@ func TestReviewerCannotWriteExecuteConfigureOrBypassViaYolo(t *testing.T) {
 			t.Fatal(kind, got, err)
 		}
 	}
-	for _, tool := range []string{"workspace_get", "member_update", "inbox_ack", "message_send"} {
+	for _, tool := range []string{"workspace_get", "member_update", "message_send"} {
 		meta, _ := json.Marshal(map[string]any{"claudeCode": map[string]any{"toolName": "mcp__wash_workspace__" + tool, "mcpServer": map[string]string{"name": "wash_workspace", "source": "dynamic"}}})
 		tc := acp.ToolCall{Meta: meta}
 		got, err := h.RequestPermission(context.Background(), acp.RequestPermissionRequest{ToolCall: tc, Options: options})

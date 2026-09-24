@@ -37,7 +37,7 @@ func reviewerMetadata(provider string, info acp.Implementation) (map[string]any,
 }
 func reviewerWorkspaceTool(name string) bool {
 	switch name {
-	case "workspace_get", "inbox_read", "inbox_ack", "member_update", "message_send", "assignment_update", "decision_request", "flash_message":
+	case "workspace_get", "inbox_read", "member_update", "message_send", "assignment_update", "decision_request", "flash_message":
 		return true
 	}
 	return false

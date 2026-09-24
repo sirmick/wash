@@ -37,7 +37,7 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await tool('workspace_configure',{members:{architect:{name:'Architect',instructions:'Review clock designs.',lifetime:'resident'}}});
  await expect.poll(()=>state().members.length).toBe(2);
  const resident=state().members.find((m:any)=>m.name==='Architect').id;
- await expect.poll(()=>state().messages.filter((m:any)=>m.recipient===resident&&m.delivery==='acknowledged').length).toBe(1);
+ await expect.poll(()=>state().messages.filter((m:any)=>m.recipient===resident&&m.delivery==='delivered').length).toBe(1);
  expect(state().members.find((m:any)=>m.id===resident).initial_configs.model).toBe('fast');
  await tool('message_send',{recipient:resident,type:'question',body:'Which clock?'});
  await expect.poll(()=>state().messages.some((m:any)=>m.type==='answer'&&m.body==='Fixture answer')).toBe(true);
@@ -62,8 +62,8 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await app.getByRole('button',{name:'Send message',exact:true}).click();
  await expect.poll(()=>state().messages.find((m:any)=>m.body==='Human follow-up')?.sender).toBe('human');
  await app.getByRole('button',{name:'Resume member',exact:true}).click();
- await expect.poll(()=>state().messages.find((m:any)=>m.body==='Human follow-up')?.delivery).toBe('acknowledged');
- expect(state().messages.find((m:any)=>m.body==='Retained while paused').delivery).toBe('acknowledged');
+ await expect.poll(()=>state().messages.find((m:any)=>m.body==='Human follow-up')?.delivery).toBe('delivered');
+ expect(state().messages.find((m:any)=>m.body==='Retained while paused').delivery).toBe('delivered');
  await expect(app.locator('[data-testid="workspace-member-detail"]')).toContainText('Human follow-up');
  await tool('member_update',{status:'Review complete',emoji:'✅'});
  await expect(sidebar).toContainText('Review complete');
@@ -130,7 +130,7 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  await expect(app.locator('[data-testid="workspace-sidebar"]')).toHaveCount(0);
  await tool('workspace_configure', { workspace:{name: 'Profiles'} });
  expect((await tool('workspace_get', {view:'about'})).caller.role).toBe('orchestrator');
- const before = await tool('workspace_get');
+ const before = await tool('workspace_get', {view:'state'});
  expect(before.sessions[before.workspace.orchestrator].config_options.map((c: any) => c.category)).toEqual(['model', 'thought_level']);
  await tool('workspace_configure', {
   expected_revision: before.workspace.revision,
@@ -153,7 +153,7 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  const failedLaunch = await tool('workspace_configure', {members:{invalid:{ name: 'Invalid thinking', profile: 'pleb', thinking: 'high', instructions: 'Must not run.', lifetime: 'resident' }}});
  expect(failedLaunch.launches.invalid.state).toBe('failed');
  expect(failedLaunch.launches.invalid.error).toBeTruthy();
- const after = await tool('workspace_get', { include_messages: true });
+ const after = await tool('workspace_get', { view: 'state', include_messages: true });
  expect(after.workspace.profiles.god.model).toBe('fast');
  expect(after.workspace.members.find((m: any) => m.id === resident.id).launch_settings).toMatchObject({ model: 'smart', thinking: 'high' });
  expect(after.sessions[resident.id].config_options.find((c: any) => c.id === 'model').currentValue).toBe('smart');
@@ -163,7 +163,7 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  expect(after.workspace.messages.some((m: any) => m.recipient === failed.id)).toBe(false);
  await tool('workspace_configure', { expected_revision: before.workspace.revision, name: 'Stale edit' }, true);
  await tool('workspace_configure', { profiles: { god: null }, default_profile: '' });
- const removed = await tool('workspace_get');
+ const removed = await tool('workspace_get', {view:'state'});
  expect(removed.workspace.profiles.god).toBeUndefined();
  expect(removed.workspace.profiles.pleb.model).toBe('fast');
  expect(removed.workspace.default_profile).toBe('');
@@ -295,7 +295,7 @@ test('bulk workspace setup keeps package workers resident and QA survives refres
   const text=await outputs.last().innerText();expect(text).toMatch(error?/^WORKSPACE_ERROR /:/^WORKSPACE_RESULT /);return error?text:JSON.parse(text.slice('WORKSPACE_RESULT '.length));
  };
  await expect(composer).toBeEnabled();
- const about=await tool('workspace_get',{view:'about'});expect(about.tools).toHaveLength(12);
+ const about=await tool('workspace_get',{view:'about'});expect(about.tools).toHaveLength(11);
  expect(about.tools).not.toContain('member_spawn');
  await tool('member_spawn',{},true);
  await tool('setup_workspace',{name:'Removed'},true);
