@@ -209,6 +209,55 @@ releases; Fable 5.1 and every Codex model are pinned IDs. Codex's `read-only`
 mode still asks rather than refusing ("Always ask to edit external files"),
 so it does not make a reviewer read-only.
 
+### Stacks, connections and keys (2026-09-24)
+
+The launcher picks a **stack** and a **tier** rather than an adapter. A stack
+is a named set of four tiers (`frontier`, `coding`, `review`, `small`); a tier
+is a `swarm.AgentProfile` naming an adapter, a connection, a model, an effort
+and optionally `capability:"reviewer"`. Three ship, as data in
+`apps/agentd/be/stacks.json`:
+
+| Stack | frontier | coding | review | small |
+|---|---|---|---|---|
+| All Anthropic (Claude Code) | `claude-fable-5-1[1m]` | `sonnet` | `sonnet`, reviewer (enforced) | `haiku` |
+| All OpenAI (Codex) | `gpt-6-astra` high | `gpt-6-sol` medium | `gpt-6-sol` medium (read-only by instruction) | `gpt-6-luna` low |
+| OpenRouter budget (OpenCode) | `~anthropic/claude-opus-latest` high | `deepseek/deepseek-v4-pro-0813` high | `z-ai/glm-5.3` high | `~deepseek/deepseek-v4-flash-latest` low |
+
+OpenRouter prices on 2026-09-24, per 1M tokens in/out: Opus 5.5 4.00/20.00,
+GLM-5.3 1.40/4.40, DeepSeek V4 Pro 0813 0.46/1.39, DeepSeek V4 Flash 0731
+0.03/0.32. The `~…-latest` aliases are used only where one priced the same as
+the intended model that day (Opus, V4 Flash); `~deepseek/deepseek-pro-latest`
+and `~z-ai/glm-latest` priced differently, so those tiers pin the snapshot.
+
+- **Overrides.** `agents.json` `stacks` overrides a stack by key, tier by
+  tier (`{"stacks":{"anthropic":{"tiers":{"frontier":{"provider":"claude","model":"opus[1m]"}}}}}`),
+  or adds one with a `name` and all four tiers. A stack that fails the
+  profile rules, names an unknown adapter or connection, sets `approval`, or
+  asks for a reviewer capability off Claude Code is shown greyed with the
+  reason. Availability (adapter installed, key set) is re-read every sweep.
+- **Starting.** `agent_start {stack, tier, agent?, model?, cwd}`: the tier is
+  resolved, the adapter launched through its connection, and the settings
+  applied with `configureWorkspaceSession`, which fails the start, listing
+  the adapter's values, if a model is not offered. `agent` and `model` are
+  the launcher's Advanced overrides; another adapter drops the tier's
+  adapter-specific values. `wash ai --agent X` is `agent` alone. agentd logs
+  `session settings … effective=` with what the adapter reports.
+- **Connections** are an adapter plus environment, named `adapter@provider`
+  (`opencode@openrouter`, `claude@openrouter`); the adapter's own id is its
+  direct connection. `agents.json` `connections` replaces or adds them. A
+  session's connection is recorded in History and the transcript head, and a
+  resume launches through it again.
+- **Keys** live in `~/.config/wash/keys.json`, beside `agents.json` and not
+  in it, written 0600. The launcher's Connections section saves, tests
+  (`GET https://openrouter.ai/api/v1/key`) and clears them; after saving, the
+  window sees only "set" and the last four characters, and no log carries a
+  value. A key is injected into the environment of adapters on connections
+  that name it (`OPENROUTER_API_KEY`; `ANTHROPIC_AUTH_TOKEN` for
+  `claude@openrouter`). **There is no keychain yet**: the file is plain JSON
+  protected by its mode only.
+- **Workspaces** take the orchestrator's stack; members say `"tier":"review"`
+  (AGENT_SWARM_BULK.md, API 3.3).
+
 **So Node is a prerequisite for the managed tier as a whole**, not just for
 Claude, and the "Codex first because its adapter is static" argument does
 not survive contact. Ordering is now a preference, not a constraint.
