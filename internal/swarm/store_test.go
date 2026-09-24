@@ -290,3 +290,36 @@ func TestReportsToTheOrchestratorAreSummaries(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Observed in Redoubt: two implementers reported finished work as progress,
+// set waiting, and the orchestrator slept on — both sides waiting. The last
+// report before a member goes idle wakes the orchestrator; check-ins do not.
+func TestAMembersLastReportBeforeWaitingWakesTheOrchestrator(t *testing.T) {
+	s, w := fixture(t)
+	for _, body := range []string{"step 1 done", "fix round done, staged"} {
+		if _, err := s.Send("worker-session", w.Lead, "progress", body, "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if next, _ := s.Next("lead-session"); len(next) != 0 {
+		t.Fatal("a check-in woke the orchestrator")
+	}
+	if err := s.Mutate("worker-session", false, func(w *Workspace, m *Member) error {
+		m.Waiting = "Waiting for review"
+		DeliverLastReport(w, m)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.Next("lead-session")
+	if err != nil || len(next) != 1 || next[0].Body != "fix round done, staged" {
+		t.Fatalf("orchestrator woke with %+v, want the last report", next)
+	}
+	if first := s.View("lead-session").Messages[0]; first.State != "recorded" {
+		t.Fatalf("an earlier check-in was delivered too: %s", first.State)
+	}
+	// The orchestrator going idle wakes nobody.
+	if err := s.Mutate("lead-session", false, func(w *Workspace, m *Member) error { DeliverLastReport(w, m); return nil }); err != nil {
+		t.Fatal(err)
+	}
+}

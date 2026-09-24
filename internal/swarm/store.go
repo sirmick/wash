@@ -438,6 +438,29 @@ func AddMessage(w *Workspace, from, to, kind, body, reply, assignment, request s
 	w.Messages = append(w.Messages, Message{ID: ID(), Swarm: w.ID, Sender: from, Recipient: to, Type: kind, Body: body, ReplyTo: reply, Assignment: assignment, RequestID: request, State: state, Created: time.Now().UnixMilli()})
 	return &w.Messages[len(w.Messages)-1], nil
 }
+
+// DeliverLastReport wakes the orchestrator with m's latest undelivered progress
+// report when m goes idle. Progress is an FYI while the sender works on; the
+// last one before it waits is a report someone has to act on. Sent as progress
+// with no assignment to complete, finished work sat unread while both sides
+// waited (observed in Redoubt: two implementers "done and reported").
+// Earlier check-ins stay in the inbox history.
+func DeliverLastReport(w *Workspace, m *Member) {
+	if m.ID == w.Lead {
+		return
+	}
+	for i := len(w.Messages) - 1; i >= 0; i-- {
+		v := &w.Messages[i]
+		if v.Sender != m.ID || v.Recipient != w.Lead {
+			continue
+		}
+		if v.Type == "progress" && v.State == "recorded" {
+			v.State = "queued"
+		}
+		return
+	}
+}
+
 func (s *Store) Send(session, to, kind, body, reply, assignment, request string) (Message, error) {
 	var out Message
 	if !slices.Contains([]string{"instruction", "question", "answer", "progress"}, kind) {

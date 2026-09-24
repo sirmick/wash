@@ -308,6 +308,7 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 					}
 					m.WaitingOn = slices.Clone(p.Waiting.Until)
 					m.WaitingFor, m.Waiting = p.Waiting.Reply, p.Waiting.Reason
+					swarm.DeliverLastReport(w, m)
 					for i := range w.Assignments {
 						if w.Assignments[i].Member == m.ID && w.Assignments[i].State == "active" {
 							w.Assignments[i].State = "blocked"
