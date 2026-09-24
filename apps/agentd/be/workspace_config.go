@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -122,4 +123,49 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 		}
 	}
 	return effective, nil
+}
+
+// restoreWorkspaceSession reapplies launch settings to a session that was
+// loaded rather than created. Unlike a launch it must not fail on a value
+// the loaded session does not offer: session/load keeps the model, but the
+// adapter may name it differently afterwards (observed: a session launched
+// on "claude-fable-5-1[1m]" loads with 1M context as "claude-fable-5-1", from
+// a list then reading only "default, opus"), while the thinking level really
+// is lost. So a setting the session does not offer is skipped and reported,
+// and everything it does offer is still applied — dropping effort because
+// the model's label moved is the bug this exists to fix.
+func restoreWorkspaceSession(settings swarm.AgentProfile, options []acp.ConfigOption, set func(string, string) ([]acp.ConfigOption, error)) (skipped []string, err error) {
+	offered := func(category, value string) bool {
+		for _, o := range options {
+			if o.Category != category && !(category == "model" && o.ID == "model") {
+				continue
+			}
+			return len(o.Options) == 0 || slices.ContainsFunc(o.Options, func(v acp.ConfigOptionValue) bool { return v.Value == value })
+		}
+		return false
+	}
+	if settings.Model != "" && !offered("model", settings.Model) {
+		skipped = append(skipped, "model="+settings.Model)
+		settings.Model = ""
+	}
+	if settings.Thinking != "" && !offered("thought_level", settings.Thinking) {
+		skipped = append(skipped, "thinking="+settings.Thinking)
+		settings.Thinking = ""
+	}
+	settings.Configs = maps.Clone(settings.Configs)
+	for id, value := range settings.Configs {
+		ok := false
+		for _, o := range options {
+			if o.ID == id {
+				ok = len(o.Options) == 0 || slices.ContainsFunc(o.Options, func(v acp.ConfigOptionValue) bool { return v.Value == value })
+			}
+		}
+		if !ok {
+			skipped = append(skipped, id+"="+value)
+			delete(settings.Configs, id)
+		}
+	}
+	slices.Sort(skipped)
+	_, err = configureWorkspaceSession(settings, options, set)
+	return skipped, err
 }

@@ -209,3 +209,37 @@ func TestWorkspaceAboutBeforeSetupAndWithoutMutation(t *testing.T) {
 		}
 	}
 }
+
+// Observed on resume: the loaded session offered model "default, opus" for a
+// member launched on claude-fable-5-1[1m] (still on 1M context), and the strict
+// launch path gave up on the model before ever restoring effort "high".
+func TestRestoreSkipsWhatTheLoadedSessionDoesNotOfferAndAppliesTheRest(t *testing.T) {
+	values := func(vs ...string) []acp.ConfigOptionValue {
+		out := []acp.ConfigOptionValue{}
+		for _, v := range vs {
+			out = append(out, acp.ConfigOptionValue{Value: v})
+		}
+		return out
+	}
+	options := []acp.ConfigOption{
+		{ID: "model", Category: "model", CurrentValue: "default", Options: values("default", "opus")},
+		{ID: "effort", Category: "thought_level", CurrentValue: "default", Options: values("default", "low", "medium", "high")},
+	}
+	var set []string
+	skipped, err := restoreWorkspaceSession(swarm.AgentProfile{Provider: "claude", Model: "claude-fable-5-1[1m]", Thinking: "high"}, options, func(id, value string) ([]acp.ConfigOption, error) {
+		set = append(set, id+"="+value)
+		next := append([]acp.ConfigOption(nil), options...)
+		for i := range next {
+			if next[i].ID == id {
+				next[i].CurrentValue = value
+			}
+		}
+		return next, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(skipped, []string{"model=claude-fable-5-1[1m]"}) || !reflect.DeepEqual(set, []string{"effort=high"}) {
+		t.Fatalf("skipped=%v set=%v", skipped, set)
+	}
+}

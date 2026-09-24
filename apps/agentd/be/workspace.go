@@ -694,13 +694,17 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 			hostedMu.Lock()
 			options := append([]acp.ConfigOption(nil), target.configs...)
 			hostedMu.Unlock()
-			if _, cerr := configureWorkspaceSession(*m.LaunchSettings, options, func(id, value string) ([]acp.ConfigOption, error) {
+			skipped, cerr := restoreWorkspaceSession(*m.LaunchSettings, options, func(id, value string) ([]acp.ConfigOption, error) {
 				res, e := target.client.SetConfigOption(ctx, target.sessionID, id, value)
 				if e == nil {
 					target.applyConfigs(res.ConfigOptions)
 				}
 				return res.ConfigOptions, e
-			}); cerr != nil {
+			})
+			if len(skipped) > 0 {
+				log.Printf("agentd: workspace resume member=%s: not offered by the loaded session, left as loaded: %s", id, strings.Join(skipped, " "))
+			}
+			if cerr != nil {
 				log.Printf("agentd: workspace resume member=%s: launch settings not reapplied: %v", id, cerr)
 			}
 		}
