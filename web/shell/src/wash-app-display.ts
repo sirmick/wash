@@ -16,6 +16,7 @@
 
 import { registerDisplayWindow, subscribeRaw, subscribeResync, unregisterDisplayWindow } from './api';
 import { type Origin, LOCAL_ORIGIN } from './clients';
+import { SerialQueue, normalizeWheel } from './display-frames';
 import { moveLocal, resizeLocal, windowById, screenSize, VIEWPORTS_PER_AXIS } from './wm';
 
 // xdg_toplevel resize edge bitmask (matches wlroots / xdg-shell).
@@ -81,6 +82,9 @@ interface PopupOverlay {
   y: number;
   unsub?: () => void;
   cleanup: () => void;
+  // Per-popup decode queue: frames must draw in wire order (see
+  // display-frames.ts SerialQueue).
+  decode: SerialQueue;
 }
 
 export class WashAppDisplay extends HTMLElement {
@@ -95,6 +99,11 @@ export class WashAppDisplay extends HTMLElement {
   private unsubscribe?: () => void;
   private unsubscribeResync?: () => void;
   private errorCount = 0;
+  // Decode+draw runs through this queue so frames land in wire order:
+  // createImageBitmap is async and a big full frame can finish after a later
+  // small dirty frame, which would then be overwritten with older pixels
+  // (REVIEW-DISPLAY-2026-09 #5).
+  private decode = new SerialQueue();
 
   // Pending input batch + rAF handle. Motion coalesces (one per frame);
   // buttons/keys/wheel flush immediately so clicks/keystrokes stay snappy.
@@ -276,26 +285,29 @@ export class WashAppDisplay extends HTMLElement {
       this.flushNow();
     };
     const onWheel = (ev: WheelEvent) => {
-      // Normalize deltaMode before forwarding: Firefox delivers LINE deltas
-      // (±3 per notch), not pixels, so passing deltaY raw scrolled guests ~40×
-      // too slow (REVIEW-X11-WAYLAND #10). Convert lines→px (~40px/line) and
-      // pages→viewport height, then send BOTH a pixel delta (the BE derives a
-      // continuous value for smooth trackpad scroll) and an integer notch count
-      // so the BE emits a clean value120 = notches*120 — Xwayland accumulates
-      // value120 into buttons 4/5 and ragged values make discrete-consuming
-      // clients (xterm, Qt list views) skip/lag.
+      // Normalize deltaMode before forwarding (Firefox line deltas, page
+      // deltas) and send BOTH a pixel delta (smooth trackpad scroll) and an
+      // integer notch count (clean value120 for Xwayland's buttons 4/5). The
+      // conversion lives in display-frames.ts so the popup overlay uses the
+      // exact same one (REVIEW-X11-WAYLAND #10, REVIEW-DISPLAY-2026-09 #15).
       ev.preventDefault();
       window.wash?.focusWindow(this.windowID, this.origin);
       this.focus({ preventScroll: true });
-      const LINE_PX = 40;
-      const NOTCH_PX = 120;
-      const scale = ev.deltaMode === 1 ? LINE_PX
-                  : ev.deltaMode === 2 ? (this.clientHeight || 800)
-                  : 1;
-      const py = ev.deltaY * scale;
-      const px = ev.deltaX * scale;
-      if (py) this.queue({ ev: 'axis', axis: 'v', delta: Math.round(py), notches: Math.round(py / NOTCH_PX) });
-      if (px) this.queue({ ev: 'axis', axis: 'h', delta: Math.round(px), notches: Math.round(px / NOTCH_PX) });
+      for (const a of normalizeWheel(ev, this.clientHeight)) this.queue({ ev: 'axis', ...a });
+      this.flushNow();
+    };
+    // The pointer left the canvas without a grab: tell the guest (the
+    // compositor sends wl_pointer.leave) so hover highlights and tooltips
+    // don't stick until the next focus change. During a captured drag the
+    // element still receives moves, so no leave is sent then.
+    const onPointerLeave = (ev: PointerEvent) => {
+      if (this.moving || this.resizing) return;
+      try {
+        if (this.hasPointerCapture(ev.pointerId)) return;
+      } catch {
+        /* not capturable */
+      }
+      this.queue({ ev: 'leave' });
       this.flushNow();
     };
     const onKeyDown = (ev: KeyboardEvent) => {
@@ -338,6 +350,7 @@ export class WashAppDisplay extends HTMLElement {
     this.addEventListener('pointermove', onPointerMove);
     this.addEventListener('pointerdown', onPointerDown);
     this.addEventListener('pointerup', onPointerUp);
+    this.addEventListener('pointerleave', onPointerLeave);
     this.addEventListener('wheel', onWheel, { passive: false });
     this.addEventListener('keydown', onKeyDown);
     this.addEventListener('keyup', onKeyUp);
@@ -349,6 +362,7 @@ export class WashAppDisplay extends HTMLElement {
       this.removeEventListener('pointermove', onPointerMove);
       this.removeEventListener('pointerdown', onPointerDown);
       this.removeEventListener('pointerup', onPointerUp);
+      this.removeEventListener('pointerleave', onPointerLeave);
       this.removeEventListener('wheel', onWheel);
       this.removeEventListener('keydown', onKeyDown);
       this.removeEventListener('keyup', onKeyUp);
@@ -496,7 +510,25 @@ export class WashAppDisplay extends HTMLElement {
     if (this.pending.length === 0) return;
     const events = this.pending;
     this.pending = [];
-    this.sendInput({ win: this.windowID }, events);
+    this.sendInput({ win: this.windowID, vp: this.viewportBox() }, events);
+  }
+
+  // viewportBox is the browser viewport expressed in this window's canvas
+  // coordinates (logical surface px). The compositor uses it to keep a
+  // guest's menus (xdg_popup constraint_adjustment) inside what the user can
+  // actually see: the overlay is position:fixed in the browser, and the
+  // compositor has no other way to know where the wash window sits
+  // (REVIEW-DISPLAY-2026-09 #9). Sent with every input batch — a menu opens
+  // off a click or key, so the box is always fresh when it matters.
+  private viewportBox(): { x: number; y: number; w: number; h: number } {
+    const box = this.canvas && this.canvas.width > 0 ? this.canvas : this;
+    const r = box.getBoundingClientRect();
+    return {
+      x: Math.round(-r.left),
+      y: Math.round(-r.top),
+      w: Math.round(window.innerWidth),
+      h: Math.round(window.innerHeight),
+    };
   }
 
   // sendInput posts one input batch to the wash-display instance. `target`
@@ -505,7 +537,7 @@ export class WashAppDisplay extends HTMLElement {
   // (compound) instance id so a REMOTE display window's input routes to its
   // own host's wash-display, not the local router (docs/REMOTE.md §15.1) —
   // sendAppMsgTo would always go over the local connection.
-  private sendInput(target: Record<string, number>, events: InputEvent[]): void {
+  private sendInput(target: Record<string, unknown>, events: InputEvent[]): void {
     if (events.length === 0) return;
     if (typeof window === 'undefined' || !window.wash) return;
     window.wash.sendAppMsg(this.instanceID, { kind: 'input', ...target, events });
@@ -583,7 +615,9 @@ export class WashAppDisplay extends HTMLElement {
     const payload = bytes.subarray(HEADER_BYTES);
     if (payload.length === 0) return;
 
-    createImageBitmap(new Blob([payload]))
+    // Queue the decode so this frame draws after every earlier one (wire
+    // order), never before — see SerialQueue.
+    void this.decode.enqueue(() => createImageBitmap(new Blob([payload]))
       .then((bitmap) => {
         const canvas = this.canvas;
         const ctx = this.ctx;
@@ -613,7 +647,7 @@ export class WashAppDisplay extends HTMLElement {
         ctx.drawImage(bitmap, header.dirtyX, header.dirtyY);
         bitmap.close?.();
       })
-      .catch((e) => this.logError('decode/draw failed', e));
+      .catch((e) => this.logError('decode/draw failed', e)));
   }
 
   // --- popup overlays (DISPLAY.md §12 M3) ----------------------------
@@ -635,6 +669,7 @@ export class WashAppDisplay extends HTMLElement {
       y: 0,
       unsub,
       cleanup: () => {},
+      decode: new SerialQueue(),
     };
     this.popups.set(channelID, placeholder);
   }
@@ -670,7 +705,7 @@ export class WashAppDisplay extends HTMLElement {
     const payload = bytes.subarray(HEADER_BYTES);
     if (payload.length === 0) return;
     if (!p.canvas) this.ensurePopupCanvas(p);
-    createImageBitmap(new Blob([payload]))
+    void p.decode.enqueue(() => createImageBitmap(new Blob([payload]))
       .then((bitmap) => {
         const live = this.popups.get(channelID);
         if (!live || !live.canvas || !live.ctx) {
@@ -699,7 +734,7 @@ export class WashAppDisplay extends HTMLElement {
         bitmap.close?.();
         this.repositionPopup(live);
       })
-      .catch((e) => this.logError('popup decode/draw failed', e));
+      .catch((e) => this.logError('popup decode/draw failed', e)));
   }
 
   // ensurePopupCanvas builds the overlay canvas: position:fixed on <body>
@@ -729,6 +764,8 @@ export class WashAppDisplay extends HTMLElement {
       this.sendInput(tgt, [{ ev: 'motion', x, y }]);
     };
     const onDown = (ev: PointerEvent) => {
+      // A press on a menu item must not also move browser focus/selection.
+      ev.preventDefault();
       const { x, y } = surfacePos(ev);
       this.sendInput(tgt, [
         { ev: 'motion', x, y },
@@ -736,28 +773,35 @@ export class WashAppDisplay extends HTMLElement {
       ]);
     };
     const onUp = (ev: PointerEvent) => {
+      ev.preventDefault();
       const { x, y } = surfacePos(ev);
       this.sendInput(tgt, [
         { ev: 'motion', x, y },
         { ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'up' },
       ]);
     };
+    // Same deltaMode normalization + notch count as the window canvas: the
+    // overlay previously sent a raw pixel delta with no `notches`, so X11
+    // menus/combos (value120 → buttons 4/5) got no discrete scroll at all
+    // (REVIEW-DISPLAY-2026-09 #15).
     const onWheel = (ev: WheelEvent) => {
       ev.preventDefault();
-      const evs: InputEvent[] = [];
-      if (ev.deltaY) evs.push({ ev: 'axis', axis: 'v', delta: Math.round(ev.deltaY) });
-      if (ev.deltaX) evs.push({ ev: 'axis', axis: 'h', delta: Math.round(ev.deltaX) });
-      this.sendInput(tgt, evs);
+      const evs: InputEvent[] = normalizeWheel(ev, window.innerHeight).map((a) => ({ ev: 'axis', ...a }));
+      if (evs.length) this.sendInput(tgt, evs);
     };
+    // Right-click on a menu item is the guest's, not the browser's.
+    const onContextMenu = (ev: Event) => ev.preventDefault();
     cv.addEventListener('pointermove', onMove);
     cv.addEventListener('pointerdown', onDown);
     cv.addEventListener('pointerup', onUp);
     cv.addEventListener('wheel', onWheel, { passive: false });
+    cv.addEventListener('contextmenu', onContextMenu);
     p.cleanup = () => {
       cv.removeEventListener('pointermove', onMove);
       cv.removeEventListener('pointerdown', onDown);
       cv.removeEventListener('pointerup', onUp);
       cv.removeEventListener('wheel', onWheel);
+      cv.removeEventListener('contextmenu', onContextMenu);
       cv.remove();
     };
     this.repositionPopup(p);

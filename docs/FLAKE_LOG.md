@@ -16,6 +16,30 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-23 — term-tab-verbs + term-bell-activity: deterministic red from a DEEP worktree path (harness artifact)
+
+**Seen during:** `make e2e-test` on branch `wash-display-review`, run from
+`branches/wash-display-review/`: 720 passed / 2 failed / 9 skipped.
+`term-tab-verbs.spec.ts:60` ("renamed tab keeps its name") timed out with a
+`term-close-confirm` overlay intercepting every click; `term-bell-activity
+.spec.ts:67` never found `term-tab-activity-<first>`. Both reproduced 2/2 in
+isolation on the branch — so not load.
+
+**Not the branch.** Same build green on main (7/7), and green on the branch
+(7/7) when run from a short symlink (`ln -s branches/wash-display-review
+~/wdr; cd ~/wdr/e2e`).
+
+**Mechanism — tab title length.** The spawned terminal's title is its cwd
+(`mick@buzz: ~/wash/branches/wash-display-review/e2e`). The longer title
+re-lays the tab strip, so `tab.click()` / `tab.dblclick()` on the tab box
+land on its close ×: the first tab closes (no activity dot can exist) or,
+with a `sleep` running, the close-confirm opens and eats the next clicks.
+
+**Verdict:** harness artifact of where the suite is run from. **Fix lives:**
+run from a short path for now; the real fix is for those specs to click the
+tab's *label* element rather than the tab box (or for the title to be
+elided). Memory: `wash-e2e-worktree-path-length`.
+
 ## 2026-09-23 — sidebar notify badge: CI-only, on a runner 4x slower than the dev box
 
 **Seen during:** the GitHub Actions `ci` run for the PR #26 head

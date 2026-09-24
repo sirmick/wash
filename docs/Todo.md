@@ -350,5 +350,7 @@ The hover/press/focus sweep landed the layer, the guard and the shared
   stays a window.
 - **Nested serial-less Qt submenu chaining** (`TODO` in
   `toplevel_setup_popover`) — low value; the primary classifier covers the
-  common case.
+  common case. (A real `xdg_popup` submenu of a popover DOES chain now —
+  docs/Review-findings-display.md #13; only a serial-less submenu-toplevel of a
+  popover is still a window.)
 - **Touch input** — the FE only synthesizes pointer events.
