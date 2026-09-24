@@ -191,10 +191,24 @@ Run against `internal/acp` with a scratch probe and the conformance test
   `size` and `cost` (the last is ignored), which agentd already reads.
 - `loadSession: true`. `authMethods` lists `opencode-login` even when
   sessions open fine, as codex-acp does.
-- **Not yet verified: real work on OpenRouter models.** No OpenRouter key
-  was available, so edit-and-test turns on DeepSeek V4 Pro and GLM-5.3 have
-  not been run. The permission, usage and model-switch results above came
-  from the free default model and a dummy key.
+- **Real work on OpenRouter models, verified with the owner's key.** Task: a
+  Go module whose `Clamp` returned `hi` for values below `lo`, with a failing
+  test; "fix calc.go without changing the test, then run `go test`". Effort
+  high, every permission approved.
+  - DeepSeek V4 Pro (`openrouter/deepseek/deepseek-v4-pro-0813`): correct
+    fix (both bounds), test left alone, passed; 17 s, 11k tokens, $0.024.
+    Asked for the edit and for `go test`.
+  - GLM-5.3 (`openrouter/z-ai/glm-5.3`): the same fix; ran `go test` before
+    and after; 11 s, 10.5k tokens, $0.048. Three asks.
+  - Through Wash itself, in an isolated test router: key saved and tested
+    from the Connections section ("valid"), "OpenRouter budget / coding"
+    started OpenCode with `effort:high model:openrouter/deepseek/deepseek-v4-pro-0813`
+    through `opencode@openrouter`, the three asks were answered with the
+    window's Allow buttons, the fix passed, the status bar read 15k/1049k,
+    and the key appeared in no log.
+- **`claude@openrouter` works** for a one-line turn (claude-agent-acp
+  0.81.2, default model). With a wrong token the prompt does not fail: it
+  hangs, retrying, until the caller's deadline.
 
 Model options offered by the other adapters on the same day, which the
 stacks' defaults (`apps/agentd/be/stacks.json`) are chosen from:
