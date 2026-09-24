@@ -510,11 +510,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 
 	// Without a profile, preserve same-provider model inheritance. A profile
 	// starts from that provider's defaults rather than the caller's settings.
-	settings := *member.LaunchSettings
-	settings.Configs = maps.Clone(settings.Configs)
-	if settings.Configs == nil {
-		settings.Configs = make(map[string]string)
-	}
+	settings := memberSettings(member)
 	if member.Profile == "" && settings.Model == "" && settings.Provider == parent.agent {
 		hostedMu.Lock()
 		for _, cfg := range parent.configs {
@@ -606,6 +602,19 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		return map[string]any{"member": member, "assignment": initialAssignment}, nil
 	}
 	return member, nil
+}
+
+// memberSettings is what a member runs with: its launch settings with the
+// orchestrator's live adjustments on top, a copy the caller may change. A
+// relaunch through spawn once dropped the adjustments, which resume kept.
+func memberSettings(m swarm.Member) swarm.AgentProfile {
+	settings := *m.LaunchSettings
+	settings.Configs = maps.Clone(settings.Configs)
+	if settings.Configs == nil {
+		settings.Configs = map[string]string{}
+	}
+	maps.Copy(settings.Configs, m.Adjusted)
+	return settings
 }
 
 // memberBrief is a member's first message: its role, how a workspace member
@@ -701,12 +710,7 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 			hostedMu.Lock()
 			options := append([]acp.ConfigOption(nil), target.configs...)
 			hostedMu.Unlock()
-			settings := *m.LaunchSettings
-			settings.Configs = maps.Clone(settings.Configs)
-			if settings.Configs == nil {
-				settings.Configs = map[string]string{}
-			}
-			maps.Copy(settings.Configs, m.Adjusted)
+			settings := memberSettings(*m)
 			skipped, cerr := restoreWorkspaceSession(settings, options, func(id, value string) ([]acp.ConfigOption, error) {
 				res, e := target.client.SetConfigOption(ctx, target.sessionID, id, value)
 				if e == nil {
@@ -765,12 +769,7 @@ func (ws *workspaceService) configureMember(ctx context.Context, h *hosted, id s
 	}
 	// The same limits as a launch profile: a reviewer cannot be given a
 	// permission mode, whoever asks.
-	check := *m.LaunchSettings
-	check.Configs = maps.Clone(check.Configs)
-	if check.Configs == nil {
-		check.Configs = map[string]string{}
-	}
-	maps.Copy(check.Configs, m.Adjusted)
+	check := memberSettings(*m)
 	maps.Copy(check.Configs, configs)
 	if err := swarm.ValidateProfile(check); err != nil {
 		return nil, err

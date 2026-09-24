@@ -302,3 +302,16 @@ func TestRelaunchDoesNotUnpauseTheWorkspace(t *testing.T) {
 		t.Fatal("relaunch unpaused the workspace")
 	}
 }
+
+// A setting the orchestrator adjusted on a live member (plan mode lifted,
+// say) survives a relaunch as it survives a resume.
+func TestMemberSettingsCarryAdjustments(t *testing.T) {
+	launch := swarm.AgentProfile{Provider: "claude", Configs: map[string]string{"mode": "plan", "effort": "low"}}
+	got := memberSettings(swarm.Member{LaunchSettings: &launch, Adjusted: map[string]string{"mode": "default"}})
+	if got.Configs["mode"] != "default" || got.Configs["effort"] != "low" {
+		t.Fatalf("settings %v", got.Configs)
+	}
+	if launch.Configs["mode"] != "plan" {
+		t.Fatal("memberSettings changed the stored launch settings")
+	}
+}
