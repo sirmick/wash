@@ -44,6 +44,7 @@ package agentd
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"path/filepath"
@@ -137,11 +138,11 @@ func scanTranscriptGrams(path string) ([]string, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), maxImageBytes+(1<<16))
 	for sc.Scan() {
-		var e Event
+		var e agentproto.Event
 		if json.Unmarshal(sc.Bytes(), &e) != nil {
 			continue
 		}
-		if e.Kind == EventImage {
+		if e.Kind == agentproto.EventImage {
 			continue
 		}
 		trigramsOf(e.Text, seen)

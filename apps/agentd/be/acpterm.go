@@ -20,6 +20,7 @@ package agentd
 import (
 	"context"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"strconv"
 	"strings"
@@ -132,8 +133,8 @@ func (h *hosted) CreateTerminal(ctx context.Context, req acp.CreateTerminalReque
 	// better, but nobody can see it happen — and "I can see what it did" is
 	// the fallback for not reading every approval.
 	if h.conn != nil {
-		ev := appendEvent(h.key, Event{
-			Kind:    EventTerminal,
+		ev := appendEvent(h.key, agentproto.Event{
+			Kind:    agentproto.EventTerminal,
 			Title:   strings.Join(append([]string{req.Command}, req.Args...), " "),
 			Channel: sess.ID(),
 			Status:  "running",
@@ -261,7 +262,7 @@ func (h *hosted) completeTerminalEvent(id string) {
 	if sig != "" {
 		status = "killed by " + sig
 	}
-	ev, ok := updateEvent(t.key, t.evSeq, func(e *Event) {
+	ev, ok := updateEvent(t.key, t.evSeq, func(e *agentproto.Event) {
 		e.Text = text
 		e.Status = status
 		// The channel is gone with the pty; leaving it set would have the

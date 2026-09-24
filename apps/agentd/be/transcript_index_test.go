@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,7 +184,7 @@ func TestIndexIgnoresImagePayloads(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
 	bindTranscript("acp:1", "s-img", launchRecord{Agent: "codex"}, "/home/mick", now)
-	appendEvent("acp:1", Event{Kind: EventImage, Mime: "image/png", Text: strings.Repeat("QUJD", 40)}, now)
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventImage, Mime: "image/png", Text: strings.Repeat("QUJD", 40)}, now)
 	waitForTranscriptWrites()
 
 	if cand, ok := searchCandidates([]string{"QUJD"}); ok && cand["s-img"] {

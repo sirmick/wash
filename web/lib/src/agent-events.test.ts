@@ -3,9 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyAgentEvent, mergeAgentEvents, utf8Len } from './agent-events.ts';
-import type { AgentEvent } from './agent-session.tsx';
+import type * as agentproto from './agent-protocol.gen';
 
-const msg = (seq: number, text: string, extra: Partial<AgentEvent> = {}): AgentEvent => ({
+const msg = (seq: number, text: string, extra: Partial<agentproto.Event> = {}): agentproto.Event => ({
   seq,
   kind: 'message',
   text,
@@ -13,7 +13,7 @@ const msg = (seq: number, text: string, extra: Partial<AgentEvent> = {}): AgentE
   at_ms: 0,
   ...extra,
 });
-const delta = (seq: number, text: string, textLen: number): AgentEvent => ({
+const delta = (seq: number, text: string, textLen: number): agentproto.Event => ({
   seq,
   kind: 'message',
   text,

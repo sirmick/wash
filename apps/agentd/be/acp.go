@@ -1113,11 +1113,11 @@ func unansweredReason(why string) string {
 // It uses appendEvent rather than appendPrompt on purpose. These callers
 // all used to borrow appendPrompt, which stores what the HUMAN typed: the
 // stored event kept Kind=user while only the pushed copy carried
-// EventMessage, so a live window and a reloaded one showed the same note
+// agentproto.EventMessage, so a live window and a reloaded one showed the same note
 // differently. appendEvent's own doc comment names that trap; these were
 // the callers still in it.
 func (h *hosted) note(text string) {
-	e := appendEvent(h.key, Event{Kind: EventMessage, Text: text}, time.Now())
+	e := appendEvent(h.key, agentproto.Event{Kind: agentproto.EventMessage, Text: text}, time.Now())
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, e)
 	}
@@ -1744,7 +1744,7 @@ const noteSubjectMax = 80
 // decision puts wash's approval verdict in the transcript as its own event,
 // which the Agent window renders as a coloured row.
 func (h *hosted) decision(status, reason, tool, subject string) {
-	e := appendEvent(h.key, Event{Kind: EventDecision, Status: status, Title: tool, Detail: noteSubject(subject), Reason: reason}, time.Now())
+	e := appendEvent(h.key, agentproto.Event{Kind: agentproto.EventDecision, Status: status, Title: tool, Detail: noteSubject(subject), Reason: reason}, time.Now())
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, e)
 	}

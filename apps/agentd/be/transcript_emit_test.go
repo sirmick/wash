@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 // restore func. Frames are the app messages as pushEvent built them.
 type sentFrame struct {
 	inst string
-	ev   Event
+	ev   agentproto.Event
 	kind string
 }
 
@@ -22,11 +23,10 @@ func captureSends(t *testing.T) (*[]sentFrame, func() []sentFrame) {
 	var mu sync.Mutex
 	var got []sentFrame
 	prev := transcriptSend
-	transcriptSend = func(_ *sdk.Conn, inst string, msg map[string]any) {
+	transcriptSend = func(_ *sdk.Conn, inst string, msg agentproto.TranscriptEvent) {
 		mu.Lock()
 		defer mu.Unlock()
-		ev, _ := msg["event"].(Event)
-		got = append(got, sentFrame{inst: inst, ev: ev, kind: msg["kind"].(string)})
+		got = append(got, sentFrame{inst: inst, ev: msg.Event, kind: "transcript_event"})
 	}
 	prevDelay := streamFlushDelay
 	streamFlushDelay = 10 * time.Millisecond
@@ -114,7 +114,7 @@ func TestClosingEventFlushesPendingDeltaFirst(t *testing.T) {
 	if !got[1].ev.Append || got[1].ev.Text != "look." {
 		t.Errorf("frame 2 = %+v, want the pending delta", got[1].ev)
 	}
-	if got[2].ev.Kind != EventTool {
+	if got[2].ev.Kind != agentproto.EventTool {
 		t.Errorf("frame 3 = %+v, want the tool event", got[2].ev)
 	}
 }

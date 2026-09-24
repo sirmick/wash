@@ -448,7 +448,7 @@ func promptHosted(h *hosted, t turn) (next turn) {
 		if body == "" {
 			body = text
 		}
-		e := appendEvent(h.key, Event{Kind: "collaboration", Text: t.origin + "\n\n" + body}, time.Now())
+		e := appendEvent(h.key, agentproto.Event{Kind: agentproto.EventCollaboration, Text: t.origin + "\n\n" + body}, time.Now())
 		if h.conn != nil {
 			pushEvent(h.conn, h.key, e)
 		}

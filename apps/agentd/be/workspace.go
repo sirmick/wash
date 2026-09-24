@@ -978,7 +978,7 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (any, error)
 		events = events[len(events)-300:]
 	}
 	if events == nil {
-		events = []Event{}
+		events = []agentproto.Event{}
 	}
 	return map[string]any{"member_id": m.ID, "events": events, "note": "Archived conversation; reopen through Agent History to resume."}, nil
 }
@@ -1351,7 +1351,7 @@ func (ws *workspaceService) bindSession(h *hosted) {
 
 // ACP providers replay input as user text. Recover collaboration provenance
 // only for envelopes that exactly match this session's persisted mailbox.
-func (ws *workspaceService) restoreProvenance(session string, events []Event) {
+func (ws *workspaceService) restoreProvenance(session string, events []agentproto.Event) {
 	messages := map[string]swarm.Message{}
 	labels := map[string]string{}
 	for _, w := range ws.store.Snapshot().Workspaces {
@@ -1394,7 +1394,7 @@ func (ws *workspaceService) restoreProvenance(session string, events []Event) {
 			continue
 		}
 		origin, body := inboxDisplay(replay, func(msg swarm.Message) string { return labels[msg.ID] })
-		e.Kind = "collaboration"
+		e.Kind = agentproto.EventCollaboration
 		e.Text = origin + "\n\n" + body
 	}
 }

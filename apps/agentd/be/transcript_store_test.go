@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +66,7 @@ func TestTranscriptPersistsAndLoadsBack(t *testing.T) {
 	bindTranscript("acp:1", "sess-a", launchRecord{Agent: "codex"}, "/tmp", now)
 
 	appendPrompt("acp:1", "hello", now)
-	appendEvent("acp:1", Event{Kind: EventMessage, Text: "hi back"}, now)
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventMessage, Text: "hi back"}, now)
 	waitForTranscriptWrites()
 
 	got, err := loadTranscript("sess-a")
@@ -75,10 +76,10 @@ func TestTranscriptPersistsAndLoadsBack(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 events, got %d: %+v", len(got), got)
 	}
-	if got[0].Kind != EventUser || got[0].Text != "hello" {
+	if got[0].Kind != agentproto.EventUser || got[0].Text != "hello" {
 		t.Errorf("first event = %+v", got[0])
 	}
-	if got[1].Kind != EventMessage || got[1].Text != "hi back" {
+	if got[1].Kind != agentproto.EventMessage || got[1].Text != "hi back" {
 		t.Errorf("second event = %+v", got[1])
 	}
 	// Seq must survive: it is what an update folds against.
@@ -96,8 +97,8 @@ func TestTranscriptUpdateFoldsToLastWrite(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	bindTranscript("acp:1", "sess-b", launchRecord{Agent: "codex"}, "/tmp", now)
 
-	e := appendEvent("acp:1", Event{Kind: EventTool, ToolID: "t1", Title: "read", Status: "pending"}, now)
-	if _, ok := updateEvent("acp:1", e.Seq, func(ev *Event) { ev.Status = "completed" }); !ok {
+	e := appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventTool, ToolID: "t1", Title: "read", Status: "pending"}, now)
+	if _, ok := updateEvent("acp:1", e.Seq, func(ev *agentproto.Event) { ev.Status = "completed" }); !ok {
 		t.Fatal("updateEvent did not find the event")
 	}
 	waitForTranscriptWrites()
@@ -158,15 +159,15 @@ func TestReconcileResumeKeepsTheRicherRecord(t *testing.T) {
 	// First run: three events under the original key.
 	bindTranscript("acp:1", "sess-c", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "one", now)
-	appendEvent("acp:1", Event{Kind: EventMessage, Text: "two"}, now)
-	appendEvent("acp:1", Event{Kind: EventMessage, Text: "three"}, now)
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventMessage, Text: "two"}, now)
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventMessage, Text: "three"}, now)
 	waitForTranscriptWrites()
 
 	// Resume: a new roster key, and an adapter that replayed nothing.
 	reconcileResume("acp:2", "sess-c", "codex", "/tmp", now)
 
 	transMu.Lock()
-	got := append([]Event(nil), trans["acp:2"].events...)
+	got := append([]agentproto.Event(nil), trans["acp:2"].events...)
 	seq := trans["acp:2"].seq
 	transMu.Unlock()
 	if len(got) != 3 {
@@ -182,7 +183,7 @@ func TestReconcileResumeKeepsTheRicherRecord(t *testing.T) {
 	}
 
 	// A new event lands after the restored history, in memory and on disk.
-	appendEvent("acp:2", Event{Kind: EventMessage, Text: "four"}, now)
+	appendEvent("acp:2", agentproto.Event{Kind: agentproto.EventMessage, Text: "four"}, now)
 	waitForTranscriptWrites()
 	back, err := loadTranscript("sess-c")
 	if err != nil {
@@ -210,7 +211,7 @@ func TestReconcileResumePrefersAFullReplay(t *testing.T) {
 	// The replay lands under the new key before reconcile runs.
 	bindTranscript("acp:2", "sess-d", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:2", "replayed one", now)
-	appendEvent("acp:2", Event{Kind: EventMessage, Text: "replayed two"}, now)
+	appendEvent("acp:2", agentproto.Event{Kind: agentproto.EventMessage, Text: "replayed two"}, now)
 	reconcileResume("acp:2", "sess-d", "codex", "/tmp", now)
 	waitForTranscriptWrites()
 
@@ -314,7 +315,7 @@ func TestReleaseTranscriptFreesMemoryButKeepsTheConversation(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	bindTranscript("acp:1", "sess-g", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "still here", now)
-	appendEvent("acp:1", Event{Kind: EventMessage, Text: "and this"}, now)
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventMessage, Text: "and this"}, now)
 
 	releaseTranscript("acp:1")
 
@@ -434,7 +435,7 @@ func TestSessionMetaSurvivesASessionThatNeverEnded(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	bindTranscript("acp:1", "sess-crash", launchRecord{Agent: "codex"}, "/tmp", now)
 	writeSummary("sess-crash", transcriptSummary{Agent: "codex", Model: "gpt-5", AtMS: now.UnixMilli()})
-	appendEvent("acp:1", Event{Kind: EventMessage, Text: "mid-sentence"}, now.Add(5*time.Minute))
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventMessage, Text: "mid-sentence"}, now.Add(5*time.Minute))
 	waitForTranscriptWrites()
 
 	all := listSessionMeta()
@@ -461,7 +462,7 @@ func TestListSessionMetaSortsByRecency(t *testing.T) {
 	for i, id := range []string{"old", "newest", "middle"} {
 		bindTranscript("acp:"+id, id, launchRecord{Agent: "codex"}, "/tmp", base)
 		at := base.Add(time.Duration(map[int]int{0: 1, 1: 30, 2: 10}[i]) * time.Minute)
-		appendEvent("acp:"+id, Event{Kind: EventMessage, Text: id}, at)
+		appendEvent("acp:"+id, agentproto.Event{Kind: agentproto.EventMessage, Text: id}, at)
 	}
 	waitForTranscriptWrites()
 
@@ -565,7 +566,7 @@ func TestHistoryRowsCarryBoundedRecentTranscriptPreview(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	bindTranscript("acp:1", "s-preview", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:1", "first question", now)
-	appendEvent("acp:1", Event{Kind: EventMessage, Text: "first answer"}, now.Add(time.Second))
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventMessage, Text: "first answer"}, now.Add(time.Second))
 	appendPrompt("acp:1", "latest "+strings.Repeat("detail ", 80), now.Add(2*time.Second))
 	waitForTranscriptWrites()
 
@@ -591,7 +592,7 @@ func TestHistorySearchIgnoresImageBytes(t *testing.T) {
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
 	bindTranscript("acp:1", "s-img", launchRecord{Agent: "codex"}, "/tmp", now)
-	appendEvent("acp:1", Event{Kind: EventImage, Mime: "image/png", Text: "iVBORw0KGgoAAAANSUhEUg"}, now)
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventImage, Mime: "image/png", Text: "iVBORw0KGgoAAAANSUhEUg"}, now)
 	waitForTranscriptWrites()
 
 	if got := historyQuery("iVBORw0", 0); len(got) != 0 {

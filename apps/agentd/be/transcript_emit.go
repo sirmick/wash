@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"time"
 
@@ -32,8 +33,8 @@ var streamFlushDelay = 50 * time.Millisecond
 
 // transcriptSend is how emitted frames leave. A var so tests can capture
 // them without a router.
-var transcriptSend = func(conn *sdk.Conn, inst string, msg map[string]any) {
-	_ = conn.SendAppMsgToBulk(wire.Recipient{InstanceID: inst}, msg)
+var transcriptSend = func(conn *sdk.Conn, inst string, msg agentproto.TranscriptEvent) {
+	_ = agentproto.Send(conn, wire.Recipient{InstanceID: inst}, msg)
 }
 
 // keyEmitter is one session's outgoing transcript stream.
@@ -87,7 +88,7 @@ func dropEmitter(key string) {
 }
 
 func isStreamKind(kind string) bool {
-	return kind == EventMessage || kind == EventThought
+	return kind == agentproto.EventMessage || kind == agentproto.EventThought
 }
 
 // pushEvent sends one event to every watcher of its session — whole, or
@@ -107,7 +108,7 @@ func isStreamKind(kind string) bool {
 // relay to its FE, and that one marks itself (apps/ai/be/app.go). This
 // call marks the stream at its source, so the class is the truth about
 // this traffic everywhere it goes rather than a label applied at the end.
-func pushEvent(conn *sdk.Conn, key string, e Event) {
+func pushEvent(conn *sdk.Conn, key string, e agentproto.Event) {
 	em := emitterFor(key, conn)
 	em.mu.Lock()
 	defer em.mu.Unlock()
@@ -171,7 +172,7 @@ func (em *keyEmitter) flushLockedExcept(except string) {
 		return
 	}
 	em.sent = len(full.Text)
-	em.sendLockedExcept(Event{
+	em.sendLockedExcept(agentproto.Event{
 		Seq:     full.Seq,
 		Kind:    full.Kind,
 		Text:    delta,
@@ -181,37 +182,33 @@ func (em *keyEmitter) flushLockedExcept(except string) {
 	}, except)
 }
 
-func (em *keyEmitter) sendLocked(e Event) { em.sendLockedExcept(e, "") }
+func (em *keyEmitter) sendLocked(e agentproto.Event) { em.sendLockedExcept(e, "") }
 
-func (em *keyEmitter) sendLockedExcept(e Event, except string) {
+func (em *keyEmitter) sendLockedExcept(e agentproto.Event, except string) {
 	for _, inst := range transcriptWatchers(em.key) {
 		if inst == except {
 			continue
 		}
-		transcriptSend(em.conn, inst, map[string]any{
-			"kind":  "transcript_event",
-			"key":   em.key,
-			"event": e,
-		})
+		transcriptSend(em.conn, inst, agentproto.TranscriptEvent{Key: em.key, Event: e})
 	}
 }
 
 // eventBySeq returns a copy of a live transcript's event by seq. Recent
 // events are at the tail, and a streaming message is the most recent one,
 // so the scan is short.
-func eventBySeq(key string, seq uint64) (Event, bool) {
+func eventBySeq(key string, seq uint64) (agentproto.Event, bool) {
 	transMu.Lock()
 	defer transMu.Unlock()
 	t := trans[key]
 	if t == nil {
-		return Event{}, false
+		return agentproto.Event{}, false
 	}
 	for i := len(t.events) - 1; i >= 0; i-- {
 		if t.events[i].Seq == seq {
 			return t.events[i], true
 		}
 	}
-	return Event{}, false
+	return agentproto.Event{}, false
 }
 
 // sendTranscriptSnapshot replays a session's history to one subscriber.
@@ -223,7 +220,7 @@ func sendTranscriptSnapshot(conn *sdk.Conn, instanceID, key string) error {
 	defer em.mu.Unlock()
 	em.flushLockedExcept(instanceID)
 	for _, msg := range transcriptSnapshotMsgs(key, snapshot(key)) {
-		if err := conn.SendAppMsgToBulk(wire.Recipient{InstanceID: instanceID}, msg); err != nil {
+		if err := agentproto.Send(conn, wire.Recipient{InstanceID: instanceID}, msg); err != nil {
 			return err
 		}
 	}

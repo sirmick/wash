@@ -10,7 +10,7 @@
 // Framework-free so both wash-ai and wash-edit fold the same way, and so it
 // runs under node:test.
 
-import type { AgentEvent } from './agent-session';
+import type * as agentproto from './agent-protocol.gen';
 
 const utf8 = new TextEncoder();
 
@@ -20,7 +20,7 @@ export function utf8Len(s: string): number {
 }
 
 export interface ApplyResult {
-  events: AgentEvent[];
+  events: agentproto.Event[];
   /** A delta could not be applied: its base row is missing or our text does
    * not match what it appends to. The caller should ask for a replay — the
    * snapshot re-establishes the base, and deltas resume from it. */
@@ -29,7 +29,7 @@ export interface ApplyResult {
 
 /** applyAgentEvent folds one transcript_event into `prev` (kept sorted by
  * seq). Never mutates `prev`. */
-export function applyAgentEvent(prev: AgentEvent[], e: AgentEvent): ApplyResult {
+export function applyAgentEvent(prev: agentproto.Event[], e: agentproto.Event): ApplyResult {
   const at = prev.findIndex((x) => x.seq === e.seq);
   if (!e.append) {
     // A whole row: agentd mutates tool rows in place, so a seq we already
@@ -59,14 +59,14 @@ export function applyAgentEvent(prev: AgentEvent[], e: AgentEvent): ApplyResult 
 }
 
 /** mergeAgentEvents folds a snapshot batch into `prev`, replacing by seq. */
-export function mergeAgentEvents(prev: AgentEvent[], batch: AgentEvent[]): AgentEvent[] {
-  const bySeq = new Map<number, AgentEvent>();
+export function mergeAgentEvents(prev: agentproto.Event[], batch: agentproto.Event[]): agentproto.Event[] {
+  const bySeq = new Map<number, agentproto.Event>();
   for (const e of prev) bySeq.set(e.seq, e);
   for (const e of batch) bySeq.set(e.seq, e);
   return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
 }
 
-function insertBySeq(prev: AgentEvent[], e: AgentEvent): AgentEvent[] {
+function insertBySeq(prev: agentproto.Event[], e: agentproto.Event): agentproto.Event[] {
   // The common case is a new tail; keep it O(1) there.
   if (prev.length === 0 || prev[prev.length - 1].seq < e.seq) return [...prev, e];
   return mergeAgentEvents(prev, [e]);

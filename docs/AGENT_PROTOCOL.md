@@ -60,6 +60,7 @@ edit by hand.
 |---|---|---|---|---|
 | `subscribe` | [`Subscribe`](#subscribe) | any app (the session gateway, hostgw) | state, now and on every change | Subscribe to the whole roster. |
 | `unsubscribe` | [`Unsubscribe`](#unsubscribe) | a subscriber |  | Stop receiving state. |
+| `transcript_subscribe` | [`TranscriptSubscribe`](#transcriptsubscribe) | any frontend showing the session | transcript_snapshot, when the watcher is new or asks for replay | Watch a session's transcript, or re-affirm the watch. |
 
 ### Pushes (from agentd)
 
@@ -68,6 +69,8 @@ edit by hand.
 | `state` | [`RosterState`](#rosterstate) | every subscriber | interactive | The whole roster. Sent by the SDK StateService, which owns this message's encoding. |
 | `manager_state` | [`ManagerState`](#managerstate) | every manager (manager_subscribe) | interactive | The manager's roster view, sent on subscribe and whenever it changes. |
 | `session_state` | [`SessionState`](#sessionstate) | a session's controller | interactive, keyed | One session's row and questions, sent on claim and whenever they change. |
+| `transcript_snapshot` | [`TranscriptSnapshot`](#transcriptsnapshot) | the subscribing instance | bulk, keyed | A session's history, in bounded frames. |
+| `transcript_event` | [`TranscriptEvent`](#transcriptevent) | every watcher of the session | bulk, keyed | One transcript event, new or changed; streamed text arrives as appended deltas. |
 
 ### Types
 
@@ -131,6 +134,29 @@ Config is one agent setting the session can change.
 | `value` | `string` |  |
 | `name` | `string` |  |
 | `description?` | `string` |  |
+
+#### Event
+
+Event is one line in a transcript.
+
+| Field | Type | |
+|---|---|---|
+| `seq` | `number` |  |
+| `kind` | `string` | Kind is one of the Event* kinds above: message \| thought \| tool \| decision \| user \| terminal \| image \| collaboration. |
+| `text?` | `string` | Text is the message body, accumulated across streamed chunks. |
+| `tool_id?` | `string` | Tool fields, set when Kind == EventTool. |
+| `tool_kind?` | `string` |  |
+| `title?` | `string` |  |
+| `status?` | `string` |  |
+| `path?` | `string` | Path is the file a tool call touched (its first ACP location, or the diff's), so a host can open it. Diff is the unified diff of what the call changed, rendered once here from the agent's before/after pair (diff.go). Both on EventTool only. |
+| `diff?` | `string` |  |
+| `mime?` | `string` | Mime is set on EventImage; Text then holds the base64 bytes. |
+| `reason?` | `string` | Reason and Detail are set on EventDecision. |
+| `detail?` | `string` |  |
+| `channel?` | `number` | Channel is set on EventTerminal: the raw channel id to render. |
+| `at_ms` | `number` | AtMS is wall-clock at first append, for the FE's own clock anchoring. |
+| `append?` | `boolean` | Append marks a wire-only delta: Text is what was ADDED to the event with this Seq since the last emit, not the whole message. Never set on a stored or snapshotted event (transcript_emit.go). |
+| `text_len?` | `number` | TextLen is the message's byte length after this event applies, on message/thought events. A consumer applying a delta checks its own length + the delta against it, and asks for a replay on mismatch. |
 
 #### KeyView
 
@@ -293,6 +319,34 @@ TierView is one tier as the launcher shows it.
 | `read_only?` | `string` | ReadOnly is set on the review tier: "enforced" where the adapter's tools are restricted (Claude Code's reviewer capability), otherwise "instruction" — the reviewer is asked not to write, and could. |
 | `available` | `boolean` |  |
 | `note?` | `string` |  |
+
+#### TranscriptEvent
+
+TranscriptEvent is one new or changed event.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `event` | `Event` |  |
+
+#### TranscriptSnapshot
+
+TranscriptSnapshot is a session's history, sent in bounded frames: the first has Reset (replace what you hold), the rest append.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `reset` | `boolean` |  |
+| `events` | `Event[] \| null` |  |
+
+#### TranscriptSubscribe
+
+TranscriptSubscribe watches a session's transcript, and re-affirms the watch: a watcher agentd has not heard from for its TTL is dropped, so a frontend repeats this every agentclient.WatcherRefresh.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `replay?` | `boolean` | Replay asks for the whole history again even from a watcher agentd already knows, after a frontend lost its copy (a reload, a missed delta). |
 
 #### Unsubscribe
 

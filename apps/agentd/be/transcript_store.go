@@ -34,6 +34,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"path/filepath"
@@ -191,7 +192,7 @@ func bindTranscript(key, sessionID string, launch launchRecord, cwd string, now 
 
 // persistEvent queues one event for its session's file. Safe to call
 // under transMu: it only appends to a channel.
-func persistEvent(key string, e Event) {
+func persistEvent(key string, e agentproto.Event) {
 	storeMu.Lock()
 	sid := storeSession[key]
 	storeMu.Unlock()
@@ -356,7 +357,7 @@ func transcriptSessionID(key string) string {
 // seq. Returns nil (no error) when the session has no file: a session
 // from before persistence, or one that never produced an event, is an
 // empty history rather than a failure.
-func loadTranscript(sessionID string) ([]Event, error) {
+func loadTranscript(sessionID string) ([]agentproto.Event, error) {
 	path := transcriptPath(sessionID)
 	if path == "" {
 		return nil, nil
@@ -373,7 +374,7 @@ func loadTranscript(sessionID string) ([]Event, error) {
 	// Order is the order events were FIRST seen; an update rewrites in
 	// place, exactly as updateEvent does in memory, so a completed tool
 	// call stays where it happened rather than jumping to the end.
-	var out []Event
+	var out []agentproto.Event
 	at := map[uint64]int{}
 	sc := bufio.NewScanner(f)
 	// A single event can carry a base64 image up to maxImageBytes, and
@@ -387,7 +388,7 @@ func loadTranscript(sessionID string) ([]Event, error) {
 		if len(b) == 0 {
 			continue
 		}
-		var e Event
+		var e agentproto.Event
 		if err := json.Unmarshal(b, &e); err != nil {
 			// One malformed line is a truncated write, not a reason to
 			// throw away the conversation around it.
@@ -452,7 +453,7 @@ func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 	}
 	replayed := len(t.events)
 	if replayed < len(stored) {
-		t.events = append([]Event(nil), stored...)
+		t.events = append([]agentproto.Event(nil), stored...)
 		t.toolAt = map[string]int{}
 		t.openMessage = -1
 		var max uint64
@@ -460,7 +461,7 @@ func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 			if e.Seq > max {
 				max = e.Seq
 			}
-			if e.Kind == EventTool && e.ToolID != "" {
+			if e.Kind == agentproto.EventTool && e.ToolID != "" {
 				t.toolAt[e.ToolID] = i
 			}
 		}
@@ -469,7 +470,7 @@ func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 	if workspaces != nil {
 		workspaces.restoreProvenance(sessionID, t.events)
 	}
-	events := append([]Event(nil), t.events...)
+	events := append([]agentproto.Event(nil), t.events...)
 	transMu.Unlock()
 
 	log.Printf("agentd: transcript reconciled key=%s session=%s replayed=%d stored=%d kept=%d",
@@ -491,7 +492,7 @@ func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 // new one — never a half-written conversation. This is the one path that
 // does not append; it exists because resume has to reconcile two
 // numbering schemes into one.
-func rewriteTranscript(sessionID, agent, cwd string, events []Event, now time.Time) error {
+func rewriteTranscript(sessionID, agent, cwd string, events []agentproto.Event, now time.Time) error {
 	path := transcriptPath(sessionID)
 	if path == "" {
 		return nil
@@ -765,8 +766,8 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 			if probe.AtMS > lastEventAt {
 				lastEventAt = probe.AtMS
 			}
-			var e Event
-			if json.Unmarshal(b, &e) == nil && (e.Kind == EventUser || e.Kind == EventMessage) && e.Text != "" {
+			var e agentproto.Event
+			if json.Unmarshal(b, &e) == nil && (e.Kind == agentproto.EventUser || e.Kind == agentproto.EventMessage) && e.Text != "" {
 				if _, seen := previewBySeq[e.Seq]; !seen {
 					previewOrder = append(previewOrder, e.Seq)
 				}
@@ -925,11 +926,11 @@ func searchTranscript(sessionID string, terms []string) (string, bool) {
 		// Match on the decoded text, not the raw line: a JSON line
 		// carries escapes and base64 image data, and searching that
 		// finds nothing a human typed and plenty they didn't.
-		var e Event
+		var e agentproto.Event
 		if json.Unmarshal(sc.Bytes(), &e) != nil {
 			continue
 		}
-		if e.Kind == EventImage {
+		if e.Kind == agentproto.EventImage {
 			continue // Text is base64 here
 		}
 		for _, field := range [2]string{e.Text, e.Title} {
@@ -1079,7 +1080,7 @@ func historyQuery(q string, limit int) []SessionMeta {
 // about is unfinished: a tool call still pending or in progress, or the
 // human's prompt with nothing after it. Recovery means the agent's own
 // replay produced something past that point; anything else is a drop.
-func logInFlight(key, sessionID string, stored, replayed []Event, now time.Time) {
+func logInFlight(key, sessionID string, stored, replayed []agentproto.Event, now time.Time) {
 	tool, at := lastUnfinished(stored)
 	if at < 0 {
 		log.Printf("agentd: resume in-flight key=%s session=%s state=idle-at-exit — nothing was running, nothing to lose", key, sessionID)
@@ -1100,11 +1101,11 @@ func logInFlight(key, sessionID string, stored, replayed []Event, now time.Time)
 
 // lastUnfinished returns a label for the trailing unfinished work in evs
 // and its index, or ("", -1) when the transcript ends cleanly.
-func lastUnfinished(evs []Event) (string, int) {
+func lastUnfinished(evs []agentproto.Event) (string, int) {
 	for i := len(evs) - 1; i >= 0; i-- {
 		e := evs[i]
 		switch e.Kind {
-		case EventTool:
+		case agentproto.EventTool:
 			if e.Status == acp.ToolStatusPending || e.Status == acp.ToolStatusInProgress {
 				label := e.Title
 				if label == "" {
@@ -1113,7 +1114,7 @@ func lastUnfinished(evs []Event) (string, int) {
 				return "tool: " + label, i
 			}
 			return "", -1
-		case EventUser:
+		case agentproto.EventUser:
 			// A prompt with nothing after it: the agent was asked and
 			// never answered.
 			t := e.Text
@@ -1121,7 +1122,7 @@ func lastUnfinished(evs []Event) (string, int) {
 				t = t[:60] + "…"
 			}
 			return "prompt: " + t, i
-		case EventMessage, EventThought, EventTerminal, EventImage:
+		case agentproto.EventMessage, agentproto.EventThought, agentproto.EventTerminal, agentproto.EventImage:
 			// The agent said something after the prompt, so whatever was
 			// in flight got at least partway out.
 			return "", -1

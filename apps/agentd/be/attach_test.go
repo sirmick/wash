@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"encoding/base64"
+	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func TestAttachFileBecomesAResourceLink(t *testing.T) {
 	// The transcript records what the agent was given, so a reloaded
 	// window shows it too.
 	evs := snapshot(h.key)
-	if len(evs) != 1 || evs[0].Kind != EventTool || evs[0].Path != path {
+	if len(evs) != 1 || evs[0].Kind != agentproto.EventTool || evs[0].Path != path {
 		t.Errorf("transcript = %+v, want one row naming the file", evs)
 	}
 }
@@ -85,7 +86,7 @@ func TestAttachImageIsSentInlineAndShown(t *testing.T) {
 		t.Fatalf("blocks = %+v", blocks)
 	}
 	evs := snapshot(h.key)
-	if len(evs) != 1 || evs[0].Kind != EventImage || evs[0].Text != data {
+	if len(evs) != 1 || evs[0].Kind != agentproto.EventImage || evs[0].Text != data {
 		t.Errorf("transcript = %+v, want the image", evs)
 	}
 }

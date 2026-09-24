@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"sort"
 	"strings"
 	"sync"
@@ -44,7 +45,7 @@ func liveTranscriptPreview(key string, limit int) string {
 	lines := make([]string, 0, limit)
 	for i := len(t.events) - 1; i >= 0 && len(lines) < limit; i-- {
 		e := t.events[i]
-		if e.Kind != EventUser && e.Kind != EventMessage {
+		if e.Kind != agentproto.EventUser && e.Kind != agentproto.EventMessage {
 			continue
 		}
 		if line := previewLine(e.Text); line != "" {

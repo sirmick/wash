@@ -23,6 +23,7 @@ package agentd
 
 import (
 	"encoding/base64"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"net/url"
 	"os"
@@ -75,7 +76,7 @@ func (h *hosted) attachmentBlocks(list []promptAttachment) []acp.ContentBlock {
 				continue
 			}
 			out = append(out, acp.Image(a.Mime, a.Data))
-			h.pushAttachEvent(Event{Kind: EventImage, Mime: a.Mime, Text: a.Data}, now)
+			h.pushAttachEvent(agentproto.Event{Kind: agentproto.EventImage, Mime: a.Mime, Text: a.Data}, now)
 
 		case "file":
 			abs, err := fsys.Confine(a.Path)
@@ -93,8 +94,8 @@ func (h *hosted) attachmentBlocks(list []promptAttachment) []acp.ContentBlock {
 				name = filepath.Base(abs)
 			}
 			out = append(out, acp.ResourceLink(fileURI(abs), name))
-			h.pushAttachEvent(Event{
-				Kind: EventTool, ToolKind: "attach", Title: name,
+			h.pushAttachEvent(agentproto.Event{
+				Kind: agentproto.EventTool, ToolKind: "attach", Title: name,
 				Path: abs, Status: "completed",
 			}, now)
 
@@ -112,7 +113,7 @@ func (h *hosted) attachmentBlocks(list []promptAttachment) []acp.ContentBlock {
 // every watcher. Recorded, not merely shown: a reloaded window must see
 // the screenshot it sent, and the stored transcript is what a resumed
 // session reads back.
-func (h *hosted) pushAttachEvent(e Event, now time.Time) {
+func (h *hosted) pushAttachEvent(e agentproto.Event, now time.Time) {
 	stored := appendEvent(h.key, e, now)
 	if h.conn != nil {
 		pushEvent(h.conn, h.key, stored)

@@ -16,7 +16,7 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Tab, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { InsertedDraft } from '@wash/ui';
-import type { AgentEvent, AgentStatus, TerminalAPI, agentproto } from '@wash/ui';
+import type { AgentStatus, TerminalAPI, agentproto } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
 
 // One roster row as agentd publishes it; only the fields this pane reads.
@@ -405,7 +405,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Per-agent-tab transcript state, keyed by agentd session key. Kept
   // outside TermTab so an arriving event does not replace the tab object
   // and remount the pane.
-  const [agentEvents, setAgentEvents] = createSignal<Record<string, AgentEvent[]>>({});
+  const [agentEvents, setAgentEvents] = createSignal<Record<string, agentproto.Event[]>>({});
   const [agentRoster, setAgentRoster] = createSignal<{ rows?: agentproto.Row[]; asks?: agentproto.Ask[]; adapters?: { id: string; name?: string }[] }>({});
   const [agentMenu, setAgentMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [termOpen, setTermOpen] = createSignal(false);
@@ -1787,12 +1787,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (m.kind === 'agent.snapshot') {
       const key = String(m.key ?? '');
       agentResyncPending.delete(key);
-      setAgentEvents({ ...agentEvents(), [key]: (m.events ?? []) as AgentEvent[] });
+      setAgentEvents({ ...agentEvents(), [key]: (m.events ?? []) as agentproto.Event[] });
       return;
     }
     if (m.kind === 'agent.event') {
       const key = String(m.key ?? '');
-      const ev = m.event as AgentEvent;
+      const ev = m.event as agentproto.Event;
       const cur = agentEvents()[key] ?? [];
       // Same seq means the BE updated a row in place (a tool going
       // pending → completed), not a new line; a streamed reply's later

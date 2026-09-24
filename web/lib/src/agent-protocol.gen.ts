@@ -85,6 +85,57 @@ export interface ConfigValue {
   description?: string;
 }
 
+/**
+ * Event is one line in a transcript.
+ * 
+ * Flat and string-typed on purpose: this crosses the router to the FE, and
+ * structured byte fields get base64'd on the way (the CBOR pitfall).
+ */
+export interface Event {
+  seq: number;
+  /**
+   * Kind is one of the Event* kinds above: message | thought | tool |
+   * decision | user | terminal | image | collaboration.
+   */
+  kind: string;
+  /** Text is the message body, accumulated across streamed chunks. */
+  text?: string;
+  /** Tool fields, set when Kind == EventTool. */
+  tool_id?: string;
+  tool_kind?: string;
+  title?: string;
+  status?: string;
+  /**
+   * Path is the file a tool call touched (its first ACP location, or
+   * the diff's), so a host can open it. Diff is the unified diff of what
+   * the call changed, rendered once here from the agent's before/after
+   * pair (diff.go). Both on EventTool only.
+   */
+  path?: string;
+  diff?: string;
+  /** Mime is set on EventImage; Text then holds the base64 bytes. */
+  mime?: string;
+  /** Reason and Detail are set on EventDecision. */
+  reason?: string;
+  detail?: string;
+  /** Channel is set on EventTerminal: the raw channel id to render. */
+  channel?: number;
+  /** AtMS is wall-clock at first append, for the FE's own clock anchoring. */
+  at_ms: number;
+  /**
+   * Append marks a wire-only delta: Text is what was ADDED to the event
+   * with this Seq since the last emit, not the whole message. Never set
+   * on a stored or snapshotted event (transcript_emit.go).
+   */
+  append?: boolean;
+  /**
+   * TextLen is the message's byte length after this event applies, on
+   * message/thought events. A consumer applying a delta checks its own
+   * length + the delta against it, and asks for a replay on mismatch.
+   */
+  text_len?: number;
+}
+
 /** KeyView is a key as the launcher shows it. */
 export interface KeyView {
   id: string;
@@ -394,6 +445,43 @@ export interface TierView {
   note?: string;
 }
 
+/**
+ * TranscriptEvent is one new or changed event. An event with Append set is
+ * a delta to the one with its Seq.
+ */
+export interface TranscriptEvent {
+  kind: 'transcript_event';
+  key: string;
+  event: Event;
+}
+
+/**
+ * TranscriptSnapshot is a session's history, sent in bounded frames: the
+ * first has Reset (replace what you hold), the rest append.
+ */
+export interface TranscriptSnapshot {
+  kind: 'transcript_snapshot';
+  key: string;
+  reset: boolean;
+  events: Event[] | null;
+}
+
+/**
+ * TranscriptSubscribe watches a session's transcript, and re-affirms the
+ * watch: a watcher agentd has not heard from for its TTL is dropped, so a
+ * frontend repeats this every agentclient.WatcherRefresh.
+ */
+export interface TranscriptSubscribe {
+  kind: 'transcript_subscribe';
+  key: string;
+  /**
+   * Replay asks for the whole history again even from a watcher agentd
+   * already knows, after a frontend lost its copy (a reload, a missed
+   * delta).
+   */
+  replay?: boolean;
+}
+
 /** Unsubscribe stops a Subscribe. */
 export interface Unsubscribe {
   kind: 'unsubscribe';
@@ -402,12 +490,15 @@ export interface Unsubscribe {
 /** Every request, discriminated by kind. */
 export type AgentdRequest =
   | Subscribe
-  | Unsubscribe;
+  | Unsubscribe
+  | TranscriptSubscribe;
 export type AgentdRequestKind = AgentdRequest['kind'];
 
 /** Every push, discriminated by kind. */
 export type AgentdPush =
   | RosterState
   | ManagerState
-  | SessionState;
+  | SessionState
+  | TranscriptSnapshot
+  | TranscriptEvent;
 export type AgentdPushKind = AgentdPush['kind'];

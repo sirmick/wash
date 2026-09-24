@@ -34,39 +34,6 @@ import {
   washPathsFrom,
 } from './agent-compose-drop';
 
-/** One line in a transcript, as agentd publishes it. */
-export interface AgentEvent {
-  seq: number;
-  /** message | thought | tool */
-  kind: string;
-  text?: string;
-  tool_id?: string;
-  /** read | edit | delete | move | search | fetch | execute | think | other */
-  tool_kind?: string;
-  title?: string;
-  /** pending | in_progress | completed | failed */
-  status?: string;
-  /** the file a tool call touched, when it named one: what a click opens */
-  path?: string;
-  /** a unified diff of what an edit tool changed, rendered by agentd from
-   *  the ACP `diff` content block's before/after pair */
-  diff?: string;
-  /** set on kind==="image"; text then holds the base64 bytes */
-  mime?: string;
-  /** set on kind==="decision": why wash allowed or refused (status says which),
-   *  and the tool call's subject, already cut to one short line */
-  reason?: string;
-  detail?: string;
-  /** set on kind==="terminal": the raw channel its pty writes to */
-  channel?: number;
-  at_ms: number;
-  /** a wire-only delta: text is what was ADDED to the row with this seq
-   *  since the last event for it (see agent-events.ts) */
-  append?: boolean;
-  /** the row's UTF-8 byte length after this event applies (message/thought) */
-  text_len?: number;
-}
-
 /** Text pushed into the composer from outside, and a counter that says
  *  "this is a new send" — see AgentSessionProps.insertDraft. */
 export interface InsertedDraft {
@@ -130,7 +97,7 @@ export interface AgentStatus {
 }
 
 export interface AgentSessionProps {
-  events: () => AgentEvent[];
+  events: () => agentproto.Event[];
   asks?: () => agentproto.Ask[];
   status?: () => AgentStatus;
   /** Send a prompt, with whatever the composer had attached to it.
@@ -166,7 +133,7 @@ export interface AgentSessionProps {
   /** Answer a pending question. `rule` is set when the user chose "always". */
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
   /** Click on a tool row — the host decides what that opens. */
-  onOpenTool?: (e: AgentEvent) => void;
+  onOpenTool?: (e: agentproto.Event) => void;
   /** Abort the running turn. Absent means the session cannot be stopped. */
   onCancel?: () => void;
   /** Switch the agent's approval preset. Absent hides the control. */
@@ -254,7 +221,7 @@ function baseName(path: string): string {
  *  the whole reason to watch an agent rather than run one. agentd renders
  *  it (apps/agentd/be/diff.go) so the wire carries hunks rather than two
  *  whole copies of the file, and it arrives here as text to colour. */
-const ToolRow: Component<{ e: AgentEvent; onOpen?: (e: AgentEvent) => void }> = (p) => {
+const ToolRow: Component<{ e: agentproto.Event; onOpen?: (e: agentproto.Event) => void }> = (p) => {
   const clickable = () => !!p.onOpen;
   // Expanded by default: a diff nobody opened is a diff nobody read, and
   // the box is height-capped so even a big one costs a scroll, not a
@@ -417,7 +384,7 @@ const hintStyle: JSX.CSSProperties = {
  *  guard was off, or that something was refused. */
 const clipped: JSX.CSSProperties = { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', 'min-width': 0 };
 
-export const DecisionRow: Component<{ e: AgentEvent }> = (p) => {
+export const DecisionRow: Component<{ e: agentproto.Event }> = (p) => {
   const allowed = () => p.e.status === 'allow';
   const label = () => allowed()
     ? (p.e.reason?.startsWith('allowed once') ? 'Allowed once' : 'Auto-approved')

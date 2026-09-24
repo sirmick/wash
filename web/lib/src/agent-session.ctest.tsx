@@ -1,7 +1,8 @@
 import { test, expect, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, fireEvent } from '@solidjs/testing-library';
 import { createSignal } from 'solid-js';
-import { AgentSession, type AgentEvent } from './agent-session.tsx';
+import { AgentSession } from './agent-session.tsx';
+import type * as agentproto from './agent-protocol.gen';
 
 beforeEach(() => {
   HTMLElement.prototype.scrollTo = () => {};
@@ -10,7 +11,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 test('agent thoughts render markdown like assistant messages', () => {
-  const events: AgentEvent[] = [{
+  const events: agentproto.Event[] = [{
     seq: 1,
     kind: 'thought',
     text: '## Next step\n\n- **inspect** the parser',
@@ -25,7 +26,7 @@ test('agent thoughts render markdown like assistant messages', () => {
 });
 
 test('human prompts stay literal markdown text', () => {
-  const events: AgentEvent[] = [{
+  const events: agentproto.Event[] = [{
     seq: 1,
     kind: 'user',
     text: 'Please keep **this** literal',
@@ -174,7 +175,7 @@ test('a drag the composer does not understand is left to the browser', async () 
 // viewable" — the tool row was a one-liner and the Agent app passed no
 // onOpenTool, so nothing about an edit could be seen or opened.
 test('a tool row shows the diff the call made, foldable, and opens its path', () => {
-  const events: AgentEvent[] = [{
+  const events: agentproto.Event[] = [{
     seq: 1,
     kind: 'tool',
     tool_kind: 'edit',
@@ -205,7 +206,7 @@ test('a tool row shows the diff the call made, foldable, and opens its path', ()
 });
 
 test('a tool row with no diff renders no diff box', () => {
-  const events: AgentEvent[] = [
+  const events: agentproto.Event[] = [
     { seq: 1, kind: 'tool', tool_kind: 'read', title: 'Read main.go', status: 'completed', at_ms: 0 },
   ];
   const { container } = render(() => <AgentSession events={() => events} />);
@@ -235,7 +236,7 @@ test('Ctrl+Enter sends, Enter still sends, Shift+Enter does not', () => {
 });
 
 test('the up arrow walks back through this session\'s own prompts', () => {
-  const events: AgentEvent[] = [
+  const events: agentproto.Event[] = [
     { seq: 1, kind: 'user', text: 'first', at_ms: 0 },
     { seq: 2, kind: 'message', text: 'ok', at_ms: 0 },
     { seq: 3, kind: 'user', text: 'second', at_ms: 0 },

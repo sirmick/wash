@@ -21,7 +21,7 @@ import {
   agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
-  AgentEvent, AgentStatus,
+  AgentStatus,
 } from '@wash/ui';
 
 /** The roster as this window holds it: empty until agentd's first push. */
@@ -47,7 +47,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [role, setRole] = createSignal<'session' | 'manager'>(
     isManagerElement(props.host.tagName) ? 'manager' : 'session',
   );
-  const [events, setEvents] = createSignal<AgentEvent[]>([]);
+  const [events, setEvents] = createSignal<agentproto.Event[]>([]);
   const [workspaceFrame, setWorkspaceFrame] = createSignal<WorkspaceFrame>({ workspace: null });
   const [workspaceResult, setWorkspaceResult] = createSignal<WorkspaceResult>();
   // One replay request in flight at a time; the snapshot clears it.
@@ -234,13 +234,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (staleTranscript(m)) break;
         resyncPending = false;
         if (typeof m.reset === 'boolean') {
-          setEvents((prev) => mergeEvents(prev, (m.events as AgentEvent[]) ?? []));
+          setEvents((prev) => mergeEvents(prev, (m.events as agentproto.Event[]) ?? []));
         } else {
-          setEvents(mergeEvents([], (m.events as AgentEvent[]) ?? []));
+          setEvents(mergeEvents([], (m.events as agentproto.Event[]) ?? []));
         }
         break;
       case 'event': {
-        const e = m.event as AgentEvent | undefined;
+        const e = m.event as agentproto.Event | undefined;
         if (!e || staleTranscript(m)) break;
         // Whole rows replace by seq (agentd mutates a tool row in place);
         // a streamed reply's later chunks arrive as deltas and append. A

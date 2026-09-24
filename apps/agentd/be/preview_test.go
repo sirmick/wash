@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"testing"
 	"time"
 )
@@ -9,7 +10,7 @@ func TestLiveTranscriptPreviewUsesTwoRecentConversationLines(t *testing.T) {
 	resetTranscripts()
 	appendPrompt("acp:preview", "old question", t0)
 	appendPrompt("acp:preview", "new question", t0.Add(time.Second))
-	appendEvent("acp:preview", Event{Kind: EventMessage, Text: "latest answer"}, t0.Add(2*time.Second))
+	appendEvent("acp:preview", agentproto.Event{Kind: agentproto.EventMessage, Text: "latest answer"}, t0.Add(2*time.Second))
 
 	got := liveTranscriptPreview("acp:preview", 2)
 	if got != "new question\nlatest answer" {
@@ -36,7 +37,7 @@ func TestPreviewPatchCoalescesToLatestBoundedValue(t *testing.T) {
 
 	appendPrompt("acp:preview", "question", t0)
 	queuePreviewPatch("acp:preview")
-	appendEvent("acp:preview", Event{Kind: EventMessage, Text: "answer"}, t0.Add(time.Second))
+	appendEvent("acp:preview", agentproto.Event{Kind: agentproto.EventMessage, Text: "answer"}, t0.Add(time.Second))
 	queuePreviewPatch("acp:preview")
 
 	select {

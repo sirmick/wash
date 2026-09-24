@@ -995,7 +995,7 @@ func TestPromptMidTurnIsQueuedAndRunsAfter(t *testing.T) {
 	// when it was typed, which would have split the reply it interrupted.
 	var users []string
 	for _, e := range snapshot(h.key) {
-		if e.Kind == EventUser {
+		if e.Kind == agentproto.EventUser {
 			users = append(users, e.Text)
 		}
 	}
@@ -1152,9 +1152,9 @@ func TestApprovalVerdictsAreDecisionEvents(t *testing.T) {
 	if _, err := h.RequestPermission(context.Background(), acp.RequestPermissionRequest{ToolCall: acp.ToolCall{Kind: acp.ToolKindExecute, RawInput: json.RawMessage(`{"command":"rm -rf build"}`)}, Options: options}); err != nil {
 		t.Fatal(err)
 	}
-	var got []Event
+	var got []agentproto.Event
 	for _, e := range snapshot(h.key) {
-		if e.Kind == EventDecision {
+		if e.Kind == agentproto.EventDecision {
 			got = append(got, e)
 		}
 	}

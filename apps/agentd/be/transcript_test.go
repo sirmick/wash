@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"github.com/sirmick/wash/internal/agentproto"
 	"testing"
 	"time"
 
@@ -121,9 +122,9 @@ func TestTranscriptIsUnboundedInMemory(t *testing.T) {
 
 func TestTranscriptSnapshotReplayIsChunked(t *testing.T) {
 	resetTranscripts()
-	events := []Event{
-		{Seq: 1, Kind: EventMessage, Text: "a"},
-		{Seq: 2, Kind: EventMessage, Text: "b"},
+	events := []agentproto.Event{
+		{Seq: 1, Kind: agentproto.EventMessage, Text: "a"},
+		{Seq: 2, Kind: agentproto.EventMessage, Text: "b"},
 	}
 	old := maxTranscriptSnapshotBytes
 	maxTranscriptSnapshotBytes = 1
@@ -143,7 +144,7 @@ func TestTranscriptSnapshotReplayIsChunked(t *testing.T) {
 
 func TestForgetTranscriptWatchersKeepsHistory(t *testing.T) {
 	resetTranscripts()
-	appendEvent("acp:1", Event{Kind: EventMessage, Text: "kept"}, time.Unix(0, 0))
+	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventMessage, Text: "kept"}, time.Unix(0, 0))
 	transMu.Lock()
 	transSubs["acp:1"] = map[string]time.Time{"i-1": time.Now()}
 	transMu.Unlock()
@@ -244,10 +245,10 @@ func TestImageAndTextFromOneUpdate(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("%d events, want 2 (the image AND the text): %+v", len(got), got)
 	}
-	if got[0].Kind != EventImage || got[0].Mime != "image/png" || got[0].Text != "AAAA" {
+	if got[0].Kind != agentproto.EventImage || got[0].Mime != "image/png" || got[0].Text != "AAAA" {
 		t.Errorf("image event = %+v", got[0])
 	}
-	if got[1].Kind != EventMessage || got[1].Text != "and some words" {
+	if got[1].Kind != agentproto.EventMessage || got[1].Text != "and some words" {
 		t.Errorf("text event = %+v", got[1])
 	}
 }
@@ -265,7 +266,7 @@ func TestOversizeImageIsDropped(t *testing.T) {
 		Content:       acp.Content{{Type: "image", MimeType: "image/png", Data: string(big)}},
 	}, time.Unix(0, 0))
 
-	if len(got) != 1 || got[0].Kind != EventMessage {
+	if len(got) != 1 || got[0].Kind != agentproto.EventMessage {
 		t.Fatalf("events = %+v, want one note", got)
 	}
 	if len(got[0].Text) > 100 {

@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"encoding/json"
+	"github.com/sirmick/wash/internal/agentproto"
 	"strings"
 	"testing"
 
@@ -114,7 +115,7 @@ func TestToolCallDiffBlockReachesTheTranscript(t *testing.T) {
 		t.Fatalf("got %d events, want 1", len(evs))
 	}
 	e := evs[0]
-	if e.Kind != EventTool || e.Path != "/w/notes.md" {
+	if e.Kind != agentproto.EventTool || e.Path != "/w/notes.md" {
 		t.Errorf("event = %+v, want a tool row pointing at /w/notes.md", e)
 	}
 	if !strings.Contains(e.Diff, "-b\n+c\n") {

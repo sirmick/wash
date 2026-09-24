@@ -1,7 +1,7 @@
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { Button, Markdown, tokens, agentActivityLabel, agentActivityColor, agentActivityPulses } from '@wash/ui';
-import type { AgentEvent, agentproto } from '@wash/ui';
+import type { agentproto } from '@wash/ui';
 
 export interface WorkspaceItem { id: string; text: string; emoji?: string; state: string; revision: number }
 export interface WorkspaceProfile { capability?: string; provider: string; model?: string; thinking?: string; configs?: Record<string, string> }
@@ -33,7 +33,7 @@ export interface WorkspaceFrame {
   qa_markdown?: string;
   qa_document_status?: {path?: string; state: string; error?: string};
   approvals?: (agentproto.Ask & {member_id: string})[];
-  preview?: { member_id: string; events: AgentEvent[]; asks?: agentproto.Ask[]; note?: string };
+  preview?: { member_id: string; events: agentproto.Event[]; asks?: agentproto.Ask[]; note?: string };
   workspace: WorkspaceState | null;
   activity?: Record<string, string>;
   activity_detail?: Record<string, string>;
@@ -43,7 +43,7 @@ export interface WorkspaceFrame {
 }
 export interface WorkspaceResult {
   operation: string;
-  result?: { member_id?: string; events?: AgentEvent[]; asks?: agentproto.Ask[]; note?: string };
+  result?: { member_id?: string; events?: agentproto.Event[]; asks?: agentproto.Ask[]; note?: string };
   error?: string;
 }
 

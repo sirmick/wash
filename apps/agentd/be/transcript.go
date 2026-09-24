@@ -18,6 +18,7 @@ package agentd
 
 import (
 	"encoding/json"
+	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"strings"
@@ -52,79 +53,11 @@ var (
 	WatcherRefresh = agentclient.WatcherRefresh()
 )
 
-// Event kinds. Deliberately fewer than ACP's update variants: the
-// transcript renders messages and tool calls, and everything else
-// (usage, available commands, session info) is roster or nothing.
-const (
-	EventMessage = "message"
-	EventThought = "thought"
-	// EventDecision is wash's own approval verdict on a tool call: Status is
-	// allow or cancelled, Title the tool, Detail its (shortened) subject,
-	// Reason why. Distinct from a message so a transcript can
-	// show a guard coming off (or holding) at a glance, and so these lines
-	// stay out of the conversation preview.
-	EventDecision = "decision"
-	EventTool     = "tool"
-	// EventUser is what the human typed. ACP has a user_message_chunk
-	// variant, but an agent does not echo the prompt its client just sent
-	// it — so a transcript built purely from notifications shows the
-	// answers with none of the questions. wash records its own side.
-	EventUser = "user"
-	// EventTerminal is a command the agent handed to wash to run
-	// (acpterm.go). Channel carries the raw channel its pty writes to, so
-	// a transcript can mount a live terminal on it — the difference
-	// between watching the command and reading about it afterwards.
-	EventTerminal = "terminal"
-	// EventImage is one image the agent showed. Its own event rather than
-	// a field on a message, so it renders in the order it arrived without
-	// restructuring everything else.
-	EventImage = "image"
-)
-
 // maxImageBytes bounds one inline image. The transcript is held in memory
 // and pushed over the router, so a multi-megabyte screenshot would cost
 // both — and an image too big to show is better dropped with a note than
 // silently wedging the session.
 const maxImageBytes = 2 << 20
-
-// Event is one line in a transcript.
-//
-// Flat and string-typed on purpose: this crosses the router to the FE, and
-// structured byte fields get base64'd on the way (the CBOR pitfall).
-type Event struct {
-	Seq  uint64 `json:"seq"`
-	Kind string `json:"kind"`
-	// Text is the message body, accumulated across streamed chunks.
-	Text string `json:"text,omitempty"`
-	// Tool fields, set when Kind == EventTool.
-	ToolID   string `json:"tool_id,omitempty"`
-	ToolKind string `json:"tool_kind,omitempty"`
-	Title    string `json:"title,omitempty"`
-	Status   string `json:"status,omitempty"`
-	// Path is the file a tool call touched (its first ACP location, or
-	// the diff's), so a host can open it. Diff is the unified diff of what
-	// the call changed, rendered once here from the agent's before/after
-	// pair (diff.go). Both on EventTool only.
-	Path string `json:"path,omitempty"`
-	Diff string `json:"diff,omitempty"`
-	// Mime is set on EventImage; Text then holds the base64 bytes.
-	Mime string `json:"mime,omitempty"`
-	// Reason and Detail are set on EventDecision.
-	Reason string `json:"reason,omitempty"`
-	Detail string `json:"detail,omitempty"`
-	// Channel is set on EventTerminal: the raw channel id to render.
-	Channel uint32 `json:"channel,omitempty"`
-	// AtMS is wall-clock at first append, for the FE's own clock anchoring.
-	AtMS int64 `json:"at_ms"`
-	// Append marks a wire-only delta: Text is what was ADDED to the event
-	// with this Seq since the last emit, not the whole message. Never set
-	// on a stored or snapshotted event (transcript_emit.go).
-	Append bool `json:"append,omitempty"`
-	// TextLen is the message's byte length after this event applies, on
-	// message/thought events. A consumer applying a delta checks its own
-	// length + the delta against it, and asks for a replay on mismatch.
-	TextLen int `json:"text_len,omitempty"`
-}
 
 type transcript struct {
 	// key is the roster key these events belong to. Held so push() can
@@ -132,7 +65,7 @@ type transcript struct {
 	// maps key → session id, which is what the file is named for.
 	key    string
 	seq    uint64
-	events []Event
+	events []agentproto.Event
 	// toolAt indexes tool events by their ACP tool-call id, so a
 	// tool_call_update mutates the row it belongs to instead of appending
 	// a second one.
@@ -163,7 +96,7 @@ func newTranscript(key string) *transcript {
 
 // appendPrompt records what the human sent, so the transcript reads as a
 // conversation rather than a monologue.
-func appendPrompt(key, text string, now time.Time) Event {
+func appendPrompt(key, text string, now time.Time) agentproto.Event {
 	transMu.Lock()
 	defer transMu.Unlock()
 	t := trans[key]
@@ -173,7 +106,7 @@ func appendPrompt(key, text string, now time.Time) Event {
 	}
 	// A prompt always closes any open agent message: the turn is over.
 	t.openMessage = -1
-	return t.push(Event{Kind: EventUser, Text: text, AtMS: now.UnixMilli()})
+	return t.push(agentproto.Event{Kind: agentproto.EventUser, Text: text, AtMS: now.UnixMilli()})
 }
 
 // appendEvent stores an event wash itself originated — a terminal it
@@ -186,7 +119,7 @@ func appendPrompt(key, text string, now time.Time) Event {
 // window showed one thing and a reloaded one showed another. That is
 // invisible for a note and destructive for a terminal, whose channel id
 // would be lost on reload.
-func appendEvent(key string, e Event, now time.Time) Event {
+func appendEvent(key string, e agentproto.Event, now time.Time) agentproto.Event {
 	transMu.Lock()
 	defer transMu.Unlock()
 	t := trans[key]
@@ -206,12 +139,12 @@ func appendEvent(key string, e Event, now time.Time) Event {
 // updateEvent rewrites a stored event in place and returns it, so a caller
 // can push the result. Both hosts replace by seq, so an updated event lands
 // where the original was rather than appearing twice.
-func updateEvent(key string, seq uint64, mutate func(*Event)) (Event, bool) {
+func updateEvent(key string, seq uint64, mutate func(*agentproto.Event)) (agentproto.Event, bool) {
 	transMu.Lock()
 	defer transMu.Unlock()
 	t := trans[key]
 	if t == nil {
-		return Event{}, false
+		return agentproto.Event{}, false
 	}
 	for i := range t.events {
 		if t.events[i].Seq == seq {
@@ -224,7 +157,7 @@ func updateEvent(key string, seq uint64, mutate func(*Event)) (Event, bool) {
 	}
 	// Fell off the front of the bounded history: nothing to update, and
 	// nothing to say about it.
-	return Event{}, false
+	return agentproto.Event{}, false
 }
 
 // appendUpdate folds one ACP notification into a session's transcript and
@@ -236,7 +169,7 @@ func updateEvent(key string, seq uint64, mutate func(*Event)) (Event, bool) {
 // transcript entries. Returning a single event silently dropped the
 // image from the LIVE push while still storing it, so it appeared only
 // after a reload — the kind of bug that looks like a rendering problem.
-func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
+func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []agentproto.Event {
 	transMu.Lock()
 	defer transMu.Unlock()
 
@@ -248,21 +181,21 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 
 	switch u.SessionUpdate {
 	case acp.UpdateAgentMessageChunk, acp.UpdateAgentThoughtChunk:
-		kind := EventMessage
+		kind := agentproto.EventMessage
 		if u.SessionUpdate == acp.UpdateAgentThoughtChunk {
-			kind = EventThought
+			kind = agentproto.EventThought
 		}
 		// Images arrive alongside text in the same content block list.
 		// They are pushed as their own events, in order.
-		var out []Event
+		var out []agentproto.Event
 		for _, img := range u.Content.Images() {
 			if len(img.Data) > maxImageBytes {
 				log.Printf("agentd: image dropped key=%s mime=%s bytes=%d (over %d)", key, img.MimeType, len(img.Data), maxImageBytes)
-				out = append(out, t.push(Event{Kind: EventMessage, Text: "[image too large to show]", AtMS: now.UnixMilli()}))
+				out = append(out, t.push(agentproto.Event{Kind: agentproto.EventMessage, Text: "[image too large to show]", AtMS: now.UnixMilli()}))
 				continue
 			}
 			t.openMessage = -1
-			out = append(out, t.push(Event{Kind: EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
+			out = append(out, t.push(agentproto.Event{Kind: agentproto.EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
 		}
 		text := u.Content.String()
 		if text == "" {
@@ -289,7 +222,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			persistEvent(t.key, t.events[t.openMessage])
 			return append(out, t.events[t.openMessage])
 		}
-		e := t.push(Event{Kind: kind, Text: text, AtMS: now.UnixMilli()})
+		e := t.push(agentproto.Event{Kind: kind, Text: text, AtMS: now.UnixMilli()})
 		t.openMessage = len(t.events) - 1
 		return append(out, e)
 
@@ -298,13 +231,13 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 		// A tool can produce an image too — a screenshot, a chart. Its
 		// content is nested one level deeper than a message's, which is
 		// why Images() unwraps.
-		var imgs []Event
+		var imgs []agentproto.Event
 		for _, img := range u.Content.Images() {
 			if len(img.Data) > maxImageBytes {
 				log.Printf("agentd: image dropped key=%s mime=%s bytes=%d (over %d)", key, img.MimeType, len(img.Data), maxImageBytes)
 				continue
 			}
-			imgs = append(imgs, t.push(Event{Kind: EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
+			imgs = append(imgs, t.push(agentproto.Event{Kind: agentproto.EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
 		}
 		id := u.ToolCallID
 		path, diff := toolPathAndDiff(u)
@@ -332,8 +265,8 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			}
 			return append(imgs, *ev)
 		}
-		e := t.push(Event{
-			Kind:     EventTool,
+		e := t.push(agentproto.Event{
+			Kind:     agentproto.EventTool,
 			ToolID:   id,
 			ToolKind: u.Kind,
 			Title:    u.Title,
@@ -375,7 +308,7 @@ func toolPathAndDiff(u acp.SessionUpdate) (path, diff string) {
 }
 
 // push appends and stamps a sequence number.
-func (t *transcript) push(e Event) Event {
+func (t *transcript) push(e agentproto.Event) agentproto.Event {
 	t.seq++
 	e.Seq = t.seq
 	t.events = append(t.events, e)
@@ -391,11 +324,11 @@ func (t *transcript) push(e Event) Event {
 // memory (transcript_store.go). That fallback is what lets retire() free
 // the events at all: before persistence they had to be held forever,
 // because agentd was the only place they existed.
-func snapshot(key string) []Event {
+func snapshot(key string) []agentproto.Event {
 	transMu.Lock()
 	t := trans[key]
 	if t != nil {
-		out := append([]Event(nil), t.events...)
+		out := append([]agentproto.Event(nil), t.events...)
 		transMu.Unlock()
 		return out
 	}
@@ -437,13 +370,6 @@ func releaseTranscript(key string) {
 	transMu.Unlock()
 }
 
-type transcriptSnapshotMsg struct {
-	Kind   string  `json:"kind"`
-	Key    string  `json:"key"`
-	Reset  bool    `json:"reset"`
-	Events []Event `json:"events"`
-}
-
 // sendTranscriptSnapshot ships a session's stored events to one window.
 //
 // Bulk, like the live events it precedes (see pushEvent): a replayed
@@ -451,23 +377,22 @@ type transcriptSnapshotMsg struct {
 // it must not be scheduled ahead of the frames that make the desktop
 // feel alive. Both halves of the stream ride the same class so the
 // snapshot cannot be overtaken by the events that follow it.
-func transcriptSnapshotMsgs(key string, events []Event) []transcriptSnapshotMsg {
+func transcriptSnapshotMsgs(key string, events []agentproto.Event) []agentproto.TranscriptSnapshot {
 	if len(events) == 0 {
-		return []transcriptSnapshotMsg{{Kind: "transcript_snapshot", Key: key, Reset: true}}
+		return []agentproto.TranscriptSnapshot{{Key: key, Reset: true}}
 	}
-	var out []transcriptSnapshotMsg
-	var batch []Event
+	var out []agentproto.TranscriptSnapshot
+	var batch []agentproto.Event
 	var bytes int
 	reset := true
 	flush := func() {
 		if len(batch) == 0 {
 			return
 		}
-		out = append(out, transcriptSnapshotMsg{
-			Kind:   "transcript_snapshot",
+		out = append(out, agentproto.TranscriptSnapshot{
 			Key:    key,
 			Reset:  reset,
-			Events: append([]Event(nil), batch...),
+			Events: append([]agentproto.Event(nil), batch...),
 		})
 		reset = false
 		batch = batch[:0]
@@ -485,7 +410,7 @@ func transcriptSnapshotMsgs(key string, events []Event) []transcriptSnapshotMsg 
 	return out
 }
 
-func encodedEventSize(e Event) int {
+func encodedEventSize(e agentproto.Event) int {
 	b, err := json.Marshal(e)
 	if err != nil {
 		return len(e.Text) + 256
@@ -536,7 +461,7 @@ func transcriptSubscriberCount(key string) int {
 }
 
 func registerTranscriptHandlers(bus *sdk.Bus) {
-	sdk.HandleFromVoid(bus, "transcript_subscribe", func(conn *sdk.Conn, _ string, req transReq, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "transcript_subscribe", func(conn *sdk.Conn, _ string, req agentproto.TranscriptSubscribe, from wire.Sender) error {
 		if from.InstanceID == "" || req.Key == "" {
 			return nil
 		}
