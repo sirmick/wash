@@ -82,6 +82,9 @@ export interface RosterAsk {
   /** the directory that rule is confined to, when it is (Bash rules are
    *  per project; read-only tools are not) */
   rule_cwd?: string;
+  /** the workspace this session belongs to, when it belongs to one — what
+   *  the workspace-scoped "always" answer covers */
+  workspace_name?: string;
   row_key: string;
   /** who asked — attribution only; the answer routes by `id` in agentd */
   source_app?: string;
@@ -118,7 +121,7 @@ export interface AgentRosterProps {
   /** permission questions waiting on the human */
   asks?: () => RosterAsk[];
   /** answer one: decision allow|deny, remember writes the named rule */
-  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean) => void;
+  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
   // recent / onResume / onCopyID used to live here. They went with
   // RecentRow: the roster answers "what is running", and reopening
   // something that ISN'T is com.wash.ai's History menu and HistoryPanel,
@@ -177,10 +180,10 @@ export function fmtElapsed(ms: number): string {
  */
 export const AgentAsks: Component<{
   asks: () => RosterAsk[];
-  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean) => void;
+  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
 }> = (props) => (
   <For each={props.asks()}>
-    {(a) => <AskRow ask={a} onAnswer={(d, r) => props.onAnswer?.(a, d, r)} />}
+    {(a) => <AskRow ask={a} onAnswer={(d, r, scope) => props.onAnswer?.(a, d, r, scope)} />}
   </For>
 );
 
@@ -266,7 +269,7 @@ export function fmtAgo(nowMS: number, unixSec: number): string {
 // — what you clicked is what gets saved.
 const AskRow: Component<{
   ask: RosterAsk;
-  onAnswer: (decision: 'allow' | 'deny', remember: boolean) => void;
+  onAnswer: (decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
 }> = (props) => {
   const what = () => {
     const s = props.ask.subject ?? '';
@@ -316,6 +319,17 @@ const AskRow: Component<{
       </div>
       <div style={{ display: 'flex', gap: '4px', 'flex-wrap': 'wrap' }}>
         <AskBtn testid="agents-ask-allow" onClick={() => props.onAnswer('allow', false)}>Allow</AskBtn>
+        {/* Covers every member of the team, in whatever worktree each one
+            works in — the per-directory rule below covers only this one. */}
+        <Show when={props.ask.suggested_rule && props.ask.workspace_name}>
+          <AskBtn
+            testid="agents-ask-always-workspace"
+            title={`Writes ${props.ask.suggested_rule} for every member of ${props.ask.workspace_name}`}
+            onClick={() => props.onAnswer('allow', true, 'workspace')}
+          >
+            Always {props.ask.suggested_rule} for {props.ask.workspace_name}
+          </AskBtn>
+        </Show>
         <Show when={props.ask.suggested_rule}>
           <AskBtn
             testid="agents-ask-always"

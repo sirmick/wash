@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentpolicy"
 )
 
 // This is a provider tool capability, not an OS sandbox. Pin the adapter contract:
@@ -62,4 +63,36 @@ func savedWorkspaceCapability(session string) string {
 		}
 	}
 	return ""
+}
+
+// workspaceApprovalPolicy is the decision path's one view of workspace-scoped
+// rules. Nil-safe on purpose: the workspace service is optional (it logs and
+// carries on if it cannot start), and an ordinary agent conversation has no
+// workspace at all, so both must read as "nothing to say" rather than as a
+// reason for the permission ladder to behave differently.
+func workspaceApprovalPolicy(session string) (id, name string, policy agentpolicy.Policy) {
+	if workspaces == nil || session == "" {
+		return "", "", agentpolicy.Policy{}
+	}
+	return workspaces.store.ApprovalsFor(session)
+}
+
+// decideWithWorkspace runs the two rule tables in the order the permission
+// ladder requires, and names which one answered so the log can say.
+//
+// The global table stays authoritative in BOTH directions. An allow or a deny
+// in ~/.config/wash/agents.json is a decision the user made about this whole
+// machine, and a per-workspace table — which an agent's own question can talk
+// the user into writing — must be able to reopen neither. So the workspace
+// table is reached only where global said "ask", which is exactly the case
+// that would otherwise become one prompt per member per worktree.
+func decideWithWorkspace(global, workspace agentpolicy.Policy, req agentpolicy.Request) (agentpolicy.Response, string) {
+	res := agentpolicy.Evaluate(global, req)
+	if res.Decision != agentpolicy.DecisionAsk || !workspace.Enabled {
+		return res, "global"
+	}
+	if w := agentpolicy.Evaluate(workspace, req); w.Decision != agentpolicy.DecisionAsk {
+		return w, "workspace"
+	}
+	return res, "global"
 }

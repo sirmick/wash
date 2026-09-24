@@ -122,6 +122,11 @@ type Ask struct {
 	// key for terminals; hosted sessions mint their own), so the sidebar
 	// can render it against the right agent.
 	RowKey string `json:"row_key"`
+	// WorkspaceName is set when the asking session is a workspace member,
+	// and is what lets the prompt offer "always, for this workspace"
+	// alongside the global "always". The ID is deliberately NOT sent: the
+	// answer names a scope, never a target (see the answer path).
+	WorkspaceName string `json:"workspace_name,omitempty"`
 	// SourceApp / SourceInstance name the producer, for display and
 	// attribution only. The reply route is the closure on `pending`, never
 	// these — a question from a session agentd hosts itself has no
@@ -136,7 +141,13 @@ type Ask struct {
 // it. Guarded by svc.Mutate like the roster rows.
 type pending struct {
 	Ask
-	asked time.Time
+	// workspaceID is held here rather than on Ask because Ask is what the
+	// desktop sees. A client names the SCOPE it chose ("workspace"); the
+	// workspace it resolves to is this, decided when the question was
+	// asked, so no answer can redirect a rule at a workspace of its own
+	// choosing — the same reasoning that keeps RuleScope off the wire.
+	workspaceID string
+	asked       time.Time
 	// reply is how this particular requester hears the verdict.
 	reply replyFn
 	timer *time.Timer
@@ -156,7 +167,15 @@ type askSpec struct {
 	Agent, Tool, Subject, Cwd string
 	RowKey                    string
 	SourceApp, SourceInstance string
+	// Workspace is resolved when the question is ASKED, not when it is
+	// answered: the member that asked may have been ended or replaced by
+	// then, and the answer must still land on the right table.
+	WorkspaceID, WorkspaceName string
 }
+
+// askScopeWorkspace is the answer's name for "remember this for every member
+// of the workspace that asked", as opposed to the global table.
+const askScopeWorkspace = "workspace"
 
 var asks = map[string]*pending{}
 
@@ -281,15 +300,30 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 			if rule == "" {
 				rule = p.SuggestedRule
 			}
-			// Scoped from the ASK's own cwd, decided here rather than
-			// trusted from the answer: the desktop rail and the Agent
-			// window both answer by id, and neither should be able to
-			// widen a rule past the project the question came from.
-			scope := agentpolicy.RuleScope(p.Tool, p.Cwd)
-			if err := agentpolicy.Append(agentpolicy.Path(), rule, decision, scope); err != nil {
-				log.Printf("agentd: remember rule=%q cwd=%q: %v", rule, scope, err)
-			} else {
-				log.Printf("agentd: remembered rule=%q decision=%s cwd=%q", rule, decision, scope)
+			// Which TABLE is the human's choice; which workspace or which
+			// directory it resolves to is not. Both are decided here from
+			// the ask itself, because the desktop rail and the Agent
+			// window both answer by id and neither should be able to aim a
+			// rule past the question that prompted it.
+			switch {
+			case req.Scope == askScopeWorkspace && p.workspaceID != "" && workspaces != nil:
+				// Membership-scoped: covers every member of this workspace
+				// whatever worktree it works in, and covers members that
+				// have not been launched yet — which is the whole point,
+				// since a per-cwd rule has to be re-answered by each.
+				if err := workspaces.store.AddApproval(p.workspaceID, rule, decision); err != nil {
+					log.Printf("agentd: remember rule=%q workspace=%s: %v", rule, p.workspaceID, err)
+				} else {
+					log.Printf("agentd: remembered rule=%q decision=%s workspace=%s", rule, decision, p.workspaceID)
+					workspaces.signal()
+				}
+			default:
+				scope := agentpolicy.RuleScope(p.Tool, p.Cwd)
+				if err := agentpolicy.Append(agentpolicy.Path(), rule, decision, scope); err != nil {
+					log.Printf("agentd: remember rule=%q cwd=%q: %v", rule, scope, err)
+				} else {
+					log.Printf("agentd: remembered rule=%q decision=%s cwd=%q", rule, decision, scope)
+				}
 			}
 		}
 		log.Printf("agentd: answer id=%s tool=%s decision=%s remember=%v", req.ID, p.Tool, decision, req.Remember)
@@ -330,10 +364,12 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 				Dir:            dirLabel(spec.Cwd),
 				SuggestedRule:  agentpolicy.SuggestRule(spec.Tool, spec.Subject, spec.Cwd),
 				RuleCwd:        agentpolicy.RuleScope(spec.Tool, spec.Cwd),
+				WorkspaceName:  spec.WorkspaceName,
 				RowKey:         spec.RowKey,
 				SourceApp:      spec.SourceApp,
 				SourceInstance: spec.SourceInstance,
 			},
+			workspaceID:  spec.WorkspaceID,
 			asked:        now,
 			reply:        reply,
 			softTTL:      soft,
@@ -538,4 +574,9 @@ type answerReq struct {
 	Decision string `json:"decision"`
 	Remember bool   `json:"remember"`
 	Rule     string `json:"rule"`
+	// Scope picks the table a remembered answer is written to: "" (or
+	// anything unrecognised) is the global one, askScopeWorkspace is this
+	// workspace's. An unknown value must not silently widen anything, so
+	// the switch above defaults to the narrower, pre-existing behaviour.
+	Scope string `json:"scope,omitempty"`
 }

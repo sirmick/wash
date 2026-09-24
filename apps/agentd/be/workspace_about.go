@@ -46,5 +46,20 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 		"reviewer_capability_profiles": map[string]any{"reviewer": map[string]any{"provider": "claude", "adapter": "@agentclientprotocol/claude-agent-acp", "verified_versions": []string{"0.79.0"}, "tools": []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "enforcement": "provider tool allowlist plus host write/terminal denial; not an OS sandbox"}, "codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported"},
 		"active_capability":            h.capability,
 	}
+	// Workspace-scoped approvals, reported because an agent reasoning about
+	// what it may do should not have to infer it from which prompts it
+	// stopped seeing. Rules only — they say what was granted; they are not
+	// a claim about what the host would otherwise have asked.
+	if id, name, wpol := workspaceApprovalPolicy(h.sessionID); id != "" {
+		rules := make([]map[string]string, 0, len(wpol.Rules))
+		for _, r := range wpol.Rules {
+			rules = append(rules, map[string]string{"match": r.Match, "decision": r.Decision})
+		}
+		result["permissions"].(map[string]any)["workspace_approvals"] = map[string]any{
+			"workspace": name,
+			"rules":     rules,
+			"scope":     "every member of this workspace, in any directory; consulted only where the host policy does not decide; ends with the workspace",
+		}
+	}
 	return result
 }

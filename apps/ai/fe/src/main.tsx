@@ -795,11 +795,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onOpenTerminal={(r) => send({ kind: 'open_terminal', cwd: r.cwd ?? '' })}
           onOpenFileManager={(r) => send({ kind: 'open_file_manager', cwd: r.cwd ?? '' })}
           onOpenTextEditor={(r) => send({ kind: 'open_text_editor', cwd: r.cwd ?? '' })}
-          onAnswer={(a, decision, remember) => send({
+          onAnswer={(a, decision, remember, scope) => send({
             kind: 'answer',
             id: a.id,
             decision,
             rule: remember ? (a.suggested_rule ?? '') : '',
+            ...(scope ? { scope } : {}),
           })}
         />
     </div>
@@ -1141,7 +1142,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           overflow: 'hidden',
         }}
       >
-        <WorkspaceLayout onAnswer={(id, decision, rule) => send({kind:'answer', id, decision, rule:rule ?? ''})} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
+        <WorkspaceLayout onAnswer={(id, decision, rule, scope) => send({kind:'answer', id, decision, rule: rule ?? '', ...(scope ? { scope } : {})})} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
           onAction={(name, args) => send({ kind: 'workspace_action', name, arguments: args })}>
           <Show
             when={sessionKey()}
@@ -1176,7 +1177,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   setAttaching(true);
                 })
               }
-              onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
+              onAnswer={(id, decision, rule, scope) => send({ kind: 'answer', id, decision, rule: rule ?? '', ...(scope ? { scope } : {}) })}
               onCancel={() => send({ kind: 'cancel' })}
               onSetMode={(mode) => send({ kind: 'set_mode', mode })}
               onSetConfig={(id, value) => send({ kind: 'set_config', id, value })}

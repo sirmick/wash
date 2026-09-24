@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentpolicy"
 )
 
 type Item struct {
@@ -95,6 +97,12 @@ type Workspace struct {
 	QAAuthors      map[string]string       `json:"qa_authors,omitempty"`
 	QADocument     *Document               `json:"qa_document,omitempty"`
 	QA             []QAThread              `json:"qa"`
+	// Approvals apply to every member of this workspace, whatever its cwd.
+	// Members work in worktrees the orchestrator chooses, and those are as
+	// often siblings of project_root as children of it, so a path-scoped
+	// rule cannot cover a fleet. Membership is the scope instead: these
+	// rules carry no Cwd, and agentpolicy's matcher is reused verbatim.
+	Approvals      []agentpolicy.Rule      `json:"approvals,omitempty"`
 	Profiles       map[string]AgentProfile `json:"profiles"`
 	DefaultProfile string                  `json:"default_profile"`
 	ID             string                  `json:"id"`

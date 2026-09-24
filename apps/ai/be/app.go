@@ -645,12 +645,15 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		}
 
 	case "answer":
+		// scope names WHICH table a remembered answer goes in, never which
+		// workspace: agentd resolves that from the question it asked.
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":     "agent_answer",
 			"id":       str(m["id"]),
 			"decision": str(m["decision"]),
 			"remember": str(m["rule"]) != "",
 			"rule":     str(m["rule"]),
+			"scope":    str(m["scope"]),
 		})
 	}
 }

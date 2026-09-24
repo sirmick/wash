@@ -34,7 +34,7 @@ export const WorkspacePlan: Component<{ frame: WorkspaceFrame }> = (props) => {
 
 export const WorkspaceMemberPanel: Component<{
   frame: WorkspaceFrame; result?: WorkspaceResult; memberID: string;
-  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
+  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
   draft: string; onDraft: (draft: string) => void; onAction: WorkspaceAction;
 }> = (props) => {
   const w = () => props.frame.workspace!;

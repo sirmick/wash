@@ -92,6 +92,11 @@ export interface AgentAsk {
   suggested_rule?: string;
   /** the directory the rule is confined to, when it is (Bash: per project) */
   rule_cwd?: string;
+  /** set when the asking session is a workspace member: the name of that
+   *  workspace, which is what the third "always" answer is scoped to. A
+   *  per-directory rule has to be re-answered by every member, because each
+   *  works in its own worktree. */
+  workspace_name?: string;
   age_ms: number;
 }
 
@@ -177,7 +182,7 @@ export interface AgentSessionProps {
    *  is simply there when the box goes live. */
   insertDraft?: () => InsertedDraft | undefined;
   /** Answer a pending question. `rule` is set when the user chose "always". */
-  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
+  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
   /** Click on a tool row — the host decides what that opens. */
   onOpenTool?: (e: AgentEvent) => void;
   /** Abort the running turn. Absent means the session cannot be stopped. */
@@ -428,7 +433,7 @@ const AskRow: Component<{
   ask: AgentAsk;
   /** only the row a keystroke would answer advertises the shortcut */
   keyed?: boolean;
-  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
+  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
 }> = (p) => (
   <div
     style={{
@@ -456,6 +461,24 @@ const AskRow: Component<{
         <span style={hintStyle}>{ALLOW_HINT}</span>
       </Show>
     </button>
+    {/* Two "always" answers where there is a workspace, because they mean
+        different things: the per-directory rule covers the one worktree
+        this member happens to work in, while the workspace rule covers
+        every member of the team — including ones not launched yet. With a
+        fleet the first is the one that makes you answer again and again. */}
+    <Show when={p.ask.suggested_rule && p.ask.workspace_name}>
+      <button
+        data-wash-hit
+        type="button"
+        data-testid="agent-ask-always-workspace"
+        onClick={() => p.onAnswer?.(p.ask.id, 'allow', p.ask.suggested_rule, 'workspace')}
+        title={`Allows ${p.ask.suggested_rule} for every member of ${p.ask.workspace_name}, in whatever folder it works in. Ends with the workspace.`}
+        style={askBtn(tokens.bgInfo, tokens.fgInfo)}
+      >
+        Always allow <span style={{ font: tokens.type.monoSm }}>{p.ask.suggested_rule}</span>
+        <span style={{ font: tokens.type.monoSm, opacity: 0.7 }}>for {p.ask.workspace_name}</span>
+      </button>
+    </Show>
     <Show when={p.ask.suggested_rule}>
       <button
         data-wash-hit

@@ -870,7 +870,8 @@ func (h *hosted) toolMayChangeCheckout(u acp.SessionUpdate) bool {
 func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
 	pol := hostedPolicy()
 	preq := toolRequest(req.ToolCall, h.cwd)
-	res := agentpolicy.Evaluate(pol, preq)
+	_, _, wpol := workspaceApprovalPolicy(h.sessionID)
+	res, scope := decideWithWorkspace(pol, wpol, preq)
 	if h.capability == "reviewer" {
 		if res.Decision == agentpolicy.DecisionDeny || !h.reviewerPermission(req.ToolCall) {
 			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
@@ -880,10 +881,10 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 
 	switch res.Decision {
 	case agentpolicy.DecisionAllow:
-		log.Printf("agentd: acp decide key=%s tool=%s decision=allow rule=%q", h.key, preq.ToolName, res.Rule)
+		log.Printf("agentd: acp decide key=%s tool=%s decision=allow rule=%q scope=%s", h.key, preq.ToolName, res.Rule, scope)
 		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	case agentpolicy.DecisionDeny:
-		log.Printf("agentd: acp decide key=%s tool=%s decision=deny rule=%q", h.key, preq.ToolName, res.Rule)
+		log.Printf("agentd: acp decide key=%s tool=%s decision=deny rule=%q scope=%s", h.key, preq.ToolName, res.Rule, scope)
 		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
 	}
 
@@ -956,6 +957,7 @@ func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
 	defer h.narrated()
 
 	answer := make(chan verdict, 1)
+	workspaceID, workspaceName, _ := workspaceApprovalPolicy(h.sessionID)
 	queued := enqueueAsk(askSpec{
 		Agent:          h.agent,
 		Tool:           tool,
@@ -964,6 +966,8 @@ func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
 		RowKey:         h.key,
 		SourceApp:      AppID,
 		SourceInstance: "",
+		WorkspaceID:    workspaceID,
+		WorkspaceName:  workspaceName,
 	}, func(decision, why string) error {
 		select {
 		case answer <- verdict{decision: decision, why: why}:

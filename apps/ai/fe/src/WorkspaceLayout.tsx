@@ -19,7 +19,7 @@ const savedSplit = () => {
  * its draft, attachments, pending questions and transcript across workspace tabs. */
 export const WorkspaceLayout: Component<{
   frame: WorkspaceFrame; result?: WorkspaceResult; currentSessionID?: string;
-  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string) => void;
+  onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
   onAction: WorkspaceAction; children: JSX.Element;
 }> = (props) => {
   let container!: HTMLDivElement;
