@@ -11,5 +11,34 @@
       "key": "openrouter",
       "key_env": ["ANTHROPIC_AUTH_TOKEN"]
     }
+  },
+  "stacks": {
+    "anthropic": {
+      "name": "All Anthropic",
+      "tiers": {
+        "frontier": {"provider": "claude", "model": "claude-fable-5-1[1m]"},
+        "coding": {"provider": "claude", "model": "sonnet"},
+        "review": {"provider": "claude", "model": "sonnet", "capability": "reviewer"},
+        "small": {"provider": "claude", "model": "haiku"}
+      }
+    },
+    "openai": {
+      "name": "All OpenAI",
+      "tiers": {
+        "frontier": {"provider": "codex", "model": "gpt-6-astra", "thinking": "high"},
+        "coding": {"provider": "codex", "model": "gpt-6-sol", "thinking": "medium"},
+        "review": {"provider": "codex", "model": "gpt-6-sol", "thinking": "medium"},
+        "small": {"provider": "codex", "model": "gpt-6-luna", "thinking": "low"}
+      }
+    },
+    "openrouter": {
+      "name": "OpenRouter budget",
+      "tiers": {
+        "frontier": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/~anthropic/claude-opus-latest", "thinking": "high"},
+        "coding": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4-pro-0813", "thinking": "high"},
+        "review": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/z-ai/glm-5.3", "thinking": "high"},
+        "small": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/~deepseek/deepseek-v4-flash-latest", "thinking": "low"}
+      }
+    }
   }
 }

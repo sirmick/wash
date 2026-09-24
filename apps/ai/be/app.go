@@ -6,7 +6,7 @@
 // and the approval queue; this app owns a window, a subscription and a
 // composer. Everything it does is a message to com.wash.agentd:
 //
-//	FE → ai   start    {agent, cwd, prompt?}   → ai → agentd  agent_start
+//	FE → ai   start    {stack?, tier?, agent?, model?, cwd, prompt?} → agentd agent_start
 //	FE → ai   prompt   {text, blocks?}         → ai → agentd  agent_prompt
 //	FE → ai   answer   {id, decision, rule?}   → ai → agentd  agent_answer
 //	FE → ai   open_path {path}                 → router open routing
@@ -44,6 +44,7 @@ import (
 	"time"
 
 	agentd "github.com/sirmick/wash/apps/agentd/be"
+	"github.com/sirmick/wash/internal/agentpolicy"
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/pkg/apps/registry"
@@ -173,7 +174,7 @@ var (
 // nothing in the router's — resolving them later cost a bug already.
 func parseFlags() {
 	flags := flag.NewFlagSet("wash-ai", flag.ContinueOnError)
-	agent := flags.String("agent", "", "which agent to start (claude, codex, gemini)")
+	agent := flags.String("agent", "", "which agent to start, on its own defaults (claude, codex, gemini, opencode)")
 	cwd := flags.String("cwd", "", "working directory for the session (default: $HOME)")
 	flags.SetOutput(io.Discard)
 	_ = flags.Parse(os.Args[1:])
@@ -207,7 +208,7 @@ func parseFlags() {
 // firstAvailableAgent is the adapter probe's first usable row, so
 // `wash ai ~/wash` starts something rather than asking.
 func firstAvailableAgent() string {
-	for _, a := range agentd.Probe() {
+	for _, a := range agentd.Probe(agentpolicy.Load(agentpolicy.Path())) {
 		if a.Available {
 			return a.ID
 		}
@@ -448,11 +449,17 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		})
 
 	case "start":
+		// stack/tier choose the settings; agent/model are the launcher's
+		// Advanced overrides. agentd resolves them (its stacks.go).
 		msg := map[string]any{
 			"kind":   "agent_start",
-			"agent":  str(m["agent"]),
 			"cwd":    str(m["cwd"]),
 			"prompt": str(m["prompt"]),
+		}
+		for _, k := range []string{"stack", "tier", "agent", "model"} {
+			if v := str(m[k]); v != "" {
+				msg[k] = v
+			}
 		}
 		if managerMode {
 			msg["open"] = true

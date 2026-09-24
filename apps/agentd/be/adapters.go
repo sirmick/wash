@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -169,19 +170,35 @@ func (a Adapter) launchWith(cfg agentpolicy.AgentConfig) (cmd string, args []str
 }
 
 // Probe reports which adapters this box can actually launch. Cheap enough
-// to call whenever the launcher opens — it is a PATH lookup per row.
-func Probe() []Adapter {
-	pol := hostedPolicy()
+// to call on every sweep — it is a PATH lookup per row.
+func Probe(pol agentpolicy.Policy) []Adapter {
 	out := make([]Adapter, 0, len(adapters))
 	for _, a := range adapters {
-		cmd, _, note, ok := a.launchWith(pol.AgentFor(a.ID))
+		_, _, note, ok := a.launchWith(pol.AgentFor(a.ID))
 		a.Available, a.Note = ok, note
-		if ok {
-			log.Printf("agentd: adapter %s -> %s %s", a.ID, cmd, note)
-		}
 		out = append(out, a)
 	}
 	return out
+}
+
+// refreshLaunchers republishes what the launcher offers when it changed:
+// adapters installed or removed, agents.json edited, a key set or cleared.
+// Re-read on every sweep, like the default prompt, because each of those
+// can happen outside wash. Reports whether anything changed.
+func refreshLaunchers(s *State) bool {
+	pol := hostedPolicy()
+	adapters, stacks := Probe(pol), publishStacks(pol, keyStore())
+	if reflect.DeepEqual(adapters, s.Adapters) && reflect.DeepEqual(stacks, s.Stacks) {
+		return false
+	}
+	s.Adapters, s.Stacks = adapters, stacks
+	for _, a := range adapters {
+		log.Printf("agentd: adapter %s available=%v %s", a.ID, a.Available, a.Note)
+	}
+	for _, st := range stacks {
+		log.Printf("agentd: stack %s available=%v %s", st.ID, st.Available, st.Note)
+	}
+	return true
 }
 
 func adapterByID(id string) (Adapter, bool) {
@@ -191,17 +208,6 @@ func adapterByID(id string) (Adapter, bool) {
 		}
 	}
 	return Adapter{}, false
-}
-
-// startHosted launches an adapter, completes the handshake, opens a
-// session and puts it on the roster. The returned session is live; the
-// caller prompts it.
-//
-// Every early failure kills the process before returning — a half-started
-// adapter is a stray child that outlives the desktop, which is the bug
-// class the child-process audit already cost us once.
-func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	return startHostedCapability(agentID, cwd, svcConn, sessionLaunch{})
 }
 
 // sessionLaunch is how a session starts: the connection it runs through,
@@ -226,6 +232,13 @@ type sessionLaunch struct {
 	noSubagents bool
 }
 
+// startHostedCapability launches an adapter, completes the handshake, opens
+// a session and puts it on the roster. The returned session is live; the
+// caller prompts it.
+//
+// Every early failure kills the process before returning — a half-started
+// adapter is a stray child that outlives the desktop, which is the bug
+// class the child-process audit already cost us once.
 func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
 	h, err := dialAdapterCapability(agentID, cwd, svcConn, launch)
 	if err != nil {
@@ -267,11 +280,9 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 	return h, nil
 }
 
-// dialAdapter launches an adapter and completes the handshake. Shared by
-// start and resume, which differ only in session/new vs session/load.
-func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	return dialAdapterCapability(agentID, cwd, svcConn, sessionLaunch{})
-}
+// dialAdapterCapability launches an adapter and completes the handshake.
+// Shared by start and resume, which differ only in session/new vs
+// session/load.
 func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
 	capability := launch.capability
 	if capability != "" && (capability != "reviewer" || agentID != "claude") {

@@ -45,7 +45,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-agentd ready instance=%s", instanceID)
 	bus := sdk.NewBus(c)
 	loadHistory()
-	svc = sdk.NewStateService(bus, State{Recent: publishHistory(), Adapters: Probe(), HasDefaultPrompt: loadDefaultPrompt() != ""})
+	initial := State{Recent: publishHistory(), HasDefaultPrompt: loadDefaultPrompt() != ""}
+	refreshLaunchers(&initial)
+	svc = sdk.NewStateService(bus, initial)
 	controllerConn = c
 
 	// agent_resume: a Resume/Fork click in the sidebar (§13).
@@ -157,6 +159,9 @@ func sweepLoop(c *sdk.Conn) {
 					}
 				}
 				if refreshDefaultPrompt(s) {
+					changed = true
+				}
+				if refreshLaunchers(s) {
 					changed = true
 				}
 				// Computed on every tick, not only when a row moved: the

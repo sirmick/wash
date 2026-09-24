@@ -36,6 +36,9 @@ type State struct {
 	// with their reason rather than hiding them, so "why can I not pick
 	// Claude here" has an answer on screen.
 	Adapters []Adapter `json:"adapters,omitempty"`
+	// Stacks are what the launcher offers first (stacks.go): each with the
+	// availability of its tiers, greyed with a reason like an adapter.
+	Stacks []StackView `json:"stacks,omitempty"`
 	// HasDefaultPrompt says whether a stored default prompt exists, so the
 	// launcher can say that a new session will not start empty. Only the
 	// FLAG rides the state push — the text itself is fetched on demand

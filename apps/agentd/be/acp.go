@@ -1281,9 +1281,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 
 	// agent_start: launch an adapter and open a session.
 	sdk.HandleFromVoid(bus, "agent_start", func(conn *sdk.Conn, _ string, req startReq, from wire.Sender) error {
-		h, err := startHosted(req.Agent, req.Cwd, svcConn)
+		h, err := startSession(req, svcConn)
 		if err != nil {
-			log.Printf("agentd: acp start agent=%s cwd=%s: %v", req.Agent, req.Cwd, err)
+			log.Printf("agentd: acp start stack=%s tier=%s agent=%s cwd=%s: %v", req.Stack, req.Tier, req.Agent, req.Cwd, err)
 			if from.InstanceID != "" {
 				return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
 					"kind":   "agent_started",
@@ -1499,7 +1499,13 @@ type defaultPromptReq struct {
 }
 
 type startReq struct {
-	Agent  string `json:"agent"`
+	// Stack and Tier choose the settings (stacks.go); Tier defaults to
+	// frontier. Agent and Model are the launcher's Advanced overrides, and
+	// Agent alone, with no stack, is how `wash ai --agent` starts.
+	Stack  string `json:"stack,omitempty"`
+	Tier   string `json:"tier,omitempty"`
+	Agent  string `json:"agent,omitempty"`
+	Model  string `json:"model,omitempty"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt,omitempty"`
 	Open   bool   `json:"open,omitempty"`
