@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sirmick/wash/internal/agentpolicy"
@@ -288,5 +289,90 @@ func TestMessagingAMemberAnswersItsPendingDecision(t *testing.T) {
 	res, err = ws.humanMessage(lead, raw)
 	if err != nil || res.(map[string]any)["answered"] != nil {
 		t.Fatal("a plain message was taken as a decision answer", res, err)
+	}
+}
+
+// A member's tier resolves against the orchestrator's stack when its key is
+// reserved, and a member with neither tier nor profile launches through the
+// orchestrator's connection. PATH is emptied so no adapter can start: the
+// reservation is what is under test.
+func TestMemberTierResolvesFromTheOrchestratorsStack(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	withPolicy(t, agentpolicy.Policy{})
+	root := t.TempDir()
+	s, err := swarm.Open(filepath.Join(root, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "opencode", connection: "opencode@openrouter", stack: "openrouter", cwd: root}
+	call := func(args string) error {
+		_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(args)})
+		return err
+	}
+	member := func(key, extra string) string {
+		return fmt.Sprintf(`"%s":{"name":%q,"lifetime":"resident","instructions":"Wait for assignments."%s}`, key, key, extra)
+	}
+	if err := call(`{"workspace":{"name":"Team"},"members":{` + member("rev", `,"tier":"review"`) + `,` + member("impl", `,"tier":"coding","thinking":"max"`) + `,` + member("plain", "") + `}}`); err != nil {
+		t.Fatal(err)
+	}
+	w := s.View("lead")
+	if w.Stack != "openrouter" {
+		t.Fatalf("stack = %q, want the orchestrator's", w.Stack)
+	}
+	if lead := swarm.GetMember(w, w.Lead); lead.LaunchSettings == nil || lead.LaunchSettings.Connection != "opencode@openrouter" {
+		t.Fatalf("orchestrator launch settings = %+v", lead.LaunchSettings)
+	}
+	want := builtinStacks["openrouter"].Tiers["review"]
+	rev := swarm.GetMember(w, "rev")
+	if rev.Tier != "review" || rev.LaunchSettings.Model != want.Model || rev.LaunchSettings.Connection != want.Connection || rev.Provider != "opencode" {
+		t.Fatalf("review member = tier %q %+v", rev.Tier, rev.LaunchSettings)
+	}
+	if impl := swarm.GetMember(w, "impl"); impl.LaunchSettings.Model != builtinStacks["openrouter"].Tiers["coding"].Model || impl.LaunchSettings.Thinking != "max" {
+		t.Fatalf("explicit thinking did not override the tier: %+v", impl.LaunchSettings)
+	}
+	if plain := swarm.GetMember(w, "plain"); plain.LaunchSettings.Provider != "opencode" || plain.LaunchSettings.Connection != "opencode@openrouter" {
+		t.Fatalf("member without tier = %+v", plain.LaunchSettings)
+	}
+	// A member reads its role and task, never its model.
+	if brief := memberBrief(*rev, "a1"); strings.Contains(brief, rev.LaunchSettings.Model) {
+		t.Fatal("the member brief carries a model string")
+	}
+
+	// Another stack affects later launches only.
+	if err := call(`{"stack":"anthropic","members":{` + member("rev2", `,"tier":"review"`) + `}}`); err != nil {
+		t.Fatal(err)
+	}
+	w = s.View("lead")
+	if rev2 := swarm.GetMember(w, "rev2"); rev2.LaunchSettings.Provider != "claude" || rev2.LaunchSettings.Capability != "reviewer" {
+		t.Fatalf("after the stack change = %+v", rev2.LaunchSettings)
+	}
+	if swarm.GetMember(w, "rev").LaunchSettings.Provider != "opencode" {
+		t.Fatal("a stack change rewrote an existing member")
+	}
+
+	for name, args := range map[string]string{
+		"tier and profile": `{"profiles":{"p":{"provider":"claude"}},"members":{` + member("both", `,"tier":"coding","profile":"p"`) + `}}`,
+		"unknown tier":     `{"members":{` + member("odd", `,"tier":"huge"`) + `}}`,
+		"unknown stack":    `{"stack":"nope"}`,
+		"bad connection":   `{"profiles":{"p":{"provider":"codex","connection":"opencode@openrouter"}}}`,
+	} {
+		if err := call(args); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// Without a stack there is nothing for a tier to name.
+func TestMemberTierNeedsAWorkspaceStack(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	withPolicy(t, agentpolicy.Policy{})
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex", cwd: root}
+	_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(`{"workspace":{"name":"Team"},"members":{"a":{"name":"A","lifetime":"resident","instructions":"x","tier":"coding"}}}`)})
+	if err == nil || !strings.Contains(err.Error(), "no stack") {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -9,13 +9,16 @@ import (
 // ConfigurePatch merges profile entries by name. Each supplied profile replaces
 // that entry; null deletes it. Other omitted fields are preserved.
 type ConfigurePatch struct {
-	Name           *string                  `json:"name"`
-	MaxActive      *int                     `json:"max_active"`
-	MaxMembers     *int                     `json:"max_members"`
-	Profiles       map[string]*AgentProfile `json:"profiles"`
-	Packages       map[string]*Package      `json:"packages"`
-	DefaultProfile *string                  `json:"default_profile"`
-	Expected       *int64                   `json:"expected_revision"`
+	Name       *string                  `json:"name"`
+	MaxActive  *int                     `json:"max_active"`
+	MaxMembers *int                     `json:"max_members"`
+	Profiles   map[string]*AgentProfile `json:"profiles"`
+	Packages   map[string]*Package      `json:"packages"`
+	// Stack names the stack members' tiers come from. agentd checks that it
+	// exists; the store only keeps the name.
+	Stack          *string `json:"stack"`
+	DefaultProfile *string `json:"default_profile"`
+	Expected       *int64  `json:"expected_revision"`
 }
 
 func ValidProfileName(s string) bool {
@@ -137,6 +140,9 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		if p.DefaultProfile != nil {
 			w.DefaultProfile = *p.DefaultProfile
 		}
+		if p.Stack != nil {
+			w.Stack = *p.Stack
+		}
 		if w.DefaultProfile != "" {
 			if _, ok := w.Profiles[w.DefaultProfile]; !ok {
 				return errors.New("default_profile must name a registered profile or be empty")
@@ -152,29 +158,46 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 	return revision, err
 }
 
-// ResolveProfile captures a launch configuration while membership is reserved.
-// Explicit settings win. Provider overrides must match the named profile: raw
-// adapter option IDs must never accidentally cross provider boundaries.
-func ResolveProfile(w *Workspace, name string, explicit AgentProfile, parentProvider string) (string, AgentProfile, error) {
+// ResolveProfile captures a launch configuration while membership is reserved:
+// the named profile, else the default one, with explicit settings on top.
+// With neither, a member launches like its parent: the parent's provider and,
+// when it runs on that same provider, the parent's connection, so a team led
+// through OpenRouter is not quietly launched direct.
+func ResolveProfile(w *Workspace, name string, explicit, parent AgentProfile) (string, AgentProfile, error) {
 	if name == "" {
 		name = w.DefaultProfile
 	}
-	result := AgentProfile{}
+	var base AgentProfile
 	if name != "" {
 		p, ok := w.Profiles[name]
 		if !ok {
-			return "", result, fmt.Errorf("unknown profile %q", name)
+			return "", AgentProfile{}, fmt.Errorf("unknown profile %q", name)
 		}
-		result = clone(p)
-		if explicit.Provider != "" && explicit.Provider != result.Provider {
-			return "", result, errors.New("provider conflicts with selected profile")
+		base = p
+	} else {
+		base.Provider = explicit.Provider
+		if base.Provider == "" {
+			base.Provider = parent.Provider
 		}
+		if base.Provider == parent.Provider {
+			base.Connection = parent.Connection
+		}
+	}
+	settings, err := Overlay(base, explicit)
+	return name, settings, err
+}
+
+// Overlay puts explicit settings over a base profile: a named profile or a
+// stack's tier. Explicit settings win field by field; configs merge by option
+// ID. A provider override must match the base's: raw adapter option IDs and
+// a connection must never cross provider boundaries.
+func Overlay(base, explicit AgentProfile) (AgentProfile, error) {
+	result := clone(base)
+	if explicit.Provider != "" && result.Provider != "" && explicit.Provider != result.Provider {
+		return result, errors.New("provider conflicts with selected profile")
 	}
 	if explicit.Provider != "" {
 		result.Provider = explicit.Provider
-	}
-	if result.Provider == "" {
-		result.Provider = parentProvider
 	}
 	if explicit.Capability != "" {
 		result.Capability = explicit.Capability
@@ -197,5 +220,5 @@ func ResolveProfile(w *Workspace, name string, explicit AgentProfile, parentProv
 	for id, value := range explicit.Configs {
 		result.Configs[id] = value
 	}
-	return name, result, ValidateProfile(result)
+	return result, ValidateProfile(result)
 }

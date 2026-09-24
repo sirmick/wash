@@ -54,13 +54,16 @@ type Usage struct {
 	Size int64 `json:"size"`
 }
 type Member struct {
-	Key            string            `json:"key,omitempty"`
-	Package        string            `json:"package,omitempty"`
-	Role           string            `json:"role,omitempty"`
-	Instructions   string            `json:"instructions,omitempty"`
-	InitialTask    string            `json:"initial_task,omitempty"`
-	Usage          *Usage            `json:"usage,omitempty"`
-	Profile        string            `json:"profile,omitempty"`
+	Key          string `json:"key,omitempty"`
+	Package      string `json:"package,omitempty"`
+	Role         string `json:"role,omitempty"`
+	Instructions string `json:"instructions,omitempty"`
+	InitialTask  string `json:"initial_task,omitempty"`
+	Usage        *Usage `json:"usage,omitempty"`
+	Profile      string `json:"profile,omitempty"`
+	// Tier is the stack tier the member was launched from, resolved into
+	// LaunchSettings at reservation like a profile.
+	Tier           string            `json:"tier,omitempty"`
 	LaunchSettings *AgentProfile     `json:"launch_settings,omitempty"`
 	InitialConfigs map[string]string `json:"initial_configs,omitempty"`
 	// Adjusted are settings the orchestrator changed on the live member
@@ -139,20 +142,23 @@ type Workspace struct {
 	Packages       map[string]Package      `json:"packages,omitempty"`
 	Profiles       map[string]AgentProfile `json:"profiles"`
 	DefaultProfile string                  `json:"default_profile"`
-	ID             string                  `json:"id"`
-	Name           string                  `json:"name"`
-	Root           string                  `json:"project_root"`
-	Lead           string                  `json:"orchestrator"`
-	State          string                  `json:"state"`
-	Revision       int64                   `json:"revision"`
-	PlanRevision   int64                   `json:"plan_revision"`
-	MaxActive      int                     `json:"max_active"`
-	MaxMembers     int                     `json:"max_members"`
-	Items          []Item                  `json:"items"`
-	Document       *Document               `json:"document,omitempty"`
-	Members        []Member                `json:"members"`
-	Assignments    []Assignment            `json:"assignments"`
-	Messages       []Message               `json:"messages"`
+	// Stack is where members' tiers come from: set from the orchestrator's
+	// own stack at setup, changeable with workspace_configure.stack.
+	Stack        string       `json:"stack,omitempty"`
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	Root         string       `json:"project_root"`
+	Lead         string       `json:"orchestrator"`
+	State        string       `json:"state"`
+	Revision     int64        `json:"revision"`
+	PlanRevision int64        `json:"plan_revision"`
+	MaxActive    int          `json:"max_active"`
+	MaxMembers   int          `json:"max_members"`
+	Items        []Item       `json:"items"`
+	Document     *Document    `json:"document,omitempty"`
+	Members      []Member     `json:"members"`
+	Assignments  []Assignment `json:"assignments"`
+	Messages     []Message    `json:"messages"`
 }
 type State struct {
 	Receipts   []Receipt   `json:"receipts,omitempty"`

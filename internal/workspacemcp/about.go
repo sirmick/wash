@@ -2,7 +2,7 @@ package workspacemcp
 
 import "github.com/sirmick/wash/internal/version"
 
-const APIVersion = "3.2.0"
+const APIVersion = "3.3.0"
 
 // Instructions is shared by discovery and MCP initialization. Describe only the
 // implemented API and keep provider-independent discovery consistent.
@@ -18,14 +18,15 @@ func About() map[string]any {
 		"instructions": Instructions, "tools": names,
 		"capabilities": map[string]bool{
 			"resident_agents": true, "ephemeral_agents": true, "durable_inboxes": true,
-			"live_markdown": true, "keyed_plan": true, "launch_profiles": true,
+			"live_markdown": true, "keyed_plan": true, "launch_profiles": true, "stack_tiers": true,
 			"bulk_workspace_configuration": true, "qa_threads": true, "qa_markdown_file": true, "reviewer_capability_profiles": true,
 		},
 		"configuration": map[string]any{
 			"omitted_fields":  "unchanged",
 			"profiles":        "merge aliases; each object replaces that profile; null deletes; edits affect future launches",
 			"revision_guards": "workspace_configure uses workspace revision; QA transitions use thread revision; replies append",
-			"model_choices":   "inspect about.caller.config_options before setup, or view=state sessions config_options; do not guess adapter IDs",
+			"model_choices":   "prefer members[key].tier; otherwise inspect about.caller.config_options before setup, or view=state sessions config_options; do not guess adapter IDs",
+			"tiers":           "members[key].tier is frontier, coding, review or small: the workspace stack's adapter, connection, model and effort for that tier, fixed at launch; explicit model/thinking/configs override it; give a tier or a profile, not both. stack is the orchestrator's own unless workspace_configure.stack names another; it affects later launches only. A review tier is read-only only where about.permissions says the adapter enforces it",
 		},
 		"context": map[string]any{
 			"children": "fresh context plus supplied role instructions, workspace guidance and attributed inbox messages",

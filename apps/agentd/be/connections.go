@@ -44,6 +44,22 @@ func connections(pol agentpolicy.Policy) map[string]agentpolicy.Connection {
 	return out
 }
 
+// knownConnection checks that connection name exists and is for provider.
+// "" is the provider direct and always fine.
+func knownConnection(pol agentpolicy.Policy, provider, name string) error {
+	if name == "" {
+		return nil
+	}
+	c, ok := connections(pol)[name]
+	if !ok {
+		return fmt.Errorf("unknown connection %q", name)
+	}
+	if c.Adapter != provider {
+		return fmt.Errorf("connection %q is for %s, not %s", name, c.Adapter, provider)
+	}
+	return nil
+}
+
 // connectionEnv is what connection `name` adds to adapter agentID's
 // environment: its own env, then its key under each of its key_env names.
 // "" is the adapter direct and adds nothing. An unknown connection, one for
@@ -53,13 +69,10 @@ func connectionEnv(pol agentpolicy.Policy, keys map[string]string, agentID, name
 	if name == "" {
 		return nil, nil
 	}
-	c, ok := connections(pol)[name]
-	if !ok {
-		return nil, fmt.Errorf("unknown connection %q", name)
+	if err := knownConnection(pol, agentID, name); err != nil {
+		return nil, err
 	}
-	if c.Adapter != agentID {
-		return nil, fmt.Errorf("connection %q is for %s, not %s", name, c.Adapter, agentID)
-	}
+	c := connections(pol)[name]
 	env := make([]string, 0, len(c.Env)+len(c.KeyEnv))
 	names := make([]string, 0, len(c.Env))
 	for k := range c.Env {

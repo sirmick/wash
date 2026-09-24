@@ -245,17 +245,19 @@ profiles and 32 raw settings per profile are accepted.
 `workspace_configure.members[key].profile` selects an alias, otherwise the configured default applies.
 Explicit `model` and `thinking` replace those profile fields; explicit `configs`
 merges by option ID. Conflicting semantic and raw values for the same setting
-are rejected. A provider override must match the selected profile. With no
-profile, same-provider children inherit the parent's selected model unless an
-explicit model is provided. Profiles use the provider's defaults for unspecified
+are rejected. A provider override must match the selected profile. A member may
+instead name a stack `tier` (AGENT_SWARM_BULK.md, API 3.3), which works like a
+profile drawn from the workspace's stack. With no profile or tier,
+same-provider children inherit the parent's selected model and connection
+unless an explicit model is provided. Profiles use the provider's defaults for unspecified
 settings; they do not inherit the caller's model.
 
 Wash resolves the profile atomically while reserving membership, applies the
 model first, then validates thinking against the refreshed adapter choices.
 Unknown settings, invalid choices, RPC failures and silently substituted values
 fail the launch before role instructions or tasks are delivered. Model and
-thinking use ACP categories (`model`, `thought_level`), with common option IDs
-as a fallback for adapters that omit categories; other settings use exact IDs.
+thinking use ACP categories (`model`, `thought_level`); other settings use exact
+IDs.
 
 Each child retains its alias, resolved `launch_settings` snapshot and
 `initial_configs` returned by the adapter. Editing/deleting a profile changes

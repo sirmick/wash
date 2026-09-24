@@ -102,7 +102,6 @@ func validateStack(pol agentpolicy.Policy, s Stack) error {
 			return fmt.Errorf("unknown tier %q; tiers are %v", id, tierNames)
 		}
 	}
-	conns := connections(pol)
 	for _, id := range tierNames {
 		t, ok := s.Tiers[id]
 		if !ok {
@@ -122,14 +121,8 @@ func validateStack(pol agentpolicy.Policy, s Stack) error {
 		if t.Capability == "reviewer" && t.Provider != "claude" || t.Subagents == "deny" && t.Provider != "claude" {
 			return fmt.Errorf("tier %s: capability and subagents are enforced on claude only", id)
 		}
-		if t.Connection != "" {
-			c, ok := conns[t.Connection]
-			if !ok {
-				return fmt.Errorf("tier %s: unknown connection %q", id, t.Connection)
-			}
-			if c.Adapter != t.Provider {
-				return fmt.Errorf("tier %s: connection %q is for %s, not %s", id, t.Connection, c.Adapter, t.Provider)
-			}
+		if err := knownConnection(pol, t.Provider, t.Connection); err != nil {
+			return fmt.Errorf("tier %s: %w", id, err)
 		}
 	}
 	return nil

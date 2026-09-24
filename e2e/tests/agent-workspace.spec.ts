@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../fixtures/router';
 import { closeButtonOf } from '../fixtures/agents';
@@ -351,4 +351,35 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await expect(app.getByTestId('workspace-qa')).toContainText('Regression tests passed; review complete.');
  expect(state().qa[0].state).toBe('resolved');
  await tool('workspace_end');await expect(sidebar).toHaveCount(0);
+});
+
+// A workspace takes its stack from the orchestrator's own session, and a
+// member launched with "tier":"review" runs that stack's review settings with
+// no model string in its definition. The stack is agents.json's own, with the
+// fake's models, so the tier's model and effort are checkable here.
+test('a member launched by tier inherits the orchestrator\'s stack', async ({page,router}) => {
+ test.setTimeout(90_000);
+ mkdirSync(join(router.xdgConfigHome,'wash'),{recursive:true});
+ const tier=(model:string,thinking:string)=>({provider:'codex',model,thinking});
+ writeFileSync(join(router.xdgConfigHome,'wash','agents.json'),JSON.stringify({stacks:{fake:{name:'Fake',tiers:{frontier:tier('smart','high'),coding:tier('fast','low'),review:tier('smart','low'),small:tier('fast','low')}}}}));
+ await page.goto(router.url);
+ await expect(page.locator('wash-app-session')).toBeVisible();
+ const cursor=router.logCursor();
+ const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'start',stack:'fake',tier:'frontier',cwd:router.xdgConfigHome,prompt:''}});
+ await router.waitForLog(/agentd: session settings key=\S+ stack=fake tier=frontier connection= adapter=codex effective=map\[model:smart reasoning_effort:high\]/,25_000,cursor);
+ const app=page.locator('wash-app-ai');
+ const composer=app.locator('[data-testid="agent-composer"]').first();
+ await expect(composer).toBeEnabled();
+ // The store file appears with the first workspace.
+ const state=()=>{try{return JSON.parse(readFileSync(join(router.xdgStateHome,'wash/workspaces.json'),'utf8')).workspaces.at(-1);}catch{return undefined;}};
+ const tool=async(name:string,args:object={})=>{await composer.fill(`workspace ${name} ${JSON.stringify(args)}`);await composer.press('Enter');};
+ await tool('workspace_configure',{workspace:{name:'Tiers'},members:{rev:{name:'Reviewer',tier:'review',instructions:'Review when asked.',lifetime:'resident'}}});
+ await expect.poll(()=>state()?.members?.find((m:any)=>m.key==='rev')?.state,{timeout:30_000}).toBe('available');
+ const w=state();
+ expect(w.stack).toBe('fake');
+ const rev=w.members.find((m:any)=>m.key==='rev');
+ expect(rev.tier).toBe('review');
+ expect(rev.launch_settings).toMatchObject({provider:'codex',model:'smart',thinking:'low'});
+ expect(rev.initial_configs).toMatchObject({model:'smart',reasoning_effort:'low'});
 });

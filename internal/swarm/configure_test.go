@@ -107,7 +107,7 @@ func TestConfigureConcurrentRevision(t *testing.T) {
 }
 func TestResolveProfileSnapshotAndOverrides(t *testing.T) {
 	w := &Workspace{DefaultProfile: "god", Profiles: map[string]AgentProfile{"god": {Provider: "codex", Model: "smart", Thinking: "high", Configs: map[string]string{"speed": "slow"}}}}
-	name, settings, err := ResolveProfile(w, "", AgentProfile{Thinking: "low", Configs: map[string]string{"speed": "fast"}}, "claude")
+	name, settings, err := ResolveProfile(w, "", AgentProfile{Thinking: "low", Configs: map[string]string{"speed": "fast"}}, AgentProfile{Provider: "claude"})
 	if err != nil || name != "god" || settings.Provider != "codex" || settings.Model != "smart" || settings.Thinking != "low" || settings.Configs["speed"] != "fast" {
 		t.Fatal(name, settings, err)
 	}
@@ -119,12 +119,12 @@ func TestResolveProfileSnapshotAndOverrides(t *testing.T) {
 		name     string
 		explicit AgentProfile
 	}{{"missing", AgentProfile{}}, {"god", AgentProfile{Provider: "claude"}}} {
-		if _, _, err := ResolveProfile(w, tc.name, tc.explicit, "codex"); err == nil {
+		if _, _, err := ResolveProfile(w, tc.name, tc.explicit, AgentProfile{Provider: "codex"}); err == nil {
 			t.Fatal("invalid selection accepted")
 		}
 	}
 	w.DefaultProfile = ""
-	if _, settings, err := ResolveProfile(w, "", AgentProfile{}, "claude"); err != nil || settings.Provider != "claude" {
+	if _, settings, err := ResolveProfile(w, "", AgentProfile{}, AgentProfile{Provider: "claude"}); err != nil || settings.Provider != "claude" {
 		t.Fatal(settings, err)
 	}
 }
@@ -162,10 +162,10 @@ func TestApprovalProfileValidatesAndResolves(t *testing.T) {
 		}
 	}
 	w := &Workspace{Profiles: map[string]AgentProfile{"pleb": {Provider: "claude", Approval: "auto"}}}
-	if _, got, err := ResolveProfile(w, "pleb", AgentProfile{}, "claude"); err != nil || got.Approval != "auto" {
+	if _, got, err := ResolveProfile(w, "pleb", AgentProfile{}, AgentProfile{Provider: "claude"}); err != nil || got.Approval != "auto" {
 		t.Fatalf("profile approval lost: %+v %v", got, err)
 	}
-	if _, got, err := ResolveProfile(w, "pleb", AgentProfile{Approval: "ask"}, "claude"); err != nil || got.Approval != "ask" {
+	if _, got, err := ResolveProfile(w, "pleb", AgentProfile{Approval: "ask"}, AgentProfile{Provider: "claude"}); err != nil || got.Approval != "ask" {
 		t.Fatalf("member override ignored: %+v %v", got, err)
 	}
 }
@@ -189,5 +189,41 @@ func TestPackagesNameCodesAndPatchByKey(t *testing.T) {
 		if _, err := s.Configure("lead", ConfigurePatch{Packages: bad}); err == nil {
 			t.Errorf("accepted %+v", bad)
 		}
+	}
+}
+
+// A member with no profile launches like its parent, connection included,
+// unless it names another provider: a connection never crosses providers.
+func TestResolveProfileInheritsTheParentsConnection(t *testing.T) {
+	w := &Workspace{}
+	parent := AgentProfile{Provider: "opencode", Connection: "opencode@openrouter"}
+	if _, got, err := ResolveProfile(w, "", AgentProfile{}, parent); err != nil || got.Connection != "opencode@openrouter" {
+		t.Fatal(got, err)
+	}
+	if _, got, err := ResolveProfile(w, "", AgentProfile{Provider: "claude"}, parent); err != nil || got.Provider != "claude" || got.Connection != "" {
+		t.Fatal(got, err)
+	}
+	// A named profile says how it connects; the parent's is not added.
+	w.Profiles = map[string]AgentProfile{"direct": {Provider: "opencode"}}
+	if _, got, _ := ResolveProfile(w, "direct", AgentProfile{}, parent); got.Connection != "" {
+		t.Fatal(got)
+	}
+}
+
+// Overlay is how a stack tier and a profile take explicit settings alike.
+func TestOverlay(t *testing.T) {
+	base := AgentProfile{Provider: "claude", Connection: "claude@openrouter", Model: "sonnet", Capability: "reviewer", Configs: map[string]string{"a": "1"}}
+	got, err := Overlay(base, AgentProfile{Model: "haiku", Configs: map[string]string{"b": "2"}})
+	if err != nil || got.Model != "haiku" || got.Connection != "claude@openrouter" || got.Capability != "reviewer" || got.Configs["a"] != "1" || got.Configs["b"] != "2" {
+		t.Fatal(got, err)
+	}
+	if base.Configs["b"] != "" {
+		t.Fatal("Overlay changed its base")
+	}
+	if _, err := Overlay(base, AgentProfile{Provider: "codex"}); err == nil {
+		t.Fatal("a provider override crossed the base's provider")
+	}
+	if _, err := Overlay(base, AgentProfile{Approval: "auto"}); err == nil {
+		t.Fatal("an overlay broke the profile rules (reviewer with auto)")
 	}
 }

@@ -488,7 +488,7 @@ func workspaceHosted(session string) *hosted {
 }
 func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string) (any, error) {
 	var member swarm.Member
-	var workspaceID string
+	var workspaceID, workspaceStack string
 	err := ws.store.Mutate(parent.sessionID, true, func(w *swarm.Workspace, _ *swarm.Member) error {
 		// A relaunch used to force the workspace active, lifting the pause
 		// an orchestrator failure put on dispatch while the orchestrator
@@ -500,7 +500,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		if m == nil || m.State != "pending" {
 			return errors.New("member is not pending launch")
 		}
-		member, workspaceID = *m, w.ID
+		member, workspaceID, workspaceStack = *m, w.ID, w.Stack
 		m.State = "starting"
 		return nil
 	})
@@ -508,13 +508,14 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		return nil, err
 	}
 
-	// Without a profile, preserve same-provider model inheritance. A profile
-	// starts from that provider's defaults rather than the caller's settings.
+	// Without a profile or a tier, preserve same-provider model inheritance.
+	// A profile or tier starts from that provider's defaults rather than the
+	// caller's settings.
 	settings := memberSettings(member)
-	if member.Profile == "" && settings.Model == "" && settings.Provider == parent.agent {
+	if member.Profile == "" && member.Tier == "" && settings.Model == "" && settings.Provider == parent.agent {
 		hostedMu.Lock()
 		for _, cfg := range parent.configs {
-			if cfg.Category == "model" || cfg.ID == "model" {
+			if cfg.Category == "model" {
 				if _, ok := settings.Configs[cfg.ID]; !ok && cfg.CurrentValue != "" {
 					settings.Configs[cfg.ID] = cfg.CurrentValue
 				}
@@ -522,7 +523,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		}
 		hostedMu.Unlock()
 	}
-	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, sessionLaunch{capability: settings.Capability, member: true, noSubagents: settings.Subagents == "deny"})
+	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, sessionLaunch{connection: settings.Connection, stack: workspaceStack, tier: member.Tier, capability: settings.Capability, member: true, noSubagents: settings.Subagents == "deny"})
 	var initialConfigs map[string]string
 	if err == nil {
 		hostedMu.Lock()
@@ -1471,7 +1472,7 @@ func teamView(w *swarm.Workspace) map[string]any {
 			}
 		}
 		row := map[string]any{"id": m.ID, "key": m.Key, "name": m.Name, "state": m.State, "activity": activity[m.ID]}
-		for k, v := range map[string]string{"package": m.Package, "role": m.Role, "status": m.Status, "waiting": m.Waiting, "activity_detail": detail[m.ID]} {
+		for k, v := range map[string]string{"package": m.Package, "role": m.Role, "tier": m.Tier, "status": m.Status, "waiting": m.Waiting, "activity_detail": detail[m.ID]} {
 			if v != "" {
 				row[k] = v
 			}
@@ -1496,7 +1497,11 @@ func teamView(w *swarm.Workspace) map[string]any {
 		}
 		members = append(members, row)
 	}
-	return map[string]any{"workspace": map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "revision": w.Revision}, "pending_approvals": len(workspaceApprovals(w)), "members": members}
+	header := map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "revision": w.Revision}
+	if w.Stack != "" {
+		header["stack"] = w.Stack
+	}
+	return map[string]any{"workspace": header, "pending_approvals": len(workspaceApprovals(w)), "members": members}
 }
 
 // firstLine is s cut to its first line and at most n runes, marked when cut.

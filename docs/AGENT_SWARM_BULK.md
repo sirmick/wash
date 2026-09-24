@@ -1,6 +1,6 @@
 # Bulk workspace MCP contract
 
-Implemented API 3.2.0, 2026-09-24. This supersedes the incremental v1 catalog in
+Implemented API 3.3.0, 2026-09-24. This supersedes the incremental v1 catalog in
 [the original design](AGENT_SWARM.md). New discovery advertises exactly eleven
 tools. Removed v1 operations return Unknown tool; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
@@ -33,6 +33,20 @@ A member's role instructions and initial task are now one first message, with th
 Sent as two, the role went out alone and was taken as the go-ahead before the task's "plan first"
 arrived. A member launched without a task is told to wait for its assignment.
 
+API 3.3 adds stack tiers. A stack (apps/agentd/be/stacks.go) is a named, global set of four
+tiers, `frontier`, `coding`, `review` and `small`, each an adapter, connection, model and effort;
+the launcher starts sessions from them. A workspace takes its `stack` from the orchestrator's own
+session (the stack it was started from), and `workspace_configure.stack` changes it for later
+launches. A member definition may give `"tier":"coding"` instead of a profile or model names: the
+tier is resolved into the member's launch settings when its key is reserved, like a profile, so a
+later stack edit changes no running member. Explicit `model`, `thinking` and `configs` override
+the tier; a member gives a tier or a profile, not both. Members never need a model string, which
+matters because members run on cheap models. A member with neither inherits the orchestrator's
+provider and, on that provider, its connection, so a team led through OpenRouter launches through
+it too. A tier's read-only guarantee is the adapter's: only Claude Code enforces a `review` tier's
+`capability:"reviewer"`; elsewhere the review tier is read-only by instruction. Profiles gain an
+optional `connection` (for example `claude@openrouter`).
+
 ## Eleven tools
 
 | Tool | Responsibility |
@@ -62,7 +76,9 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
   "request_id":"package-setup-1",
   "workspace":{"name":"Project","project_root":"/data/project"},
   "profiles":{"worker":{"provider":"codex","model":"<advertised ID>","thinking":"high"}},
-  "members":{"K5-red":{"name":"K5 red","profile":"worker","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
+  "members":{
+    "K5-impl":{"name":"K5 implementer","tier":"coding","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"implementer","instructions":"Implement K5. Wait for assignments."},
+    "K5-red":{"name":"K5 red","profile":"worker","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
   "plan":{"items":{"K5":{"text":"Accept K5","state":"active"}}},
   "document":{"path":"/data/project/docs/BUILD-PLAN.md","title":"Build plan"},
   "qa_document":{"path":"/data/project/docs/WORKSPACE-QA.md","title":"Project QA"}
@@ -70,7 +86,8 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
 ```
 
 - Omitted fields stay. Profiles merge by alias; each object replaces the alias,
-  null deletes. Model IDs/thinking values must come from provider choices.
+  null deletes. Model IDs/thinking values must come from provider choices; a member's
+  `tier` takes them from the workspace stack instead.
 - Members use stable keys; an existing matching definition is reused. Profile edits
   affect future launches. Changed member definitions or ended keys require explicit
   end/replacement with a new key. No implicit restart or termination.
