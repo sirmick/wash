@@ -9,7 +9,7 @@
 // tier's model proves the whole chain — the key store, the connection's
 // environment, and the tier's settings — without a network.
 
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, expect } from '../fixtures/router';
@@ -35,7 +35,7 @@ function writeKeys(configHome: string, keys: Record<string, string>) {
 test.describe('stacks', () => {
   test.setTimeout(90_000);
 
-  test('without a key the OpenRouter stack is greyed with the reason', async ({ page, router }) => {
+  test('the OpenRouter stack is greyed until its key is set, and the key is never shown again', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
     const manager = await openAgents(page);
@@ -43,6 +43,30 @@ test.describe('stacks', () => {
     // toBeDisabled does not read an <option>'s own disabled state.
     await expect(option).toHaveJSProperty('disabled', true);
     await expect(option).toContainText('no openrouter key set');
+    await expect(manager.locator('[data-testid="ai-key-status-openrouter"]')).toHaveText('not set');
+
+    const secret = 'sk-or-v1-e2e-secret-0000-wxyz';
+    const cursor = router.logCursor();
+    await manager.locator('[data-testid="ai-key-input-openrouter"]').fill(secret);
+    await manager.locator('[data-testid="ai-key-save-openrouter"]').click();
+    await router.waitForLog(/agentd: key openrouter set=true/, 15_000, cursor);
+
+    // Saved once, then shown only as set and its last four characters; the
+    // stack that needed it is available straight away.
+    await expect(manager.locator('[data-testid="ai-key-status-openrouter"]')).toHaveText('set · …wxyz');
+    await expect(option).toHaveJSProperty('disabled', false);
+    await expect(manager.locator('[data-testid="ai-key-input-openrouter"]')).toHaveValue('');
+    expect(await manager.innerHTML()).not.toContain(secret);
+    expect(router.log()).not.toContain(secret);
+
+    // Beside agents.json, not in it, and readable only by the owner.
+    const file = join(router.xdgConfigHome, 'wash', 'keys.json');
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ openrouter: secret });
+
+    await manager.locator('[data-testid="ai-key-clear-openrouter"]').click();
+    await expect(manager.locator('[data-testid="ai-key-status-openrouter"]')).toHaveText('not set');
+    await expect(option).toHaveJSProperty('disabled', true);
   });
 
   test('OpenRouter budget / coding runs OpenCode on the tier model through the key', async ({ page, router }) => {

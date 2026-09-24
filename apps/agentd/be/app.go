@@ -39,6 +39,9 @@ type State struct {
 	// Stacks are what the launcher offers first (stacks.go): each with the
 	// availability of its tiers, greyed with a reason like an adapter.
 	Stacks []StackView `json:"stacks,omitempty"`
+	// Keys are the connection keys the launcher can store: set or not, and
+	// a stored key's last four characters. Never a value.
+	Keys []KeyView `json:"keys,omitempty"`
 	// HasDefaultPrompt says whether a stored default prompt exists, so the
 	// launcher can say that a new session will not start empty. Only the
 	// FLAG rides the state push — the text itself is fetched on demand

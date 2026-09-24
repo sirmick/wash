@@ -473,6 +473,17 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		}
 	case "open_agents":
 		_ = c.SpawnRequest("com.wash.agents")
+	case "set_key", "test_key":
+		// A connection key on its way to agentd's key store, or to be
+		// checked. Passed through, never logged or kept here; agentd
+		// accepts it only from the manager, which has the launcher.
+		if managerMode {
+			_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+				"kind":  "agent_" + str(m["kind"]),
+				"name":  str(m["name"]),
+				"value": str(m["value"]),
+			})
+		}
 	case "prompt":
 		if session.key == "" {
 			return
@@ -767,6 +778,10 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 
 	case "default_prompt":
 		c.SendAppMsg(map[string]any{"kind": "default_prompt", "text": m["text"]})
+
+	// A key's save or test outcome, for the Connections section.
+	case "key_saved", "key_test":
+		c.SendAppMsg(map[string]any{"kind": m["kind"], "name": m["name"], "ok": m["ok"], "detail": m["detail"], "error": m["error"]})
 
 	case "history_deleted", "history_pruned":
 		// agentd's answer to a delete or prune this window asked for;

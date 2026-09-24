@@ -186,12 +186,12 @@ func Probe(pol agentpolicy.Policy) []Adapter {
 // Re-read on every sweep, like the default prompt, because each of those
 // can happen outside wash. Reports whether anything changed.
 func refreshLaunchers(s *State) bool {
-	pol := hostedPolicy()
-	adapters, stacks := Probe(pol), publishStacks(pol, keyStore())
-	if reflect.DeepEqual(adapters, s.Adapters) && reflect.DeepEqual(stacks, s.Stacks) {
+	pol, keys := hostedPolicy(), keyStore()
+	adapters, stacks, keyViews := Probe(pol), publishStacks(pol, keys), publishKeys(pol, keys)
+	if reflect.DeepEqual(adapters, s.Adapters) && reflect.DeepEqual(stacks, s.Stacks) && reflect.DeepEqual(keyViews, s.Keys) {
 		return false
 	}
-	s.Adapters, s.Stacks = adapters, stacks
+	s.Adapters, s.Stacks, s.Keys = adapters, stacks, keyViews
 	for _, a := range adapters {
 		log.Printf("agentd: adapter %s available=%v %s", a.ID, a.Available, a.Note)
 	}

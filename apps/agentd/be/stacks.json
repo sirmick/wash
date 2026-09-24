@@ -1,4 +1,7 @@
 {
+  "keys": {
+    "openrouter": {"name": "OpenRouter API key", "test_url": "https://openrouter.ai/api/v1/key"}
+  },
   "connections": {
     "opencode@openrouter": {
       "adapter": "opencode",

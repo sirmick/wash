@@ -20,7 +20,15 @@ var launchDataJSON []byte
 
 // launchData is stacks.json.
 type launchData struct {
+	Keys        map[string]keySpec                `json:"keys"`
 	Connections map[string]agentpolicy.Connection `json:"connections"`
+}
+
+// keySpec describes a key the launcher offers to store: what to call it, and
+// the URL that checks one (a GET with it as the bearer token).
+type keySpec struct {
+	Name    string `json:"name"`
+	TestURL string `json:"test_url,omitempty"`
 }
 
 var builtinLaunch = func() launchData {

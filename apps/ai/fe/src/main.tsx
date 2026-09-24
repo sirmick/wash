@@ -10,6 +10,7 @@ import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
 import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
 import { defaultStack, defaultCwd } from './default-stack.ts';
 import { Launcher, startMessage, DEFAULT_TIER, type Adapter, type LaunchForm, type StackView } from './Launcher.tsx';
+import { Connections, type KeyResult, type KeyView } from './Connections.tsx';
 import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
 import { isManagerElement } from './role.ts';
@@ -49,6 +50,8 @@ interface RosterState {
   asks?: RosterAsk[];
   adapters?: Adapter[];
   stacks?: StackView[];
+  /** connection keys: set or not, never a value */
+  keys?: KeyView[];
   recent?: RecentSession[];
   /** a stored default prompt exists — the TEXT is fetched on demand */
   has_default_prompt?: boolean;
@@ -90,6 +93,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   let stackDefaulted = false;
   const [form, setForm] = createSignal<LaunchForm>({ stack: '', tier: DEFAULT_TIER, agent: '', model: '', cwd: '' });
   const patchForm = (patch: Partial<LaunchForm>) => setForm((f) => ({ ...f, ...patch }));
+  const [keyResults, setKeyResults] = createSignal<Record<string, KeyResult>>({});
+  const setKeyResult = (id: string, r: KeyResult) => setKeyResults((all) => ({ ...all, [id]: r }));
   const cwd = () => form().cwd;
   const [starting, setStarting] = createSignal(false);
   const [picking, setPicking] = createSignal(false);
@@ -342,6 +347,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         }
         break;
 
+      case 'key_saved':
+        setKeyResult(String(m.name ?? ''), m.error ? { ok: false, detail: String(m.error) } : { ok: true, detail: 'Saved.' });
+        break;
+      case 'key_test':
+        setKeyResult(String(m.name ?? ''), { ok: m.ok === true, detail: String(m.detail ?? '') });
+        break;
+
       case 'usage_patch':
         setRoster((prev) => applyUsagePatch(prev, m.rows));
         break;
@@ -547,7 +559,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         error={error()}
         hasDefaultPrompt={!!roster().has_default_prompt}
         onOpenPrompt={openPrompt}
-      />
+      >
+        <Connections
+          keys={roster().keys ?? []}
+          results={keyResults()}
+          onSave={(name, value) => { setKeyResult(name, {}); send({ kind: 'set_key', name, value }); }}
+          onTest={(name, value) => { setKeyResult(name, { busy: true }); send({ kind: 'test_key', name, value }); }}
+        />
+      </Launcher>
 
       <FilePicker
         open={saving()}
