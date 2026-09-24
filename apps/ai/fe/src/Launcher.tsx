@@ -174,7 +174,7 @@ export const Launcher: Component<{
       </div>
 
       <details data-testid="ai-advanced" open={!!(props.form.agent || props.form.model)}>
-        <summary style={{ ...labelStyle, cursor: 'pointer' }}>advanced</summary>
+        <summary data-wash-hit style={labelStyle}>advanced</summary>
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceSm}px` }}>
           <label style={fieldStyle}>
             <span style={labelStyle}>agent</span>
