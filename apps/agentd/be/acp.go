@@ -1434,7 +1434,14 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		if h == nil {
 			return nil
 		}
-		if workspaces != nil {
+		// Recorded here as well as when the turn ends, for an adapter that
+		// ends a cancelled turn as end_turn. Only with a turn running: Stop
+		// racing a turn that just ended paused an idle member and told the
+		// orchestrator it had failed.
+		h.turnMu.Lock()
+		live := h.turnLive
+		h.turnMu.Unlock()
+		if workspaces != nil && live {
 			_ = workspaces.store.TurnStopped(h.sessionID, nil)
 		}
 		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
