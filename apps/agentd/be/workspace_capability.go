@@ -3,6 +3,7 @@ package agentd
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/sirmick/wash/internal/acp"
@@ -13,9 +14,18 @@ import (
 // unknown versions must be reviewed before we claim their launch metadata works.
 // Observed in claude-agent-acp 0.79.0 createSession: _meta.claudeCode.options is
 // passed to the SDK on both new and load. Codex's read-only mode is workspaceWrite.
+//
+// 0.81.1 re-verified against its dist/acp-agent.js: tools comes from options;
+// disallowedTools is merged with the adapter's own; settingSources and
+// strictMcpConfig reach the SDK through the options spread, after the
+// adapter's defaults; settings (disableAllHooks) survives the provider merge;
+// allowDangerouslySkipPermissions:false turns allowBypass off; permission
+// requests for MCP tools carry _meta.claudeCode.mcpServer {name, source}.
+var reviewerVerifiedVersions = []string{"0.79.0", "0.81.1"}
+
 func reviewerMetadata(provider string, info acp.Implementation) (map[string]any, error) {
-	if provider != "claude" || info.Name != "@agentclientprotocol/claude-agent-acp" || info.Version != "0.79.0" {
-		return nil, fmt.Errorf("reviewer capability unsupported by %s %s: requires verified claude-agent-acp 0.79.0; mode names are not read-only guarantees", info.Name, info.Version)
+	if provider != "claude" || info.Name != "@agentclientprotocol/claude-agent-acp" || !slices.Contains(reviewerVerifiedVersions, info.Version) {
+		return nil, fmt.Errorf("reviewer capability unsupported by %s %s: requires verified claude-agent-acp %s; mode names are not read-only guarantees", info.Name, info.Version, strings.Join(reviewerVerifiedVersions, " or "))
 	}
 	return map[string]any{"claudeCode": map[string]any{"options": map[string]any{
 		"tools":           []string{"Read", "Glob", "Grep"},

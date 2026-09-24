@@ -163,7 +163,7 @@ launch, for example:
 {"profiles":{"review":{"provider":"claude","capability":"reviewer"}}}
 ```
 
-This currently requires verified `@agentclientprotocol/claude-agent-acp` 0.79.0;
+This currently requires verified `@agentclientprotocol/claude-agent-acp` 0.79.0 or 0.81.1;
 Codex, Gemini and unverified versions fail launch with an actionable error. Inspect
 about.permissions.reviewer_capability_profiles before choosing a provider. Codex's
 `read-only` adapter mode uses workspaceWrite and cannot satisfy this contract.

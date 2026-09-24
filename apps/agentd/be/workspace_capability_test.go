@@ -23,7 +23,11 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 	if !reflect.DeepEqual(options["tools"], []string{"Read", "Glob", "Grep"}) || options["strictMcpConfig"] != true || options["allowDangerouslySkipPermissions"] != false {
 		t.Fatal(options)
 	}
-	for _, version := range []string{"", "0.64.2", "0.80.0"} {
+	info.Version = "0.81.1"
+	if _, err = reviewerMetadata("claude", info); err != nil {
+		t.Fatal("re-verified adapter refused:", err)
+	}
+	for _, version := range []string{"", "0.64.2", "0.80.0", "0.82.0"} {
 		info.Version = version
 		if _, err = reviewerMetadata("claude", info); err == nil {
 			t.Fatal("unverified adapter accepted", version)
