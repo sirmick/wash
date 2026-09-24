@@ -60,7 +60,23 @@ edit by hand.
 |---|---|---|---|---|
 | `subscribe` | [`Subscribe`](#subscribe) | any app (the session gateway, hostgw) | state, now and on every change | Subscribe to the whole roster. |
 | `unsubscribe` | [`Unsubscribe`](#unsubscribe) | a subscriber |  | Stop receiving state. |
+| `agent_start` | [`AgentStart`](#agentstart) | a launcher (the Agents manager, an Agent window, wash-edit, wash ai --agent) | agent_started | Start a session from a stack tier, or an adapter on its defaults. |
+| `agent_prompt` | [`AgentPrompt`](#agentprompt) | a frontend showing the session |  | Send a prompt, with attachments; queued while a turn runs. |
+| `agent_cancel` | [`AgentCancel`](#agentcancel) | a frontend showing the session |  | Stop the running turn. |
+| `agent_detach` | [`AgentDetach`](#agentdetach) | a frontend showing the session | detach, to the session's controller | Keep the session running with no window. |
+| `agent_reattach` | [`AgentReattach`](#agentreattach) | any frontend |  | Open a window onto a running session. |
+| `agent_stop` | [`AgentStop`](#agentstop) | any frontend |  | End a session and its adapter. |
+| `agent_set_yolo` | [`AgentSetYolo`](#agentsetyolo) | a frontend showing the session |  | Turn host-side auto-approval on or off for the session. |
+| `agent_set_mode` | [`AgentSetMode`](#agentsetmode) | a frontend showing the session |  | Switch the agent's approval preset. Refused for a reviewer. |
+| `agent_set_config` | [`AgentSetConfig`](#agentsetconfig) | a frontend showing the session |  | Change an agent setting (model, effort, …). A reviewer's mode cannot change. |
+| `agent_add_root` | [`AgentAddRoot`](#agentaddroot) | any frontend |  | Let the session reach another folder. |
+| `agent_remove_root` | [`AgentRemoveRoot`](#agentremoveroot) | any frontend |  | Take a folder back. |
+| `agent_answer` | [`AgentAnswer`](#agentanswer) | any frontend (answering anywhere resolves everywhere) |  | Answer a question, optionally remembering the rule. |
+| `agent_default_prompt` | [`AgentDefaultPrompt`](#agentdefaultprompt) | any frontend | default_prompt | Read the stored default prompt. |
+| `agent_set_default_prompt` | [`AgentSetDefaultPrompt`](#agentsetdefaultprompt) | any frontend | default_prompt | Store (or, with empty text, delete) the default prompt. |
 | `transcript_subscribe` | [`TranscriptSubscribe`](#transcriptsubscribe) | any frontend showing the session | transcript_snapshot, when the watcher is new or asks for replay | Watch a session's transcript, or re-affirm the watch. |
+| `workspace_refresh` | [`WorkspaceRefresh`](#workspacerefresh) | the session's controller | workspace_state | Resend the workspace frame for the session. |
+| `workspace_action` | [`WorkspaceAction`](#workspaceaction) | the session's controller | workspace_result | A human's action in the workspace sidebar. |
 
 ### Pushes (from agentd)
 
@@ -69,6 +85,9 @@ edit by hand.
 | `state` | [`RosterState`](#rosterstate) | every subscriber | interactive | The whole roster. Sent by the SDK StateService, which owns this message's encoding. |
 | `manager_state` | [`ManagerState`](#managerstate) | every manager (manager_subscribe) | interactive | The manager's roster view, sent on subscribe and whenever it changes. |
 | `session_state` | [`SessionState`](#sessionstate) | a session's controller | interactive, keyed | One session's row and questions, sent on claim and whenever they change. |
+| `agent_started` | [`AgentStarted`](#agentstarted) | the starter | interactive | A started session's key, or the error that stopped it. |
+| `detach` | [`Detach`](#detach) | the session's controller | interactive, keyed | The session was detached elsewhere; its window closes. |
+| `default_prompt` | [`DefaultPrompt`](#defaultprompt) | the asker | interactive | The stored default prompt. |
 | `transcript_snapshot` | [`TranscriptSnapshot`](#transcriptsnapshot) | the subscribing instance | bulk, keyed | A session's history, in bounded frames. |
 | `transcript_event` | [`TranscriptEvent`](#transcriptevent) | every watcher of the session | bulk, keyed | One transcript event, new or changed; streamed text arrives as appended deltas. |
 
@@ -87,6 +106,146 @@ Adapter is one way to reach an agent over ACP, as the launcher shows it: whether
 | `name` | `string` | Name is what a human reads. |
 | `note?` | `string` | Note explains a greyed row: why this one cannot be used here. |
 | `available` | `boolean` | Available is whether it can be launched here. |
+
+#### AgentAddRoot
+
+AgentAddRoot widens which folders a session may reach beyond its cwd.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `path` | `string` |  |
+
+#### AgentAnswer
+
+AgentAnswer answers a question (Ask) by its id.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `decision` | `string` | Decision is allow \| deny. |
+| `remember` | `boolean` | Remember writes Rule (or the ask's suggested rule) to the policy, so the question is not asked again. |
+| `rule` | `string` |  |
+| `scope?` | `string` | Scope picks the table a remembered answer is written to: "" (or anything unrecognised) is the global one, "workspace" is the asking member's workspace's. An unknown value must not silently widen anything, so it falls back to the narrower, global behaviour. |
+
+#### AgentCancel
+
+AgentCancel ends the running turn; the agent answers with a cancelled stop.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+
+#### AgentDefaultPrompt
+
+AgentDefaultPrompt asks for the stored default prompt's text.
+
+No fields.
+
+#### AgentDetach
+
+AgentDetach leaves a session running with no window: its roster row stays and offers Reattach, and its controller window is told to close.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+
+#### AgentPrompt
+
+AgentPrompt is another turn on a live session.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `text?` | `string` |  |
+| `blocks?` | `PromptAttachment[]` | Blocks are attachments sent with the text: a pasted image, a file the composer's Attach button picked. Kept as a wash-shaped struct rather than acp.ContentBlock so the app→service wire is ours to validate — the router carries this from a window, and a window is not trusted to name a mime type or a path. |
+
+#### AgentReattach
+
+AgentReattach opens a window onto a running session.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+
+#### AgentRemoveRoot
+
+AgentRemoveRoot narrows it again.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `path` | `string` |  |
+
+#### AgentSetConfig
+
+AgentSetConfig changes one of the agent's own settings (Row.Configs): model, reasoning effort, plan mode, …
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `id` | `string` |  |
+| `value` | `string` |  |
+
+#### AgentSetDefaultPrompt
+
+AgentSetDefaultPrompt stores the default prompt.
+
+| Field | Type | |
+|---|---|---|
+| `text` | `string` |  |
+
+#### AgentSetMode
+
+AgentSetMode switches the agent's approval preset (Row.Modes).
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `mode` | `string` |  |
+
+#### AgentSetYolo
+
+AgentSetYolo turns host-side auto-approval on or off for one session.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `on` | `boolean` |  |
+
+#### AgentStart
+
+AgentStart starts a session.
+
+| Field | Type | |
+|---|---|---|
+| `stack?` | `string` | Stack and Tier choose the settings (stacks.go); Tier defaults to frontier. Agent and Model are the launcher's Advanced overrides, and Agent alone, with no stack, is how `wash ai --agent` starts. |
+| `tier?` | `string` |  |
+| `agent?` | `string` |  |
+| `model?` | `string` |  |
+| `cwd` | `string` | Cwd is the folder the session works in; empty is the home folder. |
+| `prompt?` | `string` | Prompt is sent as the first turn, after the stored default prompt. |
+| `open?` | `boolean` | Open asks agentd to open (or focus) an Agent window on the new session, for a starter that is not itself that window (the manager). |
+| `req_id?` | `string` | ReqID is opaque to agentd and echoed back on agent_started, success or failure. A host with ONE session per process (wash-ai) never needs it — the reply can only be about the one thing it asked for. A host with several (wash-edit's agent tabs) cannot tell two concurrent starts apart without it, and a FAILED start carries no key at all, so there would be nothing to attribute the error to. |
+
+#### AgentStarted
+
+AgentStarted answers AgentStart: the new session's key, or why it failed.
+
+| Field | Type | |
+|---|---|---|
+| `key?` | `string` |  |
+| `session_id?` | `string` |  |
+| `req_id?` | `string` |  |
+| `error?` | `string` |  |
+
+#### AgentStop
+
+AgentStop ends a session and its adapter.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
 
 #### Ask
 
@@ -134,6 +293,22 @@ Config is one agent setting the session can change.
 | `value` | `string` |  |
 | `name` | `string` |  |
 | `description?` | `string` |  |
+
+#### DefaultPrompt
+
+DefaultPrompt is the stored default prompt's text, answering either.
+
+| Field | Type | |
+|---|---|---|
+| `text` | `string` |  |
+
+#### Detach
+
+Detach tells a session's controller window that the session was detached elsewhere (the rail, the manager), so it closes.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
 
 #### Event
 
@@ -187,6 +362,18 @@ Mode is one approval/sandbox preset an agent offers.
 | `id` | `string` |  |
 | `name` | `string` |  |
 | `description?` | `string` |  |
+
+#### PromptAttachment
+
+PromptAttachment is one attachment on its way to an ACP content block.
+
+| Field | Type | |
+|---|---|---|
+| `type` | `string` |  |
+| `mime?` | `string` | Image: base64 bytes and their mime type. |
+| `data?` | `string` |  |
+| `path?` | `string` | File: an absolute path, confined against the session cwd before it becomes a resource_link. |
+| `name?` | `string` |  |
 
 #### RosterState
 
@@ -353,5 +540,23 @@ TranscriptSubscribe watches a session's transcript, and re-affirms the watch: a 
 Unsubscribe stops a Subscribe.
 
 No fields.
+
+#### WorkspaceAction
+
+WorkspaceAction is a human's action in the workspace sidebar.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `name` | `string` | Name is the operation: decision_response \| member_open \| member_resume \| member_message \| member_inspect. |
+| `arguments` | `unknown` |  |
+
+#### WorkspaceRefresh
+
+WorkspaceRefresh asks for the session's workspace frame again.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
 
 <!-- END GENERATED -->

@@ -193,7 +193,7 @@ func publishStacks(pol agentpolicy.Policy, keys map[string]string) []agentproto.
 // Advanced overrides on top. Choosing another adapter drops the tier's
 // model, effort and connection, which are that tier's adapter's values and
 // mean nothing to another; the new adapter starts on its own defaults.
-func startProfile(pol agentpolicy.Policy, req startReq) (swarm.AgentProfile, sessionLaunch, error) {
+func startProfile(pol agentpolicy.Policy, req agentproto.AgentStart) (swarm.AgentProfile, sessionLaunch, error) {
 	var p swarm.AgentProfile
 	tier := ""
 	if req.Stack != "" {
@@ -222,7 +222,7 @@ func startProfile(pol agentpolicy.Policy, req startReq) (swarm.AgentProfile, ses
 // the adapter through its connection, then apply the settings with the same
 // check workspace members get, so a model the adapter does not offer fails
 // here, naming the ones it does, rather than running on its default.
-func startSession(req startReq, svcConn *sdk.Conn) (*hosted, error) {
+func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error) {
 	p, launch, err := startProfile(hostedPolicy(), req)
 	if err != nil {
 		return nil, err

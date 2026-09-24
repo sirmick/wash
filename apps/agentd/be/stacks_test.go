@@ -113,30 +113,30 @@ func TestInvalidStacksAreKeptWithTheirReason(t *testing.T) {
 // an agent alone (wash ai --agent) starts that adapter on its defaults.
 func TestStartProfile(t *testing.T) {
 	pol := agentpolicy.Policy{}
-	p, l, err := startProfile(pol, startReq{Stack: "openrouter"})
+	p, l, err := startProfile(pol, agentproto.AgentStart{Stack: "openrouter"})
 	if err != nil || p.Model != builtinStacks["openrouter"].Tiers["frontier"].Model || l.connection != "opencode@openrouter" || l.tier != "frontier" || l.stack != "openrouter" {
 		t.Fatalf("stack alone: %+v %+v %v", p, l, err)
 	}
-	p, l, _ = startProfile(pol, startReq{Stack: "openrouter", Tier: "coding", Model: "openrouter/z-ai/glm-5.3"})
+	p, l, _ = startProfile(pol, agentproto.AgentStart{Stack: "openrouter", Tier: "coding", Model: "openrouter/z-ai/glm-5.3"})
 	if p.Model != "openrouter/z-ai/glm-5.3" || p.Thinking != "high" || l.connection != "opencode@openrouter" {
 		t.Errorf("model override: %+v %+v", p, l)
 	}
-	p, l, _ = startProfile(pol, startReq{Stack: "openrouter", Tier: "coding", Agent: "codex"})
+	p, l, _ = startProfile(pol, agentproto.AgentStart{Stack: "openrouter", Tier: "coding", Agent: "codex"})
 	if p.Provider != "codex" || p.Model != "" || p.Thinking != "" || l.connection != "" || l.stack != "openrouter" {
 		t.Errorf("adapter override kept another adapter's settings: %+v %+v", p, l)
 	}
-	p, l, _ = startProfile(pol, startReq{Stack: "anthropic", Tier: "review"})
+	p, l, _ = startProfile(pol, agentproto.AgentStart{Stack: "anthropic", Tier: "review"})
 	if l.capability != "reviewer" || p.Model != "sonnet" {
 		t.Errorf("review tier: %+v %+v", p, l)
 	}
-	p, l, err = startProfile(pol, startReq{Agent: "gemini"})
+	p, l, err = startProfile(pol, agentproto.AgentStart{Agent: "gemini"})
 	if err != nil || p.Provider != "gemini" || l.stack != "" || l.tier != "" {
 		t.Errorf("agent alone: %+v %+v %v", p, l, err)
 	}
-	if _, _, err := startProfile(pol, startReq{}); err == nil {
+	if _, _, err := startProfile(pol, agentproto.AgentStart{}); err == nil {
 		t.Error("an empty request resolved")
 	}
-	if _, _, err := startProfile(pol, startReq{Stack: "nope"}); err == nil {
+	if _, _, err := startProfile(pol, agentproto.AgentStart{Stack: "nope"}); err == nil {
 		t.Error("an unknown stack resolved")
 	}
 }

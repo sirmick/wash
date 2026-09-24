@@ -25,7 +25,7 @@ func TestAttachFileBecomesAResourceLink(t *testing.T) {
 	}
 	h := &hosted{key: "acp:att", cwd: root}
 
-	blocks := h.attachmentBlocks([]promptAttachment{{Type: "file", Path: path}})
+	blocks := h.attachmentBlocks([]agentproto.PromptAttachment{{Type: "file", Path: path}})
 	if len(blocks) != 1 {
 		t.Fatalf("got %d blocks, want 1", len(blocks))
 	}
@@ -63,7 +63,7 @@ func TestAttachFileOutsideTheSessionRootIsRefused(t *testing.T) {
 	}
 	h := &hosted{key: "acp:att2", cwd: root}
 
-	if blocks := h.attachmentBlocks([]promptAttachment{{Type: "file", Path: outside}}); len(blocks) != 0 {
+	if blocks := h.attachmentBlocks([]agentproto.PromptAttachment{{Type: "file", Path: outside}}); len(blocks) != 0 {
 		t.Fatalf("a file outside the root was attached: %+v", blocks)
 	}
 	// Refused out loud: a silent drop is indistinguishable from a bug.
@@ -81,7 +81,7 @@ func TestAttachImageIsSentInlineAndShown(t *testing.T) {
 	h := &hosted{key: "acp:att3", cwd: t.TempDir()}
 	data := b64n(1024)
 
-	blocks := h.attachmentBlocks([]promptAttachment{{Type: "image", Mime: "image/png", Data: data}})
+	blocks := h.attachmentBlocks([]agentproto.PromptAttachment{{Type: "image", Mime: "image/png", Data: data}})
 	if len(blocks) != 1 || blocks[0].Type != "image" || blocks[0].Data != data || blocks[0].MimeType != "image/png" {
 		t.Fatalf("blocks = %+v", blocks)
 	}
@@ -95,7 +95,7 @@ func TestAttachRefusesOversizeAndUnknownKinds(t *testing.T) {
 	withStateDir(t)
 	h := &hosted{key: "acp:att4", cwd: t.TempDir()}
 
-	blocks := h.attachmentBlocks([]promptAttachment{
+	blocks := h.attachmentBlocks([]agentproto.PromptAttachment{
 		{Type: "image", Mime: "image/png", Data: b64n(maxAttachImageBytes + 1)},
 		{Type: "image", Mime: "text/plain", Data: b64n(16)},
 		{Type: "video", Path: "/x"},

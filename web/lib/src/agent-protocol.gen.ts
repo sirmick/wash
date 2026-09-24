@@ -20,6 +20,169 @@ export interface Adapter {
   available: boolean;
 }
 
+/** AgentAddRoot widens which folders a session may reach beyond its cwd. */
+export interface AgentAddRoot {
+  kind: 'agent_add_root';
+  key: string;
+  path: string;
+}
+
+/** AgentAnswer answers a question (Ask) by its id. */
+export interface AgentAnswer {
+  kind: 'agent_answer';
+  id: string;
+  /** Decision is allow | deny. */
+  decision: string;
+  /**
+   * Remember writes Rule (or the ask's suggested rule) to the policy, so
+   * the question is not asked again.
+   */
+  remember: boolean;
+  rule: string;
+  /**
+   * Scope picks the table a remembered answer is written to: "" (or
+   * anything unrecognised) is the global one, "workspace" is the asking
+   * member's workspace's. An unknown value must not silently widen
+   * anything, so it falls back to the narrower, global behaviour.
+   */
+  scope?: string;
+}
+
+/**
+ * AgentCancel ends the running turn; the agent answers with a cancelled
+ * stop.
+ */
+export interface AgentCancel {
+  kind: 'agent_cancel';
+  key: string;
+}
+
+/** AgentDefaultPrompt asks for the stored default prompt's text. */
+export interface AgentDefaultPrompt {
+  kind: 'agent_default_prompt';
+}
+
+/**
+ * AgentDetach leaves a session running with no window: its roster row
+ * stays and offers Reattach, and its controller window is told to close.
+ */
+export interface AgentDetach {
+  kind: 'agent_detach';
+  key: string;
+}
+
+/**
+ * AgentPrompt is another turn on a live session. Sent while a turn runs,
+ * it is queued and sent when the turn ends.
+ */
+export interface AgentPrompt {
+  kind: 'agent_prompt';
+  key: string;
+  text?: string;
+  /**
+   * Blocks are attachments sent with the text: a pasted image, a file
+   * the composer's Attach button picked. Kept as a wash-shaped struct
+   * rather than acp.ContentBlock so the app→service wire is ours to
+   * validate — the router carries this from a window, and a window is
+   * not trusted to name a mime type or a path.
+   */
+  blocks?: PromptAttachment[];
+}
+
+/** AgentReattach opens a window onto a running session. */
+export interface AgentReattach {
+  kind: 'agent_reattach';
+  key: string;
+}
+
+/** AgentRemoveRoot narrows it again. */
+export interface AgentRemoveRoot {
+  kind: 'agent_remove_root';
+  key: string;
+  path: string;
+}
+
+/**
+ * AgentSetConfig changes one of the agent's own settings (Row.Configs):
+ * model, reasoning effort, plan mode, …
+ */
+export interface AgentSetConfig {
+  kind: 'agent_set_config';
+  key: string;
+  id: string;
+  value: string;
+}
+
+/**
+ * AgentSetDefaultPrompt stores the default prompt. Empty text is a
+ * deletion, not a validation failure.
+ */
+export interface AgentSetDefaultPrompt {
+  kind: 'agent_set_default_prompt';
+  text: string;
+}
+
+/** AgentSetMode switches the agent's approval preset (Row.Modes). */
+export interface AgentSetMode {
+  kind: 'agent_set_mode';
+  key: string;
+  mode: string;
+}
+
+/** AgentSetYolo turns host-side auto-approval on or off for one session. */
+export interface AgentSetYolo {
+  kind: 'agent_set_yolo';
+  key: string;
+  on: boolean;
+}
+
+/** AgentStart starts a session. */
+export interface AgentStart {
+  kind: 'agent_start';
+  /**
+   * Stack and Tier choose the settings (stacks.go); Tier defaults to
+   * frontier. Agent and Model are the launcher's Advanced overrides, and
+   * Agent alone, with no stack, is how `wash ai --agent` starts.
+   */
+  stack?: string;
+  tier?: string;
+  agent?: string;
+  model?: string;
+  /** Cwd is the folder the session works in; empty is the home folder. */
+  cwd: string;
+  /** Prompt is sent as the first turn, after the stored default prompt. */
+  prompt?: string;
+  /**
+   * Open asks agentd to open (or focus) an Agent window on the new
+   * session, for a starter that is not itself that window (the manager).
+   */
+  open?: boolean;
+  /**
+   * ReqID is opaque to agentd and echoed back on agent_started, success
+   * or failure. A host with ONE session per process (wash-ai) never needs
+   * it — the reply can only be about the one thing it asked for. A host
+   * with several (wash-edit's agent tabs) cannot tell two concurrent
+   * starts apart without it, and a FAILED start carries no key at all, so
+   * there would be nothing to attribute the error to.
+   */
+  req_id?: string;
+}
+
+/** AgentStarted answers AgentStart: the new session's key, or why it failed. */
+export interface AgentStarted {
+  kind: 'agent_started';
+  key?: string;
+  session_id?: string;
+  req_id?: string;
+  error?: string;
+}
+
+/** AgentStop ends a session and its adapter. */
+export interface AgentStop {
+  kind: 'agent_stop';
+  key: string;
+}
+
 /**
  * Ask is one question waiting for a human. It rides the roster's own
  * state push, so the sidebar needs no second subscription.
@@ -83,6 +246,21 @@ export interface ConfigValue {
   value: string;
   name: string;
   description?: string;
+}
+
+/** DefaultPrompt is the stored default prompt's text, answering either. */
+export interface DefaultPrompt {
+  kind: 'default_prompt';
+  text: string;
+}
+
+/**
+ * Detach tells a session's controller window that the session was
+ * detached elsewhere (the rail, the manager), so it closes.
+ */
+export interface Detach {
+  kind: 'detach';
+  key: string;
 }
 
 /**
@@ -161,6 +339,23 @@ export interface Mode {
   id: string;
   name: string;
   description?: string;
+}
+
+/**
+ * PromptAttachment is one attachment on its way to an ACP content block.
+ * Type is "image" or "file"; anything else is dropped.
+ */
+export interface PromptAttachment {
+  type: string;
+  /** Image: base64 bytes and their mime type. */
+  mime?: string;
+  data?: string;
+  /**
+   * File: an absolute path, confined against the session cwd before it
+   * becomes a resource_link.
+   */
+  path?: string;
+  name?: string;
 }
 
 /**
@@ -487,11 +682,45 @@ export interface Unsubscribe {
   kind: 'unsubscribe';
 }
 
+/** WorkspaceAction is a human's action in the workspace sidebar. */
+export interface WorkspaceAction {
+  kind: 'workspace_action';
+  key: string;
+  /**
+   * Name is the operation: decision_response | member_open |
+   * member_resume | member_message | member_inspect.
+   */
+  name: string;
+  arguments: unknown;
+}
+
+/** WorkspaceRefresh asks for the session's workspace frame again. */
+export interface WorkspaceRefresh {
+  kind: 'workspace_refresh';
+  key: string;
+}
+
 /** Every request, discriminated by kind. */
 export type AgentdRequest =
   | Subscribe
   | Unsubscribe
-  | TranscriptSubscribe;
+  | AgentStart
+  | AgentPrompt
+  | AgentCancel
+  | AgentDetach
+  | AgentReattach
+  | AgentStop
+  | AgentSetYolo
+  | AgentSetMode
+  | AgentSetConfig
+  | AgentAddRoot
+  | AgentRemoveRoot
+  | AgentAnswer
+  | AgentDefaultPrompt
+  | AgentSetDefaultPrompt
+  | TranscriptSubscribe
+  | WorkspaceRefresh
+  | WorkspaceAction;
 export type AgentdRequestKind = AgentdRequest['kind'];
 
 /** Every push, discriminated by kind. */
@@ -499,6 +728,9 @@ export type AgentdPush =
   | RosterState
   | ManagerState
   | SessionState
+  | AgentStarted
+  | Detach
+  | DefaultPrompt
   | TranscriptSnapshot
   | TranscriptEvent;
 export type AgentdPushKind = AgentdPush['kind'];

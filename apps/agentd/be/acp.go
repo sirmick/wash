@@ -1249,18 +1249,15 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// agent_history is: it is one window's question, and a page of text
 	// on every roster push would reach every subscriber — including the
 	// desktop rail — several times a second during a turn.
-	sdk.HandleFromVoid(bus, "agent_default_prompt", func(conn *sdk.Conn, _ string, _ struct{}, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_default_prompt", func(conn *sdk.Conn, _ string, _ agentproto.AgentDefaultPrompt, from wire.Sender) error {
 		if from.InstanceID == "" {
 			return nil
 		}
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-			"kind": "default_prompt",
-			"text": loadDefaultPrompt(),
-		})
+		return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.DefaultPrompt{Text: loadDefaultPrompt()})
 	})
 
 	// agent_set_default prompt: store it. Empty removes the file.
-	sdk.HandleFromVoid(bus, "agent_set_default_prompt", func(conn *sdk.Conn, _ string, req defaultPromptReq, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_set_default_prompt", func(conn *sdk.Conn, _ string, req agentproto.AgentSetDefaultPrompt, from wire.Sender) error {
 		if err := saveDefaultPrompt(req.Text); err != nil {
 			log.Printf("agentd: save default prompt: %v", err)
 			conn.Fail("Could not save the default prompt", err)
@@ -1274,23 +1271,16 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		if from.InstanceID == "" {
 			return nil
 		}
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-			"kind": "default_prompt",
-			"text": stored,
-		})
+		return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.DefaultPrompt{Text: stored})
 	})
 
 	// agent_start: launch an adapter and open a session.
-	sdk.HandleFromVoid(bus, "agent_start", func(conn *sdk.Conn, _ string, req startReq, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_start", func(conn *sdk.Conn, _ string, req agentproto.AgentStart, from wire.Sender) error {
 		h, err := startSession(req, svcConn)
 		if err != nil {
 			log.Printf("agentd: acp start stack=%s tier=%s agent=%s cwd=%s: %v", req.Stack, req.Tier, req.Agent, req.Cwd, err)
 			if from.InstanceID != "" {
-				return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-					"kind":   "agent_started",
-					"error":  err.Error(),
-					"req_id": req.ReqID,
-				})
+				return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.AgentStarted{Error: err.Error(), ReqID: req.ReqID})
 			}
 			return nil
 		}
@@ -1312,16 +1302,11 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		if from.InstanceID == "" {
 			return nil
 		}
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-			"kind":       "agent_started",
-			"key":        h.key,
-			"session_id": h.sessionID,
-			"req_id":     req.ReqID,
-		})
+		return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.AgentStarted{Key: h.key, SessionID: h.sessionID, ReqID: req.ReqID})
 	})
 
 	// agent_prompt: another turn on a live session.
-	sdk.HandleFromVoid(bus, "agent_prompt", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_prompt", func(conn *sdk.Conn, _ string, req agentproto.AgentPrompt, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
 			// A window still pointed at a session whose adapter exited (or
@@ -1340,7 +1325,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 
 	// agent_detach: the window closed but the session is to keep running.
 	// The roster row stays and gains a Reattach affordance.
-	sdk.HandleFromVoid(bus, "agent_detach", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_detach", func(conn *sdk.Conn, _ string, req agentproto.AgentDetach, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
 			return nil
@@ -1354,16 +1339,13 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// Only the controller owns this window. Transcript watchers may be
 		// editor tabs and must not be closed with it.
 		if instanceID := controllerFor(h.key); instanceID != "" {
-			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
-				"kind": "detach",
-				"key":  h.key,
-			})
+			_ = agentproto.Send(conn, wire.Recipient{InstanceID: instanceID}, agentproto.Detach{Key: h.key})
 		}
 		return nil
 	})
 
 	// agent_reattach: open a window onto a session that is still running.
-	sdk.HandleFromVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req agentproto.AgentReattach, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
 			return nil
@@ -1379,7 +1361,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// behaves tomorrow. For an ordinary session the job is the session; for
 	// a workspace member it is the workspace (see below). The transition
 	// itself is announced in the transcript.
-	sdk.HandleFromVoid(bus, "agent_set_yolo", func(_ *sdk.Conn, _ string, req yoloReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_set_yolo", func(_ *sdk.Conn, _ string, req agentproto.AgentSetYolo, _ wire.Sender) error {
 		if h := lookupHosted(req.Key); h != nil {
 			h.toggleYolo(req.On)
 		}
@@ -1387,7 +1369,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	})
 
 	// agent_set_mode: switch the session's approval preset.
-	sdk.HandleFromVoid(bus, "agent_set_mode", func(_ *sdk.Conn, _ string, req modeReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_set_mode", func(_ *sdk.Conn, _ string, req agentproto.AgentSetMode, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil || req.Mode == "" || h.capability == "reviewer" {
 			return nil
@@ -1410,7 +1392,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 
 	// agent_set_config: change one of the agent's own settings (model,
 	// reasoning effort, plan mode, …).
-	sdk.HandleFromVoid(bus, "agent_set_config", func(_ *sdk.Conn, _ string, req configReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_set_config", func(_ *sdk.Conn, _ string, req agentproto.AgentSetConfig, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil || req.ID == "" || h.capability == "reviewer" && req.ID == "mode" {
 			return nil
@@ -1432,7 +1414,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// which promptHosted already handles. Without this there is no stop
 	// button at all — a runaway turn could only be waited out or killed
 	// along with its session.
-	sdk.HandleFromVoid(bus, "agent_cancel", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_cancel", func(_ *sdk.Conn, _ string, req agentproto.AgentCancel, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
 			return nil
@@ -1460,7 +1442,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// publishes the set, so every surface showing the session can say how
 	// wide it is — rather than something a stream of tool approvals can
 	// quietly accumulate.
-	sdk.HandleFromVoid(bus, "agent_add_root", func(_ *sdk.Conn, _ string, req rootReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_add_root", func(_ *sdk.Conn, _ string, req agentproto.AgentAddRoot, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil || req.Path == "" {
 			return nil
@@ -1472,7 +1454,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		return nil
 	})
 
-	sdk.HandleFromVoid(bus, "agent_remove_root", func(_ *sdk.Conn, _ string, req rootReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_remove_root", func(_ *sdk.Conn, _ string, req agentproto.AgentRemoveRoot, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil || req.Path == "" {
 			return nil
@@ -1485,38 +1467,12 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	})
 
 	// agent_stop: end a session and its adapter.
-	sdk.HandleFromVoid(bus, "agent_stop", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_stop", func(_ *sdk.Conn, _ string, req agentproto.AgentStop, _ wire.Sender) error {
 		if h := lookupHosted(req.Key); h != nil {
 			h.retire()
 		}
 		return nil
 	})
-}
-
-// defaultPromptReq carries the default prompt on its way to disk. Empty text
-// is a deletion, not a validation failure.
-type defaultPromptReq struct {
-	Text string `json:"text"`
-}
-
-type startReq struct {
-	// Stack and Tier choose the settings (stacks.go); Tier defaults to
-	// frontier. Agent and Model are the launcher's Advanced overrides, and
-	// Agent alone, with no stack, is how `wash ai --agent` starts.
-	Stack  string `json:"stack,omitempty"`
-	Tier   string `json:"tier,omitempty"`
-	Agent  string `json:"agent,omitempty"`
-	Model  string `json:"model,omitempty"`
-	Cwd    string `json:"cwd"`
-	Prompt string `json:"prompt,omitempty"`
-	Open   bool   `json:"open,omitempty"`
-	// ReqID is opaque to agentd and echoed back on agent_started, success
-	// or failure. A host with ONE session per process (wash-ai) never needs
-	// it — the reply can only be about the one thing it asked for. A host
-	// with several (wash-edit's agent tabs) cannot tell two concurrent
-	// starts apart without it, and a FAILED start carries no key at all, so
-	// there would be nothing to attribute the error to.
-	ReqID string `json:"req_id,omitempty"`
 }
 
 // Elicit answers elicitation/create — the agent asking the HUMAN a
@@ -1535,17 +1491,6 @@ func (h *hosted) Elicit(_ context.Context, req acp.ElicitRequest) (acp.ElicitRes
 	log.Printf("agentd: acp elicitation key=%s message=%q (declining — no form renderer)", h.key, req.Message)
 	h.note("The agent asked: " + req.Message + "\n(wash cannot answer structured questions yet, so it declined.)")
 	return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
-}
-
-type yoloReq struct {
-	Key string `json:"key"`
-	On  bool   `json:"on"`
-}
-
-type configReq struct {
-	Key   string `json:"key"`
-	ID    string `json:"id"`
-	Value string `json:"value"`
 }
 
 // publicConfigs / publicCommands copy for the wire (copy-on-write: a
@@ -1576,11 +1521,6 @@ func publicCommands(in []acp.AvailableCommand) []agentproto.Command {
 	return out
 }
 
-type modeReq struct {
-	Key  string `json:"key"`
-	Mode string `json:"mode"`
-}
-
 // publicModes copies the mode list for the wire (copy-on-write: a
 // snapshot may outlive this call).
 func publicModes(in []acp.SessionMode) []agentproto.Mode {
@@ -1592,36 +1532,6 @@ func publicModes(in []acp.SessionMode) []agentproto.Mode {
 		out = append(out, agentproto.Mode{ID: m.ID, Name: m.Name, Description: m.Description})
 	}
 	return out
-}
-
-// rootReq addresses one folder on one session.
-type rootReq struct {
-	Key  string `json:"key"`
-	Path string `json:"path"`
-}
-
-type promptReq struct {
-	Key  string `json:"key"`
-	Text string `json:"text,omitempty"`
-	// Blocks are attachments sent with the text: a pasted image, a file
-	// the composer's Attach button picked. Kept as a wash-shaped struct
-	// rather than acp.ContentBlock so the app→service wire is ours to
-	// validate — the router carries this from a window, and a window is
-	// not trusted to name a mime type or a path.
-	Blocks []promptAttachment `json:"blocks,omitempty"`
-}
-
-// promptAttachment is one attachment on its way to an ACP content block.
-// Type is "image" or "file"; anything else is dropped.
-type promptAttachment struct {
-	Type string `json:"type"`
-	// Image: base64 bytes and their mime type.
-	Mime string `json:"mime,omitempty"`
-	Data string `json:"data,omitempty"`
-	// File: an absolute path, confined against the session cwd before it
-	// becomes a resource_link.
-	Path string `json:"path,omitempty"`
-	Name string `json:"name,omitempty"`
 }
 
 // modelName is the agent's current model, read out of its generic

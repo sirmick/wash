@@ -49,7 +49,7 @@ const maxAttachments = 16
 // attached into the transcript — a pasted image is shown, a linked file
 // is named — so the conversation records what the agent was actually
 // given rather than only what was typed.
-func (h *hosted) attachmentBlocks(list []promptAttachment) []acp.ContentBlock {
+func (h *hosted) attachmentBlocks(list []agentproto.PromptAttachment) []acp.ContentBlock {
 	if len(list) == 0 {
 		return nil
 	}

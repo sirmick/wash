@@ -217,7 +217,7 @@ var askSeq uint64
 func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 	// agent_answer: the human clicked. Comes from the session BE gateway,
 	// which is the desktop speaking for the person in front of it.
-	sdk.HandleFromVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req answerReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req agentproto.AgentAnswer, _ wire.Sender) error {
 		var p *pending
 		mutateState(func(s *agentproto.State) {
 			p = asks[req.ID]
@@ -492,16 +492,4 @@ func normalizeAnswer(d string) string {
 		return DecisionDeny
 	}
 	return DecisionDefer
-}
-
-type answerReq struct {
-	ID       string `json:"id"`
-	Decision string `json:"decision"`
-	Remember bool   `json:"remember"`
-	Rule     string `json:"rule"`
-	// Scope picks the table a remembered answer is written to: "" (or
-	// anything unrecognised) is the global one, askScopeWorkspace is this
-	// workspace's. An unknown value must not silently widen anything, so
-	// the switch above defaults to the narrower, pre-existing behaviour.
-	Scope string `json:"scope,omitempty"`
 }

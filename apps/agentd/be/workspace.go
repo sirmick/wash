@@ -85,17 +85,13 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 	}()
 	go ws.loop()
 	sdk.OnTerminate(func() { close(ws.done); _ = server.Close(); _ = watcher.Close(); _ = os.RemoveAll(dir) })
-	sdk.HandleFromVoid(bus, "workspace_refresh", func(c *sdk.Conn, _ string, req promptReq, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "workspace_refresh", func(c *sdk.Conn, _ string, req agentproto.WorkspaceRefresh, from wire.Sender) error {
 		if from.AppID == aiAppID && controllerFor(req.Key) == from.InstanceID {
 			ws.publish(true)
 		}
 		return nil
 	})
-	sdk.HandleFromVoid(bus, "workspace_action", func(c *sdk.Conn, _ string, req struct {
-		Key       string          `json:"key"`
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
-	}, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "workspace_action", func(c *sdk.Conn, _ string, req agentproto.WorkspaceAction, from wire.Sender) error {
 		if from.AppID != aiAppID || controllerFor(req.Key) != from.InstanceID {
 			return nil
 		}
