@@ -490,8 +490,11 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 	var member swarm.Member
 	var workspaceID string
 	err := ws.store.Mutate(parent.sessionID, true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		// A relaunch used to force the workspace active, lifting the pause
+		// an orchestrator failure put on dispatch while the orchestrator
+		// itself stayed paused.
 		if w.State != "active" {
-			return errors.New("workspace paused")
+			return errors.New("workspace paused; resume the orchestrator first")
 		}
 		m := swarm.GetMember(w, id)
 		if m == nil || m.State != "pending" {

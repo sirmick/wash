@@ -200,7 +200,6 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 						return errors.New("member cannot be relaunched")
 					}
 					m.State = "pending"
-					w.State = "active"
 					return nil
 				})
 				if err == nil {

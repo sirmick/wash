@@ -271,3 +271,34 @@ func TestMemberControlIsOrchestratorOnly(t *testing.T) {
 		}
 	}
 }
+
+// Relaunching a failed member while the orchestrator's failure has paused the
+// workspace is refused; it used to force the workspace active behind the
+// paused orchestrator.
+func TestRelaunchDoesNotUnpauseTheWorkspace(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "worker", Key: "worker", State: "failed", Lifetime: "resident", Creator: m.ID})
+		w.State, m.State = "paused", "paused"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	result, err := ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "member_control", Arguments: json.RawMessage(`{"action":"resume","member_ids":["worker"]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(result); !strings.Contains(string(b), "resume the orchestrator first") {
+		t.Fatalf("relaunch outcome %s", b)
+	}
+	if s.View("lead").State != "paused" {
+		t.Fatal("relaunch unpaused the workspace")
+	}
+}
