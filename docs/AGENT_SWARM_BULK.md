@@ -138,7 +138,7 @@ QA file/document identity are rejected. Completed runs transfer projection owner
 never writes the file. The backend remains authoritative: a projection failure does not
 undo a committed QA update. Read `qa_document_status` (saved/pending/error) in tool results
 or the Questions tab; the service retries failures and reconstructs output after restart.
-Saved status includes saved_revision. Changing the configured path leaves the old file intact. Output continues without an open tab.
+Changing the configured path leaves the old file intact. Output continues without an open tab.
 
 Open and deliver atomically:
 

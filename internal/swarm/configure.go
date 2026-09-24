@@ -139,7 +139,11 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 				return errors.New("default_profile must name a registered profile or be empty")
 			}
 		}
-		revision = w.Revision + 1
+		// The revision counts configuration changes only: bumped by every
+		// mutation, an expected_revision read moments earlier went stale
+		// whenever any member's turn delivered mail.
+		w.Revision++
+		revision = w.Revision
 		return nil
 	})
 	return revision, err

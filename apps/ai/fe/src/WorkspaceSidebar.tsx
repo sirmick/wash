@@ -31,7 +31,7 @@ export interface WorkspaceState {
 export interface WorkspaceFrame {
   sequence?: number;
   qa_markdown?: string;
-  qa_document_status?: {path?: string; state: string; error?: string; saved_revision?: number};
+  qa_document_status?: {path?: string; state: string; error?: string};
   approvals?: (AgentAsk & {member_id: string})[];
   preview?: { member_id: string; events: AgentEvent[]; asks?: AgentAsk[]; note?: string };
   workspace: WorkspaceState | null;

@@ -287,11 +287,7 @@ func (s *Store) Mutate(session string, lead bool, fn func(*Workspace, *Member) e
 		if lead && m.ID != w.Lead {
 			return errors.New("orchestrator operation")
 		}
-		if err := fn(w, m); err != nil {
-			return err
-		}
-		w.Revision++
-		return nil
+		return fn(w, m)
 	})
 }
 func ValidText(s string, max int) bool { return strings.TrimSpace(s) != "" && len(s) <= max }
@@ -558,8 +554,8 @@ func (s *Store) Next(session string) ([]Message, error) {
 	if w == nil || w.State != "active" || m.State != "available" || m.Retire {
 		return nil, nil
 	}
-	// Decide on the snapshot first: Mutate bumps the workspace revision, and
-	// most calls here find nothing to deliver.
+	// Decide on the snapshot first: Mutate rewrites the state file, and most
+	// calls here find nothing to deliver.
 	if batch, stale, _ := pickDelivery(w, m); len(batch) == 0 && len(stale) == 0 {
 		return nil, nil
 	}
@@ -685,9 +681,7 @@ func (s *Store) TurnStopped(session string, messageIDs []string) error {
 }
 
 func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped bool) error {
-	// An ordinary successful turn changes no durable workspace state. In
-	// particular, reading workspace_get must not invalidate its own revision
-	// when that conversation turn ends.
+	// An ordinary successful turn changes no durable workspace state.
 	if !failed && len(messageIDs) == 0 {
 		return nil
 	}

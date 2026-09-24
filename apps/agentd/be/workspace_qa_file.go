@@ -16,11 +16,10 @@ import (
 )
 
 type qaDocumentStatus struct {
-	Path     string `json:"path"`
-	State    string `json:"state"`
-	Error    string `json:"error,omitempty"`
-	Updated  int64  `json:"updated_at,omitempty"`
-	Revision int64  `json:"saved_revision,omitempty"`
+	Path    string `json:"path"`
+	State   string `json:"state"`
+	Error   string `json:"error,omitempty"`
+	Updated int64  `json:"updated_at,omitempty"`
 }
 type qaFileState struct {
 	Digest [32]byte
@@ -173,13 +172,11 @@ func (ws *workspaceService) syncQADocuments() {
 			next.Status.State = "error"
 			next.Status.Error = err.Error()
 			next.Status.Updated = prior.Status.Updated
-			next.Status.Revision = prior.Status.Revision
 			if ws.conn != nil && (prior.Status.State != "error" || prior.Status.Error != next.Status.Error) {
 				ws.conn.NotifyAbout("", w.Name+" · QA save failed", next.Status.Error+". Records retained; Wash will retry.", "error")
 			}
 		} else {
 			next.Info, _ = os.Lstat(w.QADocument.Path)
-			next.Status.Revision = w.Revision
 		}
 		ws.qaFiles[w.ID] = next
 	}

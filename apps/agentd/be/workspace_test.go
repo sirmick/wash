@@ -630,3 +630,40 @@ func TestMemberBriefCarriesTheTaskOrSaysWait(t *testing.T) {
 		t.Fatalf("oversized brief accepted: %v", err)
 	}
 }
+
+// The workspace revision counts configuration changes only: mail moving
+// between members must not make an expected_revision read moments ago stale.
+func TestMailDoesNotStaleTheConfigurationRevision(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "worker", Session: "worker-s", State: "available", Lifetime: "resident"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	read := s.View("lead").Revision
+	if _, err = s.Send("worker-s", w.Lead, "question", "Which clock?", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Next("lead"); err != nil || len(got) != 1 {
+		t.Fatalf("delivery: %+v %v", got, err)
+	}
+	ws := &workspaceService{store: s}
+	args, _ := json.Marshal(map[string]any{"name": "Renamed", "expected_revision": read})
+	if _, err = ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "workspace_configure", Arguments: args}); err != nil {
+		t.Fatalf("configure after mail: %v", err)
+	}
+	if s.View("lead").Revision != read+1 {
+		t.Fatalf("revision %d, want %d", s.View("lead").Revision, read+1)
+	}
+	if _, err = ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "workspace_configure", Arguments: args}); err == nil {
+		t.Fatal("stale expected_revision accepted")
+	}
+}
