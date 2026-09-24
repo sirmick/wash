@@ -217,6 +217,18 @@ func LinkQA(w *Workspace, id string, msg *Message) error {
 	}
 	return nil
 }
+
+// WithdrawDecision cancels a pending decision request. Its QA thread returns
+// to open unless another decision is still pending on it: left alone, the
+// thread of an ended member's question stayed awaiting-owner, asking the
+// human about a question nobody would read the answer to.
+func WithdrawDecision(w *Workspace, msg *Message) {
+	msg.State = "cancelled"
+	if q := QA(w, msg.Thread); q != nil && q.State == "awaiting-owner" && !pendingQADecision(w, q.ID) {
+		q.State = "open"
+	}
+}
+
 func QAMarkdown(w *Workspace) string {
 	var b strings.Builder
 	_ = writeQAMarkdown(&b, w, true)

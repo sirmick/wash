@@ -723,7 +723,7 @@ func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped b
 func (s *Store) EndMember(session, id string, notify bool) error {
 	return s.Mutate(session, true, func(w *Workspace, _ *Member) error {
 		if id == w.Lead {
-			return errors.New("use teardown_workspace to end the workspace")
+			return errors.New("use workspace_end to end the workspace")
 		}
 		m := GetMember(w, id)
 		if m == nil {
@@ -738,7 +738,7 @@ func (s *Store) EndMember(session, id string, notify bool) error {
 		}
 		for i := range w.Messages {
 			if w.Messages[i].Sender == id && w.Messages[i].Type == "decision_request" && w.Messages[i].State == "recorded" {
-				w.Messages[i].State = "cancelled"
+				WithdrawDecision(w, &w.Messages[i])
 			}
 			if w.Messages[i].Recipient == id && w.Messages[i].State == "dispatched" {
 				w.Messages[i].State = "uncertain"

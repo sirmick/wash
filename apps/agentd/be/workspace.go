@@ -1235,6 +1235,9 @@ func (ws *workspaceService) end(lead string) (*swarm.Workspace, error) {
 			if w.Messages[i].State == "queued" {
 				w.Messages[i].State = "cancelled"
 			}
+			// Pending owner decisions stay recorded, unlike an ended
+			// member's: the QA file carries them, and the next workspace
+			// that resumes it asks them again.
 		}
 		return nil
 	})

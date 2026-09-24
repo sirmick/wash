@@ -128,6 +128,7 @@ func TestTransactionRollsBackAndDeduplicatesAcrossRecovery(t *testing.T) {
 		t.Fatal("preview mutated state")
 	}
 }
+
 // A receipt belongs to its workspace: a new workspace on the same session
 // that reuses a request_id runs the call, and the ended one's receipts go.
 func TestReceiptsDoNotOutliveTheirWorkspace(t *testing.T) {
@@ -193,5 +194,32 @@ func TestQAResolutionWaitsForHumanAndCannotForgeOwner(t *testing.T) {
 	b, _ := json.Marshal(q)
 	if len(b) == 0 {
 		t.Fatal("missing QA JSON")
+	}
+}
+
+// Ending a member withdraws its pending decision, and the QA thread it was
+// asked on stops waiting for the owner.
+func TestEndedMembersDecisionLeavesTheThreadOpen(t *testing.T) {
+	s, _, _ := qaStore(t)
+	if err := qaChange(s, "lead", QAUpdate{ID: "q", Action: "open", Package: "K5", Title: "Clock", Assignee: "writer", Body: "Which clock?"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("writer-session", false, func(w *Workspace, m *Member) error {
+		msg, err := AddMessage(w, m.ID, "human", "decision_request", "Monotonic or wall?", "", "", "")
+		if err != nil {
+			return err
+		}
+		return LinkQA(w, "q", msg)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if q := QA(s.View("lead"), "q"); q.State != "awaiting-owner" {
+		t.Fatalf("state %s", q.State)
+	}
+	if err := s.EndMember("lead", "writer", false); err != nil {
+		t.Fatal(err)
+	}
+	if q := QA(s.View("lead"), "q"); q.State != "open" {
+		t.Fatalf("thread still %s after its asker ended", q.State)
 	}
 }
