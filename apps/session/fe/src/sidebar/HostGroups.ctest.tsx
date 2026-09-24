@@ -163,3 +163,17 @@ test('the header still owns the disclosure', () => {
   expect(toggled).toEqual(['agents:build01']);
   expect(opened).toEqual([]);
 });
+
+// A host header is a div with a click handler; without role, tabindex and a
+// key handler it could not be reached or opened from the keyboard at all.
+test('a host header is a keyboard stop that Enter and Space toggle', () => {
+  const { getByTestId, toggled } = mount([row()]);
+  const header = getByTestId('host-group-header-agents-build01');
+  expect(header.getAttribute('role')).toBe('button');
+  expect(header.getAttribute('tabindex')).toBe('0');
+  expect(header.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.keyDown(header, { key: 'Enter' });
+  fireEvent.keyDown(header, { key: ' ' });
+  fireEvent.keyDown(header, { key: 'a' });
+  expect(toggled).toEqual([groupID('agents', 'build01'), groupID('agents', 'build01')]);
+});

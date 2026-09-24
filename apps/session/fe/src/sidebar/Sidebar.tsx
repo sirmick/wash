@@ -189,6 +189,14 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               : 'Show sidebar (Ctrl+Alt+S)'
           }
           onClick={props.onToggle}
+          role="button"
+          tabindex="0"
+          onKeyDown={(ev) => {
+            if (ev.key === 'Enter' || ev.key === ' ') {
+              ev.preventDefault();
+              props.onToggle();
+            }
+          }}
           style={tabStyle()}
           onMouseEnter={(ev) => (ev.currentTarget.style.background = GLASS_TAB_HOVER)}
           onMouseLeave={(ev) => (ev.currentTarget.style.background = GLASS_TAB)}

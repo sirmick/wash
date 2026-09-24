@@ -78,6 +78,18 @@ export const Section: Component<SectionProps> = (props) => {
         style={headerStyle()}
         onClick={props.onToggle}
         data-testid={`sidebar-section-header-${props.id}`}
+        role="button"
+        tabindex="0"
+        aria-expanded={isOpen()}
+        onKeyDown={(ev) => {
+          // A div with an onClick is invisible to the keyboard. role +
+          // tabindex make it a stop; this makes Enter/Space fire it, as a
+          // real button element would have for free.
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            props.onToggle();
+          }
+        }}
       >
         <span style={chevronStyle()}>▶</span>
         <Show when={props.icon}>

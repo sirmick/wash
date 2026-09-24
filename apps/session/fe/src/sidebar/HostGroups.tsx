@@ -89,6 +89,15 @@ export const HostGroups: Component<HostGroupsProps> = (props) => {
                   data-wash-hit
                   onClick={() => props.onToggle(id())}
                   data-testid={`host-group-header-${props.section}-${row.origin}`}
+                  role="button"
+                  tabindex="0"
+                  aria-expanded={open()}
+                  onKeyDown={(ev) => {
+                    if (ev.key === 'Enter' || ev.key === ' ') {
+                      ev.preventDefault();
+                      props.onToggle(id());
+                    }
+                  }}
                   style={{
                     display: 'flex',
                     'align-items': 'center',
