@@ -7,7 +7,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
-import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
+import { HistoryPanel, historyAction, historySignature } from './HistoryPanel.tsx';
 import { defaultStack, defaultCwd } from './default-stack.ts';
 import { Launcher, startMessage, DEFAULT_TIER, type LaunchForm } from './Launcher.tsx';
 import { Connections, type KeyResult } from './Connections.tsx';
@@ -125,7 +125,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // agentd rather than filtering here: it searches the stored
   // CONVERSATIONS, which the FE has never seen.
   const [historyQuery, setHistoryQuery] = createSignal('');
-  const [historySessions, setHistorySessions] = createSignal<SessionMeta[]>([]);
+  const [historySessions, setHistorySessions] = createSignal<agentproto.SessionMeta[]>([]);
   const [historyLoading, setHistoryLoading] = createSignal(false);
   let historyTimer: ReturnType<typeof setTimeout> | undefined;
   const askHistory = (q: string) => {
@@ -159,7 +159,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     setRenameFor(null);
     send({ kind: 'rename', key: t.key ?? '', session_id: t.session_id ?? '', title: renameDraft().trim() });
   };
-  const [deleteFor, setDeleteFor] = createSignal<SessionMeta | null>(null);
+  const [deleteFor, setDeleteFor] = createSignal<agentproto.SessionMeta | null>(null);
   const [pruning, setPruning] = createSignal(false);
   // Horizons for "Delete all older than…". 0 is every finished session —
   // the honest word for "clear history", offered here rather than as a
@@ -261,7 +261,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // Ignore an answer to a query we have already moved past, or the
         // list flickers back to stale results as you type.
         if (String(m.query ?? '') === historyQuery()) {
-          setHistorySessions((m.sessions as SessionMeta[]) ?? []);
+          setHistorySessions((m.sessions as agentproto.SessionMeta[]) ?? []);
           setHistoryLoading(false);
         }
         break;

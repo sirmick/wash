@@ -9,12 +9,13 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
-import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, historySignature, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
+import type { agentproto } from '@wash/ui';
+import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, historySignature, sessionLabel } from './HistoryPanel.tsx';
 
 afterEach(cleanup);
 
 const noop = () => {};
-const sess = (over: Partial<SessionMeta> = {}): SessionMeta => ({
+const sess = (over: Partial<agentproto.SessionMeta> = {}): agentproto.SessionMeta => ({
   session_id: 's-1',
   agent: 'claude',
   model: 'Claude Opus 4.5',
@@ -29,10 +30,10 @@ const sess = (over: Partial<SessionMeta> = {}): SessionMeta => ({
 });
 
 const panel = (over: {
-  sessions?: SessionMeta[];
+  sessions?: agentproto.SessionMeta[];
   query?: string;
-  onResume?: (s: SessionMeta) => void;
-  onRestart?: (s: SessionMeta) => void;
+  onResume?: (s: agentproto.SessionMeta) => void;
+  onRestart?: (s: agentproto.SessionMeta) => void;
   onQuery?: (q: string) => void;
   embedded?: boolean;
 } = {}) =>

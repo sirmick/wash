@@ -62,6 +62,12 @@ export interface AgentDefaultPrompt {
   kind: 'agent_default_prompt';
 }
 
+/** AgentDelete deletes a stored session that is not running. */
+export interface AgentDelete {
+  kind: 'agent_delete';
+  session_id: string;
+}
+
 /**
  * AgentDetach leaves a session running with no window: its roster row
  * stays and offers Reattach, and its controller window is told to close.
@@ -69,6 +75,17 @@ export interface AgentDefaultPrompt {
 export interface AgentDetach {
   kind: 'agent_detach';
   key: string;
+}
+
+/**
+ * AgentHistory searches the stored sessions: their metadata and, with a
+ * query, their conversations.
+ */
+export interface AgentHistory {
+  kind: 'agent_history';
+  query?: string;
+  /** Limit bounds the answer; 0 and anything above 200 mean 200. */
+  limit?: number;
 }
 
 /**
@@ -89,6 +106,17 @@ export interface AgentPrompt {
   blocks?: PromptAttachment[];
 }
 
+/** AgentPrune deletes stored sessions older than MaxAgeMS. */
+export interface AgentPrune {
+  kind: 'agent_prune';
+  /**
+   * MaxAgeMS is how old a session must be to go; 0 means every stored
+   * session that is not running. A duration rather than a cutoff so a
+   * browser clock on another machine cannot be the one deciding.
+   */
+  max_age_ms: number;
+}
+
 /** AgentReattach opens a window onto a running session. */
 export interface AgentReattach {
   kind: 'agent_reattach';
@@ -100,6 +128,27 @@ export interface AgentRemoveRoot {
   kind: 'agent_remove_root';
   key: string;
   path: string;
+}
+
+/**
+ * AgentRename names a session, by roster key when it is running or by
+ * session id when it is not. An empty title clears the person's name and
+ * the agent's own shows again.
+ */
+export interface AgentRename {
+  kind: 'agent_rename';
+  key?: string;
+  session_id?: string;
+  title: string;
+}
+
+/**
+ * AgentResume reopens a stored session: session/load replays it, and an
+ * Agent window opens on it (or the one already showing it comes forward).
+ */
+export interface AgentResume {
+  kind: 'agent_resume';
+  session_id: string;
 }
 
 /**
@@ -120,6 +169,16 @@ export interface AgentSetConfig {
 export interface AgentSetDefaultPrompt {
   kind: 'agent_set_default_prompt';
   text: string;
+}
+
+/**
+ * AgentSetKey stores a connection key (State.Keys), or clears it with an
+ * empty value. The value is never sent back.
+ */
+export interface AgentSetKey {
+  kind: 'agent_set_key';
+  name: string;
+  value?: string;
 }
 
 /** AgentSetMode switches the agent's approval preset (Row.Modes). */
@@ -181,6 +240,16 @@ export interface AgentStarted {
 export interface AgentStop {
   kind: 'agent_stop';
   key: string;
+}
+
+/**
+ * AgentTestKey checks a key against its provider: the typed value, or the
+ * stored one when Value is empty.
+ */
+export interface AgentTestKey {
+  kind: 'agent_test_key';
+  name: string;
+  value?: string;
 }
 
 /**
@@ -312,6 +381,44 @@ export interface Event {
    * length + the delta against it, and asks for a replay on mismatch.
    */
   text_len?: number;
+}
+
+/**
+ * History answers AgentHistory, newest first, each session stamped with
+ * what the roster says about it now.
+ */
+export interface History {
+  kind: 'history';
+  query: string;
+  sessions: SessionMeta[] | null;
+}
+
+/** HistoryDeleted answers AgentDelete. */
+export interface HistoryDeleted {
+  kind: 'history_deleted';
+  session_id: string;
+  error?: string;
+}
+
+/** HistoryPruned answers AgentPrune: how many sessions went. */
+export interface HistoryPruned {
+  kind: 'history_pruned';
+  deleted: number;
+}
+
+/** KeySaved answers AgentSetKey. */
+export interface KeySaved {
+  kind: 'key_saved';
+  name: string;
+  error?: string;
+}
+
+/** KeyTest answers AgentTestKey with what the provider said. */
+export interface KeyTest {
+  kind: 'key_test';
+  name: string;
+  ok: boolean;
+  detail: string;
 }
 
 /** KeyView is a key as the launcher shows it. */
@@ -549,6 +656,65 @@ export interface Session {
 }
 
 /**
+ * SessionMeta is what the history panel lists. Assembled from a
+ * transcript's head and tail without reading the conversation in
+ * between — a history list must not cost the sum of every transcript.
+ */
+export interface SessionMeta {
+  session_id: string;
+  agent?: string;
+  connection?: string;
+  stack?: string;
+  tier?: string;
+  model?: string;
+  cwd?: string;
+  dir?: string;
+  title?: string;
+  /**
+   * UserTitle is the person's name for the session, when they gave one.
+   * Title above is then the SAME string — the effective title, so every
+   * reader shows the name without knowing where it came from — and this
+   * field says it was theirs.
+   */
+  user_title?: string;
+  started_ms?: number;
+  ended_ms?: number;
+  end_reason?: string;
+  events?: number;
+  /**
+   * Bytes is the transcript's size on disk, so the UI can say what
+   * history costs and offer to prune the expensive ones.
+   */
+  bytes?: number;
+  /**
+   * Preview is a few recent human/agent lines taken from the same bounded
+   * tail read used for the metadata. It gives the always-visible history
+   * list enough context without loading or sending whole transcripts.
+   */
+  preview?: string;
+  /**
+   * Snippet is the line that matched, with a little either side. Absent
+   * when the query matched metadata instead (the row already shows the
+   * title and directory, so quoting them back is noise) or when there
+   * was no query at all.
+   */
+  snippet?: string;
+  /**
+   * Live / Detached / RowKey are stamped on the way out from the
+   * roster, not read from the file — the transcript index knows what a
+   * session WAS, and only the roster knows what it is doing now.
+   * 
+   * The panel did not have these at all, so it would happily offer to
+   * resume a session that was already running: the precise duplication
+   * the menu's filter exists to prevent, in the view that had no
+   * filter. Same predicate, both views (see rosterIndex).
+   */
+  live?: boolean;
+  detached?: boolean;
+  row_key?: string;
+}
+
+/**
  * SessionState is one Agent window's view: its own row and the questions
  * waiting on it.
  */
@@ -702,6 +868,13 @@ export interface WorkspaceRefresh {
 
 /** Every request, discriminated by kind. */
 export type AgentdRequest =
+  | AgentHistory
+  | AgentResume
+  | AgentRename
+  | AgentDelete
+  | AgentPrune
+  | AgentSetKey
+  | AgentTestKey
   | Subscribe
   | Unsubscribe
   | AgentStart
@@ -725,6 +898,11 @@ export type AgentdRequestKind = AgentdRequest['kind'];
 
 /** Every push, discriminated by kind. */
 export type AgentdPush =
+  | History
+  | HistoryDeleted
+  | HistoryPruned
+  | KeySaved
+  | KeyTest
   | RosterState
   | ManagerState
   | SessionState

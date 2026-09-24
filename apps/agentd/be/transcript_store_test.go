@@ -600,7 +600,7 @@ func TestHistorySearchIgnoresImageBytes(t *testing.T) {
 	}
 }
 
-func ids(ms []SessionMeta) []string {
+func ids(ms []agentproto.SessionMeta) []string {
 	out := make([]string, 0, len(ms))
 	for _, m := range ms {
 		out = append(out, m.SessionID)

@@ -214,7 +214,7 @@ func finishResume(sessionID string) {
 // resumeSession restores a stopped conversation through ACP and opens an
 // Agent controller for it. If it is already live, the operation instead
 // focuses (or reattaches) its existing controller.
-func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
+func resumeSession(c *sdk.Conn, sessionID string) {
 	// History is eventually consistent with the live roster: a browser can
 	// still show a Resume affordance for a moment after another click has
 	// successfully loaded the session. Treat Resume as an idempotent "take me

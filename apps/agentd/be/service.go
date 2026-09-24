@@ -51,12 +51,12 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	svc = sdk.NewStateService(bus, initial)
 	controllerConn = c
 
-	// agent_resume: a Resume/Fork click in the sidebar (§13).
-	sdk.HandleFromVoid(bus, "agent_resume", func(conn *sdk.Conn, _ string, req resumeReq, _ wire.Sender) error {
+	// agent_resume: a Resume click in History (§13).
+	sdk.HandleFromVoid(bus, "agent_resume", func(conn *sdk.Conn, _ string, req agentproto.AgentResume, _ wire.Sender) error {
 		if req.SessionID == "" {
 			return nil
 		}
-		resumeSession(conn, req.SessionID, req.Fork)
+		resumeSession(conn, req.SessionID)
 		return nil
 	})
 
@@ -65,7 +65,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// question and its results are large — pushing them through the
 	// roster's StateService would send every session's metadata to the
 	// sidebar on every keystroke.
-	sdk.HandleFromVoid(bus, "agent_history", func(conn *sdk.Conn, _ string, req historyReq, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_history", func(conn *sdk.Conn, _ string, req agentproto.AgentHistory, from wire.Sender) error {
 		if from.InstanceID == "" {
 			return nil
 		}
@@ -75,7 +75,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		}
 		sessions := historyQuery(req.Query, limit)
 		if sessions == nil {
-			sessions = []SessionMeta{}
+			sessions = []agentproto.SessionMeta{}
 		}
 		// Stamp liveness from the roster. Snapshot, not Mutate: this is a
 		// read, and Mutate would push the whole state to every subscriber
@@ -85,11 +85,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			st := idx[sessions[i].SessionID]
 			sessions[i].Live, sessions[i].Detached, sessions[i].RowKey = st.Live, st.Detached, st.RowKey
 		}
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-			"kind":     "history",
-			"query":    req.Query,
-			"sessions": sessions,
-		})
+		return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.History{Query: req.Query, Sessions: sessions})
 	})
 
 	installAskToasts(c)
@@ -279,20 +275,10 @@ func elapsedMS(since, now time.Time) int64 {
 	return ms
 }
 
-type resumeReq struct {
-	SessionID string `json:"session_id"`
-	Fork      bool   `json:"fork"`
-}
-
 // historyQueryCap bounds one history answer. A panel shows a page at a
 // time, and an unbounded reply would be one frame carrying every session
 // the machine has ever run.
 const historyQueryCap = 200
-
-type historyReq struct {
-	Query string `json:"query,omitempty"`
-	Limit int    `json:"limit,omitempty"`
-}
 
 // needsInputHold caps how long a row blocked on a human keeps the whole
 // session alive.

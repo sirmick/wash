@@ -166,7 +166,7 @@ func pruneStoredSessions(maxAge time.Duration, now time.Time) int {
 // refresh its History list; the Recent menu refreshes through the roster
 // push like everything else.
 func registerSessionAdminHandlers(bus *sdk.Bus) {
-	sdk.HandleFromVoid(bus, "agent_rename", func(conn *sdk.Conn, _ string, req renameReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_rename", func(conn *sdk.Conn, _ string, req agentproto.AgentRename, _ wire.Sender) error {
 		if _, err := renameSession(req.Key, req.SessionID, req.Title, time.Now()); err != nil {
 			log.Printf("agentd: rename key=%s session=%s: %v", req.Key, req.SessionID, err)
 			conn.Warn("Could not rename that session", err.Error())
@@ -174,44 +174,24 @@ func registerSessionAdminHandlers(bus *sdk.Bus) {
 		return nil
 	})
 
-	sdk.HandleFromVoid(bus, "agent_delete", func(conn *sdk.Conn, _ string, req deleteReq, from wire.Sender) error {
-		reply := map[string]any{"kind": "history_deleted", "session_id": req.SessionID}
+	sdk.HandleFromVoid(bus, "agent_delete", func(conn *sdk.Conn, _ string, req agentproto.AgentDelete, from wire.Sender) error {
+		reply := agentproto.HistoryDeleted{SessionID: req.SessionID}
 		if err := deleteStoredSession(req.SessionID); err != nil {
 			log.Printf("agentd: delete session=%s: %v", req.SessionID, err)
 			conn.Warn("Could not delete that session", err.Error())
-			reply["error"] = err.Error()
+			reply.Error = err.Error()
 		}
 		if from.InstanceID == "" {
 			return nil
 		}
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, reply)
+		return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, reply)
 	})
 
-	sdk.HandleFromVoid(bus, "agent_prune", func(conn *sdk.Conn, _ string, req pruneReq, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_prune", func(conn *sdk.Conn, _ string, req agentproto.AgentPrune, from wire.Sender) error {
 		n := pruneStoredSessions(time.Duration(req.MaxAgeMS)*time.Millisecond, time.Now())
 		if from.InstanceID == "" {
 			return nil
 		}
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
-			"kind":    "history_pruned",
-			"deleted": n,
-		})
+		return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.HistoryPruned{Deleted: n})
 	})
-}
-
-type renameReq struct {
-	Key       string `json:"key,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	Title     string `json:"title"`
-}
-
-type deleteReq struct {
-	SessionID string `json:"session_id"`
-}
-
-type pruneReq struct {
-	// MaxAgeMS is how old a session must be to go; 0 means every stored
-	// session that is not running. A duration rather than a cutoff so a
-	// browser clock on another machine cannot be the one deciding.
-	MaxAgeMS int64 `json:"max_age_ms"`
 }

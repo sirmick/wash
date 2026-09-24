@@ -58,6 +58,13 @@ edit by hand.
 
 | Kind | Payload | From | Reply / class | What it does |
 |---|---|---|---|---|
+| `agent_history` | [`AgentHistory`](#agenthistory) | any frontend | history | Search stored sessions. |
+| `agent_resume` | [`AgentResume`](#agentresume) | any frontend |  | Reopen a stored session in an Agent window. |
+| `agent_rename` | [`AgentRename`](#agentrename) | any frontend |  | Name a session, or clear the name. |
+| `agent_delete` | [`AgentDelete`](#agentdelete) | any frontend | history_deleted | Delete a stored session. |
+| `agent_prune` | [`AgentPrune`](#agentprune) | any frontend | history_pruned | Delete stored sessions older than an age. |
+| `agent_set_key` | [`AgentSetKey`](#agentsetkey) | a manager (manager_subscribe) | key_saved | Store or clear a connection key. |
+| `agent_test_key` | [`AgentTestKey`](#agenttestkey) | a manager (manager_subscribe) | key_test | Check a key with its provider. |
 | `subscribe` | [`Subscribe`](#subscribe) | any app (the session gateway, hostgw) | state, now and on every change | Subscribe to the whole roster. |
 | `unsubscribe` | [`Unsubscribe`](#unsubscribe) | a subscriber |  | Stop receiving state. |
 | `agent_start` | [`AgentStart`](#agentstart) | a launcher (the Agents manager, an Agent window, wash-edit, wash ai --agent) | agent_started | Start a session from a stack tier, or an adapter on its defaults. |
@@ -82,6 +89,11 @@ edit by hand.
 
 | Kind | Payload | To | Reply / class | What it does |
 |---|---|---|---|---|
+| `history` | [`History`](#history) | the asker | interactive | Stored sessions matching a history query. |
+| `history_deleted` | [`HistoryDeleted`](#historydeleted) | the asker | interactive | The outcome of a delete. |
+| `history_pruned` | [`HistoryPruned`](#historypruned) | the asker | interactive | The outcome of a prune. |
+| `key_saved` | [`KeySaved`](#keysaved) | the asker | interactive | The outcome of storing a key. |
+| `key_test` | [`KeyTest`](#keytest) | the asker | interactive | What the provider said about a key. |
 | `state` | [`RosterState`](#rosterstate) | every subscriber | interactive | The whole roster. Sent by the SDK StateService, which owns this message's encoding. |
 | `manager_state` | [`ManagerState`](#managerstate) | every manager (manager_subscribe) | interactive | The manager's roster view, sent on subscribe and whenever it changes. |
 | `session_state` | [`SessionState`](#sessionstate) | a session's controller | interactive, keyed | One session's row and questions, sent on claim and whenever they change. |
@@ -142,6 +154,14 @@ AgentDefaultPrompt asks for the stored default prompt's text.
 
 No fields.
 
+#### AgentDelete
+
+AgentDelete deletes a stored session that is not running.
+
+| Field | Type | |
+|---|---|---|
+| `session_id` | `string` |  |
+
 #### AgentDetach
 
 AgentDetach leaves a session running with no window: its roster row stays and offers Reattach, and its controller window is told to close.
@@ -149,6 +169,15 @@ AgentDetach leaves a session running with no window: its roster row stays and of
 | Field | Type | |
 |---|---|---|
 | `key` | `string` |  |
+
+#### AgentHistory
+
+AgentHistory searches the stored sessions: their metadata and, with a query, their conversations.
+
+| Field | Type | |
+|---|---|---|
+| `query?` | `string` |  |
+| `limit?` | `number` | Limit bounds the answer; 0 and anything above 200 mean 200. |
 
 #### AgentPrompt
 
@@ -159,6 +188,14 @@ AgentPrompt is another turn on a live session.
 | `key` | `string` |  |
 | `text?` | `string` |  |
 | `blocks?` | `PromptAttachment[]` | Blocks are attachments sent with the text: a pasted image, a file the composer's Attach button picked. Kept as a wash-shaped struct rather than acp.ContentBlock so the app→service wire is ours to validate — the router carries this from a window, and a window is not trusted to name a mime type or a path. |
+
+#### AgentPrune
+
+AgentPrune deletes stored sessions older than MaxAgeMS.
+
+| Field | Type | |
+|---|---|---|
+| `max_age_ms` | `number` | MaxAgeMS is how old a session must be to go; 0 means every stored session that is not running. A duration rather than a cutoff so a browser clock on another machine cannot be the one deciding. |
 
 #### AgentReattach
 
@@ -177,6 +214,24 @@ AgentRemoveRoot narrows it again.
 | `key` | `string` |  |
 | `path` | `string` |  |
 
+#### AgentRename
+
+AgentRename names a session, by roster key when it is running or by session id when it is not.
+
+| Field | Type | |
+|---|---|---|
+| `key?` | `string` |  |
+| `session_id?` | `string` |  |
+| `title` | `string` |  |
+
+#### AgentResume
+
+AgentResume reopens a stored session: session/load replays it, and an Agent window opens on it (or the one already showing it comes forward).
+
+| Field | Type | |
+|---|---|---|
+| `session_id` | `string` |  |
+
 #### AgentSetConfig
 
 AgentSetConfig changes one of the agent's own settings (Row.Configs): model, reasoning effort, plan mode, …
@@ -194,6 +249,15 @@ AgentSetDefaultPrompt stores the default prompt.
 | Field | Type | |
 |---|---|---|
 | `text` | `string` |  |
+
+#### AgentSetKey
+
+AgentSetKey stores a connection key (State.Keys), or clears it with an empty value.
+
+| Field | Type | |
+|---|---|---|
+| `name` | `string` |  |
+| `value?` | `string` |  |
 
 #### AgentSetMode
 
@@ -246,6 +310,15 @@ AgentStop ends a session and its adapter.
 | Field | Type | |
 |---|---|---|
 | `key` | `string` |  |
+
+#### AgentTestKey
+
+AgentTestKey checks a key against its provider: the typed value, or the stored one when Value is empty.
+
+| Field | Type | |
+|---|---|---|
+| `name` | `string` |  |
+| `value?` | `string` |  |
 
 #### Ask
 
@@ -332,6 +405,51 @@ Event is one line in a transcript.
 | `at_ms` | `number` | AtMS is wall-clock at first append, for the FE's own clock anchoring. |
 | `append?` | `boolean` | Append marks a wire-only delta: Text is what was ADDED to the event with this Seq since the last emit, not the whole message. Never set on a stored or snapshotted event (transcript_emit.go). |
 | `text_len?` | `number` | TextLen is the message's byte length after this event applies, on message/thought events. A consumer applying a delta checks its own length + the delta against it, and asks for a replay on mismatch. |
+
+#### History
+
+History answers AgentHistory, newest first, each session stamped with what the roster says about it now.
+
+| Field | Type | |
+|---|---|---|
+| `query` | `string` |  |
+| `sessions` | `SessionMeta[] \| null` |  |
+
+#### HistoryDeleted
+
+HistoryDeleted answers AgentDelete.
+
+| Field | Type | |
+|---|---|---|
+| `session_id` | `string` |  |
+| `error?` | `string` |  |
+
+#### HistoryPruned
+
+HistoryPruned answers AgentPrune: how many sessions went.
+
+| Field | Type | |
+|---|---|---|
+| `deleted` | `number` |  |
+
+#### KeySaved
+
+KeySaved answers AgentSetKey.
+
+| Field | Type | |
+|---|---|---|
+| `name` | `string` |  |
+| `error?` | `string` |  |
+
+#### KeyTest
+
+KeyTest answers AgentTestKey with what the provider said.
+
+| Field | Type | |
+|---|---|---|
+| `name` | `string` |  |
+| `ok` | `boolean` |  |
+| `detail` | `string` |  |
 
 #### KeyView
 
@@ -448,6 +566,33 @@ Session is one remembered agent session.
 | `live?` | `boolean` | Live is set on the way out to the FE: a session whose agent is running right now is in the roster above, so the Recent list greys it rather than offering to resume what is already here. |
 | `detached?` | `boolean` | Detached is a live session with no window pointing at it. Live and REACHABLE are not the same thing, and treating them as one is what made the History menu useless in exactly the case you open it for. agent_detach sets the flag and closes the window but never retires the row, so a detached session is still "live" — and the menu, which hides live sessions to avoid offering to duplicate a running one, hid the one thing you were trying to get back. A detached session is not something to resume. It is something to reattach to, which is a different verb with a different outcome. |
 | `row_key?` | `string` | RowKey is the roster key this session is running as, present only while it has a row. Reattach is key-addressed, not session-id addressed, so the menu needs this to offer the verb at all. |
+
+#### SessionMeta
+
+SessionMeta is what the history panel lists.
+
+| Field | Type | |
+|---|---|---|
+| `session_id` | `string` |  |
+| `agent?` | `string` |  |
+| `connection?` | `string` |  |
+| `stack?` | `string` |  |
+| `tier?` | `string` |  |
+| `model?` | `string` |  |
+| `cwd?` | `string` |  |
+| `dir?` | `string` |  |
+| `title?` | `string` |  |
+| `user_title?` | `string` | UserTitle is the person's name for the session, when they gave one. Title above is then the SAME string — the effective title, so every reader shows the name without knowing where it came from — and this field says it was theirs. |
+| `started_ms?` | `number` |  |
+| `ended_ms?` | `number` |  |
+| `end_reason?` | `string` |  |
+| `events?` | `number` |  |
+| `bytes?` | `number` | Bytes is the transcript's size on disk, so the UI can say what history costs and offer to prune the expensive ones. |
+| `preview?` | `string` | Preview is a few recent human/agent lines taken from the same bounded tail read used for the metadata. It gives the always-visible history list enough context without loading or sending whole transcripts. |
+| `snippet?` | `string` | Snippet is the line that matched, with a little either side. Absent when the query matched metadata instead (the row already shows the title and directory, so quoting them back is noise) or when there was no query at all. |
+| `live?` | `boolean` | Live / Detached / RowKey are stamped on the way out from the roster, not read from the file — the transcript index knows what a session WAS, and only the roster knows what it is doing now. The panel did not have these at all, so it would happily offer to resume a session that was already running: the precise duplication the menu's filter exists to prevent, in the view that had no filter. Same predicate, both views (see rosterIndex). |
+| `detached?` | `boolean` |  |
+| `row_key?` | `string` |  |
 
 #### SessionState
 

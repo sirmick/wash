@@ -56,11 +56,6 @@ func publishKeys(pol agentpolicy.Policy, keys map[string]string) []agentproto.Ke
 	return out
 }
 
-type keyReq struct {
-	Name  string `json:"name"`
-	Value string `json:"value,omitempty"`
-}
-
 // keyTestTimeout bounds a key check: the Test button waits on it.
 const keyTestTimeout = 10 * time.Second
 
@@ -107,25 +102,25 @@ func testKey(ctx context.Context, url, key string) (bool, string) {
 func registerKeyHandlers(bus *sdk.Bus) {
 	// agent_set_key stores a key, or clears it with an empty value, then
 	// republishes: the stacks that need it become available at once.
-	sdk.HandleFromVoid(bus, "agent_set_key", func(conn *sdk.Conn, _ string, req keyReq, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_set_key", func(conn *sdk.Conn, _ string, req agentproto.AgentSetKey, from wire.Sender) error {
 		if from.AppID != agentsAppID || from.InstanceID == "" {
 			return nil
 		}
-		reply := map[string]any{"kind": "key_saved", "name": req.Name}
+		reply := agentproto.KeySaved{Name: req.Name}
 		if _, ok := knownKeys(hostedPolicy())[req.Name]; !ok {
-			reply["error"] = "unknown key " + req.Name
+			reply.Error = "unknown key " + req.Name
 		} else if err := agentpolicy.SetKey(agentpolicy.KeysPath(), req.Name, strings.TrimSpace(req.Value)); err != nil {
-			reply["error"] = err.Error()
+			reply.Error = err.Error()
 		} else {
 			log.Printf("agentd: key %s set=%v", req.Name, strings.TrimSpace(req.Value) != "")
 			mutateState(func(s *agentproto.State) { refreshLaunchers(s) })
 		}
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, reply)
+		return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, reply)
 	})
 
 	// agent_test_key checks the typed key, or the stored one when none was
 	// typed. Off the bus goroutine: it waits on the network.
-	sdk.HandleFromVoid(bus, "agent_test_key", func(conn *sdk.Conn, _ string, req keyReq, from wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_test_key", func(conn *sdk.Conn, _ string, req agentproto.AgentTestKey, from wire.Sender) error {
 		if from.AppID != agentsAppID || from.InstanceID == "" {
 			return nil
 		}
@@ -135,19 +130,19 @@ func registerKeyHandlers(bus *sdk.Bus) {
 			key = keyStore()[req.Name]
 		}
 		go func() {
-			reply := map[string]any{"kind": "key_test", "name": req.Name}
+			reply := agentproto.KeyTest{Name: req.Name}
 			switch {
 			case !ok || spec.TestURL == "":
-				reply["detail"] = "wash has no check for this key"
+				reply.Detail = "wash has no check for this key"
 			case key == "":
-				reply["detail"] = "no key to test"
+				reply.Detail = "no key to test"
 			default:
 				ctx, cancel := context.WithTimeout(context.Background(), keyTestTimeout)
 				defer cancel()
-				reply["ok"], reply["detail"] = testKey(ctx, spec.TestURL, key)
+				reply.OK, reply.Detail = testKey(ctx, spec.TestURL, key)
 			}
-			log.Printf("agentd: key %s test ok=%v", req.Name, reply["ok"] == true)
-			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, reply)
+			log.Printf("agentd: key %s test ok=%v", req.Name, reply.OK)
+			_ = agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, reply)
 		}()
 		return nil
 	})

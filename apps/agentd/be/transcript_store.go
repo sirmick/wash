@@ -645,53 +645,6 @@ func writeSummary(sessionID string, s transcriptSummary) {
 	enqueue(sessionID, line)
 }
 
-// SessionMeta is what the history panel lists. Assembled from a
-// transcript's head and tail without reading the conversation in
-// between — a history list must not cost the sum of every transcript.
-type SessionMeta struct {
-	SessionID  string `json:"session_id"`
-	Agent      string `json:"agent,omitempty"`
-	Connection string `json:"connection,omitempty"`
-	Stack      string `json:"stack,omitempty"`
-	Tier       string `json:"tier,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Cwd        string `json:"cwd,omitempty"`
-	Dir        string `json:"dir,omitempty"`
-	Title      string `json:"title,omitempty"`
-	// UserTitle is the person's name for the session, when they gave one.
-	// Title above is then the SAME string — the effective title, so every
-	// reader shows the name without knowing where it came from — and this
-	// field says it was theirs.
-	UserTitle string `json:"user_title,omitempty"`
-	StartedMS int64  `json:"started_ms,omitempty"`
-	EndedMS   int64  `json:"ended_ms,omitempty"`
-	EndReason string `json:"end_reason,omitempty"`
-	Events    int    `json:"events,omitempty"`
-	// Bytes is the transcript's size on disk, so the UI can say what
-	// history costs and offer to prune the expensive ones.
-	Bytes int64 `json:"bytes,omitempty"`
-	// Preview is a few recent human/agent lines taken from the same bounded
-	// tail read used for the metadata. It gives the always-visible history
-	// list enough context without loading or sending whole transcripts.
-	Preview string `json:"preview,omitempty"`
-	// Snippet is the line that matched, with a little either side. Absent
-	// when the query matched metadata instead (the row already shows the
-	// title and directory, so quoting them back is noise) or when there
-	// was no query at all.
-	Snippet string `json:"snippet,omitempty"`
-	// Live / Detached / RowKey are stamped on the way out from the
-	// roster, not read from the file — the transcript index knows what a
-	// session WAS, and only the roster knows what it is doing now.
-	//
-	// The panel did not have these at all, so it would happily offer to
-	// resume a session that was already running: the precise duplication
-	// the menu's filter exists to prevent, in the view that had no
-	// filter. Same predicate, both views (see rosterIndex).
-	Live     bool   `json:"live,omitempty"`
-	Detached bool   `json:"detached,omitempty"`
-	RowKey   string `json:"row_key,omitempty"`
-}
-
 // summaryTailBytes is how much of the end of a file is scanned for the
 // last summary record. Summaries are small and written last, so a few KB
 // finds them; a session whose final line is a huge inline image may push
@@ -701,18 +654,18 @@ const summaryTailBytes = 8 << 10
 // readSessionMeta assembles one session's metadata from its file's head
 // and tail. Cheap by construction: two small reads, no matter how long
 // the conversation is.
-func readSessionMeta(path string) (SessionMeta, bool) {
+func readSessionMeta(path string) (agentproto.SessionMeta, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return SessionMeta{}, false
+		return agentproto.SessionMeta{}, false
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return SessionMeta{}, false
+		return agentproto.SessionMeta{}, false
 	}
 
-	var out SessionMeta
+	var out agentproto.SessionMeta
 	out.Bytes = fi.Size()
 
 	// Head: the meta line names the session.
@@ -730,7 +683,7 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		}
 	}
 	if out.SessionID == "" {
-		return SessionMeta{}, false
+		return agentproto.SessionMeta{}, false
 	}
 
 	// Tail: the last summary wins, and the last event dates the session
@@ -853,7 +806,7 @@ func previewLine(s string) string {
 
 // listSessionMeta is the history index: every stored transcript, newest
 // activity first.
-func listSessionMeta() []SessionMeta {
+func listSessionMeta() []agentproto.SessionMeta {
 	dir := transcriptDir()
 	if dir == "" {
 		return nil
@@ -862,7 +815,7 @@ func listSessionMeta() []SessionMeta {
 	if err != nil {
 		return nil
 	}
-	out := make([]SessionMeta, 0, len(ents))
+	out := make([]agentproto.SessionMeta, 0, len(ents))
 	for _, e := range ents {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
@@ -877,7 +830,7 @@ func listSessionMeta() []SessionMeta {
 	return out
 }
 
-func sessionRecency(m SessionMeta) int64 {
+func sessionRecency(m agentproto.SessionMeta) int64 {
 	if m.EndedMS > 0 {
 		return m.EndedMS
 	}
@@ -1004,7 +957,7 @@ func queryTerms(q string) []string {
 // matchesMeta is the cheap half of a history query: the fields already in
 // the index. Tried before opening the transcript, so a search for an
 // agent or a directory never reads a conversation at all.
-func matchesMeta(m SessionMeta, terms []string) bool {
+func matchesMeta(m agentproto.SessionMeta, terms []string) bool {
 	if len(terms) == 0 {
 		return true
 	}
@@ -1026,7 +979,7 @@ func matchesMeta(m SessionMeta, terms []string) bool {
 
 // historyQuery lists stored sessions, newest first, optionally filtered.
 // limit <= 0 means every match.
-func historyQuery(q string, limit int) []SessionMeta {
+func historyQuery(q string, limit int) []agentproto.SessionMeta {
 	all := listSessionMeta()
 	terms := queryTerms(q)
 	if len(terms) == 0 {
@@ -1040,7 +993,7 @@ func historyQuery(q string, limit int) []SessionMeta {
 	// can't narrow this query (a term shorter than a trigram), and every
 	// session is a candidate — correct, just not accelerated.
 	cand, narrowed := searchCandidates(terms)
-	out := make([]SessionMeta, 0, len(all))
+	out := make([]agentproto.SessionMeta, 0, len(all))
 	for _, m := range all {
 		// Metadata first: it is already in hand, and a query that matches
 		// there saves reading the conversation — and matters more now,

@@ -20,41 +20,7 @@
 
 import { For, Show, children, createSignal, onMount } from 'solid-js';
 import type { Component, ParentComponent } from 'solid-js';
-import { Button, Input, Menu, MenuItem, MenuSeparator, Overlay, fmtBytes, tokens } from '@wash/ui';
-
-/** One stored session, as agentd's history index describes it. */
-export interface SessionMeta {
-  session_id: string;
-  agent?: string;
-  /** the stack and tier it was started from; Restart starts them again */
-  stack?: string;
-  tier?: string;
-  model?: string;
-  cwd?: string;
-  dir?: string;
-  title?: string;
-  /** the name a person gave it; `title` is then the same string */
-  user_title?: string;
-  started_ms?: number;
-  ended_ms?: number;
-  end_reason?: string;
-  events?: number;
-  bytes?: number;
-  /** running right now, per the roster — not something to start again */
-  live?: boolean;
-  /** running with no window on it: reattach, do not resume */
-  detached?: boolean;
-  /** the roster key a reattach names */
-  row_key?: string;
-  /**
-   * The line that matched, with a little either side. Present only for a
-   * content match — a metadata hit quotes nothing back, because the row
-   * already shows the title and directory.
-   */
-  snippet?: string;
-  /** bounded recent transcript lines for the unfiltered history list */
-  preview?: string;
-}
+import { Button, Input, Menu, MenuItem, MenuSeparator, Overlay, fmtBytes, tokens, type agentproto } from '@wash/ui';
 
 /**
  * highlightParts splits a snippet into alternating plain / matched runs
@@ -108,13 +74,13 @@ export function highlightParts(text: string, query: string): { t: string; hit: b
  * change a row's text or verb. The manager re-queries the (disk-backed)
  * list only when this moves.
  */
-export function historySignature(recent: ReadonlyArray<SessionMeta & { last_seen?: number }>): string {
+export function historySignature(recent: ReadonlyArray<agentproto.SessionMeta & { last_seen?: number }>): string {
   return recent
     .map((s) => [s.session_id, s.title ?? '', s.live ? 1 : 0, s.detached ? 1 : 0, s.row_key ?? '', s.last_seen ?? ''].join('\u0001'))
     .join('\u0002');
 }
 
-export function historyAction(s: SessionMeta): 'resume' | 'restart' | 'reattach' | 'focus' | 'none' {
+export function historyAction(s: agentproto.SessionMeta): 'resume' | 'restart' | 'reattach' | 'focus' | 'none' {
   if (s.detached && s.row_key) return 'reattach';
   // Live with a window: picking it goes THERE (docs/AGENT_UX.md N1).
   // Resuming would fork a second adapter onto one conversation, which is
@@ -151,7 +117,7 @@ export function fmtSpan(startedMS?: number, endedMS?: number): string {
 }
 
 /** What to call a session that never named itself. */
-export function sessionLabel(s: SessionMeta): string {
+export function sessionLabel(s: agentproto.SessionMeta): string {
   if (s.title) return s.title;
   const where = s.dir || s.cwd;
   if (s.agent && where) return `${s.agent} · ${where}`;
@@ -204,12 +170,12 @@ const HistoryFrame: ParentComponent<{
 };
 
 export const HistoryPanel: Component<{
-  sessions: () => SessionMeta[];
+  sessions: () => agentproto.SessionMeta[];
   query: () => string;
   onQuery: (q: string) => void;
-  onResume: (s: SessionMeta) => void;
+  onResume: (s: agentproto.SessionMeta) => void;
   /** start a new agent session in this row's recorded folder */
-  onRestart?: (s: SessionMeta) => void;
+  onRestart?: (s: agentproto.SessionMeta) => void;
   onClose?: () => void;
   /** render as a pane in the Agents workspace instead of a modal */
   embedded?: boolean;
@@ -217,11 +183,11 @@ export const HistoryPanel: Component<{
    *  is not the same claim as "nothing matched". */
   loading?: () => boolean;
   /** give a session a name of your own; the host opens its dialog */
-  onRename?: (s: SessionMeta) => void;
+  onRename?: (s: agentproto.SessionMeta) => void;
   /** delete a stored session — its transcript and its history entry. The
    *  host confirms; a running session is refused by agentd and disabled
    *  here. */
-  onDelete?: (s: SessionMeta) => void;
+  onDelete?: (s: agentproto.SessionMeta) => void;
   /** "Delete all older than…" — the host asks for the horizon */
   onPrune?: () => void;
 }> = (props) => {
@@ -233,14 +199,14 @@ export const HistoryPanel: Component<{
   const [selected, setSelected] = createSignal(0);
   // The per-row verbs menu: which row, and where. Menu portals to
   // document.body, so these are viewport coordinates.
-  const [menuFor, setMenuFor] = createSignal<{ s: SessionMeta; x: number; y: number } | null>(null);
+  const [menuFor, setMenuFor] = createSignal<{ s: agentproto.SessionMeta; x: number; y: number } | null>(null);
   const hasVerbs = () => Boolean(props.onRestart || props.onRename || props.onDelete);
-  const activate = (s: SessionMeta) => {
+  const activate = (s: agentproto.SessionMeta) => {
     const action = historyAction(s);
     if (action === 'restart') props.onRestart?.(s);
     else if (action !== 'none') props.onResume(s);
   };
-  const openMenu = (s: SessionMeta, e: MouseEvent) => {
+  const openMenu = (s: agentproto.SessionMeta, e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setMenuFor({ s, x: e.clientX, y: e.clientY });
