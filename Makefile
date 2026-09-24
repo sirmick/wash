@@ -201,6 +201,17 @@ check-design:
 check-interactive:
 	@python3 ./scripts/check-interactive.py
 
+# check-names: the "green build, ReferenceError in the browser" guard. vite
+# does not typecheck, so an identifier that was never imported is not a build
+# error — esbuild emits a bare global reference and the bundle ships. It fails
+# only when that line runs, which in a desktop of lazily-mounted apps can be a
+# pane nobody happened to open while testing. Runs the real tsc and gates on
+# TS2304 alone; see the script header for why the scope is that tight, and for
+# why it must not resolve tsc through npx.
+.PHONY: check-names
+check-names:
+	@./scripts/check-undefined-names.sh
+
 # check-versions: the version single-source guard. The root VERSION file is the
 # master — the Makefile stamps it into every binary via -ldflags, and packaging
 # (run_matrix.sh / make-source-tarball.sh) now defaults its package version to
@@ -1080,6 +1091,7 @@ unit-test: test-app fe-unit component
 	$(MAKE) -s check-versions
 	$(MAKE) -s check-design
 	$(MAKE) -s check-interactive
+	$(MAKE) -s check-names
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 
