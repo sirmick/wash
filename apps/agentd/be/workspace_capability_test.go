@@ -91,3 +91,39 @@ func TestReviewerCannotWriteExecuteConfigureOrBypassViaYolo(t *testing.T) {
 		t.Fatal("profile overrode owner deny", got, err)
 	}
 }
+
+func washCall(tool, source string) acp.ToolCall {
+	meta, _ := json.Marshal(map[string]any{"claudeCode": map[string]any{"toolName": "mcp__wash_workspace__" + tool, "mcpServer": map[string]string{"name": "wash_workspace", "source": source}}})
+	return acp.ToolCall{Kind: "other", Meta: meta}
+}
+
+// Every member, not just reviewers, coordinates without a human in the loop:
+// the observed cost was a subject-less "Acp:other" prompt per inbox read.
+func TestCoordinationCallsDoNotAskTheHuman(t *testing.T) {
+	resetAsks()
+	withState(t, 0) // nobody home: an ask is deferred, so it comes back cancelled
+	withPolicy(t, agentpolicy.Policy{Enabled: true, Default: "ask"})
+	h := &hosted{key: "acp:t", cwd: t.TempDir()}
+	options := []acp.PermissionOption{{OptionID: "yes", Kind: acp.OptionAllowOnce}, {OptionID: "no", Kind: acp.OptionRejectOnce}}
+	ask := func(tc acp.ToolCall) acp.RequestPermissionResponse {
+		got, err := h.RequestPermission(context.Background(), acp.RequestPermissionRequest{ToolCall: tc, Options: options})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	for _, tool := range []string{"workspace_get", "workspace_configure", "member_update", "inbox_read", "message_send", "member_control", "workspace_end"} {
+		if got := ask(washCall(tool, "dynamic")); !reflect.DeepEqual(got, acp.Selected("yes")) {
+			t.Error(tool, got)
+		}
+	}
+	// A user-configured server borrowing the name still asks.
+	if got := ask(washCall("workspace_get", "plugin")); reflect.DeepEqual(got, acp.Selected("yes")) {
+		t.Error("approved a configured server without asking")
+	}
+	// An explicit owner deny outranks the bridge.
+	withPolicy(t, agentpolicy.Policy{Enabled: true, Default: "ask", Rules: []agentpolicy.Rule{{Match: "mcp__wash_workspace__message_send", Decision: "deny"}}})
+	if got := ask(washCall("message_send", "dynamic")); !reflect.DeepEqual(got, acp.Selected("no")) {
+		t.Error("coordination overrode owner deny", got)
+	}
+}

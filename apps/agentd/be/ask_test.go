@@ -393,3 +393,21 @@ func TestFirstRunGetsALongerWindow(t *testing.T) {
 		t.Error("the first-run window must still sit under the hard ceiling")
 	}
 }
+
+// A workspace member has no prompt of its own to fall back to, so its
+// question waits for the human rather than expiring into a cancel-and-re-ask
+// loop while they are answering a teammate.
+func TestWorkspaceMemberAskWaitsForTheHuman(t *testing.T) {
+	resetAsks()
+	withState(t, 1)
+	withRuleCount(t, 5)
+	if !enqueueAsk(askSpec{Agent: "claude", Tool: "Bash", RowKey: "row-w", WorkspaceID: "w1"}, func(string, string) error { return nil }) {
+		t.Fatal("enqueue refused with a subscriber present")
+	}
+	for _, p := range asks {
+		if p.softTTL != askHardTTL {
+			t.Errorf("softTTL = %s, want the hard ceiling %s", p.softTTL, askHardTTL)
+		}
+		p.timer.Stop()
+	}
+}

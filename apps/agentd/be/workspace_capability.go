@@ -33,24 +33,60 @@ func reviewerWorkspaceTool(name string) bool {
 	return false
 }
 func (h *hosted) reviewerPermission(tc acp.ToolCall) bool {
-	var meta struct {
-		Claude struct {
-			Tool   string `json:"toolName"`
-			Server struct {
-				Name   string `json:"name"`
-				Source string `json:"source"`
-			} `json:"mcpServer"`
-		} `json:"claudeCode"`
-	}
-	if len(tc.Meta) > 0 && json.Unmarshal(tc.Meta, &meta) != nil {
+	meta, ok := claudeToolMeta(tc)
+	if !ok {
 		return false
 	}
 	// A foreign MCP tool cannot gain approval by claiming a read/search kind.
-	if meta.Claude.Server.Name == "" && !strings.HasPrefix(meta.Claude.Tool, "mcp__") {
+	if meta.Server.Name == "" && !strings.HasPrefix(meta.Tool, "mcp__") {
 		return tc.Kind == acp.ToolKindRead || tc.Kind == acp.ToolKindSearch
 	}
+	tool, ok := washWorkspaceTool(tc)
+	return ok && reviewerWorkspaceTool(tool)
+}
+
+// claudeMeta is what claude-agent-acp says about a tool call beyond its
+// ACP kind: the provider's own tool name and, for MCP tools, which server.
+type claudeMeta struct {
+	Tool   string `json:"toolName"`
+	Server struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	} `json:"mcpServer"`
+}
+
+func claudeToolMeta(tc acp.ToolCall) (claudeMeta, bool) {
+	var meta struct {
+		Claude claudeMeta `json:"claudeCode"`
+	}
+	if len(tc.Meta) > 0 && json.Unmarshal(tc.Meta, &meta) != nil {
+		return claudeMeta{}, false
+	}
+	return meta.Claude, true
+}
+
+// washWorkspaceTool names the wash_workspace tool a call invokes, when it is
+// one: the server Wash injected itself ("dynamic"), not a same-named server
+// from the user's own configuration.
+func washWorkspaceTool(tc acp.ToolCall) (string, bool) {
+	meta, ok := claudeToolMeta(tc)
 	const prefix = "mcp__wash_workspace__"
-	return meta.Claude.Server.Name == "wash_workspace" && meta.Claude.Server.Source == "dynamic" && strings.HasPrefix(meta.Claude.Tool, prefix) && reviewerWorkspaceTool(strings.TrimPrefix(meta.Claude.Tool, prefix))
+	if !ok || meta.Server.Name != "wash_workspace" || meta.Server.Source != "dynamic" || !strings.HasPrefix(meta.Tool, prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(meta.Tool, prefix), true
+}
+
+// coordinationPermission is the approval a workspace's own coordination
+// calls get without a human. Asking gained nothing: the bridge derives the
+// caller from its session credentials and enforces every role limit itself
+// (only the orchestrator configures, a reviewer cannot spawn), so a click
+// could only ever approve what the server was going to check anyway. What it
+// cost was one prompt per inbox read, status report and message, per member —
+// a question with no subject that trained the human to click without reading.
+func coordinationPermission(tc acp.ToolCall) bool {
+	_, ok := washWorkspaceTool(tc)
+	return ok
 }
 func savedWorkspaceCapability(session string) string {
 	if workspaces != nil {

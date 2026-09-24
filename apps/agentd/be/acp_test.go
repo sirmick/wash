@@ -97,6 +97,16 @@ func TestToolRequestSpeaksTheRuleLanguage(t *testing.T) {
 			tc:       acp.ToolCall{Kind: "teleport", Title: "do something new"},
 			wantTool: "Acp:teleport",
 		},
+		{
+			name:     "an MCP call is named for its tool, not lumped into Acp:other",
+			tc:       acp.ToolCall{Kind: "other", Meta: json.RawMessage(`{"claudeCode":{"toolName":"mcp__github__create_issue","mcpServer":{"name":"github"}}}`)},
+			wantTool: "mcp__github__create_issue",
+		},
+		{
+			name:     "a non-MCP name in the metadata cannot borrow a built-in's rules",
+			tc:       acp.ToolCall{Kind: "other", Meta: json.RawMessage(`{"claudeCode":{"toolName":"Bash"}}`)},
+			wantTool: "Acp:other",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -888,6 +888,13 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
 	}
 
+	// Wash's own coordination bridge. After the policy, so an explicit deny
+	// still wins; before yolo, so it is quiet rather than narrated.
+	if coordinationPermission(req.ToolCall) {
+		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=coordination", h.key, preq.ToolName)
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+	}
+
 	// Host-side yolo: the user asked wash to stop asking. Checked AFTER the
 	// policy, never before — an explicit deny rule is a decision the user
 	// already made, and a convenience toggle must not quietly reverse it.
@@ -1151,6 +1158,14 @@ func toolRequest(tc acp.ToolCall, cwd string) agentpolicy.Request {
 		// Unmapped kind: a tool name no rule can match, so a new ACP
 		// kind falls through to asking rather than to allowing.
 		name = "Acp:" + tc.Kind
+		// Except an MCP call, which the adapter names exactly. As
+		// "Acp:other" every MCP tool of every server looked the same: the
+		// prompt could not say what it was asking about, and "always"
+		// wrote a rule that allowed all of them. Only the mcp__ namespace
+		// is taken, so a call cannot borrow a built-in's rules this way.
+		if meta, ok := claudeToolMeta(tc); ok && strings.HasPrefix(meta.Tool, "mcp__") {
+			name = meta.Tool
+		}
 	}
 
 	// The subject is what a rule's pattern matches. rawInput is the real

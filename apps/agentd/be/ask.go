@@ -345,6 +345,15 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 
 	now := time.Now()
 	soft := softTTLNow()
+	if spec.WorkspaceID != "" {
+		// A workspace member's question waits for the human, up to the hard
+		// ceiling. The soft window exists so a terminal agent falls back to
+		// its own prompt; a hosted member has none, so expiry is a cancel,
+		// and the member re-asks. Observed live: an Architect's question
+		// expired every 30s with six desktops attached, because the one
+		// person who could answer was reading another member's tab.
+		soft = askHardTTL
+	}
 	var over bool
 	var queued Ask
 	mutateState(func(s *State) {

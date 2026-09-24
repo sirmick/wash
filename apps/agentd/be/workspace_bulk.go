@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/swarm"
 )
 
@@ -77,15 +78,31 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	}
 	// Validate paths before committing. No process starts during validation/preview.
 	root := h.cwd
+	approvedRoot := ""
 	if existing := ws.store.View(h.sessionID); existing != nil {
 		root = existing.Root
+		approvedRoot = existing.Root
 	}
 	if p.Workspace != nil && p.Workspace.Root != "" {
 		root = p.Workspace.Root
 	}
+	// A path inside the project root asks nobody: the root is the one folder
+	// question, answered (or inside the session already) when the workspace
+	// was set up. Asking again for its plan, its QA file and every member's
+	// worktree put the orchestrator in front of the human on each configure
+	// call with a "Read … (outside this session's folders)" that could only
+	// be answered yes.
+	confine := func(tool, path string) (string, error) {
+		if approvedRoot != "" {
+			if abs, err := wfs.New(approvedRoot).Confine(path); err == nil {
+				return abs, nil
+			}
+		}
+		return h.confineOrAsk(ctx, tool, path)
+	}
 	if ws.store.View(h.sessionID) == nil || p.Workspace != nil {
 		var err error
-		root, err = h.confineOrAsk(ctx, "Read", root)
+		root, err = confine("Read", root)
 		if err != nil {
 			return nil, err
 		}
@@ -97,12 +114,13 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			return nil, errors.New("project_root must be a directory")
 		}
 	}
+	approvedRoot = root
 	var doc *swarm.Document
 	if len(p.Document) > 0 && string(p.Document) != "null" {
 		if err := decodeWorkspace(p.Document, &doc); err != nil {
 			return nil, err
 		}
-		path, err := h.confineOrAsk(ctx, "Read", doc.Path)
+		path, err := confine("Read", doc.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +148,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(root, path)
 		}
-		path, err := h.confineOrAsk(ctx, "Write", path)
+		path, err := confine("Write", path)
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +175,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if m.Cwd == "" {
 			m.Cwd = h.cwd
 		}
-		cwd, err := h.confineOrAsk(ctx, "Read", m.Cwd)
+		cwd, err := confine("Read", m.Cwd)
 		if err != nil {
 			return nil, err
 		}

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/sirmick/wash/internal/agentpolicy"
 	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/internal/workspacemcp"
 )
@@ -152,5 +153,49 @@ func TestBulkRenamePreservesProjectRootAndBatchesRollback(t *testing.T) {
 	}
 	if len(s.View("lead").QA[0].Events) != 2 {
 		t.Fatal("decision retry duplicated QA")
+	}
+}
+
+// The orchestrator answers the project-root folder question once, at setup.
+// Paths inside that root, such as the plan, the QA file and member worktrees,
+// must not ask again on later configure calls. Observed live: "Read
+// …/redoubt-g1 (outside this session's folders)" on every launch.
+func TestConfigureInsideApprovedRootDoesNotAsk(t *testing.T) {
+	resetAsks()
+	withState(t, 0) // nobody home: any ask comes back as a refusal
+	withPolicy(t, agentpolicy.Policy{Enabled: true, Default: "ask"})
+	base := t.TempDir()
+	cwd, project := filepath.Join(base, "wash"), filepath.Join(base, "riscv")
+	for _, d := range []string{cwd, filepath.Join(project, "docs"), filepath.Join(project, ".worktrees", "k5")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(project, "docs", "PLAN.md"), []byte("# Plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := swarm.Open(filepath.Join(base, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Setup("lead", "claude", cwd, "Project", project, nil); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	h := &hosted{key: "acp:lead", sessionID: "lead", agent: "claude", cwd: cwd}
+	call := func(args any) error {
+		raw, _ := json.Marshal(args)
+		_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: raw})
+		return err
+	}
+	member := func(dir string) map[string]any {
+		return map[string]any{"k5-implementer": map[string]any{"name": "K5", "lifetime": "resident", "instructions": "Implement", "cwd": dir}}
+	}
+	if err := call(map[string]any{"preview": true, "document": map[string]string{"path": filepath.Join(project, "docs", "PLAN.md")}, "qa_document": map[string]string{"path": filepath.Join(project, "docs", "QA.md")}, "members": member(filepath.Join(project, ".worktrees", "k5"))}); err != nil {
+		t.Fatalf("path inside the approved root asked: %v", err)
+	}
+	// Outside the root is still a question — here refused, as nobody is home.
+	if err := call(map[string]any{"preview": true, "members": member(base)}); err == nil {
+		t.Fatal("a member cwd outside the project root was accepted without asking")
 	}
 }
