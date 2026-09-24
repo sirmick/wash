@@ -403,3 +403,55 @@ func TestAutoApprovalIsBoundedByTheLauncherAndSurvivesRestart(t *testing.T) {
 		t.Fatal("auto-approval was not restored when the member resumed")
 	}
 }
+
+// view=team is one screen: per member what it is doing and what is waiting on
+// it, without every session's option catalogue.
+func TestTeamViewShowsWhoIsWaitingOnWhat(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Members = append(w.Members,
+			swarm.Member{ID: "impl", Key: "K5-implementer", Name: "K5 scheduler — implementer", Package: "K5", State: "available", Lifetime: "resident", AutoApprove: true},
+			swarm.Member{ID: "gone", Name: "Old", State: "ended", Lifetime: "resident"})
+		w.Assignments = append(w.Assignments,
+			swarm.Assignment{ID: "a1", Member: "impl", State: "assigned", Text: "Implement the tie rule\nthen the bench case"},
+			swarm.Assignment{ID: "a0", Member: "impl", State: "completed", Text: "Done already"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Send("lead", "impl", "instruction", "Start", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	raw, _ := ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "workspace_get", Arguments: json.RawMessage(`{"view":"team"}`)})
+	out, _ := json.Marshal(raw)
+	var got struct {
+		Members []struct {
+			ID           string            `json:"id"`
+			Orchestrator bool              `json:"orchestrator"`
+			AutoApprove  bool              `json:"auto_approve"`
+			Undelivered  map[string]int    `json:"undelivered"`
+			Open         []json.RawMessage `json:"open_assignments"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Members) != 2 || got.Members[0].ID != w.Lead || !got.Members[0].Orchestrator {
+		t.Fatalf("members: %s", out)
+	}
+	impl := got.Members[1]
+	if !impl.AutoApprove || impl.Undelivered["queued"] != 1 || len(impl.Open) != 1 || !strings.Contains(string(impl.Open[0]), "Implement the tie rule …") {
+		t.Fatalf("implementer row: %s", out)
+	}
+	if strings.Contains(string(out), "config_options") {
+		t.Fatal("team view carries option catalogues")
+	}
+}

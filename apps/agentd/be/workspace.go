@@ -287,8 +287,8 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 	sid := h.sessionID
 	switch call.Name {
 	case "workspace_get":
-		if a.View != "" && a.View != "state" && a.View != "about" && a.View != "qa" {
-			return nil, errors.New("view must be state, about or qa")
+		if a.View != "" && a.View != "state" && a.View != "about" && a.View != "qa" && a.View != "team" {
+			return nil, errors.New("view must be state, about, qa or team")
 		}
 		if a.View == "about" {
 			var fields map[string]json.RawMessage
@@ -304,6 +304,12 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		}
 		if a.View == "qa" {
 			return qaView(w, a)
+		}
+		if a.View == "team" {
+			if a.Thread != "" || a.Package != "" || a.IncludeMessages || a.After != "" || a.Limit != 0 {
+				return nil, errors.New("view=team takes no other options")
+			}
+			return teamView(w), nil
 		}
 		if a.Thread != "" || a.Package != "" {
 			return nil, errors.New("thread_id/package require view=qa")
@@ -1163,4 +1169,84 @@ func workspaceHistoryPage(messages []swarm.Message, after string, limit int) ([]
 		cursor = page[len(page)-1].ID
 	}
 	return page, cursor, start+len(page) < len(messages), nil
+}
+
+// teamView answers "who is doing what, and what is waiting on whom" in one
+// screen: per live member its state, activity, status, open assignments and
+// undelivered mail, plus each session's current settings as values only.
+// The full state carries every session's option catalogue, and nothing else
+// showed which member a queued message was stuck on, so an orchestrator had
+// been reading wash's own store file to find out.
+func teamView(w *swarm.Workspace) map[string]any {
+	activity, detail, usage := workspaceRuntime(w)
+	settings := map[string]map[string]string{}
+	hostedMu.Lock()
+	for _, m := range w.Members {
+		for _, live := range hostedAll {
+			if m.Session != "" && live.sessionID == m.Session && live.sessionReady.Load() {
+				cur := map[string]string{}
+				for _, c := range live.configs {
+					cur[c.ID] = c.CurrentValue
+				}
+				settings[m.ID] = cur
+			}
+		}
+	}
+	hostedMu.Unlock()
+	members := []map[string]any{}
+	for _, m := range w.Members {
+		if m.State == "ended" {
+			continue
+		}
+		open := []map[string]string{}
+		for _, a := range w.Assignments {
+			if a.Member == m.ID && a.State != "completed" && a.State != "failed" {
+				open = append(open, map[string]string{"id": a.ID, "state": a.State, "text": firstLine(a.Text, 120)})
+			}
+		}
+		inbox := map[string]int{}
+		for _, msg := range w.Messages {
+			if msg.Recipient == m.ID && (msg.State == "queued" || msg.State == "dispatched" || msg.State == "uncertain") {
+				inbox[msg.State]++
+			}
+		}
+		row := map[string]any{"id": m.ID, "key": m.Key, "name": m.Name, "state": m.State, "activity": activity[m.ID]}
+		for k, v := range map[string]string{"package": m.Package, "role": m.Role, "status": m.Status, "waiting": m.Waiting, "activity_detail": detail[m.ID]} {
+			if v != "" {
+				row[k] = v
+			}
+		}
+		if m.ID == w.Lead {
+			row["orchestrator"] = true
+		}
+		if m.AutoApprove {
+			row["auto_approve"] = true
+		}
+		if len(open) > 0 {
+			row["open_assignments"] = open
+		}
+		if len(inbox) > 0 {
+			row["undelivered"] = inbox
+		}
+		if s := settings[m.ID]; s != nil {
+			row["settings"] = s
+		}
+		if u, ok := usage[m.ID]; ok {
+			row["usage"] = u
+		}
+		members = append(members, row)
+	}
+	return map[string]any{"workspace": map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "revision": w.Revision}, "pending_approvals": len(workspaceApprovals(w)), "members": members}
+}
+
+// firstLine is s cut to its first line and at most n runes, marked when cut.
+func firstLine(s string, n int) string {
+	line, _, multi := strings.Cut(strings.TrimSpace(s), "\n")
+	if r := []rune(line); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	if multi {
+		return line + " …"
+	}
+	return line
 }

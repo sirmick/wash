@@ -1118,3 +1118,20 @@ func TestJournalDoesNotHoldHostedMuAcrossShownTitle(t *testing.T) {
 		t.Fatalf("noted %+v", got)
 	}
 }
+
+// A note restates a tool call its own row already shows in full; a heredoc
+// pasted into it swamped the transcript (observed: an auto-approved Bash
+// with a 10-line python heredoc).
+func TestNoteSubjectIsOneShortLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"git status":                          "git status",
+		"  ls -la  ":                          "ls -la",
+		"python3 - <<'EOF'\nimport json\nEOF": "python3 - <<'EOF' …",
+		strings.Repeat("a", 100):              strings.Repeat("a", 80) + " …",
+		"echo hi\n":                           "echo hi",
+	} {
+		if got := noteSubject(in); got != want {
+			t.Errorf("noteSubject(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

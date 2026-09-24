@@ -908,7 +908,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=yolo subject=%q",
 			h.key, preq.ToolName, subject)
-		h.note("Auto-approved (yolo): " + preq.ToolName + " " + subject)
+		h.note("Auto-approved (yolo): " + preq.ToolName + " " + noteSubject(subject))
 		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	}
 
@@ -1106,7 +1106,7 @@ func (h *hosted) narrateUnanswered(why, tool, subject string) {
 		h.key, tool, why, subject)
 	text := "Not approved — " + unansweredReason(why) + ": " + tool
 	if subject != "" {
-		text += " " + subject
+		text += " " + noteSubject(subject)
 	}
 	h.note(text)
 }
@@ -1705,3 +1705,22 @@ func (h *hosted) toggleYolo(on bool) {
 		return nil
 	})
 }
+
+// noteSubject is a tool subject as a transcript note shows it: the first line,
+// at most noteSubjectMax runes. The note sits directly under the tool call's
+// own row, which already shows the whole command; pasting it again made one
+// multi-line heredoc into two screens of transcript. The log keeps it whole.
+func noteSubject(s string) string {
+	line, rest, multi := strings.Cut(strings.TrimSpace(s), "\n")
+	line = strings.TrimSpace(line)
+	cut := multi && strings.TrimSpace(rest) != ""
+	if r := []rune(line); len(r) > noteSubjectMax {
+		line, cut = strings.TrimSpace(string(r[:noteSubjectMax])), true
+	}
+	if cut {
+		line += " …"
+	}
+	return line
+}
+
+const noteSubjectMax = 80
