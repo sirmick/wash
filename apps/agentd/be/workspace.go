@@ -132,8 +132,18 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 				var a workspaceArgs
 				a, err = parseWorkspaceArgs(req.Arguments)
 				if err == nil {
+					// member_control is the orchestrator's; the human may be
+					// looking at a member's tab.
+					lead := h
+					if w := ws.store.View(h.sessionID); w != nil {
+						lead = workspaceHosted(workspaceLeadSession(*w))
+					}
+					if lead == nil {
+						err = errors.New("the orchestrator is not running")
+						break
+					}
 					args, _ := json.Marshal(map[string]any{"action": "resume", "member_ids": []string{a.Member}})
-					result, err = ws.call(context.Background(), h, workspacemcp.Call{Name: "member_control", Arguments: args})
+					result, err = ws.call(context.Background(), lead, workspacemcp.Call{Name: "member_control", Arguments: args})
 					// Surface this single member's failure in the GUI, even though
 					// bulk process controls return errors in individual outcomes.
 					if err == nil {
@@ -644,9 +654,6 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 	isMember := false
 	err := ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, self *swarm.Member) error {
 		isMember = id != w.Lead
-		if self.ID != w.Lead && self.ID != id {
-			return errors.New("only self or orchestrator may pause/resume")
-		}
 		v := swarm.GetMember(w, id)
 		if v == nil {
 			return errors.New("workspace changed during member operation")

@@ -243,3 +243,31 @@ func TestInterruptEndsTheTurnWithoutPausingTheMember(t *testing.T) {
 		workspaces = old
 	}
 }
+
+// member_control is the orchestrator's: a member's tool list leaves it out,
+// and a member that calls it anyway, even on itself, is refused.
+func TestMemberControlIsOrchestratorOnly(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "worker", Key: "worker", Session: "worker-s", State: "available", Lifetime: "resident", Creator: m.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	args := json.RawMessage(`{"action":"pause","member_ids":["worker"]}`)
+	if _, err = ws.call(context.Background(), &hosted{sessionID: "worker-s"}, workspacemcp.Call{Name: "member_control", Arguments: args}); err == nil || !strings.Contains(err.Error(), "orchestrator operation") {
+		t.Fatalf("member controlled itself: %v", err)
+	}
+	for _, tool := range workspacemcp.MemberTools() {
+		if tool.Name == "member_control" {
+			t.Fatal("member tool list offers member_control")
+		}
+	}
+}

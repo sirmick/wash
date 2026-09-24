@@ -148,6 +148,9 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		if w == nil {
 			return nil, errors.New("no workspace")
 		}
+		if lead := swarm.GetMember(w, w.Lead); lead == nil || lead.Session != h.sessionID {
+			return nil, errors.New("orchestrator operation")
+		}
 		if p.Package != "" {
 			if len(p.Members) > 0 {
 				return nil, errors.New("select member_ids or package")
@@ -161,13 +164,7 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		if len(p.Members) == 0 || len(p.Members) > 64 {
 			return nil, errors.New("select 1–64 members")
 		}
-		// Validate the whole target set and authority before any process is stopped.
-		self := ""
-		for _, m := range w.Members {
-			if m.Session == h.sessionID {
-				self = m.ID
-			}
-		}
+		// Validate the whole target set before any process is stopped.
 		ids := []string{}
 		for _, ref := range p.Members {
 			m := swarm.GetMember(w, ref)
@@ -176,8 +173,7 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			// paused (nothing dispatches, nothing launches) until the lead is
 			// resumed. Refusing the lead as a target left no way back but
 			// ending the workspace — the GUI's Resume button calls this too.
-			selfResume := m != nil && m.ID == w.Lead && self == w.Lead && p.Action == "resume"
-			if m == nil || m.ID == w.Lead && !selfResume || self != w.Lead && m.Creator != self || (p.Action == "end" || p.Action == "configure") && self != w.Lead {
+			if m == nil || m.ID == w.Lead && p.Action != "resume" {
 				return nil, errors.New("invalid or unauthorized member target")
 			}
 			if !slices.Contains(ids, m.ID) {

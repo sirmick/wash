@@ -40,7 +40,7 @@ arrived. A member launched without a task is told to wait for its assignment.
 | `workspace_get` | Compact team view by default; `view:state` full JSON; `view:about` discovery; `view:qa` threads/generated Markdown |
 | `workspace_configure` | Atomic setup/patch: profiles, settings, keyed member reservations, plan, document |
 | `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history; `workspace_id` ends a stale workspace |
-| `member_control` | Pause/resume/interrupt/end IDs, keys or a package; orchestrator `configure` of live settings; per-member outcomes |
+| `member_control` | Orchestrator only: pause/resume/interrupt/end IDs, keys or a package; `configure` of live settings; per-member outcomes |
 | `member_update` | Atomic own status/emoji/waiting, results and QA updates |
 | `message_send` | One message or an atomic batch; optional QA opening/thread linkage |
 | `inbox_read` | Paginated caller inbox history |
