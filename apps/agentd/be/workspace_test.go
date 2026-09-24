@@ -296,3 +296,54 @@ func TestRemovedWorkspaceToolCannotBypassMCPBridge(t *testing.T) {
 		}
 	}
 }
+
+// A backend restart pauses the lead with everyone else, and a paused workspace
+// neither dispatches nor launches. The lead must be able to resume itself, or
+// the only way back is ending the workspace. Observed live after a rebuild.
+func TestLeadResumesItselfAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s, err := swarm.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, err = swarm.Open(path); err != nil { // the restart
+		t.Fatal(err)
+	}
+	if got := s.View("lead"); got.State != "paused" {
+		t.Fatalf("restart left workspace %q, want paused", got.State)
+	}
+	h := &hosted{key: "workspace-lead-test", sessionID: "lead"}
+	h.sessionReady.Store(true)
+	hostedMu.Lock()
+	hostedAll[h.key] = h
+	hostedMu.Unlock()
+	defer func() { hostedMu.Lock(); delete(hostedAll, h.key); hostedMu.Unlock() }()
+	ws := &workspaceService{store: s}
+	control := func(action string) map[string]any {
+		raw, _ := json.Marshal(map[string]any{"action": action, "member_ids": []string{w.Lead}})
+		res, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "member_control", Arguments: raw})
+		if err != nil {
+			return map[string]any{"error": err.Error()}
+		}
+		out, _ := json.Marshal(res)
+		var m map[string]any
+		_ = json.Unmarshal(out, &m)
+		return m
+	}
+	if got := control("resume"); got["error"] != nil {
+		t.Fatal(got)
+	}
+	if got := s.View("lead"); got.State != "active" {
+		t.Fatalf("workspace %q after the lead resumed, want active", got.State)
+	}
+	// Resuming is the only thing the lead may do to itself here.
+	for _, action := range []string{"pause", "end"} {
+		if got := control(action); got["error"] == nil {
+			t.Errorf("lead was allowed to %s itself: %v", action, got)
+		}
+	}
+}

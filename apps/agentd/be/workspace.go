@@ -674,6 +674,26 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 			capability = m.LaunchSettings.Capability
 		}
 		target, err = resumeHostedCapability(m.Provider, m.Cwd, m.Session, ws.conn, capability)
+		if err == nil && m.LaunchSettings != nil {
+			// session/load comes back on the adapter's defaults: observed, a
+			// resumed Architect on claude-fable-5-1 at effort "default" where
+			// its profile said claude-fable-5-1[1m] at high. Reapply the launch
+			// settings before the member is available, so no turn runs on the
+			// wrong model. Best effort: a setting the adapter no longer offers
+			// is logged rather than stranding a resident that loaded fine.
+			hostedMu.Lock()
+			options := append([]acp.ConfigOption(nil), target.configs...)
+			hostedMu.Unlock()
+			if _, cerr := configureWorkspaceSession(*m.LaunchSettings, options, func(id, value string) ([]acp.ConfigOption, error) {
+				res, e := target.client.SetConfigOption(ctx, target.sessionID, id, value)
+				if e == nil {
+					target.applyConfigs(res.ConfigOptions)
+				}
+				return res.ConfigOptions, e
+			}); cerr != nil {
+				log.Printf("agentd: workspace resume member=%s: launch settings not reapplied: %v", id, cerr)
+			}
+		}
 		loadErr := err
 		err = ws.store.Mutate(h.sessionID, false, func(current *swarm.Workspace, _ *swarm.Member) error {
 			v := swarm.GetMember(current, id)

@@ -150,7 +150,13 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		ids := []string{}
 		for _, ref := range p.Members {
 			m := swarm.GetMember(w, ref)
-			if m == nil || m.ID == w.Lead || self != w.Lead && m.Creator != self || p.Action == "end" && self != w.Lead {
+			// The lead may resume itself, and only that: a backend restart
+			// pauses the lead with everyone else, and the workspace stays
+			// paused (nothing dispatches, nothing launches) until the lead is
+			// resumed. Refusing the lead as a target left no way back but
+			// ending the workspace — the GUI's Resume button calls this too.
+			selfResume := m != nil && m.ID == w.Lead && self == w.Lead && p.Action == "resume"
+			if m == nil || m.ID == w.Lead && !selfResume || self != w.Lead && m.Creator != self || p.Action == "end" && self != w.Lead {
 				return nil, errors.New("invalid or unauthorized member target")
 			}
 			if !slices.Contains(ids, m.ID) {
