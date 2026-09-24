@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -126,12 +127,43 @@ func sessionView(state State, key string) State {
 func managerView(state State) State {
 	out := state
 	out.Rows = make([]Row, len(state.Rows))
+	teams := rowWorkspaces()
 	for i, row := range state.Rows {
 		row.Configs = nil
 		row.Commands = nil
 		row.Modes = nil
 		row.Preview = liveTranscriptPreview(row.Key, 2)
+		if row.SessionID != "" {
+			row.Workspace = teams[row.SessionID]
+		}
 		out.Rows[i] = row
+	}
+	return out
+}
+
+// rowWorkspaces maps each live workspace session to its place in the team.
+func rowWorkspaces() map[string]*RowWorkspace {
+	out := map[string]*RowWorkspace{}
+	if workspaces == nil {
+		return out
+	}
+	for _, w := range workspaces.store.Snapshot().Workspaces {
+		if w.State == "ended" {
+			continue
+		}
+		lead := ""
+		if m := swarm.GetMember(&w, w.Lead); m != nil {
+			lead = m.Session
+		}
+		for _, m := range w.Members {
+			if m.Session == "" || m.State == "ended" {
+				continue
+			}
+			out[m.Session] = &RowWorkspace{
+				ID: w.ID, Name: w.Name, LeadSession: lead, Orchestrator: m.ID == w.Lead,
+				Member: m.Name, Role: m.Role, Package: m.Package, PackageTitle: w.Packages[m.Package].Title,
+			}
+		}
 	}
 	return out
 }

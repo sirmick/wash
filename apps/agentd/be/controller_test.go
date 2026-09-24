@@ -1,9 +1,11 @@
 package agentd
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/pkg/sdk"
 )
 
@@ -25,6 +27,38 @@ func TestManagerViewOmitsSessionOnlyCollections(t *testing.T) {
 	}
 	if len(got.Rows[0].Roots) != 1 {
 		t.Fatalf("manager view lost roster data: %#v", got)
+	}
+}
+
+func TestManagerViewPlacesMembersUnderTheirOrchestrator(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Setup("lead-s", "claude", t.TempDir(), "Team", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Mutate("lead-s", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Packages = map[string]swarm.Package{"K5": {Title: "Timer"}}
+		w.Members = append(w.Members,
+			swarm.Member{ID: "impl", Name: "implementer", Role: "implementer", Package: "K5", Session: "impl-s", State: "available"},
+			swarm.Member{ID: "gone", Name: "old", Session: "gone-s", State: "ended"})
+		return nil
+	})
+	old := workspaces
+	workspaces = &workspaceService{store: s}
+	defer func() { workspaces = old }()
+	got := managerView(State{Rows: []Row{{Key: "a", SessionID: "lead-s"}, {Key: "b", SessionID: "impl-s"}, {Key: "c", SessionID: "gone-s"}, {Key: "d"}}})
+	lead, impl := got.Rows[0].Workspace, got.Rows[1].Workspace
+	if lead == nil || !lead.Orchestrator || lead.LeadSession != "lead-s" || lead.ID != w.ID {
+		t.Fatalf("orchestrator row: %#v", lead)
+	}
+	if impl == nil || impl.Orchestrator || impl.LeadSession != "lead-s" || impl.Member != "implementer" || impl.PackageTitle != "Timer" {
+		t.Fatalf("member row: %#v", impl)
+	}
+	if got.Rows[2].Workspace != nil || got.Rows[3].Workspace != nil {
+		t.Fatal("ended member or plain session placed in a team")
 	}
 }
 

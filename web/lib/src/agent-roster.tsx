@@ -67,6 +67,62 @@ export interface RosterRow {
    *  a session with three extra roots is a different thing from one
    *  confined to its own folder. */
   roots?: string[];
+  /** the session's place in a workspace team (manager view only): members
+   *  list under the row whose session_id is lead_session */
+  workspace?: RosterWorkspace;
+}
+
+export interface RosterWorkspace {
+  id: string;
+  name: string;
+  lead_session: string;
+  orchestrator?: boolean;
+  member: string;
+  role?: string;
+  package?: string;
+  package_title?: string;
+}
+
+/** A team entry under an orchestrator: a package heading or a member row. */
+type TeamEntry = { pkg: string; label: string } | { key: string };
+
+/**
+ * Splits the roster into top-level rows and each orchestrator's team.
+ * Members whose orchestrator has no row here stay top-level, labelled.
+ * A team lists members without a package first, then by package code, then
+ * by name: a stable order, where the attention sort would reshuffle it on
+ * every state change. Questions stay at the top of the pane either way.
+ */
+export function rosterTeams(rows: RosterRow[]): { top: string[]; teams: Map<string, TeamEntry[]> } {
+  const leads = new Map<string, string>();
+  for (const r of rows) if (r.workspace?.orchestrator && r.session_id) leads.set(r.session_id, r.key);
+  const members = new Map<string, RosterRow[]>();
+  const top: string[] = [];
+  for (const r of rows) {
+    const lead = r.workspace && !r.workspace.orchestrator ? leads.get(r.workspace.lead_session) : undefined;
+    if (lead === undefined) top.push(r.key);
+    else members.set(lead, [...(members.get(lead) ?? []), r]);
+  }
+  const teams = new Map<string, TeamEntry[]>();
+  for (const [lead, list] of members) {
+    list.sort((a, b) =>
+      (a.workspace!.package ?? '').localeCompare(b.workspace!.package ?? '') ||
+      a.workspace!.member.localeCompare(b.workspace!.member) ||
+      a.key.localeCompare(b.key));
+    const entries: TeamEntry[] = [];
+    let pkg = '';
+    for (const r of list) {
+      const code = r.workspace!.package ?? '';
+      if (code && code !== pkg) {
+        const title = r.workspace!.package_title;
+        entries.push({ pkg: code, label: title ? `${code} · ${title}` : code });
+      }
+      pkg = code;
+      entries.push({ key: r.key });
+    }
+    teams.set(lead, entries);
+  }
+  return { top, teams };
 }
 
 /** A permission question waiting for a human (docs/AGENT_TERM.md §12). */
@@ -189,10 +245,38 @@ export const AgentAsks: Component<{
 
 export const AgentRoster: Component<AgentRosterProps> = (props) => {
   const rowByKey = createMemo(() => new Map(props.rows().map((r) => [r.key, r] as const)));
-  const rowKeys = createMemo(() => props.rows().map((r) => r.key), undefined, {
-    equals: (a, b) => a.length === b.length && a.every((k, i) => k === b[i]),
-  });
+  const teams = createMemo(() => rosterTeams(props.rows()));
+  const sameKeys = (a: string[], b: string[]) => a.length === b.length && a.every((k, i) => k === b[i]);
+  const rowKeys = createMemo(() => teams().top, undefined, { equals: sameKeys });
+  // Entries are strings so <For> keeps each one across pushes, like rows.
+  const teamKeys = (lead: string) =>
+    (teams().teams.get(lead) ?? []).map((e) => ('pkg' in e ? `pkg\u0000${e.pkg}\u0000${e.label}` : `row\u0000${e.key}`));
   const empty = () => props.rows().length === 0;
+  const rowView = (key: string, depth: number) => {
+    const r = () => rowByKey().get(key)!;
+    return (
+      <Show when={rowByKey().has(key)}>
+        <AgentRowView
+          row={r()}
+          depth={depth}
+          members={depth === 0 ? (teams().teams.get(key) ?? []).filter((e) => 'key' in e).length : 0}
+          elapsed={fmtElapsed(props.now() - props.startedAt(key))}
+          onActivate={() => props.onActivate(r())}
+          active={props.activeKey?.() === key}
+          onReattach={r().detached ? () => props.onReattach?.(r()) : undefined}
+          detached={r().detached === true}
+          onDetach={props.onDetach ? () => props.onDetach?.(r()) : undefined}
+          onCancel={props.onCancel ? () => props.onCancel?.(r()) : undefined}
+          onStop={props.onStop ? () => props.onStop?.(r()) : undefined}
+          onRename={props.onRename ? () => props.onRename?.(r()) : undefined}
+          onAddRoot={props.onAddRoot ? () => props.onAddRoot?.(r()) : undefined}
+          onOpenTerminal={props.onOpenTerminal ? () => props.onOpenTerminal?.(r()) : undefined}
+          onOpenFileManager={props.onOpenFileManager ? () => props.onOpenFileManager?.(r()) : undefined}
+          onOpenTextEditor={props.onOpenTextEditor ? () => props.onOpenTextEditor?.(r()) : undefined}
+        />
+      </Show>
+    );
+  };
   return (
     <div
       data-testid="agents-widget"
@@ -223,26 +307,53 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
           through an accessor, so its fields still update in place. */}
       <For each={rowKeys()}>
         {(key) => {
-          const r = () => rowByKey().get(key)!;
+          const members = createMemo(() => teamKeys(key), undefined, { equals: sameKeys });
           return (
-            <Show when={rowByKey().has(key)}>
-              <AgentRowView
-                row={r()}
-                elapsed={fmtElapsed(props.now() - props.startedAt(key))}
-                onActivate={() => props.onActivate(r())}
-                active={props.activeKey?.() === key}
-                onReattach={r().detached ? () => props.onReattach?.(r()) : undefined}
-                detached={r().detached === true}
-                onDetach={props.onDetach ? () => props.onDetach?.(r()) : undefined}
-                onCancel={props.onCancel ? () => props.onCancel?.(r()) : undefined}
-                onStop={props.onStop ? () => props.onStop?.(r()) : undefined}
-                onRename={props.onRename ? () => props.onRename?.(r()) : undefined}
-                onAddRoot={props.onAddRoot ? () => props.onAddRoot?.(r()) : undefined}
-                onOpenTerminal={props.onOpenTerminal ? () => props.onOpenTerminal?.(r()) : undefined}
-                onOpenFileManager={props.onOpenFileManager ? () => props.onOpenFileManager?.(r()) : undefined}
-                onOpenTextEditor={props.onOpenTextEditor ? () => props.onOpenTextEditor?.(r()) : undefined}
-              />
-            </Show>
+            <>
+              {rowView(key, 0)}
+              {/* The orchestrator's team, indented under it on one guide
+                  line, so which sessions are its members is visible at a
+                  glance rather than inferred from matching folders. */}
+              <Show when={members().length > 0}>
+                <div
+                  data-testid={`agents-team-${key}`}
+                  style={{
+                    display: 'flex',
+                    'flex-direction': 'column',
+                    gap: '4px',
+                    'margin-left': '10px',
+                    'padding-left': '8px',
+                    'border-left': `2px solid ${tokens.borderFocus}`,
+                  }}
+                >
+                  <For each={members()}>
+                    {(entry) => {
+                      const [kind, a, b] = entry.split('\u0000');
+                      return kind === 'pkg' ? (
+                        <div
+                          data-testid={`agents-package-${a}`}
+                          style={{
+                            'font-size': '10px',
+                            'font-weight': 600,
+                            opacity: 0.6,
+                            'text-transform': 'uppercase',
+                            'letter-spacing': '0.04em',
+                            padding: '4px 0 0',
+                            overflow: 'hidden',
+                            'text-overflow': 'ellipsis',
+                            'white-space': 'nowrap',
+                          }}
+                        >
+                          {b}
+                        </div>
+                      ) : (
+                        rowView(a, 1)
+                      );
+                    }}
+                  </For>
+                </div>
+              </Show>
+            </>
           );
         }}
       </For>
@@ -381,6 +492,10 @@ const AskBtn: Component<{
 
 const AgentRowView: Component<{
   row: RosterRow;
+  /** 1 for a member listed under its orchestrator */
+  depth?: number;
+  /** how many members list under this orchestrator row */
+  members?: number;
   elapsed: string;
   onActivate: () => void;
   onReattach?: () => void;
@@ -501,7 +616,22 @@ const AgentRowView: Component<{
             'flex-shrink': 0,
           }}
         />
-        <span style={{ 'font-weight': 600, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+        {/* A member leads with its name in the team; the agent slug says
+            less once every row under an orchestrator is "claude". */}
+        <Show when={props.row.workspace && !props.row.workspace.orchestrator}>
+          <span data-testid="agents-member" style={{ 'font-weight': 600, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+            {props.row.workspace!.member}
+          </span>
+        </Show>
+        <span
+          style={{
+            'font-weight': props.row.workspace && !props.row.workspace.orchestrator ? 400 : 600,
+            opacity: props.row.workspace && !props.row.workspace.orchestrator ? 0.7 : 1,
+            overflow: 'hidden',
+            'text-overflow': 'ellipsis',
+            'white-space': 'nowrap',
+          }}
+        >
           {props.row.agent}
         </span>
         <Show when={place()}>
@@ -510,6 +640,20 @@ const AgentRowView: Component<{
           </span>
         </Show>
       </div>
+      {/* Team membership is said in words, not only by indentation: an
+          orchestrator names its workspace and team size, and a member
+          whose orchestrator has no row here still says whose it is. */}
+      <Show when={props.row.workspace?.orchestrator}>
+        <div data-testid="agents-orchestrator" style={{ 'font-size': '10px', 'font-weight': 600, color: tokens.accentBlue, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+          Orchestrator · {props.row.workspace!.name}
+          {props.members ? ` · ${props.members} member${props.members === 1 ? '' : 's'}` : ''}
+        </div>
+      </Show>
+      <Show when={props.row.workspace && !props.row.workspace.orchestrator && !props.depth}>
+        <div data-testid="agents-member-of" style={{ 'font-size': '10px', opacity: 0.7, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+          Member of {props.row.workspace!.name}
+        </div>
+      </Show>
       {/* What the session is ABOUT, in the agent's own words. It names
           itself once it works out what the work is, so this costs no
           extra model call — and a sidebar of "codex · wash" rows tells

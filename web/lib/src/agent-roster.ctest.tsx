@@ -7,7 +7,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
-import { AgentRoster, fmtAgo, fmtElapsed, stateColor, stateLabel, type RosterAsk, type RosterRow } from './agent-roster.tsx';
+import { AgentRoster, rosterTeams, fmtAgo, fmtElapsed, stateColor, stateLabel, type RosterAsk, type RosterRow } from './agent-roster.tsx';
 
 afterEach(cleanup);
 
@@ -533,4 +533,32 @@ test('picking a verb from the row menu does not also activate the row', () => {
   expect(activated).toEqual([]);
   fireEvent.click(getByTestId('agents-row-a'));
   expect(activated).toEqual(['a']);
+});
+
+test('team: members nest under their orchestrator, grouped by package, and say whose they are', () => {
+  const ws = (over: Partial<NonNullable<RosterRow['workspace']>>) => ({ id: 'w', name: 'Redoubt', lead_session: 'lead-s', member: '', ...over });
+  const rows = [
+    // Attention order from agentd: a member needing input sorts first.
+    row({ key: 'rev', state: 'needs-input', session_id: 'rev-s', workspace: ws({ member: 'reviewer', package: 'K5', package_title: 'Timer' }) }),
+    row({ key: 'solo', session_id: 'solo-s' }),
+    row({ key: 'lead', session_id: 'lead-s', workspace: ws({ orchestrator: true, member: 'orchestrator' }) }),
+    row({ key: 'impl', session_id: 'impl-s', workspace: ws({ member: 'implementer', package: 'K5', package_title: 'Timer' }) }),
+    row({ key: 'arch', session_id: 'arch-s', workspace: ws({ member: 'architect' }) }),
+    row({ key: 'stray', session_id: 'stray-s', workspace: ws({ member: 'scout', lead_session: 'elsewhere', name: 'Other' }) }),
+  ];
+  const { top, teams } = rosterTeams(rows);
+  expect(top).toEqual(['solo', 'lead', 'stray']);
+  expect(teams.get('lead')).toEqual([{ key: 'arch' }, { pkg: 'K5', label: 'K5 · Timer' }, { key: 'impl' }, { key: 'rev' }]);
+
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={noop} />
+  ));
+  const team = getByTestId('agents-team-lead');
+  expect(team.contains(getByTestId('agents-row-impl'))).toBe(true);
+  expect(team.contains(getByTestId('agents-package-K5'))).toBe(true);
+  expect(team.contains(getByTestId('agents-row-solo'))).toBe(false);
+  expect(getByTestId('agents-row-lead').textContent).toContain('Orchestrator · Redoubt · 3 members');
+  expect(getByTestId('agents-row-rev').textContent).toContain('reviewer');
+  // An orphaned member stays top-level but still names its workspace.
+  expect(getByTestId('agents-row-stray').textContent).toContain('Member of Other');
 });

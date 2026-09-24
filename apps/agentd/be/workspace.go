@@ -927,6 +927,10 @@ func (ws *workspaceService) publish(force bool) {
 			delete(ws.sequences, instance)
 		}
 	}
+	// The Agents window nests members under their orchestrator, and a
+	// member joins after its session row already exists. Unchanged views
+	// are not resent.
+	publishControllerViews()
 }
 func (ws *workspaceService) loop() {
 	// This ticks runtime state, never an agent/model. Mail delivery also has an

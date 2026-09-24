@@ -136,6 +136,24 @@ type Row struct {
 	// Stale marks a row whose terminal stopped reporting: shown greyed,
 	// then dropped. See staleAfter / dropAfter.
 	Stale bool `json:"stale,omitempty"`
+	// Workspace places the session in a workspace team, so the Agents
+	// window lists members under the orchestrator that leads them. Set
+	// only on the manager's projection.
+	Workspace *RowWorkspace `json:"workspace,omitempty"`
+}
+
+// RowWorkspace is one session's place in a workspace team.
+type RowWorkspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// LeadSession is the orchestrator's session: a member row nests under
+	// the row with this session_id.
+	LeadSession  string `json:"lead_session"`
+	Orchestrator bool   `json:"orchestrator,omitempty"`
+	Member       string `json:"member"`
+	Role         string `json:"role,omitempty"`
+	Package      string `json:"package,omitempty"`
+	PackageTitle string `json:"package_title,omitempty"`
 }
 
 // Mode is one approval/sandbox preset an agent offers.
