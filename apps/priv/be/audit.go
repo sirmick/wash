@@ -2,9 +2,11 @@ package priv
 
 import (
 	"encoding/json"
+	"github.com/sirmick/wash/pkg/wire"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -81,6 +83,7 @@ func (s *State) appendAudit(rec auditRecord) {
 	if rec.TS == "" {
 		rec.TS = time.Now().UTC().Format(time.RFC3339)
 	}
+	s.journal(rec)
 	if cfg.AuditPath == "" {
 		return
 	}
@@ -115,4 +118,34 @@ func ensureDir(path string) error {
 		return nil
 	}
 	return os.MkdirAll(dir, 0o700)
+}
+
+// journal mirrors a decision into the router's activity journal
+// (docs/COMMANDER.md §3.2): who asked for privilege, for what, and what
+// the person decided — the one line, beside the audit file that keeps the
+// whole record. Lock-state housekeeping (idle_locked) is not a decision
+// and is not journaled.
+func (s *State) journal(rec auditRecord) {
+	if s.conn == nil {
+		return
+	}
+	switch rec.Decision {
+	case "approve", "reject", "error", "approve_app", "revoke_app":
+	default:
+		return
+	}
+	line := rec.Decision
+	if rec.SenderApp != "" {
+		line += " " + rec.SenderApp
+	}
+	if len(rec.Argv) > 0 {
+		line += ": " + strings.Join(rec.Argv, " ")
+	}
+	if rec.Error != "" {
+		line += " (" + rec.Error + ")"
+	}
+	_ = s.conn.Note(wire.EvtActivityNote{
+		Kind: "priv.escalate", Title: rec.SenderApp, Line: line,
+		Ref: map[string]any{"req_id": rec.ReqID, "decision": rec.Decision},
+	})
 }

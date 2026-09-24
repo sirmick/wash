@@ -153,6 +153,7 @@ func TestEvtRoundTrip(t *testing.T) {
 		NewEvtWindowCreateErr(7, ErrCodeForbidden, "windows capability not declared"),
 		NewEvtWindowDestroy(42),
 		NewEvtSpawnRequest("com.wash.about"),
+		NewEvtSpawnRequestOpen("com.wash.fm", "/home/u/docs"),
 		NewEvtSpawnOk("com.wash.about", "inst-2"),
 		NewEvtSpawnErr("com.wash.about", ErrCodeForbidden, "no capability"),
 		NewEvtAppRestart(9, "com.wash.display"),

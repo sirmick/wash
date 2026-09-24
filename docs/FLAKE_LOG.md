@@ -16,6 +16,220 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-23 — sidebar notify badge: CI-only, on a runner 4x slower than the dev box
+
+**Seen during:** the GitHub Actions `ci` run for the PR #26 head
+(`b0e7ddf0`): 701 passed / 1 failed / 23 skipped. `sidebar.spec.ts:90`
+waited 15s for `[data-testid="sidebar-section-badge-notify"]` to read
+`1` and the element never appeared.
+
+**Not the branch.** Nothing in PR #26 touches the sidebar notify widget,
+and the same commit's full suite was green locally. 15/15 locally with
+`--repeat-each=3`, each run taking ~0.5s against the 15s budget.
+
+**Mechanism — runner speed, most likely.** That CI suite took 14.9m for
+what runs in 4.0m here, so the whole tier is ~4x slower under contention.
+A spec whose local margin is 30x can still lose it there. Not pinned
+down; the badge depends on a notify push reaching the session FE, so the
+thing to measure on a repeat is whether the notification was delivered at
+all or just late.
+
+**Did not recur.** The very next CI run (`18510dcc`, the merge of the
+same work) was green on both `unit` and `e2e`, so 1 in 2 CI runs so far
+and 0 in 4 local full-suite runs.
+
+**Verdict:** watch. Same class as the cli-open entry below — both are
+load-sensitive margins rather than anything the suite proves wrong. If
+either recurs, instrument the wait instead of raising the timeout.
+
+## 2026-09-23 — cli-open `xdg-open`: the shim banner missed a 10s poll under full-suite load
+
+**Seen during:** the `make push` gate on the PR #26 merge (718 passed / 1
+failed / 9 skipped). `cli-open.spec.ts:105` polls the terminal buffer for
+`wash open: ….md → wash-edit` for 10s after running `xdg-open` in a wash
+terminal, and never saw it.
+
+**Not the branch.** Two full `make e2e-test` runs on the same merged tree
+were green (719 passed, 0 flaky), and the spec is nowhere near the
+workspace/start-menu changes. No orphan accumulation either: 1 chrome,
+44/128 inotify instances at the time of the failure.
+
+**Frequency:** 1 in 3 full-suite runs so far; 15/15 standalone with
+`--repeat-each=3`, each in ~1.3s against a 10s budget. So the shim, the
+PATH and the routing are all fine — the spec loses its margin only when
+the whole suite is competing for the box.
+
+**Verdict:** load-sensitive margin, mechanism not yet pinned down. Watch
+for a repeat; if it recurs, find out what the terminal is waiting on
+(shim exec vs. the router's open routing vs. the buffer read) rather than
+just raising the timeout.
+
+## 2026-09-16 — fm-be `connect ENOENT control.sock`: the fixture was ready before the socket (FIXED)
+
+**Seen during:** the v0.16.0 tag run (677 passed / 3 failed). fm-be's
+outside_root test died on its first control request: the socket file did
+not exist.
+
+**Mechanism — harness readiness.** `startRouter` waited for the shell's
+"listening on" line, but the router starts its control listener from a
+goroutine AFTER printing it (internal/runner/router/router.go), and logs
+"control socket listening on" only then. A test whose first act is a
+`controlRequest` could dial a socket not yet created. **Fix:** the fixture
+waits for both lines. 15/15 of fm-be afterwards.
+
+Same run, `about-app-traffic` "674 B": the About row appears on the first
+~1/s stats push that counted any terminal bytes and the spec read it once;
+it now polls for the kilobytes. `agent-roots` sibling-read timed out once;
+24/24 on a two-core squeeze — CI-only so far, watch for a repeat.
+
+## 2026-09-16 — agent-adapter-exit: the crash reason arrived after the exit (FIXED)
+
+**Seen during:** the v0.15.0 tag run, where main's run of the SAME commit
+was green (the tag/main split this file has recorded before).
+
+```
+timed out waiting for /agentd: acp adapter exited .*stderr=".*simulated crash/
+agentd: acp adapter exited key=acp:1 … err=EOF stderr=""
+agentd: adapter codex stderr: acp-fake: fatal: simulated crash (token expired)
+```
+
+**Mechanism — not a test artefact.** `watchExit` wakes on `client.Done()`,
+which is the adapter's STDOUT closing, and read the stderr tail straight
+away; the stderr reader is a separate goroutine and the last line — the one
+that says why the agent died — lands a moment later. So the exit log AND
+the transcript note ("Its last output:") could both omit the reason. Same
+shape as the pty drain entry above. **Fix:** the exit path waits for the
+stderr reader, bounded at 2s so a leftover child holding stderr open cannot
+hold the exit. 8/8 squeezed afterwards.
+
+## 2026-09-15 — term-reconcile: the activity dot counted as a third tab (FIXED)
+
+**Seen during:** three GitHub `ci` runs in a row (main, PR #25, and the
+v0.15.0 tag), always `term-reconcile.spec.ts:22`:
+
+```
+Expected: 2   Received: 3    (tabs, right after clicking New Tab)
+```
+
+**Reproduced** at 6/10 with `taskset -c 0,1 --workers=2 --repeat-each=10`.
+
+**Mechanism — the spec's own selector.** A tab is a `<button>` whose
+children share its `term-tab-` prefix: the badge, the bell, the rename
+input, and the activity dot (`term-tab-activity-<id>`, apps/term/fe/src/
+main.tsx). The selector excluded only `close` and `badge`, so the moment
+the backgrounded first tab printed anything — which is exactly what a busy
+runner makes likely — its activity dot matched and the count read 3.
+Nothing was wrong with the terminal. Fixed by counting `button[data-testid^=
+"term-tab-"]`, the form term.spec.ts and term-menubar.spec.ts already use.
+20/20 afterwards.
+
+## 2026-09-15 — agent-fs: a fast command's output lost between reap and drain (FIXED)
+
+**Seen during:** GitHub `ci` for 0.15.0 (e2e 677 passed / 2 failed).
+`agent-fs.spec.ts` "the command runs in the session folder": the transcript
+showed `$ sh -c ls — exit 0` and the fake agent's `RAN<<id=7 exit=0 out=>>`
+— the command ran, and its output never arrived. Same presentation as the
+2026-08-08 trio entry below, a different window.
+
+**Reproduced** with `taskset -c 0,1 --workers=2 --repeat-each=8` on the
+finished-command pair: 2/16 failed on the release tree, **1/16 on the
+pre-release baseline 5b29105e** — pre-existing, not the release.
+
+**Mechanism** (`internal/pty`). The reaper (`cmd.Wait` → `done`) and the
+pty→channel copy are separate goroutines, and the reaper usually wins. An
+agent woken by wait_for_exit asked terminal/output before the copy had read
+`ls`'s bytes (empty `out=`), then released the terminal; release's Close
+closed the pty fd with the output still in the kernel buffer, so the
+transcript's completion read an empty capture. **Fix:** once the child is
+reaped, `Output` and `Close` wait (bounded, 2s) for the copy to drain.
+Same squeeze afterwards: 32/32.
+
+The second red in that run, `agent-roster-pane` "each manager pane scrolls",
+was a guard doing its job: one running row came out exactly as tall as the
+shrunk pane on CI's fonts (98 = 98). The spec now runs two sessions.
+
+## 2026-09-14 — edit-readonly: Save As copy not on disk within the poll
+
+**Seen during:** the second `make push` attempt for 0.15.0 (full `e2e-test`,
+692 passed / 1 failed / 9 skipped). `edit-readonly.spec.ts:39` failed at its
+last step: `ENOENT … copy.txt` from the `expect.poll` after the Save As
+picker closed. The first attempt's e2e run of the same tree passed it, and
+10/10 passes of the spec (`--repeat-each=10`) straight afterwards.
+
+**Mechanism:** not established. Load-only; the spec and wash-edit are
+untouched by the release. **Verdict:** flake under full-suite load — watch
+for a repeat before digging.
+
+## 2026-09-14 — agentclient: a keepalive tick in flight outlives Forget
+
+**Seen during:** `make push` for 0.15.0 (`test-race` on the main checkout;
+the same tree was race-green in its worktree an hour earlier).
+`TestWatchKeepsReaffirmingEveryWatchedKey`:
+
+```
+forgotten key kept being re-affirmed: 3 → 4
+```
+
+**Mechanism — the test's own check-then-act.** `keepWatching` copies the
+watched keys under the lock and sends outside it. A tick that copied them a
+moment before `Forget("b")` still sends "b" once, after the test read its
+baseline. The product behaviour is right (no later tick sends it); the
+assertion sampled inside the one-tick window. **Fix:** the test lets an
+in-flight tick land (3× refresh) before taking the baseline. Nothing in the
+0.15.0 changes touches the package.
+
+## 2026-09-14 — fm-shortcuts: the router lost its fixture port to another test
+
+**Seen during:** the full `e2e-test` for PR #24's review branch (8 workers,
+674 passed / 1 failed / 17 skipped). `fm-shortcuts-clipboard.spec.ts:36`
+failed before the test body ran:
+
+```
+wash-router exited before listening: code=1
+http: listen 127.0.0.1:34227: bind: address already in use
+```
+
+90/90 passes of the spec (`--repeat-each=5`) straight afterwards.
+
+**Mechanism:** the fixture picks a free loopback port, closes it, and hands
+it to the router — a check-then-use window another worker's listener can
+land in. Nothing in the branch touches fm or the fixture's port choice.
+**Verdict:** fixture flake, unrelated to the branch. **Fix:** not yet; the
+cure is letting the router bind :0 and report the port it got.
+
+## 2026-09-11 — term-prefs zoom: a stale prefs echo rewinds the live value
+
+**Seen during:** the `make push` gate for 0.14.5 (full `e2e-test`, 8 workers,
+677 passed / 1 failed). `term-prefs.spec.ts:96` ("Ctrl+= / Ctrl+- / Ctrl+0
+zoom the terminal font") failed on the Ctrl+Minus step:
+
+```
+Expected: 13   Received: 12     (start = 12)
+```
+
+25 consecutive passes of the whole `term-prefs.spec.ts` in isolation
+afterwards — so: load-only, and not a assertion-order mistake.
+
+**Mechanism — a full-file prefs broadcast has no ordering against newer
+local state** (`apps/term/fe/src/main.tsx`). A font change sets the signal
+locally AND sends `prefs_set`; the BE writes the file and pushes it back to
+every terminal, and `applyPrefs` applied whatever arrived. Under load the
+echo for the FIRST Ctrl+= (13) can land after the SECOND (14) has already
+been applied here, rewinding the size to 13; Ctrl+Minus then steps to 12,
+which is exactly the numbers above. Nothing about this is test-only — two
+quick zoom presses on a busy link rewind the same way for a user.
+
+**Verdict:** real defect, pre-existing, surfaced by the gate. Not the branch
+under test (nothing in 0.14.5 touches term prefs; the same tree's earlier
+full run had it green).
+
+**Fix:** `sendPrefs` records each changed key's last-sent value, and
+`applyPrefs` holds that key until the BE echoes that value back (3s TTL so a
+dropped send can't deafen the window). Every other key in the push still
+applies, so another window's change still propagates — covered by the
+existing "change it in the second window, watch the first follow" spec.
+Same shape as the WM's geometry tokens (`web/shell/src/wm.ts`).
+
 ## 2026-08-08 — agent-spec trio: two send/complete races, root-caused and fixed
 
 **Seen during:** four consecutive CI `ci` runs on main/tags (0.13.0 →
@@ -551,3 +765,177 @@ round trip, which is the most likely mechanism.
 runs, and a plausible environment cause (a 20s budget for a full agent
 round trip on a 2-core runner, warming up). Logged so a second sighting
 has something to sit next to.
+
+---
+
+## 2026-09-07 — three agent specs red locally: not a flake, my own config
+
+`agent-session.spec.ts` (both "streams its reply into the transcript" and
+"yolo auto-approves"), plus `agent-remote-roster.spec.ts`. Reproducible,
+every run, 3 failed / 501 passed. They look like the flake trio above,
+which is exactly why this is logged.
+
+**Not the branch, and not a flake.** The baseline said so twice: the same
+three failed at the pre-change commit, and they failed identically before
+and after the drag-jank merge that had landed mid-session (the tempting
+suspect, since it touched agent transcript deltas).
+
+**Mechanism: host config leaked INTO the tests.** I had just stored a
+default prompt in my own `~/.config/wash/agent-default-prompt.txt` — the
+feature does exactly what it says and prepends it to every new session,
+including the fake adapter's in these specs. Moving the file aside turned
+all 11 green; putting it back turned them red again.
+
+**Fix — the fixture, not the specs.** `XDG_CONFIG_HOME` was opt-in
+(`xdgConfig: true`, five specs), so it only ever protected the
+developer's files from the tests, never the tests from the developer's
+files. It is now unconditional, like `XDG_STATE_HOME`, which had already
+learned this lesson for the same reason. The opt-in flag is gone.
+
+**Worth remembering:** a whole-suite result that reproduces exactly is
+evidence AGAINST a flake, and host state is the first thing to suspect
+when a spec you didn't touch fails the same way every time.
+
+---
+
+## 2026-09-08 — `term-split` "two strips both ptys resized": CI-only, once
+
+The v0.14.3 tag run failed one test — `colsOf()` polled the pty for
+`SZn=<cols>` and got nothing inside its 10s budget. Test 352 of 517 on a
+2-core runner.
+
+**A flake, established rather than assumed**, and worth the paragraph
+because the cost is high: `release` needs `package` needs the tests, so a
+tag run that fails here publishes NOTHING while the tag sits there
+looking done. That is how v0.13.1 ended up with no release.
+
+Before re-running:
+
+- `make all-test` and the `make push` gate had both passed on that exact
+  commit (508/508 e2e, twice);
+- the spec at `--repeat-each=3` locally: 42 passed;
+- the change under suspicion cannot reach it — the release carried an
+  agentd roster-push dedupe, an About panel and a bundle-cap bump, none
+  of which touch pty sizing or the resize path.
+
+Re-running the failed job on the identical commit went green, and the
+release published.
+
+**Mechanism, most likely**: the helper types a command into a real shell
+and waits 10s for its output to appear in the xterm buffer. That is a
+full FE→BE→pty→FE round trip on a cold, contended runner. The same
+helper already carries a comment about a stale-match failure mode, so it
+is the second time this probe has been the thing that broke.
+
+**Not fixed here**: one occurrence, no local reproduction in six runs.
+Logged so a second sighting has something to sit next to — and if there
+is one, the fix is the probe's budget, not the test's intent.
+
+## 2026-09-08 — `fm-paste-self` "cut a file, paste into the same folder": FIXED, not a flake
+
+One red in the first full-suite run of the apps-sweep-p0 branch (523/524),
+in a spec written that day. Targeted runs (16/16, then `--repeat-each 3`)
+were green, so it only fired under load.
+
+**Mechanism**: fm's FE learned its own Ctrl+X only from the BE's
+`clipboard_files_state` echo, while the status line said "cut 1 to
+clipboard" locally and at once. The spec waited on the status line, so it
+proved nothing, and a Ctrl+V that beat the round trip read an empty
+mirror and pasted nothing. A real gap, not a timing budget: a fast
+Ctrl+X, Ctrl+V did the same for a user.
+
+**Fixed** in 45a4154c by mirroring the clipboard locally before the
+send (the echo carries the identical state). Full suite after: 524/524.
+
+## 2026-09-09 — `net-vm-gate` "VM-served wash UI round-trips a model edit": load, once
+
+Seen at the tail of `make all-test` for 0.14.4, after the KVM net matrix
+and vm-net-test had run back to back: the proxy page showed "served from
+VM" but `wash-app-session` never mounted inside the 40 s budget — the
+guest shell iframe stayed blank. Every other tier was green (Go unit,
+158 component, 561 e2e, 31 standalone-smoke, net-matrix, vm-net-test).
+
+**A/B**: `make e2e-vm` alone on the identical build → 2 passed in 6.1 s
+(the failing run had taken 43 s just to time out). The change set under
+suspicion (the apps sweep: editor/fm/term/agent) does not touch the VM
+image, the proxy, netd or the net app; the shell change in it (an OS
+file-drop guard) ran 561 times in the ordinary suite.
+
+**Mechanism, most likely**: a cold guest booting the full stack while the
+host is still digesting the previous VM tiers; the 40 s budget is the
+whole shell-over-the-wire boot. Not fixed here — one occurrence, green
+on re-run; if it recurs the fix is the budget or serialising the VM
+tiers, not the test's intent.
+
+## 2026-09-09 — `term-wedge-recovery` burst soak: NOT a flake, a shipped regression
+
+Failed the 0.14.4 tag run twice, and a rerun did not clear it. Treated as
+a flake for one cycle; it was not one.
+
+**A/B, same machine, same spec (unchanged between the two), two cores
+via `taskset -c 0,1`:**
+
+| tree | result |
+|---|---|
+| v0.14.3 | 6 of 6 passed, 12s total |
+| main (0.14.4) | 3 of 6 failed, 2.5 min |
+| 2b061bae (pre-sweep, post-QoS-lanes) | 3 of 6 failed |
+
+So the apps sweep was not the cause; the QoS lane work was, and the
+bisect landed on 54191d8f chunking the scrollback replay.
+
+**Mechanism** (measured, not inferred): the router delivered every byte
+within a second — the router log ends there — and the FE had the marker
+in its buffer (`inBuffer: true`). What was wrong was the viewport:
+`ydisp 1232` against `ybase 15183`, and on the next run `7568` against
+`19975`. xterm auto-scrolls only while ydisp == ybase, and a replay
+split across frames breaks the follow at a chunk boundary. The terminal
+had stopped showing output it had already parsed, which a user reads as
+a hang. `toContainText` reads rendered rows, so the spec caught it only
+when the marker landed off-screen — which is why it looked like a flake.
+
+**Fixed** in 78daf79f: both replay paths send one frame again; the soak
+asserts the viewport is following; the unit test that asserted chunking
+now asserts atomicity.
+
+**The lesson for this log**: a rerun that goes green is not evidence of
+a flake. The baseline A/B is, and it took one run of each to separate
+"my branch broke it" from "the release is broken".
+
+
+## 2026-09-09 — `agent-roots` "a sibling folder becomes readable once allowed": CI-only, once, NOT established
+
+Red on the ui-hit push (7d6995d4), CI run 34430662342, one test of 684:
+after a sibling folder is granted as a per-session root, the fake agent's
+`READ<<SIBLING-CONTENT` never appeared inside 20s. Green on re-run of the
+same commit with no change.
+
+**Filed deliberately as unestablished.** The entry directly above says a
+green re-run is not evidence of a flake, and this is that situation
+exactly — so the verdict here rests on the other evidence, not the re-run:
+
+- the local `make push` gate passed on that exact commit, full e2e green;
+- the spec passed 7/7 locally, run alone;
+- the change under suspicion cannot reach the failing path. The push
+  carried the interaction-layer sweep, whose only contact with this test
+  is attribute-only (`data-wash-hit`) edits to `file-picker.tsx` — and the
+  failure lands AFTER the picker has closed and the root chip has been
+  asserted by both `data-path` and label, so the picker demonstrably
+  worked;
+- the CI run on the pre-change commit (66539040) was green — but per this
+  file's own rule, one green baseline proves nothing about a flake that
+  fires one run in three. No A/B was run at repetition.
+
+**Same shape as the 2026-08-25 `agent-session` sighting**: fake-agent
+output not arriving on a loaded run, CI-only, unreproducible locally. That
+one was also unroot-caused until its diagnostic gap was closed.
+
+**The gap is the same, and closing it is the fix.** A root grant has to
+reach agentd, be applied to the session, and return through the transcript
+before the assertion fires; the test asserts only the FE end. So a failure
+still cannot say whether agentd never served the read or the browser never
+showed it. If it recurs, wait on the agentd-side log line for the read as
+well as the transcript text — do that before touching the timeout.
+
+**Owner:** the spec came with the per-session-roots work (a9355717,
+c250a140), not with the push it went red on.

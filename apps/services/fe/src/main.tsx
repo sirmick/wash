@@ -165,7 +165,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         >
           <RefreshCcw size={14} />
         </Button>
-        <label style={toggleLabelStyle} data-testid="srv-auto-label">
+        <label data-wash-hit style={toggleLabelStyle} data-testid="srv-auto-label">
           <input
             type="checkbox"
             data-testid="srv-auto"

@@ -20,7 +20,7 @@
 
 import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
-import { WASH_BTN_CLASS, FilePicker, tokens } from '@wash/ui';
+import { FilePicker, tokens } from '@wash/ui';
 
 interface BEMessage {
   kind: string;
@@ -437,15 +437,14 @@ function counterRow(label: string, testid: string): string {
   return `<div>${label}: <b data-testid="${testid}">0</b></div>`;
 }
 
-// This app builds its DOM as an innerHTML string rather than with Solid,
-// so it can't use <Button> — but WASH_BTN_CLASS is just a class name, and
-// the sheet it refers to is injected by defineWashApp like anywhere else.
-// The fill goes in as a custom property so hover and press derive off it.
 function actionBtn(name: string, label: string): string {
-  return `<button type="button" class="${WASH_BTN_CLASS}" data-testid="action-${name}" style="
-    --wash-btn-bg:${tokens.bgRowSelected};
-    --wash-btn-border:${tokens.borderFocus};
+  return `<button data-wash-hit type="button" data-testid="action-${name}" style="
+    background:${tokens.bgRowSelected};
+    color:${tokens.fg};
+    border:1px solid ${tokens.borderFocus};
     padding:5px 10px;
+    border-radius:3px;
+    cursor:pointer;
     font:${tokens.type.monoMd};
   ">${label}</button>`;
 }

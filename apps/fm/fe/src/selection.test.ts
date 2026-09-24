@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { nextSelection, type SelectionState } from './selection.ts';
+import { nextSelection, rekeyPath, rekeySelection, successorAfterRemoval, type SelectionState } from './selection.ts';
 
 const ROWS = ['/a', '/b', '/c', '/d', '/e'];
 const empty: SelectionState = { selection: new Set(), anchor: null };
@@ -69,4 +69,46 @@ test('shift-click whose anchor scrolled out of the visible rows single-selects, 
 test('shift takes precedence over ctrl when both are held', () => {
   const r = nextSelection({ selection: sel('/a'), anchor: '/b' }, '/d', ROWS, { shift: true, ctrlOrMeta: true });
   assert.deepEqual([...r.selection], ['/b', '/c', '/d']); // range, not toggle
+});
+
+// ---- rekeyPath / rekeySelection (post-rename re-keying) ----
+
+test('rekeyPath maps the renamed path itself', () => {
+  assert.equal(rekeyPath('/a/old', '/a/old', '/a/new'), '/a/new');
+});
+
+test('rekeyPath maps descendants of a renamed dir and leaves others alone', () => {
+  assert.equal(rekeyPath('/a/old/x/y', '/a/old', '/a/new'), '/a/new/x/y');
+  assert.equal(rekeyPath('/a/older', '/a/old', '/a/new'), null, 'prefix match must be on a path boundary');
+  assert.equal(rekeyPath('/b', '/a/old', '/a/new'), null);
+});
+
+test('rekeySelection re-keys affected members and returns a new set', () => {
+  const prev = sel('/a/old', '/a/old/k', '/a/other');
+  const r = rekeySelection(prev, '/a/old', '/a/new');
+  assert.deepEqual([...r].sort(), ['/a/new', '/a/new/k', '/a/other']);
+  assert.deepEqual([...prev].sort(), ['/a/old', '/a/old/k', '/a/other'], 'input untouched');
+});
+
+// ---- successorAfterRemoval (post-delete selection) ----
+
+test('successor is the next sibling in display order', () => {
+  assert.equal(successorAfterRemoval(ROWS, '/b'), '/c');
+});
+
+test('successor of the last sibling is the previous sibling', () => {
+  assert.equal(successorAfterRemoval(ROWS, '/e'), '/d');
+});
+
+test('successor skips the removed dir\'s own children and stays in its folder', () => {
+  const rows = ['/x', '/x/1', '/x/2', '/y', '/y/1', '/z'];
+  assert.equal(successorAfterRemoval(rows, '/x'), '/y');
+  // /y/1 is the last (only) entry in /y: the next visible row /z is not a
+  // sibling, and there is no previous sibling → nothing.
+  assert.equal(successorAfterRemoval(rows, '/y/1'), null);
+});
+
+test('successor of an only child is null; unknown row is null', () => {
+  assert.equal(successorAfterRemoval(['/solo'], '/solo'), null);
+  assert.equal(successorAfterRemoval(ROWS, '/nope'), null);
 });

@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { sortedFiltered, type SortableEntry, type SortOptions } from './sort.ts';
+import { extensionOf, sortedFiltered, type SortableEntry, type SortOptions } from './sort.ts';
 
 // Tiny entry factory — only the sortable fields matter here.
 function e(
@@ -71,12 +71,64 @@ test('mtime and ctime keys sort by their respective timestamps', () => {
   assert.deepEqual(names(sortedFiltered(list, opts({ key: 'ctime' }))), ['newest', 'mid', 'oldest']);
 });
 
-test('type key does NOT force dirs first; it sorts by the type field, ties broken by name', () => {
-  const list = [e('z', 'file'), e('a', 'file'), e('m', 'dir')];
-  // 'dir' < 'file' lexically, so the dir leads here too — but via the
-  // type comparison, not the dir-before-file pre-check. Within 'file',
-  // ties break by name (a before z).
-  assert.deepEqual(names(sortedFiltered(list, opts({ key: 'type' }))), ['m', 'a', 'z']);
+test('type key groups dirs first, then orders files by extension', () => {
+  const list = [
+    e('notes.txt', 'file'),
+    e('photo.png', 'file'),
+    e('zebra', 'dir'),
+    e('main.go', 'file'),
+    e('alpha', 'dir'),
+  ];
+  // Folders lead (a folder is not a kind of file), name-ordered among
+  // themselves; then the files by extension: go < png < txt.
+  assert.deepEqual(names(sortedFiltered(list, opts({ key: 'type' }))), [
+    'alpha', 'zebra', 'main.go', 'photo.png', 'notes.txt',
+  ]);
+});
+
+test('type key breaks an extension tie by name, case-insensitively', () => {
+  const list = [e('Zeta.txt', 'file'), e('alpha.txt', 'file'), e('beta.txt', 'file')];
+  assert.deepEqual(names(sortedFiltered(list, opts({ key: 'type' }))), [
+    'alpha.txt', 'beta.txt', 'Zeta.txt',
+  ]);
+});
+
+test('type key sorts extensionless files (and dotfiles) before the rest', () => {
+  const list = [
+    e('run.sh', 'file'),
+    e('Makefile', 'file'),
+    e('.bashrc', 'file'),
+    e('a.md', 'file'),
+  ];
+  assert.deepEqual(names(sortedFiltered(list, opts({ key: 'type', showHidden: true }))), [
+    '.bashrc', 'Makefile', 'a.md', 'run.sh',
+  ]);
+});
+
+test('type key ignores extension case and sorts symlinks with the files', () => {
+  const list = [e('B.PNG', 'file'), e('a.png', 'file'), e('link.txt', 'symlink')];
+  assert.deepEqual(names(sortedFiltered(list, opts({ key: 'type' }))), [
+    'a.png', 'B.PNG', 'link.txt',
+  ]);
+});
+
+test('type key descending reverses the extensions but keeps dirs first', () => {
+  // desc flips the comparison, not the dir/file grouping — same as every
+  // other key.
+  const list = [e('d', 'dir'), e('a.txt', 'file'), e('b.md', 'file')];
+  assert.deepEqual(names(sortedFiltered(list, opts({ key: 'type', desc: true }))), [
+    'd', 'a.txt', 'b.md',
+  ]);
+});
+
+test('extensionOf reads the final suffix, lowercased, or nothing', () => {
+  assert.equal(extensionOf('notes.txt'), 'txt');
+  assert.equal(extensionOf('photo.JPEG'), 'jpeg');
+  assert.equal(extensionOf('archive.tar.gz'), 'gz');
+  assert.equal(extensionOf('Makefile'), '');
+  assert.equal(extensionOf('.bashrc'), '');
+  assert.equal(extensionOf('trailing.'), '');
+  assert.equal(extensionOf(''), '');
 });
 
 test('empty input yields an empty array', () => {

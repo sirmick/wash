@@ -20,10 +20,12 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentclient"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -40,9 +42,14 @@ var maxTranscriptSnapshotBytes = wire.MaxPayload / 4
 // and the TTL remains as a backstop for any older or missed lifecycle path.
 // Watchers therefore re-affirm, exactly as the roster's own rows do, and one
 // that goes quiet is dropped.
-const (
-	watcherTTL     = 60 * time.Second
-	WatcherRefresh = 15 * time.Second
+//
+// Both numbers come from internal/agentclient, the host side of this
+// protocol, so the service and every host read one clock — and one env
+// seam (WASH_AGENT_WATCHER_TTL) shrinks it for tests that must prove a
+// watcher outlives its own expiry.
+var (
+	watcherTTL     = agentclient.WatcherTTL()
+	WatcherRefresh = agentclient.WatcherRefresh()
 )
 
 // Event kinds. Deliberately fewer than ACP's update variants: the
@@ -51,7 +58,13 @@ const (
 const (
 	EventMessage = "message"
 	EventThought = "thought"
-	EventTool    = "tool"
+	// EventDecision is wash's own approval verdict on a tool call: Status is
+	// allow or cancelled, Title the tool, Detail its (shortened) subject,
+	// Reason why. Distinct from a message so a transcript can
+	// show a guard coming off (or holding) at a glance, and so these lines
+	// stay out of the conversation preview.
+	EventDecision = "decision"
+	EventTool     = "tool"
 	// EventUser is what the human typed. ACP has a user_message_chunk
 	// variant, but an agent does not echo the prompt its client just sent
 	// it — so a transcript built purely from notifications shows the
@@ -88,12 +101,29 @@ type Event struct {
 	ToolKind string `json:"tool_kind,omitempty"`
 	Title    string `json:"title,omitempty"`
 	Status   string `json:"status,omitempty"`
+	// Path is the file a tool call touched (its first ACP location, or
+	// the diff's), so a host can open it. Diff is the unified diff of what
+	// the call changed, rendered once here from the agent's before/after
+	// pair (diff.go). Both on EventTool only.
+	Path string `json:"path,omitempty"`
+	Diff string `json:"diff,omitempty"`
 	// Mime is set on EventImage; Text then holds the base64 bytes.
 	Mime string `json:"mime,omitempty"`
+	// Reason and Detail are set on EventDecision.
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
 	// Channel is set on EventTerminal: the raw channel id to render.
 	Channel uint32 `json:"channel,omitempty"`
 	// AtMS is wall-clock at first append, for the FE's own clock anchoring.
 	AtMS int64 `json:"at_ms"`
+	// Append marks a wire-only delta: Text is what was ADDED to the event
+	// with this Seq since the last emit, not the whole message. Never set
+	// on a stored or snapshotted event (transcript_emit.go).
+	Append bool `json:"append,omitempty"`
+	// TextLen is the message's byte length after this event applies, on
+	// message/thought events. A consumer applying a delta checks its own
+	// length + the delta against it, and asks for a replay on mismatch.
+	TextLen int `json:"text_len,omitempty"`
 }
 
 type transcript struct {
@@ -277,6 +307,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			imgs = append(imgs, t.push(Event{Kind: EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
 		}
 		id := u.ToolCallID
+		path, diff := toolPathAndDiff(u)
 		if at, ok := t.toolAt[id]; ok && id != "" {
 			// Update in place: a tool row moves pending → in_progress →
 			// completed, it does not become three rows.
@@ -293,6 +324,12 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			if txt := u.Content.String(); txt != "" {
 				ev.Text = txt
 			}
+			if path != "" {
+				ev.Path = path
+			}
+			if diff != "" {
+				ev.Diff = diff
+			}
 			return append(imgs, *ev)
 		}
 		e := t.push(Event{
@@ -302,6 +339,8 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 			Title:    u.Title,
 			Status:   u.Status,
 			Text:     u.Content.String(),
+			Path:     path,
+			Diff:     diff,
 			AtMS:     now.UnixMilli(),
 		})
 		if id != "" {
@@ -310,6 +349,29 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []Event {
 		return append(imgs, e)
 	}
 	return nil
+}
+
+// toolPathAndDiff lifts what a tool call says about files: the first
+// location it names (else the first diff's path), and its diff blocks
+// rendered as one unified diff. The pair is what makes a tool row
+// clickable and a change viewable.
+func toolPathAndDiff(u acp.SessionUpdate) (path, diff string) {
+	for _, l := range u.Locations {
+		if l.Path != "" {
+			path = l.Path
+			break
+		}
+	}
+	var sb strings.Builder
+	for _, d := range u.Content.Diffs() {
+		if path == "" {
+			path = d.Path
+		}
+		if text := unifiedDiff(d.Path, d.Old, d.New); text != "" {
+			sb.WriteString(text)
+		}
+	}
+	return path, sb.String()
 }
 
 // push appends and stamps a sequence number.
@@ -369,6 +431,7 @@ func transcriptLen(key string) int {
 func releaseTranscript(key string) {
 	// Let queued writes land before dropping the only other copy.
 	waitForTranscriptWrites()
+	dropEmitter(key)
 	transMu.Lock()
 	delete(trans, key)
 	transMu.Unlock()
@@ -388,15 +451,6 @@ type transcriptSnapshotMsg struct {
 // it must not be scheduled ahead of the frames that make the desktop
 // feel alive. Both halves of the stream ride the same class so the
 // snapshot cannot be overtaken by the events that follow it.
-func sendTranscriptSnapshot(conn *sdk.Conn, instanceID, key string) error {
-	for _, msg := range transcriptSnapshotMsgs(key, snapshot(key)) {
-		if err := conn.SendAppMsgToBulk(wire.Recipient{InstanceID: instanceID}, msg); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func transcriptSnapshotMsgs(key string, events []Event) []transcriptSnapshotMsg {
 	if len(events) == 0 {
 		return []transcriptSnapshotMsg{{Kind: "transcript_snapshot", Key: key, Reset: true}}
@@ -481,46 +535,12 @@ func transcriptSubscriberCount(key string) int {
 	return len(transSubs[key])
 }
 
-// pushEvent fans one event out to the windows watching that session.
-//
-// Liveness is the watcher's job, not this function's: SendAppMsgTo's error
-// path is the local transport, not per-recipient delivery. Router
-// instance.gone and transcriptWatchers expire stale recipients.
-//
-// Bulk class, for the same reason pty output is: a streamed reply is one
-// push per chunk, each carrying the message accumulated so far, so a
-// single paragraph is hundreds of frames and hundreds of kilobytes. At
-// Interactive that flood sat in front of the window moves and keystrokes
-// the human was making WHILE the agent typed. Bulk puts it behind them —
-// losslessly: the scheduler backpressures, it does not drop.
-//
-// The hop that actually shares a pipe with the desktop is wash-ai's
-// relay to its FE, and that one marks itself (apps/ai/be/app.go). This
-// call marks the stream at its source, so the class is the truth about
-// this traffic everywhere it goes rather than a label applied at the end.
-func pushEvent(conn *sdk.Conn, key string, e Event) {
-	for _, inst := range transcriptWatchers(key) {
-		_ = conn.SendAppMsgToBulk(wire.Recipient{InstanceID: inst}, map[string]any{
-			"kind":  "transcript_event",
-			"key":   key,
-			"event": e,
-		})
-	}
-}
-
-// registerTranscriptHandlers installs the per-session subscription verbs.
 func registerTranscriptHandlers(bus *sdk.Bus) {
 	sdk.HandleFromVoid(bus, "transcript_subscribe", func(conn *sdk.Conn, _ string, req transReq, from wire.Sender) error {
 		if from.InstanceID == "" || req.Key == "" {
 			return nil
 		}
-		transMu.Lock()
-		if transSubs[req.Key] == nil {
-			transSubs[req.Key] = map[string]time.Time{}
-		}
-		fresh := transSubs[req.Key][from.InstanceID].IsZero()
-		transSubs[req.Key][from.InstanceID] = time.Now()
-		transMu.Unlock()
+		fresh := affirmWatcher(req.Key, from.InstanceID, time.Now())
 		if !fresh && !req.Replay {
 			// A keepalive from a window that already has the history.
 			// Re-sending a whole transcript every 15s would be absurd.
@@ -540,21 +560,23 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 		// unbounded server-side, so replay is chunked into bounded frames.
 		return sendTranscriptSnapshot(conn, from.InstanceID, req.Key)
 	})
+}
 
-	sdk.HandleFromVoid(bus, "transcript_unsubscribe", func(_ *sdk.Conn, _ string, req transReq, from wire.Sender) error {
-		if from.InstanceID == "" {
-			return nil
-		}
-		transMu.Lock()
-		if subs := transSubs[req.Key]; subs != nil {
-			delete(subs, from.InstanceID)
-			if len(subs) == 0 {
-				delete(transSubs, req.Key)
-			}
-		}
-		transMu.Unlock()
-		return nil
-	})
+// affirmWatcher records that instance is watching key as of now, and
+// reports whether that is news. A watcher the TTL already dropped counts
+// as fresh again — which is exactly what a keepalive that arrives late
+// must do: the window is still there, so it gets its snapshot back rather
+// than silence.
+func affirmWatcher(key, instance string, now time.Time) (fresh bool) {
+	transMu.Lock()
+	defer transMu.Unlock()
+	if transSubs[key] == nil {
+		transSubs[key] = map[string]time.Time{}
+	}
+	seen := transSubs[key][instance]
+	fresh = seen.IsZero() || now.Sub(seen) > watcherTTL
+	transSubs[key][instance] = now
+	return fresh
 }
 
 // forgetInstanceTranscripts drops every subscription held by a window that

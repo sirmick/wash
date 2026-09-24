@@ -1,6 +1,7 @@
 package router
 
 import (
+	"github.com/sirmick/wash/internal/activity"
 	"net"
 	"net/http/httputil"
 
@@ -73,6 +74,7 @@ func (r *Router) registerPeer(origin, network, addr, ingressAddr string) {
 	r.peers[origin] = t
 	r.peersMu.Unlock()
 	r.log("peer register origin=%s %s://%s ingress=%q", origin, network, addr, ingressAddr)
+	r.note(activity.Entry{Kind: "peer.up", Title: origin, Line: "remote host " + origin + " connected"})
 }
 
 // AddPeer is the exported registration used by the runner's --peer-ingress
@@ -91,6 +93,7 @@ func (r *Router) unregisterPeer(origin string) {
 	// token→origin routes so a reconnected peer re-resolves fresh.
 	r.ingress.dropRemoteOrigin(origin)
 	r.log("peer unregister origin=%s", origin)
+	r.note(activity.Entry{Kind: "peer.down", Title: origin, Line: "remote host " + origin + " disconnected"})
 }
 
 func (r *Router) lookupPeer(origin string) (peerTarget, bool) {

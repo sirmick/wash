@@ -101,6 +101,28 @@ func TestSpine(t *testing.T) {
 		_ = r.HandleShell(ctx, shellPair.EndA())
 		close(shellDone)
 	}()
+	// Join every goroutine before this function returns, on EVERY path — the
+	// in-body teardown below only runs on the happy one, so a mid-test
+	// t.Fatalf used to leave the handlers running and logging through the
+	// closure above, and a t.Logf from a goroutine that outlives its test
+	// races the testing package's completion bookkeeping
+	// (docs/TEST_FLAKES.md B3). Idempotent with the explicit teardown: a
+	// closed channel and a second Close are both no-ops.
+	defer func() {
+		cancel()
+		appPair.Close()
+		shellPair.Close()
+		for _, j := range []struct {
+			name string
+			ch   <-chan struct{}
+		}{{"router app handler", routerDone}, {"router shell handler", shellDone}} {
+			select {
+			case <-j.ch:
+			case <-time.After(2 * time.Second):
+				t.Errorf("%s didn't exit", j.name)
+			}
+		}
+	}()
 
 	// Wire the real SDK on the app side. Manifest.OnMapped sets the
 	// title; OnCloseRequested defaults to allow=true.
@@ -215,7 +237,8 @@ func TestSpine(t *testing.T) {
 	}
 deletePatchFound:
 
-	// Tear down.
+	// Tear down. The router handlers are joined by the defer registered at
+	// spawn time; the SDK loop is this body's to wait for.
 	cancel()
 	appPair.Close()
 	shellPair.Close()
@@ -223,16 +246,6 @@ deletePatchFound:
 	case <-sdkLoopDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("SDK loop didn't exit")
-	}
-	select {
-	case <-routerDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("router app handler didn't exit")
-	}
-	select {
-	case <-shellDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("router shell handler didn't exit")
 	}
 }
 

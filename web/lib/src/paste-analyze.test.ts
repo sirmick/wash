@@ -25,6 +25,41 @@ test('clean text is passed through untouched', () => {
   }
 });
 
+// ---- one line plus its newline is still one line ----
+
+test('a Windows-copied one-liner with its CRLF is cleaned silently, newline kept', () => {
+  // "ls\r\n" is what a whole line copied on Windows looks like. The CRLF
+  // is junk to fix, not a second line to ask about — and the newline
+  // survives, so the paste still runs the command.
+  const a = analyzePaste('ls\r\n');
+  assert.equal(a.lines, 1);
+  assert.equal(a.verdict, 'clean');
+  assert.equal(a.cleaned, 'ls\n');
+  assert.equal(a.issues[0].kind, 'crlf');
+});
+
+test('a one-liner with a trailing LF and invisible junk is cleaned silently', () => {
+  const a = analyzePaste('git\u00a0status\n');
+  assert.equal(a.lines, 1);
+  assert.equal(a.verdict, 'clean');
+  assert.equal(a.cleaned, 'git status\n');
+  // A clean one with its newline is left alone entirely.
+  const b = analyzePaste('ls\n');
+  assert.equal(b.lines, 1);
+  assert.equal(b.verdict, 'as-is');
+  assert.equal(b.cleaned, 'ls\n');
+});
+
+test('a blank line after the newline is structure again, and asks', () => {
+  const a = analyzePaste('git\u00a0status\n\n');
+  assert.equal(a.lines, 2);
+  assert.equal(a.verdict, 'ask');
+  // Two real lines with CRLF endings: multi-line, asked about.
+  const b = analyzePaste('cd /tmp\r\nls\r\n');
+  assert.equal(b.lines, 2);
+  assert.equal(b.verdict, 'ask');
+});
+
 // ---- invisible junk: cleaned, and cleaned silently when it's one line ----
 
 test('a non-breaking space is fixed silently — the classic "command not found"', () => {

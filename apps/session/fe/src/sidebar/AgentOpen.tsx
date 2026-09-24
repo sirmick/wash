@@ -1,8 +1,8 @@
 // The Agents section's way in (docs/SIDEBAR.md M2c).
 //
-// The roster and its verbs moved into com.wash.ai, because that is where
+// The roster and its verbs live in com.wash.agents, because that is where
 // they can be correct: an app talking to its own host's agentd carries a
-// router-attested sender, so `launchOn(origin, 'com.wash.ai')` gets
+// router-attested sender, so `focusOrLaunch(origin, 'com.wash.agents')` gets
 // working verbs on ANY host with no new addressing. The rail could never
 // have that — its sends gateway through the session BE, which resolves
 // inside its own router.

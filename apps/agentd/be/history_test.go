@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -18,15 +17,15 @@ func resetHistory() {
 // The list is "what could I put back", most recent first.
 func TestRememberSessionOrdersMostRecentFirst(t *testing.T) {
 	resetHistory()
-	rememberSession("claude", "s-1", "/home/mick/wash", "", t0)
-	rememberSession("claude", "s-2", "/home/mick/other", "", t0.Add(time.Minute))
-	rememberSession("codex", "s-3", "/tmp", "", t0.Add(2*time.Minute))
+	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/home/mick/wash", "", t0)
+	rememberSession(launchRecord{Agent: "claude"}, "s-2", "/home/mick/other", "", t0.Add(time.Minute))
+	rememberSession(launchRecord{Agent: "codex"}, "s-3", "/tmp", "", t0.Add(2*time.Minute))
 
 	if got := []string{history[0].SessionID, history[1].SessionID, history[2].SessionID}; got[0] != "s-3" {
 		t.Errorf("order = %v, want s-3 first", got)
 	}
 	// Touching an older session moves it back to the front.
-	rememberSession("claude", "s-1", "/home/mick/wash", "", t0.Add(3*time.Minute))
+	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/home/mick/wash", "", t0.Add(3*time.Minute))
 	if history[0].SessionID != "s-1" {
 		t.Errorf("touched session did not move to front: %+v", history)
 	}
@@ -39,16 +38,16 @@ func TestRememberSessionOrdersMostRecentFirst(t *testing.T) {
 // file dirty, or the service would write on every tick.
 func TestRememberSessionReportsRealChangesOnly(t *testing.T) {
 	resetHistory()
-	if !rememberSession("claude", "s-1", "/w", "", t0) {
+	if !rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w", "", t0) {
 		t.Error("a new session is a change")
 	}
-	if rememberSession("claude", "s-1", "/w", "", t0.Add(15*time.Second)) {
+	if rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w", "", t0.Add(15*time.Second)) {
 		t.Error("a keepalive reported a change")
 	}
-	if !rememberSession("claude", "s-1", "/w/other", "", t0.Add(30*time.Second)) {
+	if !rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w/other", "", t0.Add(30*time.Second)) {
 		t.Error("a moved directory is a change")
 	}
-	if rememberSession("", "", "/w", "", t0) {
+	if rememberSession(launchRecord{Agent: ""}, "", "/w", "", t0) {
 		t.Error("a session with no id was recorded")
 	}
 }
@@ -56,7 +55,7 @@ func TestRememberSessionReportsRealChangesOnly(t *testing.T) {
 func TestHistoryCapped(t *testing.T) {
 	resetHistory()
 	for i := 0; i < historyCap+10; i++ {
-		rememberSession("claude", "s-"+itoa(uint64(i)), "/w", "", t0.Add(time.Duration(i)*time.Second))
+		rememberSession(launchRecord{Agent: "claude"}, "s-"+itoa(uint64(i)), "/w", "", t0.Add(time.Duration(i)*time.Second))
 	}
 	if len(history) != historyCap {
 		t.Errorf("history holds %d, cap is %d", len(history), historyCap)
@@ -72,8 +71,8 @@ func TestHistoryCapped(t *testing.T) {
 func TestPublishHistoryMarksLiveSessions(t *testing.T) {
 	reset()
 	resetHistory()
-	rememberSession("claude", "live-1", "/w", "", t0)
-	rememberSession("claude", "dead-1", "/w", "", t0.Add(-time.Hour))
+	rememberSession(launchRecord{Agent: "claude"}, "live-1", "/w", "", t0)
+	rememberSession(launchRecord{Agent: "claude"}, "dead-1", "/w", "", t0.Add(-time.Hour))
 	put("i-1:1", Row{Key: "i-1:1", Agent: "claude", State: "working", SessionID: "live-1"}, t0, t0)
 
 	got := publishHistory()
@@ -89,73 +88,13 @@ func TestPublishHistoryMarksLiveSessions(t *testing.T) {
 	}
 }
 
-// What Resume actually runs. The quoting matters: a path or a session id
-// arrived from a hook payload.
-func TestResumeArgv(t *testing.T) {
-	cases := []struct {
-		name                          string
-		shell, agent, session, cwd    string
-		fork                          bool
-		wantShell                     string
-		wantContains, wantNotContains []string
-	}{
-		{
-			name: "resume in a directory", shell: "/bin/bash", agent: "claude",
-			session: "abc-123", cwd: "/home/mick/wash", wantShell: "/bin/bash",
-			wantContains:    []string{"cd '/home/mick/wash'", "exec 'claude' --resume 'abc-123'"},
-			wantNotContains: []string{"--fork-session"},
-		},
-		{
-			name: "fork", shell: "/bin/bash", agent: "claude", session: "abc", cwd: "/w", fork: true,
-			wantShell: "/bin/bash", wantContains: []string{"--fork-session"},
-		},
-		{
-			name: "no cwd known", shell: "/bin/zsh", agent: "codex", session: "z", wantShell: "/bin/zsh",
-			wantContains: []string{"exec 'codex' --resume 'z'"}, wantNotContains: []string{"cd "},
-		},
-		{
-			name: "no shell in the environment", agent: "claude", session: "s", wantShell: "/bin/sh",
-			wantContains: []string{"--resume 's'"},
-		},
-		{
-			name: "quotes in the data are escaped, not executed", shell: "/bin/bash", agent: "claude",
-			session: "s'; rm -rf /; echo '", cwd: "/w",
-			wantShell:       "/bin/bash",
-			wantNotContains: []string{"; rm -rf /; echo ;"},
-			wantContains:    []string{`'\''`},
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			argv := resumeArgv(c.shell, c.agent, c.session, c.cwd, c.fork)
-			if len(argv) != 3 || argv[0] != c.wantShell || argv[1] != "-c" {
-				t.Fatalf("argv = %q", argv)
-			}
-			for _, want := range c.wantContains {
-				if !strings.Contains(argv[2], want) {
-					t.Errorf("command %q missing %q", argv[2], want)
-				}
-			}
-			for _, no := range c.wantNotContains {
-				if strings.Contains(argv[2], no) {
-					t.Errorf("command %q contains %q", argv[2], no)
-				}
-			}
-		})
-	}
-	// The agent defaults rather than producing a command with a hole in it.
-	if argv := resumeArgv("/bin/sh", "", "s", "", false); !strings.Contains(argv[2], "'claude'") {
-		t.Errorf("empty agent → %q", argv[2])
-	}
-}
-
 // History has to survive the failure it exists for: the process going away.
 func TestHistoryRoundTripsThroughDisk(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
 	resetHistory()
-	rememberSession("claude", "s-1", "/home/mick/wash", "", t0)
-	rememberSession("codex", "s-2", "/tmp", "", t0.Add(time.Minute))
+	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/home/mick/wash", "", t0)
+	rememberSession(launchRecord{Agent: "codex"}, "s-2", "/tmp", "", t0.Add(time.Minute))
 	saveHistory()
 
 	path := filepath.Join(dir, "wash", "agent-sessions.json")
@@ -193,7 +132,7 @@ func TestFlushHistoryDebounces(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
 	resetHistory()
-	rememberSession("claude", "s-1", "/w", "", t0)
+	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w", "", t0)
 	historyDirty = true
 	historySaved = time.Now()
 
@@ -288,5 +227,93 @@ func TestRecentPublishCapIsSmallerThanTheStore(t *testing.T) {
 	}
 	if recentPublishCap >= historyCap {
 		t.Error("the published slice must be the smaller of the two, or raising the store bloats every push")
+	}
+}
+
+// A row whose adapter exited stays on the roster as failed/exited until
+// the sweep drops it, so the failure is visible — but nothing is behind
+// it, and History must offer to RESUME it rather than "go to" a window
+// on a dead session.
+func TestRosterIndexTreatsAnExitedRowAsNotLive(t *testing.T) {
+	idx := rosterIndex([]Row{
+		{Key: "acp:1", SessionID: "alive", State: "working"},
+		{Key: "acp:2", SessionID: "dead", State: "failed", Reason: "exited"},
+		{Key: "acp:3", SessionID: "errored", State: "failed", Reason: "error"},
+	})
+	if !idx["alive"].Live {
+		t.Error("a working row is live")
+	}
+	if idx["dead"].Live {
+		t.Error("an exited row was reported live — History would say 'go to it'")
+	}
+	if !idx["errored"].Live {
+		t.Error("a row that failed a turn but whose adapter is still up must stay live — its composer works")
+	}
+}
+
+// The History panel lists every transcript on disk; `history` holds the
+// last historyCap. A session past the cap was listed, clickable and
+// inert — resume looked only in the slice. The transcript's own header
+// carries what a resume needs, so it is the fallback.
+func TestResumeResolvesFromTheStoreWhenHistoryMisses(t *testing.T) {
+	withStateDir(t)
+	history = nil
+	t.Cleanup(func() { history = nil })
+
+	proj := t.TempDir()
+	bindTranscript("acp:old", "old-sess", launchRecord{Agent: "claude"}, proj, time.Unix(1_700_000_000, 0))
+	waitForTranscriptWrites()
+
+	got, ok := resolveResumeTarget("old-sess")
+	if !ok {
+		t.Fatal("a session with a transcript on disk but no history entry could not be resolved")
+	}
+	if got.Agent != "claude" || got.Cwd != proj || got.SessionID != "old-sess" {
+		t.Errorf("resolved %+v, want agent=claude cwd=%s", got, proj)
+	}
+	if got.LastSeen != 1_700_000_000 {
+		t.Errorf("LastSeen = %d, want the header's start time in seconds", got.LastSeen)
+	}
+
+	// Nothing anywhere: not resumable, and said so.
+	if _, ok := resolveResumeTarget("never-existed"); ok {
+		t.Error("an unknown id resolved")
+	}
+	if _, ok := resolveResumeTarget(""); ok {
+		t.Error("an empty id resolved")
+	}
+
+	// The in-memory entry wins when present — it may carry a cwd the
+	// session moved to after the header was written.
+	history = []Session{{SessionID: "old-sess", Agent: "codex", Cwd: "/elsewhere"}}
+	got, _ = resolveResumeTarget("old-sess")
+	if got.Agent != "codex" || got.Cwd != "/elsewhere" {
+		t.Errorf("history entry did not take precedence: %+v", got)
+	}
+
+}
+
+func TestResumeFlightsCoalesceBySession(t *testing.T) {
+	resumeMu.Lock()
+	resumeFlights = map[string]bool{}
+	resumeMu.Unlock()
+	t.Cleanup(func() {
+		resumeMu.Lock()
+		resumeFlights = map[string]bool{}
+		resumeMu.Unlock()
+	})
+
+	if !beginResume("session-a") {
+		t.Fatal("first resume was rejected")
+	}
+	if beginResume("session-a") {
+		t.Fatal("duplicate in-flight resume was accepted")
+	}
+	if !beginResume("session-b") {
+		t.Fatal("an unrelated session was blocked")
+	}
+	finishResume("session-a")
+	if !beginResume("session-a") {
+		t.Fatal("session could not retry after its flight finished")
 	}
 }

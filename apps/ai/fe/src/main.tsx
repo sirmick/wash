@@ -1,46 +1,40 @@
-// wash-app-ai — roster + session, master-detail (docs/SIDEBAR.md M2).
-//
-// The window is a thin host around <AgentSession> from @wash/ui: agentd
-// owns the session, the transcript and the approval queue, so everything
-// here is a subscription and a form. An unstarted window renders the
-// launcher, which is why there is no separate "new session" dialog.
-//
-// The left pane is <AgentRoster> — every session agentd knows about, the
-// same renderer the desktop rail used. Picking a row re-points the detail
-// pane at that session. The roster data was already arriving here (the
-// window subscribes for its own status line and the launcher's adapter
-// list); M2 renders it and, in M2b, acts on it.
+// Shared bundle for two surfaces: the singleton Agents manager renders the
+// roster/history/launcher; an Agent controller renders one AgentSession.
+// The custom element names the role; agentd remains authoritative for both
+// stores.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { HistoryPanel, historyAction, type SessionMeta } from './HistoryPanel.tsx';
-import { defaultAgent, defaultCwd } from './default-agent.ts';
+import { applyWorkspacePatch, type WorkspacePatch } from './workspace-patch';
+import { WorkspaceLayout } from './WorkspaceLayout';
+import type { WorkspaceFrame, WorkspaceResult } from './WorkspaceSidebar';
+import { HistoryPanel, historyAction, historySignature, type SessionMeta } from './HistoryPanel.tsx';
+import { defaultStack, defaultCwd } from './default-stack.ts';
+import { Launcher, startMessage, DEFAULT_TIER, type Adapter, type LaunchForm, type StackView } from './Launcher.tsx';
+import { Connections, type KeyResult, type KeyView } from './Connections.tsx';
 import { isStaleTranscript } from './transcript-guard.ts';
+import { applyUsagePatch } from './usage-patch.ts';
+import { isManagerElement } from './role.ts';
 import type { Component } from 'solid-js';
-import { Plus } from 'lucide-solid';
 import {
-  AgentRoster, AgentSession, Button, FilePicker, Menu, MenuBar, MenuItem, MenuSeparator, Overlay, Select,
-  Splitter,
-  createAppBus, defineWashApp, kbdStyle, tokens, washCopyText,
+  AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
+  Overlay, Select, Splitter,
+  applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
   AgentAsk, AgentEvent, AgentStatus, RosterAsk, RosterRow,
 } from '@wash/ui';
 
-interface Adapter {
-  id: string;
-  name: string;
-  available: boolean;
-  note?: string;
-}
-
 interface RecentSession {
   session_id: string;
   agent: string;
+  /** the stack it was started from — what the launcher defaults to */
+  stack?: string;
   /** full working directory — what the launcher refills (N5b) */
   cwd?: string;
   /** short label for display ("wash"), not a path to start in */
   dir?: string;
-  /** the agent's own one-line name for what the session was about */
+  /** the agent's own one-line name for what the session was about — or
+   *  the person's, when they renamed it (agentd puts theirs here) */
   title?: string;
   last_seen: number;
   /** running right now — in the roster above, not something to resume */
@@ -55,42 +49,53 @@ interface RosterState {
   rows?: RosterRow[];
   asks?: RosterAsk[];
   adapters?: Adapter[];
+  stacks?: StackView[];
+  /** connection keys: set or not, never a value */
+  keys?: KeyView[];
   recent?: RecentSession[];
+  /** a stored default prompt exists — the TEXT is fetched on demand */
+  has_default_prompt?: boolean;
 }
 
 interface PersistedState {
   session_key?: string;
-  /** Sessions-pane width, percent of the window (see set_split). */
-  split_pct?: number;
 }
 
-// defaultSplitPct — wide enough for "claude · wash" plus a state dot,
-// narrow enough that the transcript still reads on a small window.
-const defaultSplitPct = 26;
-
-function mergeEvents(prev: AgentEvent[], next: AgentEvent[]): AgentEvent[] {
-  const bySeq = new Map<number, AgentEvent>();
-  for (const e of prev) bySeq.set(e.seq, e);
-  for (const e of next) bySeq.set(e.seq, e);
-  return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
+interface PreviewPatchRow {
+  key: string;
+  preview?: string;
 }
+
+const mergeEvents = mergeAgentEvents;
+
 
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
+  // The element says which surface this is. A BE `role` message alone was
+  // not enough: it is sent once at startup, and a browser reload remounts
+  // the FE without replaying it — the manager came back as a blank session
+  // window.
+  const [role, setRole] = createSignal<'session' | 'manager'>(
+    isManagerElement(props.host.tagName) ? 'manager' : 'session',
+  );
   const [events, setEvents] = createSignal<AgentEvent[]>([]);
+  const [workspaceFrame, setWorkspaceFrame] = createSignal<WorkspaceFrame>({ workspace: null });
+  const [workspaceResult, setWorkspaceResult] = createSignal<WorkspaceResult>();
+  // One replay request in flight at a time; the snapshot clears it.
+  let resyncPending = false;
   const [sessionKey, setSessionKey] = createSignal('');
   const [roster, setRoster] = createSignal<RosterState>({});
   const [error, setError] = createSignal('');
-  // Sessions-pane width (see the pane below). Declared up here because
-  // onState restores it, and a signal declared after createAppBus would be
-  // in the temporal dead zone if the bus ever replayed state synchronously.
-  const [splitPct, setSplitPct] = createSignal(defaultSplitPct);
-  let bodyEl!: HTMLDivElement;
+  const [managerSplit, setManagerSplit] = createSignal(68);
+  let managerBody!: HTMLDivElement;
 
-  // Launcher form. agentDefaulted latches N5a's one-shot preselect so
+  // Launcher form. stackDefaulted latches N5a's one-shot preselect so
   // later roster pushes can't overwrite a deliberate "Choose…".
-  let agentDefaulted = false;
-  const [agent, setAgent] = createSignal('');
-  const [cwd, setCwd] = createSignal('');
+  let stackDefaulted = false;
+  const [form, setForm] = createSignal<LaunchForm>({ stack: '', tier: DEFAULT_TIER, agent: '', model: '', cwd: '' });
+  const patchForm = (patch: Partial<LaunchForm>) => setForm((f) => ({ ...f, ...patch }));
+  const [keyResults, setKeyResults] = createSignal<Record<string, KeyResult>>({});
+  const setKeyResult = (id: string, r: KeyResult) => setKeyResults((all) => ({ ...all, [id]: r }));
+  const cwd = () => form().cwd;
   const [starting, setStarting] = createSignal(false);
   const [picking, setPicking] = createSignal(false);
   // Launched with --agent/--cwd: show what is starting rather than an
@@ -100,10 +105,54 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // — so the user chooses what happens to it.
   const [confirmClose, setConfirmClose] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
+  // The composer's Attach button. <AgentSession> asks for paths and waits
+  // on a promise; the picker is this window's, because the picker needs a
+  // BE with a file client and the shared component has neither.
+  // "Also allow a folder…" from a roster row. The picker is this
+  // window's; the row it widens is whichever row opened it, which is not
+  // necessarily the session in the detail pane.
+  // A draft handed to this window by another app (`agent_draft` — see
+  // apps/ai/be/app.go). The counter is what makes sending the same
+  // selection twice insert it twice.
+  const [draftIn, setDraftIn] = createSignal<{ text: string; seq: number } | undefined>();
+  let draftSeq = 0;
+
+  const [rootFor, setRootFor] = createSignal<{ key: string; start: string } | null>(null);
+  const openAddRoot = (key: string, start: string) => setRootFor({ key, start });
+
+  const [attaching, setAttaching] = createSignal(false);
+  let attachResolve: ((paths: string[]) => void) | null = null;
+  const finishAttach = (paths: string[]) => {
+    setAttaching(false);
+    const r = attachResolve;
+    attachResolve = null;
+    r?.(paths);
+  };
+  // The default prompt (agentd owns the file; this is the editor for it).
+  // `draft` is the textarea's contents while the dialog is open — a
+  // browser reload loses an unsaved edit, which is the same deal every
+  // other unsaved form in wash offers, while the SAVED text survives
+  // because it is a file on the host rather than anything this tab holds.
+  const [promptOpen, setPromptOpen] = createSignal(false);
+  const [promptDraft, setPromptDraft] = createSignal('');
+  // promptPending: the dialog has been asked for, and is waiting on
+  // agentd's copy of the stored text.
+  //
+  // The dialog opens WHEN THE TEXT ARRIVES rather than opening empty and
+  // filling in later. Filling in later is a race with the user: an
+  // asynchronous reply that lands after they have started editing
+  // silently replaces what they typed, and Save then stores the old text
+  // back. The first cut tried to gate that on "has the user typed yet",
+  // which is not knowable — clearing a field that is already empty
+  // produces no input event at all, so the gate stayed open and the
+  // reply undid the clear. Opening on arrival has no such window.
+  //
+  // Safe because agentd is a local process on the same machine; this is
+  // an IPC round trip, not a network one.
+  const [promptPending, setPromptPending] = createSignal(false);
   // History panel (HistoryPanel.tsx). The query round-trips through
   // agentd rather than filtering here: it searches the stored
   // CONVERSATIONS, which the FE has never seen.
-  const [historyOpen, setHistoryOpen] = createSignal(false);
   const [historyQuery, setHistoryQuery] = createSignal('');
   const [historySessions, setHistorySessions] = createSignal<SessionMeta[]>([]);
   const [historyLoading, setHistoryLoading] = createSignal(false);
@@ -114,16 +163,44 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
   // Debounced: every keystroke would otherwise grep every transcript on
   // the machine.
+  let lastHistorySig: string | undefined;
   const onHistoryQuery = (q: string) => {
     setHistoryQuery(q);
     if (historyTimer) clearTimeout(historyTimer);
     historyTimer = setTimeout(() => askHistory(q), 150);
   };
-  const openHistory = () => {
-    setHistoryOpen(true);
-    askHistory(historyQuery());
-  };
   onCleanup(() => { if (historyTimer) clearTimeout(historyTimer); });
+
+  // Rename / delete / prune (agentd/session_admin.go). Each is a small
+  // dialog over whichever list it was picked from — the roster, the
+  // History panel or the Session menu — sending one key-or-id addressed
+  // verb. The dialogs are here rather than in the lists because the
+  // lists are shared renderers that own no state.
+  const [renameFor, setRenameFor] = createSignal<{ key?: string; session_id?: string; title: string } | null>(null);
+  const [renameDraft, setRenameDraft] = createSignal('');
+  const openRename = (t: { key?: string; session_id?: string; title?: string }) => {
+    setRenameDraft(t.title ?? '');
+    setRenameFor({ key: t.key, session_id: t.session_id, title: t.title ?? '' });
+  };
+  const saveRename = () => {
+    const t = renameFor();
+    if (!t) return;
+    setRenameFor(null);
+    send({ kind: 'rename', key: t.key ?? '', session_id: t.session_id ?? '', title: renameDraft().trim() });
+  };
+  const [deleteFor, setDeleteFor] = createSignal<SessionMeta | null>(null);
+  const [pruning, setPruning] = createSignal(false);
+  // Horizons for "Delete all older than…". 0 is every finished session —
+  // the honest word for "clear history", offered here rather than as a
+  // separate verb so there is one place history is thrown away.
+  const pruneChoices: [string, string][] = [
+    [String(24 * 3600e3), 'a day'],
+    [String(7 * 24 * 3600e3), 'a week'],
+    [String(30 * 24 * 3600e3), 'a month'],
+    [String(90 * 24 * 3600e3), 'three months'],
+    ['0', 'any age — every finished session'],
+  ];
+  const [pruneAge, setPruneAge] = createSignal(pruneChoices[2][0]);
 
   // Why a transcript frame can now be for the wrong session: see
   // transcript-guard.ts.
@@ -131,10 +208,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const handleBE = (m: Record<string, unknown>) => {
     switch (m.kind) {
+      case 'workspace_state':
+        if (!staleTranscript(m)) setWorkspaceFrame(m as unknown as WorkspaceFrame);
+        break;
+      case 'workspace_patch':
+        if (!staleTranscript(m)) {
+          const next = applyWorkspacePatch(workspaceFrame(), m as unknown as WorkspacePatch);
+          if (next) setWorkspaceFrame(next);
+          else send({ kind: 'workspace_refresh' });
+        }
+        break;
+      case 'workspace_result':
+        if (!staleTranscript(m)) setWorkspaceResult(m as unknown as WorkspaceResult);
+        break;
+      case 'role':
+        setRole(m.role === 'manager' ? 'manager' : 'session');
+        break;
       case 'autostart':
         setAutostart({ agent: String(m.agent ?? ''), cwd: String(m.cwd ?? '') });
-        setAgent(String(m.agent ?? ''));
-        setCwd(String(m.cwd ?? ''));
+        patchForm({ agent: String(m.agent ?? ''), cwd: String(m.cwd ?? '') });
         setStarting(true);
         break;
       case 'started':
@@ -143,9 +235,24 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setStarting(false);
         setError('');
         break;
+      case 'session_opened':
+        setStarting(false);
+        setError('');
+        break;
+      case 'claim_denied':
+        setError('This session is already controlled by another window.');
+        break;
       case 'restore_failed':
         setSessionKey('');
         setEvents([]);
+        break;
+      case 'draft':
+        // Another app sent a selection here (agent_draft). It lands in
+        // the composer, not on the wire: what someone does with it — add
+        // a question above it, trim it, think better of it — is the whole
+        // reason it goes to the composer at all.
+        draftSeq += 1;
+        setDraftIn({ text: String(m.text ?? ''), seq: draftSeq });
         break;
       case 'start_failed':
         setAutostart(null);
@@ -154,6 +261,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
       case 'snapshot':
         if (staleTranscript(m)) break;
+        resyncPending = false;
         if (typeof m.reset === 'boolean') {
           setEvents((prev) => mergeEvents(prev, (m.events as AgentEvent[]) ?? []));
         } else {
@@ -163,9 +271,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'event': {
         const e = m.event as AgentEvent | undefined;
         if (!e || staleTranscript(m)) break;
-        // agentd mutates a tool row in place, so an event with a seq we
-        // already hold replaces it rather than appending a duplicate.
-        setEvents((prev) => mergeEvents(prev, [e]));
+        // Whole rows replace by seq (agentd mutates a tool row in place);
+        // a streamed reply's later chunks arrive as deltas and append. A
+        // delta we cannot apply means our base is wrong — a reload landed
+        // mid-reply, say — so ask for the snapshot again, once.
+        const r = applyAgentEvent(events(), e);
+        setEvents(r.events);
+        if (r.gap && !resyncPending) {
+          resyncPending = true;
+          send({ kind: 'resync' });
+        }
         break;
       }
       case 'confirm_close':
@@ -180,24 +295,76 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         }
         break;
 
+      case 'history_deleted':
+      case 'history_pruned':
+        // The store changed under the panel: re-ask with the current
+        // query rather than editing the list locally, so what is shown is
+        // what is on disk.
+        if (role() === 'manager') askHistory(historyQuery());
+        break;
+
+      case 'default_prompt':
+        // Only the reply this dialog asked for opens it. A later echo —
+        // agentd answers a save with what it stored — arrives with
+        // nothing pending and is ignored, rather than re-opening a
+        // dialog the user just dismissed.
+        if (promptPending()) {
+          setPromptPending(false);
+          setPromptDraft(String(m.text ?? ''));
+          setPromptOpen(true);
+        }
+        break;
+
       case 'roster':
         setRoster((m.state as RosterState) ?? {});
+        // History is always on screen in the manager, so it must follow
+        // the sessions agentd remembers: one started, ended, renamed or
+        // detached changes what a row says and which verb it offers.
+        // Re-ask only when that set moved — roster pushes also carry
+        // state flips that change nothing History shows.
+        if (role() === 'manager') {
+          const sig = historySignature(roster().recent ?? []);
+          if (sig !== lastHistorySig) {
+            const first = lastHistorySig === undefined;
+            lastHistorySig = sig;
+            if (!first) onHistoryQuery(historyQuery());
+          }
+        }
         // Fill the launcher in on the first roster that names the
-        // adapters (docs/AGENT_UX.md N5a/N5b): the agent you used last,
-        // in the folder you used it in. Once only, and only while the
+        // stacks (docs/AGENT_UX.md N5a/N5b): the stack you used last, in
+        // the folder you used it in. Once only, and only while the
         // untouched launcher is what's showing — a user who set the
         // select (or a window that's already a session) is never fought.
-        if (!agentDefaulted && !sessionKey() && !autostart() && agent() === '') {
-          const d = defaultAgent(roster().adapters ?? [], roster().recent ?? []);
+        if (!stackDefaulted && !sessionKey() && !autostart() && form().stack === '') {
+          const d = defaultStack(roster().stacks ?? [], roster().recent ?? []);
           if (d) {
-            agentDefaulted = true;
-            setAgent(d);
+            stackDefaulted = true;
+            patchForm({ stack: d, tier: DEFAULT_TIER });
             // Only if the user hasn't typed/picked one — the folder field
             // is editable from the moment the window opens.
-            if (cwd() === '') setCwd(defaultCwd(roster().recent ?? []));
+            if (cwd() === '') patchForm({ cwd: defaultCwd(roster().recent ?? []) });
           }
         }
         break;
+
+      case 'key_saved':
+        setKeyResult(String(m.name ?? ''), m.error ? { ok: false, detail: String(m.error) } : { ok: true, detail: 'Saved.' });
+        break;
+      case 'key_test':
+        setKeyResult(String(m.name ?? ''), { ok: m.ok === true, detail: String(m.detail ?? '') });
+        break;
+
+      case 'usage_patch':
+        setRoster((prev) => applyUsagePatch(prev, m.rows));
+        break;
+      case 'preview_patch': {
+        const patches = new Map(((m.rows as PreviewPatchRow[] | undefined) ?? []).map((r) => [r.key, r.preview ?? '']));
+        setRoster((prev) => ({
+          ...prev,
+          rows: (prev.rows ?? []).map((r) => patches.has(r.key) ? { ...r, preview: patches.get(r.key) } : r),
+        }));
+        break;
+      }
     }
   };
 
@@ -205,11 +372,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     onMsg: handleBE,
     onState: (state) => {
       const saved = state as PersistedState | null;
-      // Width first, and unconditionally: it is this window's furniture,
-      // and it must come back even for a window with no session in it.
-      if (typeof saved?.split_pct === 'number' && saved.split_pct > 0) {
-        setSplitPct(saved.split_pct);
-      }
       const key = typeof saved?.session_key === 'string' ? saved.session_key : '';
       if (!key) return;
       // wash:state lands before queued wash:msg events on every remount.
@@ -218,6 +380,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setSessionKey(key);
       send({ kind: 'restore', key });
     },
+  });
+
+  // History is a permanent manager pane now, so populate it as soon as
+  // agentd assigns this window the manager role. Session controllers do
+  // not ask for or retain the archive.
+  let historyLoaded = false;
+  createEffect(() => {
+    if (role() === 'manager' && !historyLoaded) {
+      historyLoaded = true;
+      askHistory(historyQuery());
+      // Every mount, not just the first: after a reload the BE has long
+      // since sent its one manager_state, and this FE never saw it.
+      send({ kind: 'manager_refresh' });
+    }
   });
 
   // ---- sessions pane (docs/SIDEBAR.md M2) ----
@@ -233,8 +409,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // drag to nothing is a better answer than a list that appears on
   // conditions.
   //
-  // Width is per window and BE-persisted (see set_split), so a pane you
-  // sized stays sized across a browser reload.
+  // Width is local to this manager window. The default keeps the launcher
+  // and history roomy while leaving enough space to scan running agents.
   const rows = () => roster().rows ?? [];
   // Elapsed per row, anchored on arrival: since_ms is measured at PUSH
   // time, so it can't be compared against a local clock directly. Same
@@ -280,8 +456,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const status = createMemo<AgentStatus>(() => {
     const r = row();
     return {
-      agent: r?.agent ?? agent(),
+      agent: r?.agent ?? autostart()?.agent ?? '',
       dir: r?.dir,
+      cwd: r?.cwd,
       branch: r?.branch,
       dirty: r?.dirty,
       state: r?.state,
@@ -294,6 +471,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       configs: r?.configs,
       commands: r?.commands,
       yolo: r?.yolo,
+      queued: r?.queued,
+      roots: r?.roots,
     };
   });
 
@@ -307,6 +486,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (e.kind === 'user') return '> ' + (e.text ?? '');
         if (e.kind === 'tool') return `[${e.tool_kind ?? 'tool'}] ${e.title ?? e.text ?? ''}`;
         if (e.kind === 'image') return `[image ${e.mime ?? 'image'}]`;
+        if (e.kind === 'decision') return `[${e.status === 'allow' ? 'allowed' : 'not approved'}: ${e.reason}] ${e.title} ${e.detail ?? ''}`.trimEnd();
         return e.text ?? '';
       })
       .join('\n\n');
@@ -316,12 +496,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return msgs.length ? (msgs[msgs.length - 1].text ?? '') : '';
   };
 
-  // Live and REACHABLE are not the same thing. Hiding live sessions is
-  // right — offering to resume one that is already running would be
-  // offering to duplicate it — but a DETACHED session is live and is
-  // exactly what you opened this menu to get back. It gets listed with a
-  // reattach verb instead of a resume one.
-  const recent = () => (roster().recent ?? []).filter((s) => historyAction(s) !== 'none');
   const configs = () => row()?.configs ?? [];
 
   // The menus advertise these, so they have to exist. A menu that shows a
@@ -343,14 +517,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     onCleanup(() => window.removeEventListener('keydown', onKey));
   });
 
+  const openPrompt = () => {
+    setPromptPending(true);
+    send({ kind: 'default_prompt' });
+  };
+
   const start = () => {
-    // Same preference the preselect uses (N5a), so a submit from
-    // "Choose…" and the visible default cannot disagree about the agent.
-    const a = agent() || defaultAgent(adapters(), roster().recent ?? []);
-    if (!a) return;
     setStarting(true);
     setError('');
-    send({ kind: 'start', agent: a, cwd: cwd() });
+    send(startMessage(form()));
   };
 
   const booting = (
@@ -372,43 +547,26 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   );
 
   const launcher = (
-    <div style={{ padding: `${tokens.spaceXl}px`, display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceLg}px` }}>
-      <div style={{ font: tokens.type.titleSm, color: tokens.fg }}>New session</div>
-
-      <label style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
-        <span style={labelStyle}>agent</span>
-        <Select
-          value={agent()}
-          onChange={setAgent}
-          data-testid="ai-agent-select"
-          options={[
-            ['', 'Choose…'],
-            ...adapters().map((a) => [a.id, a.available ? a.name : `${a.name} — ${a.note ?? 'not installed'}`] as [string, string]),
-          ]}
+    <>
+      <Launcher
+        stacks={roster().stacks ?? []}
+        adapters={adapters()}
+        form={form()}
+        onForm={patchForm}
+        onStart={start}
+        onPickFolder={() => setPicking(true)}
+        starting={starting()}
+        error={error()}
+        hasDefaultPrompt={!!roster().has_default_prompt}
+        onOpenPrompt={openPrompt}
+      >
+        <Connections
+          keys={roster().keys ?? []}
+          results={keyResults()}
+          onSave={(name, value) => { setKeyResult(name, {}); send({ kind: 'set_key', name, value }); }}
+          onTest={(name, value) => { setKeyResult(name, { busy: true }); send({ kind: 'test_key', name, value }); }}
         />
-      </label>
-
-      <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
-        <span style={labelStyle}>folder</span>
-        <div style={{ display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'stretch' }}>
-          <div
-            style={{
-              ...fieldStyle,
-              font: tokens.type.monoMd,
-              flex: 1,
-              'min-width': 0,
-              overflow: 'hidden',
-              'text-overflow': 'ellipsis',
-              'white-space': 'nowrap',
-              color: cwd() ? tokens.fg : tokens.fgDim,
-            }}
-            title={cwd() || 'Home'}
-          >
-            {cwd() || 'Home'}
-          </div>
-          <Button onClick={() => setPicking(true)}>Choose…</Button>
-        </div>
-      </div>
+      </Launcher>
 
       <FilePicker
         open={saving()}
@@ -431,32 +589,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         hostInstanceID={props.instance}
         start={cwd()}
         onConfirm={(p) => {
-          setCwd(p);
+          patchForm({ cwd: p });
           setPicking(false);
         }}
         onCancel={() => setPicking(false)}
         data-testid="ai-folder-picker"
       />
 
-      <Show when={error()}>
-        <div
-          style={{
-            font: tokens.type.textSm,
-            color: tokens.fgDanger,
-            background: tokens.bgDanger,
-            border: `1px solid ${tokens.borderDanger}`,
-            'border-radius': tokens.radiusMd,
-            padding: `${tokens.spaceMd}px`,
-          }}
-        >
-          {error()}
-        </div>
-      </Show>
-
-      <Button variant="primary" disabled={starting()} onClick={start}>
-        {starting() ? 'Starting…' : 'Start session'}
-      </Button>
-    </div>
+    </>
   );
 
   // Three outcomes, not two: dismissing the dialog must ABORT the close,
@@ -513,6 +653,34 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onClick={() => { close(); send({ kind: 'set_yolo', on: !status().yolo }); }}
                 data-testid="ai-menu-yolo"
               />
+              <MenuItem
+                label="Rename session…"
+                disabled={!sessionKey()}
+                onClick={() => { close(); openRename({ key: sessionKey(), session_id: row()?.session_id, title: row()?.title }); }}
+                data-testid="ai-menu-rename"
+              />
+              {/* Where the agent is working is exactly where a person
+                  wants a shell. Same verb the roster row offers, because
+                  the window showing a session and the row naming it are
+                  two views of one thing. */}
+              <MenuItem
+                label="Open terminal in project folder"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_terminal', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-terminal"
+              />
+              <MenuItem
+                label="Open file manager in project folder"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_file_manager', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-file-manager"
+              />
+              <MenuItem
+                label="Open text editor in project folder"
+                disabled={!row()?.cwd}
+                onClick={() => { close(); send({ kind: 'open_text_editor', cwd: row()?.cwd ?? '' }); }}
+                data-testid="ai-menu-open-text-editor"
+              />
               <MenuSeparator />
               <Show when={configs().length === 0}>
                 <MenuItem label="No settings offered" disabled onClick={() => {}} />
@@ -541,82 +709,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             </Menu>
           ),
         },
-        {
-          id: 'history',
-          label: 'History',
-          render: (at, close) => (
-            <Menu x={at.x} y={at.y} onDismiss={close} data-testid="ai-menu-history">
-              {/* The menu keeps the fast path — reopen one of the last
-                  few — and hands everything else to the panel, which is
-                  searchable and can carry the metadata a menu item
-                  cannot. */}
-              <MenuItem
-                label="Browse all history…"
-                data-testid="ai-menu-history-browse"
-                onClick={() => { close(); openHistory(); }}
-              />
-              <MenuSeparator />
-              <Show when={recent().length === 0}>
-                <MenuItem label="No earlier sessions" disabled onClick={() => {}} />
-              </Show>
-              <For each={recent()}>
-                {(s) => {
-                  const base = s.title ? `${s.title}  —  ${s.dir ?? ''}` : `${s.agent} · ${s.dir ?? ''}`;
-                  // Three verbs, never confused, and the difference is
-                  // not cosmetic. A detached session is already running
-                  // and must be reattached BY ROW KEY; a live one already
-                  // has a window and only wants focusing; only a finished
-                  // one is resumed by session id. Sending `resume` for
-                  // either of the first two starts a second copy of a
-                  // conversation you already have.
-                  const act = historyAction(s);
-                  if (act === 'reattach') {
-                    return (
-                      <MenuItem
-                        label={`Reattach — ${base}`}
-                        onClick={() => { close(); send({ kind: 'row_reattach', key: s.row_key }); }}
-                        data-testid="ai-menu-reattach"
-                      />
-                    );
-                  }
-                  if (act === 'focus') {
-                    return (
-                      <MenuItem
-                        label={`Go to — ${base}`}
-                        onClick={() => { close(); send({ kind: 'row_focus', key: s.row_key }); }}
-                        data-testid="ai-menu-focus"
-                      />
-                    );
-                  }
-                  return (
-                    <MenuItem
-                      label={base}
-                      onClick={() => { close(); send({ kind: 'resume', session_id: s.session_id }); }}
-                      data-testid="ai-menu-resume"
-                    />
-                  );
-                }}
-              </For>
-            </Menu>
-          ),
-        },
       ]}
     />
   );
 
-  // rosterPane is the master half. Verbs arrive in M2b; for now it lists
-  // and selects, which is already the thing the rail could not do for a
-  // remote host.
   const rosterPane = (
     <div
       data-testid="ai-roster-pane"
       style={{
-        // No width here: the grid column owns it, so dragging the
-        // splitter is the only thing that decides how wide this is.
-        // No height either, for the same reason — the row is clamped to
-        // the body, and min-height:0 keeps a long list from arguing.
         'min-width': 0,
         'min-height': 0,
+        height: '100%',
+        'box-sizing': 'border-box',
         background: tokens.bgInset,
         overflow: 'auto',
         // Wheel past the end of the list and the scroll stops here rather
@@ -627,38 +731,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         padding: `${tokens.spaceSm}px`,
       }}
     >
-        {/* The verbs are key-addressed, so they act on the row rather than
-            on whatever this window happens to be showing — including a
-            session with no window at all. That is the whole difference
-            between here and the rail: an app talking to its own host's
-            agentd has a router-attested sender, so it may act. */}
-        {/* New session — the way back to the launcher from a window that
-            is showing one. Without it the roster is a one-way door: the
-            launcher is only ever the EMPTY state of a window, so a window
-            with a session had no route to starting another.
-
-            A new WINDOW, not a new view: this app is one window per
-            conversation by design, and clearing the view in place would
-            leave this window's backend still watching the old session,
-            streaming its events into what looks like a fresh one.
-            launchOn is the explicit spawn verb — focusOrLaunch, its
-            sibling, would just re-raise this very window — and
-            props.origin keeps it on the host this window belongs to,
-            which is the whole point on a remote one. */}
-        <Button
-          variant="ghost"
-          data-testid="ai-roster-new"
-          title="Start another session on this host"
-          style={{
-            width: '100%',
-            'margin-bottom': `${tokens.spaceSm}px`,
-            'justify-content': 'flex-start',
-            gap: `${tokens.spaceSm}px`,
-          }}
-          onClick={() => window.wash.launchOn(props.origin, 'com.wash.ai')}
-        >
-          <Plus size={13} /> New session
-        </Button>
         <AgentRoster
           rows={rows}
           // Off-row questions only. The detail pane on the right already
@@ -674,36 +746,220 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onDetach={(r) => send({ kind: 'row_detach', key: r.key })}
           onCancel={(r) => send({ kind: 'row_cancel', key: r.key })}
           onStop={(r) => send({ kind: 'row_stop', key: r.key })}
-          onAnswer={(a, decision, remember) => send({
+          onRename={(r) => openRename({ key: r.key, session_id: r.session_id, title: r.title })}
+          onAddRoot={(r) => openAddRoot(r.key, r.cwd ?? '')}
+          onOpenTerminal={(r) => send({ kind: 'open_terminal', cwd: r.cwd ?? '' })}
+          onOpenFileManager={(r) => send({ kind: 'open_file_manager', cwd: r.cwd ?? '' })}
+          onOpenTextEditor={(r) => send({ kind: 'open_text_editor', cwd: r.cwd ?? '' })}
+          onAnswer={(a, decision, remember, scope) => send({
             kind: 'answer',
             id: a.id,
             decision,
             rule: remember ? (a.suggested_rule ?? '') : '',
+            ...(scope ? { scope } : {}),
           })}
         />
     </div>
   );
 
   const historyPanel = (
-    <Show when={historyOpen()}>
-      <HistoryPanel
-        sessions={historySessions}
-        query={historyQuery}
-        loading={historyLoading}
-        onQuery={onHistoryQuery}
-        onClose={() => setHistoryOpen(false)}
-        onResume={(s) => {
-          setHistoryOpen(false);
-          // Same predicate as the menu, same two verbs. The panel used to
-          // send `resume` unconditionally, which for an already-running
-          // session meant duplicating it — the exact outcome the menu's
-          // filter existed to prevent, in the view that had no filter.
-          const act = historyAction(s);
-          if (act === 'reattach') send({ kind: 'row_reattach', key: s.row_key });
-          else if (act === 'focus') send({ kind: 'row_focus', key: s.row_key });
-          else send({ kind: 'resume', session_id: s.session_id });
+    <HistoryPanel
+      embedded
+      sessions={historySessions}
+      query={historyQuery}
+      loading={historyLoading}
+      onQuery={onHistoryQuery}
+      onRename={(s) => openRename({ key: s.row_key, session_id: s.session_id, title: s.title })}
+      onDelete={(s) => setDeleteFor(s)}
+      onPrune={() => setPruning(true)}
+      onRestart={(s) => {
+        // Fresh, the way it was started: its stack and tier, or, for a
+        // session started without one, its adapter.
+        setStarting(true);
+        setError('');
+        send(s.stack
+          ? startMessage({ stack: s.stack, tier: s.tier ?? DEFAULT_TIER, agent: '', model: '', cwd: s.cwd ?? '' })
+          : startMessage({ stack: '', tier: '', agent: s.agent ?? '', model: '', cwd: s.cwd ?? '' }));
+      }}
+      onResume={(s) => {
+        const act = historyAction(s);
+        if (act === 'reattach') send({ kind: 'row_reattach', key: s.row_key });
+        else if (act === 'focus') send({ kind: 'row_focus', key: s.row_key });
+        else send({ kind: 'resume', session_id: s.session_id });
+      }}
+    />
+  );
+
+  // The initial-prompt editor. An Overlay like the close dialog, because
+  // it is a decision you finish or abandon rather than a panel you leave
+  // open — and because dismissing must mean "leave it as it was", which
+  // is exactly what not sending set_default prompt does.
+  const promptDialog = (
+    <Show when={promptOpen()}>
+      <Overlay onDismiss={() => setPromptOpen(false)} data-testid="ai-prompt-dialog">
+        <div style={{ 'font-weight': 600, 'margin-bottom': `${tokens.spaceSm}px` }}>
+          Default prompt
+        </div>
+        <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '54ch', 'margin-bottom': `${tokens.spaceMd}px` }}>
+          Sent to every new session on this machine, before anything you
+          type. Standing instructions — which repo, which conventions,
+          what to read first — so you stop retyping them. Existing
+          sessions are untouched.
+        </div>
+        <textarea
+          data-testid="ai-prompt-text"
+          value={promptDraft()}
+          onInput={(e) => setPromptDraft(e.currentTarget.value)}
+          rows={10}
+          spellcheck={false}
+          style={{
+            width: '58ch',
+            'max-width': '80vw',
+            resize: 'vertical',
+            font: tokens.type.monoMd,
+            color: tokens.fg,
+            background: tokens.bgInset,
+            border: `1px solid ${tokens.borderMenu}`,
+            'border-radius': tokens.radiusMd,
+            padding: `${tokens.spaceMd}px`,
+          }}
+        />
+        <div style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'justify-content': 'flex-end', 'margin-top': `${tokens.spaceLg}px` }}>
+          <Button data-testid="ai-prompt-cancel" onClick={() => setPromptOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            data-testid="ai-prompt-save"
+            onClick={() => {
+              send({ kind: 'set_default_prompt', text: promptDraft() });
+              setPromptOpen(false);
+            }}
+          >
+            Save
+          </Button>
+        </div>
+      </Overlay>
+    </Show>
+  );
+
+  // One name box for every list. Enter saves, Escape (the Overlay's
+  // dismiss) leaves the name as it was; an empty name clears yours and
+  // lets the agent's own show again.
+  const renameDialog = (
+    <Show when={renameFor()}>
+      <Overlay onDismiss={() => setRenameFor(null)} data-testid="ai-rename-dialog">
+        <div style={{ 'font-weight': 600, 'margin-bottom': `${tokens.spaceSm}px` }}>Rename session</div>
+        <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '46ch', 'margin-bottom': `${tokens.spaceMd}px` }}>
+          Shown wherever this session is listed. Leave it empty to go back to
+          the agent's own name.
+        </div>
+        <Input
+          data-testid="ai-rename-input"
+          value={renameDraft()}
+          ref={(el: HTMLInputElement) => queueMicrotask(() => { el.focus(); el.select(); })}
+          onInput={(e: InputEvent) => setRenameDraft((e.currentTarget as HTMLInputElement).value)}
+          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); saveRename(); } }}
+          style={{ width: '46ch', 'max-width': '80vw' }}
+        />
+        <div style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'justify-content': 'flex-end', 'margin-top': `${tokens.spaceLg}px` }}>
+          <Button data-testid="ai-rename-cancel" onClick={() => setRenameFor(null)}>Cancel</Button>
+          <Button variant="primary" data-testid="ai-rename-save" onClick={saveRename}>Save</Button>
+        </div>
+      </Overlay>
+    </Show>
+  );
+
+  const deleteDialog = (
+    <Show when={deleteFor()}>
+      {(s) => (
+        <ConfirmDialog
+          title="Delete this conversation?"
+          confirmLabel="Delete"
+          danger
+          data-testid="ai-delete-confirm"
+          confirmTestid="ai-delete-confirm-yes"
+          cancelTestid="ai-delete-confirm-no"
+          onCancel={() => setDeleteFor(null)}
+          onConfirm={() => {
+            const id = s().session_id;
+            setDeleteFor(null);
+            send({ kind: 'delete_session', session_id: id });
+          }}
+        >
+          <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '46ch' }}>
+            <b>{s().title || s().session_id}</b> — its transcript is removed from disk and it leaves
+            History. The agent's own record of the session is not touched.
+          </div>
+        </ConfirmDialog>
+      )}
+    </Show>
+  );
+
+  const pruneDialog = (
+    <Show when={pruning()}>
+      <ConfirmDialog
+        title="Delete older conversations?"
+        confirmLabel="Delete"
+        danger
+        data-testid="ai-prune-dialog"
+        confirmTestid="ai-prune-confirm"
+        cancelTestid="ai-prune-cancel"
+        onCancel={() => setPruning(false)}
+        onConfirm={() => {
+          setPruning(false);
+          send({ kind: 'prune_history', max_age_ms: Number(pruneAge()) });
         }}
-      />
+      >
+        <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceMd}px`, 'max-width': '46ch' }}>
+          <div style={{ font: tokens.type.textMd, opacity: 0.75 }}>
+            Every finished session whose last activity is older than this is
+            deleted from disk. Running sessions are kept.
+          </div>
+          <Select value={pruneAge()} onChange={setPruneAge} options={pruneChoices} data-testid="ai-prune-age" />
+        </div>
+      </ConfirmDialog>
+    </Show>
+  );
+
+  // Both pickers live at the window's root rather than inside the
+  // launcher fragment: the launcher renders only while there is NO
+  // session, and both of these are reached from a running one.
+  const attachPicker = (
+    <FilePicker
+      open={attaching()}
+      mode="open"
+      host={props.host}
+      hostInstanceID={props.instance}
+      start={row()?.cwd || cwd()}
+      onConfirm={(p) => finishAttach([p])}
+      onCancel={() => finishAttach([])}
+      data-testid="ai-attach-picker"
+    />
+  );
+
+  const rootPicker = (
+    <Show when={rootFor()}>
+      {(r) => (
+        <FilePicker
+          open
+          mode="directory"
+          host={props.host}
+          hostInstanceID={props.instance}
+          start={r().start}
+          onConfirm={(p) => {
+            // Read the key BEFORE clearing: `r()` is <Show>'s accessor,
+            // and it stops reporting the row the moment the condition
+            // goes false — so reading it after the clear sent an empty
+            // key and the widening silently did nothing.
+            const key = r().key;
+            setRootFor(null);
+            send({ kind: 'row_add_root', key, path: p });
+          }}
+          onCancel={() => setRootFor(null)}
+          data-testid="ai-root-picker"
+        />
+      )}
     </Show>
   );
 
@@ -746,29 +1002,91 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </Show>
   );
 
-  // Master-detail. The menubar sits ABOVE the split, so the sessions pane
-  // survives every detail state — including the launcher, which is what
-  // makes "new session while three are running" a coherent thing to do
-  // rather than a mode you leave the list to enter.
-  //
-  // A grid, not a flex row, for the same reason wash-edit uses one: the
-  // splitter's percentage is a column width, and a grid can express
-  // "<pct>% | handle | rest" directly. The 4px middle column IS the
-  // <Splitter>.
-  return (
+  // The manager is a stable workspace rather than a sequence of modes:
+  // start a session in the compact upper-left pane, find an older one
+  // below it, and keep the live roster visible on the right throughout.
+  const managerView = (
+    <>
+      {promptDialog}
+      {renameDialog}
+      {deleteDialog}
+      {pruneDialog}
+      {rootPicker}
+      <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
+        <div
+          style={{
+            padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
+            border: `0 solid ${tokens.borderMenu}`,
+            'border-bottom-width': '1px',
+            font: tokens.type.titleSm,
+          }}
+        >
+          Agents
+        </div>
+        <div
+          ref={managerBody}
+          style={{
+            flex: 1,
+            'min-height': 0,
+            display: 'grid',
+            'grid-template-columns': `minmax(320px, ${managerSplit()}%) 5px minmax(220px, 1fr)`,
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              'min-width': 0,
+              'min-height': 0,
+              display: 'grid',
+              'grid-template-rows': 'minmax(220px, 36%) minmax(0, 1fr)',
+            }}
+          >
+            <section data-testid="agents-new-pane" style={{ overflow: 'auto', 'min-height': 0 }}>
+              {launcher}
+            </section>
+            <section
+              data-testid="agents-history-pane"
+              style={{ overflow: 'hidden', 'min-height': 0, border: `0 solid ${tokens.borderMenu}`, 'border-top-width': '1px' }}
+            >
+              {historyPanel}
+            </section>
+          </div>
+          <Splitter
+            container={managerBody}
+            min={45}
+            max={80}
+            thickness={5}
+            onChange={setManagerSplit}
+            data-testid="agents-manager-splitter"
+          />
+          <section
+            data-testid="agents-running-pane"
+            style={{ 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column', background: tokens.bgInset }}
+          >
+            <div style={{ padding: `${tokens.spaceMd}px`, font: tokens.type.titleSm, color: tokens.fg }}>
+              Running
+            </div>
+            <div style={{ flex: 1, 'min-height': 0, overflow: 'hidden' }}>{rosterPane}</div>
+          </section>
+        </div>
+      </div>
+    </>
+  );
+
+  const sessionView = (
     <>
     {closeDialog}
-    {historyPanel}
+
+    {renameDialog}
+    {attachPicker}
     <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
       {menubar}
       <div
-        ref={bodyEl!}
         data-testid="ai-body"
         style={{
           flex: 1,
           'min-height': 0,
-          display: 'grid',
-          'grid-template-columns': `${splitPct()}% 4px 1fr`,
+          display: 'flex',
           // One row, clamped to the body — the same `grid-template-rows`
           // + `overflow: hidden` pair wash-edit's and wash-fm's split
           // bodies use. The row is otherwise implicit and auto-sized, so
@@ -782,21 +1100,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           overflow: 'hidden',
         }}
       >
-        {rosterPane}
-        <Splitter
-          container={bodyEl}
-          min={12}
-          max={60}
-          onChange={setSplitPct}
-          onCommit={() => send({ kind: 'set_split', pct: Math.round(splitPct()) })}
-          data-testid="ai-splitter"
-        />
-        <div style={{ 'min-width': 0, 'min-height': 0, display: 'flex', 'flex-direction': 'column' }}>
+        <WorkspaceLayout onAnswer={(id, decision, rule, scope) => send({kind:'answer', id, decision, rule: rule ?? '', ...(scope ? { scope } : {})})} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
+          onAction={(name, args) => send({ kind: 'workspace_action', name, arguments: args })}>
           <Show
             when={sessionKey()}
             fallback={
-              <div style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
-                <Show when={autostart()} fallback={launcher}>{booting}</Show>
+              <div style={{ padding: `${tokens.spaceXl}px`, color: tokens.fgMuted }}>
+                <Show
+                  when={autostart()}
+                  fallback={
+                    <>
+                      <div style={{ 'margin-bottom': `${tokens.spaceMd}px` }}>This window is not attached to a session.</div>
+                      <Button onClick={() => send({ kind: 'open_agents' })}>Open Agents</Button>
+                    </>
+                  }
+                >
+                  {booting}
+                </Show>
               </div>
             }
           >
@@ -804,35 +1124,41 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               events={events}
               asks={asks}
               status={status}
-              onSend={(text) => send({ kind: 'prompt', text })}
-              onAnswer={(id, decision, rule) => send({ kind: 'answer', id, decision, rule: rule ?? '' })}
+              onSend={(text, blocks) => send({ kind: 'prompt', text, blocks })}
+              onRemoveRoot={(path) => send({ kind: 'row_remove_root', key: sessionKey(), path })}
+              insertDraft={draftIn}
+              onPickFiles={() =>
+                new Promise<string[]>((resolve) => {
+                  // A picker already open would strand the earlier waiter.
+                  finishAttach([]);
+                  attachResolve = resolve;
+                  setAttaching(true);
+                })
+              }
+              onAnswer={(id, decision, rule, scope) => send({ kind: 'answer', id, decision, rule: rule ?? '', ...(scope ? { scope } : {}) })}
               onCancel={() => send({ kind: 'cancel' })}
               onSetMode={(mode) => send({ kind: 'set_mode', mode })}
               onSetConfig={(id, value) => send({ kind: 'set_config', id, value })}
+              onOpenTool={(e) => {
+                // A tool row names a file; clicking it opens that file in
+                // whatever app registered for the type (the router's own
+                // open routing, so this app does not have to know that
+                // .png goes to imageview and .go goes to edit). Standalone
+                // Agent had no onOpenTool at all, so every row was inert —
+                // only wash-edit's agent tab could act on one.
+                const path = e.path || (e.title ?? '').trim();
+                if (path) send({ kind: 'open_path', path });
+              }}
             />
           </Show>
-        </div>
+        </WorkspaceLayout>
       </div>
     </div>
     </>
   );
-};
 
-const labelStyle = {
-  font: tokens.type.monoSm,
-  'letter-spacing': '0.09em',
-  'text-transform': 'uppercase' as const,
-  color: tokens.fgDim,
-};
-
-const fieldStyle = {
-  background: tokens.bgInset,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': tokens.radiusMd,
-  padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
-  font: tokens.type.textMd,
-  color: tokens.fg,
-  outline: 'none',
+  return <Show when={role() === 'manager'} fallback={sessionView}>{managerView}</Show>;
 };
 
 defineWashApp('wash-app-ai', App);
+defineWashApp('wash-app-agents', App);

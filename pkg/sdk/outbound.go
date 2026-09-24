@@ -327,6 +327,16 @@ func (c *Conn) SpawnRequest(appID string) error {
 	return c.writeEvt(wire.NewEvtSpawnRequest(appID))
 }
 
+// SpawnRequestOpen is SpawnRequest with a launch path: the router starts
+// the target with `--open <path>` argv, which the target reads through
+// LaunchOpenPath. Same capability gate as SpawnRequest.
+func (c *Conn) SpawnRequestOpen(appID, path string) error {
+	if path == "" {
+		return c.SpawnRequest(appID)
+	}
+	return c.writeEvt(wire.NewEvtSpawnRequestOpen(appID, path))
+}
+
 // IdleInhibit tells the router not to self-exit for idleness while this
 // app is doing something that outlives the browser — or releases that
 // hold. Requires the "idle_inhibit" capability in the app's manifest.
@@ -585,4 +595,16 @@ func (c *Conn) RestartApp(ctx context.Context, appID string) (string, error) {
 	case r := <-wait:
 		return r.instanceID, r.err
 	}
+}
+
+// Note records a fact about this app in the router's activity journal
+// (docs/COMMANDER.md §3): one bounded line, an optional pointer, and the
+// way back. The router stamps who said it; an app can only ever speak for
+// itself. Requires the "activity_note" capability; a note the router
+// refuses is logged there, never an error here.
+//
+//	c.Note(wire.EvtActivityNote{Kind: "agent.turn", Line: "turn 12 done", Intent: &wire.ActivityIntent{Kind: "resume", SessionID: id}})
+func (c *Conn) Note(n wire.EvtActivityNote) error {
+	n.T = wire.TEvtActivityNote
+	return c.writeEvt(n)
 }

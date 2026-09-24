@@ -16,16 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import {
-  Button,
-  WASH_BTN_CLASS,
-  createAppBus,
-  defineWashApp,
-  fmtClockTime,
-  severityColor,
-  tokens,
-  WASH_ROW_CLASS,
-} from '@wash/ui';
+import { Button, createAppBus, defineWashApp, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search } from 'lucide-solid';
 
 // ----- types (mirror cmd/wash-journal wire structs) -----
@@ -314,7 +305,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const unitRowStyle = (active: boolean, sel: boolean) => ({
     padding: `4px ${tokens.spaceMd}px`,
-    '--wash-row-bg': sel ? tokens.bgRowSelected : 'transparent',
+    background: sel ? tokens.bgRowSelected : 'transparent',
+    cursor: 'pointer',
     'font-size': tokens.fontSizeMd,
     color: active ? tokens.fg : tokens.fgMuted,
     'white-space': 'nowrap' as const,
@@ -344,16 +336,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     overflow: 'hidden',
   };
 
-  // Segmented range/priority filters. The fills go in as custom
-  // properties so WASH_BTN_CLASS can derive a hover and a press off
-  // whichever branch is live — the selected segment stays responsive
-  // instead of freezing at its highlight.
   const segBtn = (sel: boolean) => ({
-    '--wash-btn-bg': sel ? tokens.bgRowSelected : 'transparent',
-    '--wash-btn-border': 'transparent',
-    '--wash-btn-fg': sel ? tokens.fg : tokens.fgMuted,
+    background: sel ? tokens.bgRowSelected : 'transparent',
+    color: sel ? tokens.fg : tokens.fgMuted,
+    border: 'none',
     padding: '3px 8px',
     'font-size': tokens.fontSizeMd,
+    cursor: 'pointer',
   });
 
   const filterWrapStyle = {
@@ -423,9 +412,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </div>
         <div style={{ overflow: 'auto', flex: 1 }}>
           <div
+            data-wash-hit
             data-testid="journal-system-row"
             data-selected={selected() === SYSTEM_KEY ? 'true' : undefined}
-            class={WASH_ROW_CLASS}
             style={unitRowStyle(true, selected() === SYSTEM_KEY)}
             onClick={() => onPickUnit(SYSTEM_KEY)}
           >
@@ -441,10 +430,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               const failed = u.active === 'failed';
               return (
                 <div
+                  data-wash-hit
                   data-testid="journal-unit-row"
                   data-unit-name={u.name}
                   data-selected={selected() === u.name ? 'true' : undefined}
-                  class={WASH_ROW_CLASS}
                   style={unitRowStyle(active || failed, selected() === u.name)}
                   onClick={() => onPickUnit(u.name)}
                   title={`${u.name}\n${u.active}/${u.sub}\n${u.description}`}
@@ -465,55 +454,31 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         {/* toolbar */}
         <div style={toolbarStyle} data-testid="journal-toolbar">
           <div style={segGroupStyle}>
-            <button
-              class={WASH_BTN_CLASS}
-              aria-pressed={range() === 'boot'}
-              style={segBtn(range() === 'boot')} onClick={() => onPickRange('boot')} title="Since last boot">
+            <button data-wash-hit style={segBtn(range() === 'boot')} onClick={() => onPickRange('boot')} title="Since last boot">
               boot
             </button>
-            <button
-              class={WASH_BTN_CLASS}
-              aria-pressed={range() === 'hour'}
-              style={segBtn(range() === 'hour')} onClick={() => onPickRange('hour')} title="Last hour">
+            <button data-wash-hit style={segBtn(range() === 'hour')} onClick={() => onPickRange('hour')} title="Last hour">
               1h
             </button>
-            <button
-              class={WASH_BTN_CLASS}
-              aria-pressed={range() === 'day'}
-              style={segBtn(range() === 'day')} onClick={() => onPickRange('day')} title="Last 24 hours">
+            <button data-wash-hit style={segBtn(range() === 'day')} onClick={() => onPickRange('day')} title="Last 24 hours">
               1d
             </button>
-            <button
-              class={WASH_BTN_CLASS}
-              aria-pressed={range() === 'all'}
-              style={segBtn(range() === 'all')} onClick={() => onPickRange('all')} title="All retained history">
+            <button data-wash-hit style={segBtn(range() === 'all')} onClick={() => onPickRange('all')} title="All retained history">
               all
             </button>
           </div>
 
           <div style={segGroupStyle}>
-            <button
-              class={WASH_BTN_CLASS}
-              aria-pressed={priority() === 0}
-              style={segBtn(priority() === 0)} onClick={() => onPickPriority(0)} title="All priorities">
+            <button data-wash-hit style={segBtn(priority() === 0)} onClick={() => onPickPriority(0)} title="All priorities">
               all
             </button>
-            <button
-              class={WASH_BTN_CLASS}
-              aria-pressed={priority() === 6}
-              style={segBtn(priority() === 6)} onClick={() => onPickPriority(6)} title="Info and above">
+            <button data-wash-hit style={segBtn(priority() === 6)} onClick={() => onPickPriority(6)} title="Info and above">
               ≥info
             </button>
-            <button
-              class={WASH_BTN_CLASS}
-              aria-pressed={priority() === 4}
-              style={segBtn(priority() === 4)} onClick={() => onPickPriority(4)} title="Warning and above">
+            <button data-wash-hit style={segBtn(priority() === 4)} onClick={() => onPickPriority(4)} title="Warning and above">
               ≥warn
             </button>
-            <button
-              class={WASH_BTN_CLASS}
-              aria-pressed={priority() === 3}
-              style={segBtn(priority() === 3)} onClick={() => onPickPriority(3)} title="Error and above">
+            <button data-wash-hit style={segBtn(priority() === 3)} onClick={() => onPickPriority(3)} title="Error and above">
               ≥err
             </button>
           </div>
@@ -564,13 +529,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               <span style={{ opacity: 0.7 }}>{statusError()}</span>
             </span>
             <button
+              data-wash-hit
               data-testid="journal-retry-root"
               onClick={retryAsRoot}
-              class={WASH_BTN_CLASS}
               style={{
-                '--wash-btn-bg': tokens.bgDenied,
-                '--wash-btn-border': tokens.borderDenied,
+                background: tokens.bgDenied,
+                color: tokens.fg,
+                border: `1px solid ${tokens.borderDenied}`,
+                'border-radius': `${tokens.radiusSm}`,
                 padding: '4px 10px',
+                cursor: 'pointer',
                 'font-size': tokens.fontSizeMd,
               }}
             >
@@ -584,12 +552,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               journalctl: <span style={{ opacity: 0.85 }}>{statusError() || 'failed'}</span>
             </span>
             <button
+              data-wash-hit
               onClick={() => requestStream()}
-              class={WASH_BTN_CLASS}
               style={{
-                '--wash-btn-bg': 'transparent',
-                '--wash-btn-border': tokens.borderDanger,
+                background: 'transparent',
+                color: tokens.fg,
+                border: `1px solid ${tokens.borderDanger}`,
+                'border-radius': `${tokens.radiusSm}`,
                 padding: '3px 10px',
+                cursor: 'pointer',
                 'font-size': tokens.fontSizeMd,
               }}
             >

@@ -34,6 +34,15 @@ const (
 	CapRestart      = wire.CapRestart
 	CapOpen         = wire.CapOpen
 	CapIdleInhibit  = wire.CapIdleInhibit
+	CapActivityNote = wire.CapActivityNote
+	CapObserve      = wire.CapObserve
+)
+
+// Observation values.
+const (
+	ObservationAuto   = wire.ObservationAuto
+	ObservationExport = wire.ObservationExport
+	ObservationNone   = wire.ObservationNone
 )
 
 // MaxIconBytes is the cap on the inline icon data URI per WIRE.md §5.1.

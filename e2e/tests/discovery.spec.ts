@@ -37,7 +37,6 @@ test('discovered host renders under "On your network" and Connect dials it', asy
     a = await startRouter({
       apps: ['session', 'connect', 'remote'],
       extraEnv: { WASH_DISCOVERY_STATIC: STATIC, WASH_DISCOVERY_NO_MDNS: '1' },
-      xdgConfig: true,
     });
     await openConnect(page, a);
 
@@ -68,7 +67,6 @@ test('Save turns a discovered host into a bookmark', async ({ page }) => {
     a = await startRouter({
       apps: ['session', 'connect', 'remote'],
       extraEnv: { WASH_DISCOVERY_STATIC: STATIC, WASH_DISCOVERY_NO_MDNS: '1' },
-      xdgConfig: true,
     });
     await openConnect(page, a);
 

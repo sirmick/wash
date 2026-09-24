@@ -28,7 +28,7 @@
 
 import { For, Show } from 'solid-js';
 import type { Component } from 'solid-js';
-import { WASH_BTN_CLASS, WASH_ROW_CLASS, tokens } from '@wash/ui';
+import { tokens } from '@wash/ui';
 import type { HostGroupRow } from './awareness';
 import type { SectionState } from './Section';
 
@@ -86,22 +86,14 @@ export const HostGroups: Component<HostGroupsProps> = (props) => {
                 style={{ opacity: stale() ? 0.55 : 1 }}
               >
                 <div
+                  data-wash-hit
                   onClick={() => props.onToggle(id())}
                   data-testid={`host-group-header-${props.section}-${row.origin}`}
-                  class={WASH_ROW_CLASS}
-                  role="button"
-                  tabindex="0"
-                  aria-expanded={open()}
-                  onKeyDown={(ev) => {
-                    if (ev.key === 'Enter' || ev.key === ' ') {
-                      ev.preventDefault();
-                      props.onToggle(id());
-                    }
-                  }}
                   style={{
                     display: 'flex',
                     'align-items': 'center',
                     gap: '5px',
+                    cursor: 'pointer',
                     'user-select': 'none',
                     font: tokens.type.textSm,
                     padding: '1px 0',
@@ -164,24 +156,22 @@ export const HostGroups: Component<HostGroupsProps> = (props) => {
                       also fold the group you just looked at. */}
                   <Show when={props.onOpen}>
                     <span
+                      data-wash-hit
                       data-testid={`host-group-open-${props.section}-${row.origin}`}
                       title={props.openTitle?.(row.origin) ?? `Open on ${row.origin}`}
                       onClick={(ev) => {
                         ev.stopPropagation();
                         props.onOpen?.(row.origin);
                       }}
-                      // Hover was two inline handlers mutating .style;
-                      // the class does it, and adds press + focus.
-                      class={WASH_BTN_CLASS}
                       style={{
                         'flex-shrink': 0,
                         'font-size': '10px',
                         padding: '0 3px',
-                        border: 'none',
-                        '--wash-btn-bg': 'transparent',
-                        '--wash-btn-fg': tokens.fgMuted,
-                        '--wash-btn-fg-hover': tokens.fg,
+                        color: tokens.fgMuted,
+                        cursor: 'pointer',
                       }}
+                      onMouseEnter={(ev) => (ev.currentTarget.style.color = tokens.fg)}
+                      onMouseLeave={(ev) => (ev.currentTarget.style.color = tokens.fgMuted)}
                     >
                       ↗
                     </span>

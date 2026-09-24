@@ -14,6 +14,7 @@
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Button, createAppBus, defineWashApp, fmtBytes, fmtUptime, tokens } from '@wash/ui';
+import { trafficRows } from './app-traffic';
 
 // ----- wire types -----
 
@@ -162,6 +163,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [sortDesc, setSortDesc] = createSignal(true);
   // Link-health telemetry (docs/QOS.md): the full bag, pushed ~1/s.
   const [link, setLink] = createSignal<WashLinkHealth | null>(window.wash.linkStats?.() ?? null);
+  // The activity journal's footprint (docs/COMMANDER.md §3.4): what is
+  // stored and what was dropped, so a person can see the cost of the
+  // Timeline and knows the clear button in it is theirs.
+  const [journal, setJournal] = createSignal<WashActivityStats | null>(null);
+  const readJournal = () => {
+    window.wash.activityStats?.(undefined).then(setJournal, () => setJournal(null));
+  };
 
   const handleBE = (m: any) => {
     if (m?.kind === 'about.info') setInfo(m as AboutInfo);
@@ -175,6 +183,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     const onResize = () => setBrowser(readBrowser());
     window.addEventListener('resize', onResize);
     setCatalog(window.wash.catalog() ?? []);
+    readJournal();
     const offCatalog = window.wash.onCatalog((apps) => setCatalog(apps ?? []));
     const offLink = window.wash.onLinkStats?.(setLink);
     onCleanup(() => {
@@ -186,6 +195,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const refresh = () => {
     setBrowser(readBrowser());
+    readJournal();
     send({ kind: 'refresh', id: `r-${Date.now()}` });
   };
 
@@ -228,6 +238,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <LinkStatsPanel h={link()!} />
           </Section>
         </Show>
+        <Show when={journal()}>
+          <Section title="Activity journal">
+            <JournalPanel st={journal()!} />
+          </Section>
+        </Show>
         <Section title="Browser">
           <BrowserPanel browser={browser()} />
         </Section>
@@ -238,6 +253,24 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           </div>
         </Section>
       </div>
+    </div>
+  );
+};
+
+// ----- activity journal -----
+
+const JournalPanel: Component<{ st: WashActivityStats }> = (props) => {
+  const today = () => Object.values(props.st.today ?? {}).reduce((a, b) => a + b, 0);
+  return (
+    <div data-testid="about-journal" style={paraStyle}>
+      <Show when={props.st.enabled} fallback={<span data-testid="about-journal-off">off (--no-activity)</span>}>
+        <span data-testid="about-journal-today">{today()} entries today</span>
+        {' · '}{props.st.days} day{props.st.days === 1 ? '' : 's'} on disk
+        {' · '}{fmtBytes(props.st.bytes)}
+        <Show when={props.st.dropped > 0}>
+          {' · '}<span data-testid="about-journal-dropped">{props.st.dropped} dropped</span>
+        </Show>
+      </Show>
     </div>
   );
 };
@@ -416,6 +449,7 @@ const SortableTh: Component<{
   const active = () => props.current === props.k;
   return (
     <th
+      data-wash-hit
       style={{
         ...thStyle,
         'text-align': props.align,
@@ -634,6 +668,50 @@ const DisplayStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
   );
 };
 
+// AppTrafficTable answers "who is using the link" — the same FE-bound
+// bytes as the table above, split by the app that produced them. Sorted
+// busiest-first, since that is the question being asked.
+//
+// The last row is the router's own lifecycle traffic, derived from the
+// difference rather than counted: only frames with an app behind them can
+// be attributed, and a table that visibly does not add up to the class
+// totals above it invites the reader to distrust both.
+const AppTrafficTable: Component<{ h: WashLinkHealth }> = (props) => {
+  const rows = () => trafficRows(props.h.session.apps, props.h.session.tx_bytes, props.h.session.tx_frames);
+  return (
+    <Show when={rows().length > 0}>
+      <table style={tableStyle} data-testid="about-app-traffic">
+        <thead>
+          <tr style={tableHeadRowStyle}>
+            <th style={thStyle}>App</th>
+            <For each={LINK_CLASSES}>
+              {(name) => <th style={{ ...thStyle, 'text-align': 'right' }}>{name}</th>}
+            </For>
+            <th style={{ ...thStyle, 'text-align': 'right' }}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={rows()}>
+            {(r) => (
+              <tr style={tdRowStyle} data-testid={`about-app-traffic-row-${r.label}`}>
+                <td style={{ ...tdStyle, color: r.derived ? tokens.fgMuted : tokens.fg }}>{r.label}</td>
+                <For each={LINK_CLASSES}>
+                  {(_, i) => (
+                    <td style={{ ...tdStyle, 'text-align': 'right' }}>
+                      {r.bytes[i()] ? fmtBytes(r.bytes[i()]) : '—'}
+                    </td>
+                  )}
+                </For>
+                <td style={{ ...tdStyle, 'text-align': 'right' }}>{fmtBytes(r.total)}</td>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+    </Show>
+  );
+};
+
 // LinkStatsPanel dumps the whole link-health bag: the session running
 // totals as a per-class table, then the scalar counters + derived rates.
 const LinkStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
@@ -672,6 +750,7 @@ const LinkStatsPanel: Component<{ h: WashLinkHealth }> = (props) => {
           </For>
         </tbody>
       </table>
+      <AppTrafficTable h={props.h} />
       <KVList>
         <KVRow k="Session uptime" v={linkUptime(props.h.uptimeMs)} />
         <KVRow k="Connections" v={props.h.connects} />

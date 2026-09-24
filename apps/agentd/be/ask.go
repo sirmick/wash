@@ -1,22 +1,19 @@
 // Interactive approval (docs/AGENT_TERM.md §12, M6).
 //
-// M3 let a terminal answer a permission request from a static rule table.
-// The table is the hard part — nobody writes one up front, and the
-// questions arrive while you are somewhere else in the desktop. So when
-// the policy has no answer, the terminal asks agentd, agentd puts the
-// question in the roster the sidebar is already rendering, and whatever
-// the human clicks travels back down the same path.
+// When the host policy has no answer for a hosted session's tool call, the
+// question joins the roster the desktop is already rendering, and whatever
+// the human clicks goes back to the waiting call.
 //
 // Three properties this file exists to guarantee:
 //
 //   - **Nobody home ⇒ no stall.** With no subscribers (headless box, no
-//     browser attached) the answer is an immediate `defer`, which is
-//     exactly M3's behaviour: the agent's own prompt appears.
-//   - **Every path ends in an answer.** Answered, timed out, terminal
+//     browser attached) the answer is an immediate `defer`: the agent's
+//     own handling applies.
+//   - **Every path ends in an answer.** Answered, timed out, session
 //     gone, service restarted — the requester always hears something, or
 //     its own deadline fires. Nothing is left hanging.
 //   - **Deny is the only thing cheaper than allow.** Everything unknown
-//     resolves to `defer` (ask the human in the terminal), never to allow.
+//     resolves to `defer`, never to allow.
 package agentd
 
 import (
@@ -76,6 +73,16 @@ const (
 	ReasonTooMany   = "too many pending"
 	ReasonTimeout   = "timeout"
 	ReasonDesktop   = "desktop"
+	// ReasonSessionEnded: the session the question belonged to ended —
+	// the human ended it, or its adapter exited — while it was waiting.
+	// The requester (if it is still there) hears cancelled; the question
+	// leaves every rail that was showing it.
+	ReasonSessionEnded = "session ended"
+	// ReasonTurnCancelled: the turn the question was blocking was
+	// stopped from the desktop. A cancel is not an answer.
+	ReasonTurnCancelled = "turn cancelled"
+	// ReasonAgentExited: the adapter died with the question outstanding.
+	ReasonAgentExited = "agent exited"
 )
 
 // maxPendingPerRow caps outstanding questions from one roster row. A
@@ -104,16 +111,19 @@ type Ask struct {
 	// SuggestedRule is what "Always allow" would write. Shown ON the
 	// button — what you clicked is what gets saved.
 	SuggestedRule string `json:"suggested_rule,omitempty"`
+	// RuleCwd is the directory that rule would be confined to, when it
+	// would be (agentpolicy.RuleScope): a Bash rule from one project must
+	// not buy the same command in every other checkout.
+	RuleCwd string `json:"rule_cwd,omitempty"`
 	// RowKey ties the question to its roster row (same "<instance>:<chan>"
 	// key for terminals; hosted sessions mint their own), so the sidebar
 	// can render it against the right agent.
 	RowKey string `json:"row_key"`
-	// SourceApp / SourceInstance name the producer, for display and
-	// attribution only. The reply route is the closure on `pending`, never
-	// these — a question from a session agentd hosts itself has no
-	// instance to message.
-	SourceApp      string `json:"source_app,omitempty"`
-	SourceInstance string `json:"source_instance,omitempty"`
+	// WorkspaceName is set when the asking session is a workspace member,
+	// and is what lets the prompt offer "always, for this workspace"
+	// alongside the global "always". The ID is deliberately NOT sent: the
+	// answer names a scope, never a target (see the answer path).
+	WorkspaceName string `json:"workspace_name,omitempty"`
 	// AgeMS is how long it has been waiting, as of the push.
 	AgeMS int64 `json:"age_ms"`
 }
@@ -122,7 +132,13 @@ type Ask struct {
 // it. Guarded by svc.Mutate like the roster rows.
 type pending struct {
 	Ask
-	asked time.Time
+	// workspaceID is held here rather than on Ask because Ask is what the
+	// desktop sees. A client names the SCOPE it chose ("workspace"); the
+	// workspace it resolves to is this, decided when the question was
+	// asked, so no answer can redirect a rule at a workspace of its own
+	// choosing — the same reasoning that keeps RuleScope off the wire.
+	workspaceID string
+	asked       time.Time
 	// reply is how this particular requester hears the verdict.
 	reply replyFn
 	timer *time.Timer
@@ -141,8 +157,15 @@ type pending struct {
 type askSpec struct {
 	Agent, Tool, Subject, Cwd string
 	RowKey                    string
-	SourceApp, SourceInstance string
+	// Workspace is resolved when the question is ASKED, not when it is
+	// answered: the member that asked may have been ended or replaced by
+	// then, and the answer must still land on the right table.
+	WorkspaceID, WorkspaceName string
 }
+
+// askScopeWorkspace is the answer's name for "remember this for every member
+// of the workspace that asked", as opposed to the global table.
+const askScopeWorkspace = "workspace"
 
 var asks = map[string]*pending{}
 
@@ -151,8 +174,30 @@ var asks = map[string]*pending{}
 // answers exactly once — is unit-testable without a live StateService
 // (which needs a Bus, which needs a Conn).
 var (
-	stateSubscribers = func() int { return svc.SubscriberCount() }
-	mutateState      = func(fn func(*State)) { svc.Mutate(fn) }
+	// A controller window is somebody watching its session's questions
+	// even though it no longer subscribes to the whole roster.
+	stateSubscribers = func() int { return svc.SubscriberCount() + managerSubscriberCount() + controllerCount() }
+	// mutateStateIf is the ONE state-write seam: fn returns false when
+	// nothing a subscriber can see moved, and no snapshot is sent. See
+	// StateService.MutateIf — a narrating agent hits this several times a
+	// second, and the row it writes is usually the row already there.
+	mutateStateIf = func(fn func(*State) bool) {
+		changed := false
+		svc.MutateIf(func(s *State) bool {
+			changed = fn(s)
+			return changed
+		})
+		if changed {
+			publishControllerViews()
+		}
+	}
+	// mutateState is the always-publish form, defined in terms of the
+	// seam above rather than beside it: two independent hooks are two
+	// things a test must remember to stub, and the one it forgets fails
+	// as a nil-pointer panic inside the SDK.
+	mutateState = func(fn func(*State)) {
+		mutateStateIf(func(s *State) bool { fn(s); return true })
+	}
 	// policyRuleCount is how many rules the human has taught wash. One
 	// stat per question, the same price the hosted tier already pays to
 	// read the policy fresh (acp.go), and for the same reason: a rule
@@ -201,23 +246,6 @@ var askSeq uint64
 
 // registerAskHandlers installs the M6 verbs on the service bus.
 func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
-	// agent_ask: a terminal has a request its policy can't answer.
-	sdk.HandleFromVoid(bus, "agent_ask", func(conn *sdk.Conn, _ string, req askReq, from wire.Sender) error {
-		if from.InstanceID == "" || req.ReqID == "" {
-			return nil
-		}
-		enqueueAsk(askSpec{
-			Agent:          req.Agent,
-			Tool:           req.Tool,
-			Subject:        req.Subject,
-			Cwd:            req.Cwd,
-			RowKey:         rowKey(from.InstanceID, req.ChannelID),
-			SourceApp:      "com.wash.term",
-			SourceInstance: from.InstanceID,
-		}, replyToInstance(conn, from.InstanceID, req.ReqID))
-		return nil
-	})
-
 	// agent_answer: the human clicked. Comes from the session BE gateway,
 	// which is the desktop speaking for the person in front of it.
 	sdk.HandleFromVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req answerReq, _ wire.Sender) error {
@@ -245,10 +273,30 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 			if rule == "" {
 				rule = p.SuggestedRule
 			}
-			if err := agentpolicy.Append(agentpolicy.Path(), rule, decision); err != nil {
-				log.Printf("agentd: remember rule=%q: %v", rule, err)
-			} else {
-				log.Printf("agentd: remembered rule=%q decision=%s", rule, decision)
+			// Which TABLE is the human's choice; which workspace or which
+			// directory it resolves to is not. Both are decided here from
+			// the ask itself, because the desktop rail and the Agent
+			// window both answer by id and neither should be able to aim a
+			// rule past the question that prompted it.
+			switch {
+			case req.Scope == askScopeWorkspace && p.workspaceID != "" && workspaces != nil:
+				// Membership-scoped: covers every member of this workspace
+				// whatever worktree it works in, and covers members that
+				// have not been launched yet — which is the whole point,
+				// since a per-cwd rule has to be re-answered by each.
+				if err := workspaces.store.AddApproval(p.workspaceID, rule, decision); err != nil {
+					log.Printf("agentd: remember rule=%q workspace=%s: %v", rule, p.workspaceID, err)
+				} else {
+					log.Printf("agentd: remembered rule=%q decision=%s workspace=%s", rule, decision, p.workspaceID)
+					workspaces.signal()
+				}
+			default:
+				scope := agentpolicy.RuleScope(p.Tool, p.Cwd)
+				if err := agentpolicy.Append(agentpolicy.Path(), rule, decision, scope); err != nil {
+					log.Printf("agentd: remember rule=%q cwd=%q: %v", rule, scope, err)
+				} else {
+					log.Printf("agentd: remembered rule=%q decision=%s cwd=%q", rule, decision, scope)
+				}
 			}
 		}
 		log.Printf("agentd: answer id=%s tool=%s decision=%s remember=%v", req.ID, p.Tool, decision, req.Remember)
@@ -270,6 +318,15 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 
 	now := time.Now()
 	soft := softTTLNow()
+	if spec.WorkspaceID != "" {
+		// A workspace member's question waits for the human, up to the hard
+		// ceiling. The soft window exists so a terminal agent falls back to
+		// its own prompt; a hosted member has none, so expiry is a cancel,
+		// and the member re-asks. Observed live: an Architect's question
+		// expired every 30s with six desktops attached, because the one
+		// person who could answer was reading another member's tab.
+		soft = askHardTTL
+	}
 	var over bool
 	var queued Ask
 	mutateState(func(s *State) {
@@ -281,17 +338,18 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 		id := "ask-" + itoa(askSeq)
 		p := &pending{
 			Ask: Ask{
-				ID:             id,
-				Agent:          spec.Agent,
-				Tool:           spec.Tool,
-				Subject:        spec.Subject,
-				Cwd:            spec.Cwd,
-				Dir:            dirLabel(spec.Cwd),
-				SuggestedRule:  agentpolicy.SuggestRule(spec.Tool, spec.Subject, spec.Cwd),
-				RowKey:         spec.RowKey,
-				SourceApp:      spec.SourceApp,
-				SourceInstance: spec.SourceInstance,
+				ID:            id,
+				Agent:         spec.Agent,
+				Tool:          spec.Tool,
+				Subject:       spec.Subject,
+				Cwd:           spec.Cwd,
+				Dir:           dirLabel(spec.Cwd),
+				SuggestedRule: agentpolicy.SuggestRule(spec.Tool, spec.Subject, spec.Cwd),
+				RuleCwd:       agentpolicy.RuleScope(spec.Tool, spec.Cwd),
+				WorkspaceName: spec.WorkspaceName,
+				RowKey:        spec.RowKey,
 			},
+			workspaceID:  spec.WorkspaceID,
 			asked:        now,
 			reply:        reply,
 			softTTL:      soft,
@@ -321,6 +379,9 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 	// unanswered ask many times over a closed lid, and a toast per
 	// extension would be a machine nagging about its own patience.
 	notifyAsk(queued)
+	if h := lookupHosted(spec.RowKey); h != nil {
+		h.journal("agent.ask", spec.Tool+": "+spec.Subject)
+	}
 	return true
 }
 
@@ -375,19 +436,43 @@ func expireAsk(id string) {
 	_ = p.reply(DecisionDefer, ReasonTimeout)
 }
 
-// replyToInstance is the reply route for a question that arrived over the
-// router: an ask_result app_msg back to the instance that asked. The
-// terminal tier's route today; any future app that asks on someone's
-// behalf uses the same one.
-func replyToInstance(conn *sdk.Conn, instance, reqID string) replyFn {
-	return func(decision, why string) error {
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, map[string]any{
-			"kind":     "ask_result",
-			"req_id":   reqID,
-			"decision": decision,
-			"rule":     why,
-		})
+// cancelAsksFor resolves every pending question on one roster row with a
+// defer, and takes them off the rail. The ONLY other deletes are the
+// human's answer and the expiry timer, which is why an ended session used
+// to keep its question on screen for up to 30 minutes: nothing about
+// ending a session touched the queue, so the rail showed "claude wants to
+// run…" for an agent that no longer existed, the attention badge counted
+// it, and "Always allow" still wrote a rule for it.
+//
+// Every dropped ask is answered exactly once, through its own reply
+// route, so a hosted RequestPermission still blocked on the queue returns
+// (cancelled toward the agent) rather than waiting out its backstop.
+func cancelAsksFor(rowKey, why string) int {
+	var dropped []*pending
+	now := time.Now()
+	mutateStateIf(func(s *State) bool {
+		for id, p := range asks {
+			if p.RowKey != rowKey {
+				continue
+			}
+			delete(asks, id)
+			dropped = append(dropped, p)
+		}
+		if len(dropped) == 0 {
+			return false
+		}
+		s.Asks = publishAsks(now)
+		return true
+	})
+	for _, p := range dropped {
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		log.Printf("agentd: ask cancelled id=%s row=%s tool=%s reason=%q age=%s",
+			p.ID, p.RowKey, p.Tool, why, now.Sub(p.asked).Round(time.Second))
+		_ = p.reply(DecisionDefer, why)
 	}
+	return len(dropped)
 }
 
 // publishAsks renders the pending list for the sidebar, oldest first —
@@ -440,18 +525,14 @@ func normalizeAnswer(d string) string {
 	return DecisionDefer
 }
 
-type askReq struct {
-	ReqID     string `json:"req_id"`
-	ChannelID uint64 `json:"channel_id"`
-	Agent     string `json:"agent"`
-	Tool      string `json:"tool"`
-	Subject   string `json:"subject"`
-	Cwd       string `json:"cwd"`
-}
-
 type answerReq struct {
 	ID       string `json:"id"`
 	Decision string `json:"decision"`
 	Remember bool   `json:"remember"`
 	Rule     string `json:"rule"`
+	// Scope picks the table a remembered answer is written to: "" (or
+	// anything unrecognised) is the global one, askScopeWorkspace is this
+	// workspace's. An unknown value must not silently widen anything, so
+	// the switch above defaults to the narrower, pre-existing behaviour.
+	Scope string `json:"scope,omitempty"`
 }

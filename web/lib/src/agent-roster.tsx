@@ -16,11 +16,9 @@
 // Pure renderer; subscription wiring lives in the consumer.
 
 import type { Component, JSX } from 'solid-js';
-import { For, Show, createSignal } from 'solid-js';
+import { For, Show, createMemo, createSignal } from 'solid-js';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { tokens } from './tokens';
-import { Button } from './button';
-import { WASH_BTN_CLASS, WASH_ROW_CLASS } from './controls';
 import { agentStateColor, agentStateLabel } from './agent-status';
 import type { AgentConfig } from './agent-session';
 
@@ -32,16 +30,17 @@ export interface RosterRow {
   reason?: string;
   /** still running, no window pointing at it — clicking opens one */
   detached?: boolean;
+  /** prompts waiting for the current turn to end (sent in order after it) */
+  queued?: number;
   session_id?: string;
   /** the agent's own name for this session, when it has one */
   title?: string;
+  /** bounded recent human/agent lines, manager view only */
+  preview?: string;
   cwd?: string;
   dir?: string;
   branch?: string;
   dirty?: boolean;
-  term_instance: string;
-  window_id: number;
-  channel_id: number;
   /** elapsed in this state as of the push; anchored locally by the App */
   since_ms: number;
   // The rest of what agentd publishes per row (apps/agentd/be/app.go).
@@ -60,6 +59,67 @@ export interface RosterRow {
   configs?: AgentConfig[];
   /** the agent's own slash commands */
   commands?: { name: string; description?: string }[];
+  /** folders this session may reach BEYOND its cwd (agentd roots.go).
+   *  Present so every surface showing a session can say how wide it is —
+   *  a session with three extra roots is a different thing from one
+   *  confined to its own folder. */
+  roots?: string[];
+  /** the session's place in a workspace team (manager view only): members
+   *  list under the row whose session_id is lead_session */
+  workspace?: RosterWorkspace;
+}
+
+export interface RosterWorkspace {
+  id: string;
+  name: string;
+  lead_session: string;
+  orchestrator?: boolean;
+  member: string;
+  role?: string;
+  package?: string;
+  package_title?: string;
+}
+
+/** A team entry under an orchestrator: a package heading or a member row. */
+type TeamEntry = { pkg: string; label: string } | { key: string };
+
+/**
+ * Splits the roster into top-level rows and each orchestrator's team.
+ * Members whose orchestrator has no row here stay top-level, labelled.
+ * A team lists members without a package first, then by package code, then
+ * by name: a stable order, where the attention sort would reshuffle it on
+ * every state change. Questions stay at the top of the pane either way.
+ */
+export function rosterTeams(rows: RosterRow[]): { top: string[]; teams: Map<string, TeamEntry[]> } {
+  const leads = new Map<string, string>();
+  for (const r of rows) if (r.workspace?.orchestrator && r.session_id) leads.set(r.session_id, r.key);
+  const members = new Map<string, RosterRow[]>();
+  const top: string[] = [];
+  for (const r of rows) {
+    const lead = r.workspace && !r.workspace.orchestrator ? leads.get(r.workspace.lead_session) : undefined;
+    if (lead === undefined) top.push(r.key);
+    else members.set(lead, [...(members.get(lead) ?? []), r]);
+  }
+  const teams = new Map<string, TeamEntry[]>();
+  for (const [lead, list] of members) {
+    list.sort((a, b) =>
+      (a.workspace!.package ?? '').localeCompare(b.workspace!.package ?? '') ||
+      a.workspace!.member.localeCompare(b.workspace!.member) ||
+      a.key.localeCompare(b.key));
+    const entries: TeamEntry[] = [];
+    let pkg = '';
+    for (const r of list) {
+      const code = r.workspace!.package ?? '';
+      if (code && code !== pkg) {
+        const title = r.workspace!.package_title;
+        entries.push({ pkg: code, label: title ? `${code} · ${title}` : code });
+      }
+      pkg = code;
+      entries.push({ key: r.key });
+    }
+    teams.set(lead, entries);
+  }
+  return { top, teams };
 }
 
 /** A permission question waiting for a human (docs/AGENT_TERM.md §12). */
@@ -72,10 +132,13 @@ export interface RosterAsk {
   dir?: string;
   /** what "Always allow" would write — shown ON the button */
   suggested_rule?: string;
+  /** the directory that rule is confined to, when it is (Bash rules are
+   *  per project; read-only tools are not) */
+  rule_cwd?: string;
+  /** the workspace this session belongs to, when it belongs to one — what
+   *  the workspace-scoped "always" answer covers */
+  workspace_name?: string;
   row_key: string;
-  /** who asked — attribution only; the answer routes by `id` in agentd */
-  source_app?: string;
-  source_instance?: string;
   age_ms: number;
 }
 
@@ -108,7 +171,7 @@ export interface AgentRosterProps {
   /** permission questions waiting on the human */
   asks?: () => RosterAsk[];
   /** answer one: decision allow|deny, remember writes the named rule */
-  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean) => void;
+  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
   // recent / onResume / onCopyID used to live here. They went with
   // RecentRow: the roster answers "what is running", and reopening
   // something that ISN'T is com.wash.ai's History menu and HistoryPanel,
@@ -119,6 +182,14 @@ export interface AgentRosterProps {
   onCancel?: (row: RosterRow) => void;
   /** end the session and its adapter process */
   onStop?: (row: RosterRow) => void;
+  /** give the session a name of your own; the host opens its dialog */
+  onRename?: (row: RosterRow) => void;
+  /** allow the session another folder; the host opens its file picker */
+  onAddRoot?: (row: RosterRow) => void;
+  /** open a terminal in the session's working directory */
+  onOpenTerminal?: (row: RosterRow) => void;
+  onOpenFileManager?: (row: RosterRow) => void;
+  onOpenTextEditor?: (row: RosterRow) => void;
 }
 
 // stateColor / stateLabel are thin adapters over the shared vocabulary in
@@ -159,15 +230,47 @@ export function fmtElapsed(ms: number): string {
  */
 export const AgentAsks: Component<{
   asks: () => RosterAsk[];
-  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean) => void;
+  onAnswer?: (ask: RosterAsk, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
 }> = (props) => (
   <For each={props.asks()}>
-    {(a) => <AskRow ask={a} onAnswer={(d, r) => props.onAnswer?.(a, d, r)} />}
+    {(a) => <AskRow ask={a} onAnswer={(d, r, scope) => props.onAnswer?.(a, d, r, scope)} />}
   </For>
 );
 
 export const AgentRoster: Component<AgentRosterProps> = (props) => {
+  const rowByKey = createMemo(() => new Map(props.rows().map((r) => [r.key, r] as const)));
+  const teams = createMemo(() => rosterTeams(props.rows()));
+  const sameKeys = (a: string[], b: string[]) => a.length === b.length && a.every((k, i) => k === b[i]);
+  const rowKeys = createMemo(() => teams().top, undefined, { equals: sameKeys });
+  // Entries are strings so <For> keeps each one across pushes, like rows.
+  const teamKeys = (lead: string) =>
+    (teams().teams.get(lead) ?? []).map((e) => ('pkg' in e ? `pkg\u0000${e.pkg}\u0000${e.label}` : `row\u0000${e.key}`));
   const empty = () => props.rows().length === 0;
+  const rowView = (key: string, depth: number) => {
+    const r = () => rowByKey().get(key)!;
+    return (
+      <Show when={rowByKey().has(key)}>
+        <AgentRowView
+          row={r()}
+          depth={depth}
+          members={depth === 0 ? (teams().teams.get(key) ?? []).filter((e) => 'key' in e).length : 0}
+          elapsed={fmtElapsed(props.now() - props.startedAt(key))}
+          onActivate={() => props.onActivate(r())}
+          active={props.activeKey?.() === key}
+          onReattach={r().detached ? () => props.onReattach?.(r()) : undefined}
+          detached={r().detached === true}
+          onDetach={props.onDetach ? () => props.onDetach?.(r()) : undefined}
+          onCancel={props.onCancel ? () => props.onCancel?.(r()) : undefined}
+          onStop={props.onStop ? () => props.onStop?.(r()) : undefined}
+          onRename={props.onRename ? () => props.onRename?.(r()) : undefined}
+          onAddRoot={props.onAddRoot ? () => props.onAddRoot?.(r()) : undefined}
+          onOpenTerminal={props.onOpenTerminal ? () => props.onOpenTerminal?.(r()) : undefined}
+          onOpenFileManager={props.onOpenFileManager ? () => props.onOpenFileManager?.(r()) : undefined}
+          onOpenTextEditor={props.onOpenTextEditor ? () => props.onOpenTextEditor?.(r()) : undefined}
+        />
+      </Show>
+    );
+  };
   return (
     <div
       data-testid="agents-widget"
@@ -190,20 +293,63 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
           no agents running
         </div>
       </Show>
-      <For each={props.rows()}>
-        {(r) => (
-          <AgentRowView
-            row={r}
-            elapsed={fmtElapsed(props.now() - props.startedAt(r.key))}
-            onActivate={() => props.onActivate(r)}
-            active={props.activeKey?.() === r.key}
-            onReattach={r.detached ? () => props.onReattach?.(r) : undefined}
-            detached={r.detached === true}
-            onDetach={props.onDetach ? () => props.onDetach?.(r) : undefined}
-            onCancel={props.onCancel ? () => props.onCancel?.(r) : undefined}
-            onStop={props.onStop ? () => props.onStop?.(r) : undefined}
-          />
-        )}
+      {/* Keyed by session key, not by row object. Every roster push,
+          usage patch and preview patch hands this a NEW object for a row
+          whose identity has not changed; <For> keys by reference, so each
+          one tore that row down — and an open row menu went with it, a
+          beat after a turn ended, under the cursor. The row is read
+          through an accessor, so its fields still update in place. */}
+      <For each={rowKeys()}>
+        {(key) => {
+          const members = createMemo(() => teamKeys(key), undefined, { equals: sameKeys });
+          return (
+            <>
+              {rowView(key, 0)}
+              {/* The orchestrator's team, indented under it on one guide
+                  line, so which sessions are its members is visible at a
+                  glance rather than inferred from matching folders. */}
+              <Show when={members().length > 0}>
+                <div
+                  data-testid={`agents-team-${key}`}
+                  style={{
+                    display: 'flex',
+                    'flex-direction': 'column',
+                    gap: '4px',
+                    'margin-left': '10px',
+                    'padding-left': '8px',
+                    'border-left': `2px solid ${tokens.borderFocus}`,
+                  }}
+                >
+                  <For each={members()}>
+                    {(entry) => {
+                      const [kind, a, b] = entry.split('\u0000');
+                      return kind === 'pkg' ? (
+                        <div
+                          data-testid={`agents-package-${a}`}
+                          style={{
+                            'font-size': '10px',
+                            'font-weight': 600,
+                            opacity: 0.6,
+                            'text-transform': 'uppercase',
+                            'letter-spacing': '0.04em',
+                            padding: '4px 0 0',
+                            overflow: 'hidden',
+                            'text-overflow': 'ellipsis',
+                            'white-space': 'nowrap',
+                          }}
+                        >
+                          {b}
+                        </div>
+                      ) : (
+                        rowView(a, 1)
+                      );
+                    }}
+                  </For>
+                </div>
+              </Show>
+            </>
+          );
+        }}
       </For>
       {/* Earlier sessions live in the Agent app's History menu now. The
           sidebar answers "what is running"; a list of things that are
@@ -228,7 +374,7 @@ export function fmtAgo(nowMS: number, unixSec: number): string {
 // — what you clicked is what gets saved.
 const AskRow: Component<{
   ask: RosterAsk;
-  onAnswer: (decision: 'allow' | 'deny', remember: boolean) => void;
+  onAnswer: (decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
 }> = (props) => {
   const what = () => {
     const s = props.ask.subject ?? '';
@@ -278,10 +424,25 @@ const AskRow: Component<{
       </div>
       <div style={{ display: 'flex', gap: '4px', 'flex-wrap': 'wrap' }}>
         <AskBtn testid="agents-ask-allow" onClick={() => props.onAnswer('allow', false)}>Allow</AskBtn>
+        {/* Covers every member of the team, in whatever worktree each one
+            works in — the per-directory rule below covers only this one. */}
+        <Show when={props.ask.suggested_rule && props.ask.workspace_name}>
+          <AskBtn
+            testid="agents-ask-always-workspace"
+            title={`Writes ${props.ask.suggested_rule} for every member of ${props.ask.workspace_name}`}
+            onClick={() => props.onAnswer('allow', true, 'workspace')}
+          >
+            Always {props.ask.suggested_rule} for {props.ask.workspace_name}
+          </AskBtn>
+        </Show>
         <Show when={props.ask.suggested_rule}>
           <AskBtn
             testid="agents-ask-always"
-            title={`Writes the rule ${props.ask.suggested_rule} to your agent policy`}
+            title={
+              props.ask.rule_cwd
+                ? `Writes the rule ${props.ask.suggested_rule} to your agent policy — only for ${props.ask.rule_cwd}`
+                : `Writes the rule ${props.ask.suggested_rule} to your agent policy`
+            }
             onClick={() => props.onAnswer('allow', true)}
           >
             Always {props.ask.suggested_rule}
@@ -299,13 +460,19 @@ const AskBtn: Component<{
   onClick: () => void;
   children: JSX.Element;
 }> = (props) => (
-  <Button
-    size="sm"
+  <button
+    data-wash-hit
+    type="button"
     data-testid={props.testid}
     title={props.title}
     onClick={props.onClick}
     style={{
+      background: tokens.bgMenu,
+      color: tokens.fg,
+      border: `1px solid ${tokens.borderMenu}`,
+      'border-radius': tokens.radiusSm,
       padding: '3px 8px',
+      cursor: 'pointer',
       'font-size': '11px',
       'max-width': '100%',
       overflow: 'hidden',
@@ -314,11 +481,15 @@ const AskBtn: Component<{
     }}
   >
     {props.children}
-  </Button>
+  </button>
 );
 
 const AgentRowView: Component<{
   row: RosterRow;
+  /** 1 for a member listed under its orchestrator */
+  depth?: number;
+  /** how many members list under this orchestrator row */
+  members?: number;
   elapsed: string;
   onActivate: () => void;
   onReattach?: () => void;
@@ -328,6 +499,11 @@ const AgentRowView: Component<{
   onDetach?: () => void;
   onCancel?: () => void;
   onStop?: () => void;
+  onRename?: () => void;
+  onAddRoot?: () => void;
+  onOpenTerminal?: () => void;
+  onOpenFileManager?: () => void;
+  onOpenTextEditor?: () => void;
 }> = (props) => {
   // The verbs live in a menu rather than a strip of buttons: the set
   // grows (resume and fork are still to come) and a sidebar row is 190px
@@ -358,7 +534,8 @@ const AgentRowView: Component<{
     closeMenu();
     fn?.();
   };
-  const hasVerbs = () => Boolean(props.onDetach || props.onCancel || props.onStop);
+  const hasVerbs = () =>
+    Boolean(props.onDetach || props.onCancel || props.onStop || props.onRename || props.onAddRoot || props.onOpenTerminal || props.onOpenFileManager || props.onOpenTextEditor);
   // Where it's working: "wash · main*" — repo, branch, and a star when the
   // tree is dirty. Absent for an agent outside a checkout.
   const place = (): string => {
@@ -372,11 +549,12 @@ const AgentRowView: Component<{
     // The row the host is showing reads as selected. Kept subtle: the
     // state colour on the left edge is the row's primary signal and a
     // strong selection fill would out-shout it.
-    '--wash-row-bg': props.active
+    background: props.active
       ? 'rgba(255,255,255,0.09)'
       : props.row.state === 'needs-input' ? 'rgba(224,178,95,0.10)' : 'rgba(255,255,255,0.02)',
     padding: '6px 8px',
     'border-radius': tokens.radiusSm,
+    cursor: 'pointer',
     'font-size': '11px',
     opacity: props.row.state === 'stale' ? 0.55 : 1,
     display: 'flex',
@@ -385,11 +563,11 @@ const AgentRowView: Component<{
   });
   return (
     <div
+      data-wash-hit
       data-testid={`agents-row-${props.row.key}`}
       data-agent={props.row.agent}
       data-agent-state={props.row.state}
       data-active={props.active ? 'true' : 'false'}
-      class={WASH_ROW_CLASS}
       style={rowStyle()}
       // One click, every row (docs/AGENT_UX.md N4). Detached rows used to
       // insist on a dblclick, on the theory that the two click events
@@ -397,8 +575,20 @@ const AgentRowView: Component<{
       // claimDetached is atomic and was always the real guard (see
       // TestClaimDetachedAllowsOnlyOneReattach), so the dblclick bought
       // nothing except a row that ignored the first click people gave it.
-      onClick={() => (props.detached ? props.onReattach?.() : props.onActivate())}
-      onContextMenu={(e) => hasVerbs() && openMenu(e)}
+      //
+      // The verbs Menu portals to document.body, but Solid delegates a
+      // portal's events through its owner — so picking "End session…"
+      // arrived HERE too and raised the controller window over the menu
+      // mid-confirm. Only a click inside the row's own DOM activates it.
+      onClick={(e) => {
+        if (!e.currentTarget.contains(e.target as Node)) return;
+        if (props.detached) props.onReattach?.();
+        else props.onActivate();
+      }}
+      onContextMenu={(e) => {
+        if (!e.currentTarget.contains(e.target as Node)) return;
+        if (hasVerbs()) openMenu(e);
+      }}
       // One title, chosen. There used to be two attributes here and JSX
       // kept the last, so the detached hint never rendered — a detached
       // row claimed clicking went "to its terminal", which is the one
@@ -420,7 +610,22 @@ const AgentRowView: Component<{
             'flex-shrink': 0,
           }}
         />
-        <span style={{ 'font-weight': 600, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+        {/* A member leads with its name in the team; the agent slug says
+            less once every row under an orchestrator is "claude". */}
+        <Show when={props.row.workspace && !props.row.workspace.orchestrator}>
+          <span data-testid="agents-member" style={{ 'font-weight': 600, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+            {props.row.workspace!.member}
+          </span>
+        </Show>
+        <span
+          style={{
+            'font-weight': props.row.workspace && !props.row.workspace.orchestrator ? 400 : 600,
+            opacity: props.row.workspace && !props.row.workspace.orchestrator ? 0.7 : 1,
+            overflow: 'hidden',
+            'text-overflow': 'ellipsis',
+            'white-space': 'nowrap',
+          }}
+        >
           {props.row.agent}
         </span>
         <Show when={place()}>
@@ -429,6 +634,20 @@ const AgentRowView: Component<{
           </span>
         </Show>
       </div>
+      {/* Team membership is said in words, not only by indentation: an
+          orchestrator names its workspace and team size, and a member
+          whose orchestrator has no row here still says whose it is. */}
+      <Show when={props.row.workspace?.orchestrator}>
+        <div data-testid="agents-orchestrator" style={{ 'font-size': '10px', 'font-weight': 600, color: tokens.accentBlue, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+          Orchestrator · {props.row.workspace!.name}
+          {props.members ? ` · ${props.members} member${props.members === 1 ? '' : 's'}` : ''}
+        </div>
+      </Show>
+      <Show when={props.row.workspace && !props.row.workspace.orchestrator && !props.depth}>
+        <div data-testid="agents-member-of" style={{ 'font-size': '10px', opacity: 0.7, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
+          Member of {props.row.workspace!.name}
+        </div>
+      </Show>
       {/* What the session is ABOUT, in the agent's own words. It names
           itself once it works out what the work is, so this costs no
           extra model call — and a sidebar of "codex · wash" rows tells
@@ -439,6 +658,24 @@ const AgentRowView: Component<{
           style={{ opacity: 0.75, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
         >
           {props.row.title}
+        </div>
+      </Show>
+      <Show when={props.row.preview}>
+        <div
+          data-testid="agents-preview"
+          style={{
+            opacity: 0.62,
+            'font-size': '10px',
+            'line-height': 1.35,
+            'white-space': 'pre-line',
+            overflow: 'hidden',
+            display: '-webkit-box',
+            '-webkit-box-orient': 'vertical',
+            '-webkit-line-clamp': '2',
+            'word-break': 'break-word',
+          }}
+        >
+          {props.row.preview}
         </div>
       </Show>
       <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px', opacity: 0.8 }}>
@@ -453,6 +690,7 @@ const AgentRowView: Component<{
             half of the same menu. */}
         <Show when={hasVerbs()}>
           <button
+            data-wash-hit
             type="button"
             // Named to collide with nothing: "agents-row-menu" made a
             // prefix query for rows (agents-row-<key>) match this button
@@ -465,10 +703,12 @@ const AgentRowView: Component<{
             aria-label="Session actions"
             aria-haspopup="menu"
             onClick={openMenu}
-            class={WASH_BTN_CLASS}
-            data-variant="icon"
             style={{
+              background: 'transparent',
+              color: tokens.fg,
+              border: 'none',
               padding: '0 2px',
+              cursor: 'pointer',
               'font-size': '12px',
               'line-height': 1,
               'flex-shrink': 0,
@@ -520,6 +760,55 @@ const AgentRowView: Component<{
                 data-testid="agents-menu-detach"
                 disabled={!props.onDetach || props.detached === true}
                 onClick={run(props.onDetach)}
+              />
+              {/* The agent names the session once and first wins; this
+                  is how a person overrides it. Needs a session id — the
+                  name is stored against the agent's id, so a row that
+                  has none yet has nothing to name. */}
+              <MenuItem
+                label="Rename…"
+                data-testid="agents-menu-rename"
+                disabled={!props.onRename || !props.row.session_id}
+                onClick={run(props.onRename)}
+              />
+              {/* The session cwd is the scope the person consented to; it
+                  is the wrong LIMIT. A monorepo sibling, a generated
+                  schema in another tree — the alternative was starting the
+                  agent at a parent and granting far more than the two
+                  folders it needed. The label counts what is already
+                  allowed, because the whole hazard of widening is
+                  forgetting you did. */}
+              <MenuItem
+                label={
+                  (props.row.roots?.length ?? 0) > 0
+                    ? `Also allow a folder… (${props.row.roots!.length})`
+                    : 'Also allow a folder…'
+                }
+                data-testid="agents-menu-add-root"
+                disabled={!props.onAddRoot}
+                onClick={run(props.onAddRoot)}
+              />
+              {/* Where the agent is working is exactly where a person
+                  wants a shell — to run the test it just changed, to see
+                  the diff it made. Needs a cwd: a row with none has
+                  nowhere to open. */}
+              <MenuItem
+                label="Open terminal in project folder"
+                data-testid="agents-menu-open-terminal"
+                disabled={!props.onOpenTerminal || !props.row.cwd}
+                onClick={run(props.onOpenTerminal)}
+              />
+              <MenuItem
+                label="Open file manager in project folder"
+                data-testid="agents-menu-open-file-manager"
+                disabled={!props.onOpenFileManager || !props.row.cwd}
+                onClick={run(props.onOpenFileManager)}
+              />
+              <MenuItem
+                label="Open text editor in project folder"
+                data-testid="agents-menu-open-text-editor"
+                disabled={!props.onOpenTextEditor || !props.row.cwd}
+                onClick={run(props.onOpenTextEditor)}
               />
               <MenuSeparator />
               <MenuItem

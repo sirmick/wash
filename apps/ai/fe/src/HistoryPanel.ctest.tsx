@@ -8,8 +8,8 @@
 // e2e's job.
 
 import { test, expect, afterEach } from 'vitest';
-import { render, fireEvent, cleanup } from '@solidjs/testing-library';
-import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
+import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
+import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, historySignature, sessionLabel, type SessionMeta } from './HistoryPanel.tsx';
 
 afterEach(cleanup);
 
@@ -32,7 +32,9 @@ const panel = (over: {
   sessions?: SessionMeta[];
   query?: string;
   onResume?: (s: SessionMeta) => void;
+  onRestart?: (s: SessionMeta) => void;
   onQuery?: (q: string) => void;
+  embedded?: boolean;
 } = {}) =>
   render(() => (
     <HistoryPanel
@@ -40,7 +42,9 @@ const panel = (over: {
       query={() => over.query ?? ''}
       onQuery={over.onQuery ?? noop}
       onResume={over.onResume ?? noop}
+      onRestart={over.onRestart}
       onClose={noop}
+      embedded={over.embedded}
     />
   ));
 
@@ -166,6 +170,7 @@ test('fmtAgo reads as recency, and says nothing about a session with no time', (
 // view that had no filter. Both views now ask the same question.
 test('historyAction tells resume from reattach from focus from neither', () => {
   expect(historyAction(sess())).toBe('resume');
+  expect(historyAction(sess({ agent: undefined }))).toBe('restart');
   expect(historyAction(sess({ live: true, detached: true, row_key: 'acp:2' }))).toBe('reattach');
   // Live with a window: go to it. Resuming would fork a second adapter
   // onto one conversation (docs/AGENT_UX.md N1).
@@ -174,6 +179,22 @@ test('historyAction tells resume from reattach from focus from neither', () => {
   // either a reattach or a focus, and resuming would start a second copy.
   expect(historyAction(sess({ live: true }))).toBe('none');
   expect(historyAction(sess({ live: true, detached: true }))).toBe('none');
+});
+
+test('a session without native agent metadata restarts fresh', () => {
+  const resumed: string[] = [];
+  const restarted: string[] = [];
+  const { getByTestId } = panel({
+    sessions: [sess({ session_id: 'damaged', agent: undefined })],
+    onResume: (s) => resumed.push(s.session_id),
+    onRestart: (s) => restarted.push(s.session_id),
+  });
+  const row = getByTestId('ai-history-row');
+  expect(row.getAttribute('data-action')).toBe('restart');
+  expect(row.textContent).toContain('restart fresh');
+  fireEvent.click(row);
+  expect(resumed).toEqual([]);
+  expect(restarted).toEqual(['damaged']);
 });
 
 test('a running session does not act like one more thing to open', () => {
@@ -261,4 +282,88 @@ test('a row with no snippet renders none — a metadata match quotes nothing bac
     />
   ));
   expect(queryByTestId('ai-history-snippet')).toBeNull();
+});
+
+test('embedded history shows a three-line transcript preview without modal controls', () => {
+  const { getByTestId, queryByTestId } = panel({
+    embedded: true,
+    sessions: [sess({ preview: 'first question\nfirst answer\nlatest detail\nnot visible' })],
+  });
+  const preview = getByTestId('ai-history-snippet');
+  expect(preview.textContent).toContain('first question');
+  expect(preview.style.getPropertyValue('-webkit-line-clamp')).toBe('3');
+  expect(queryByTestId('ai-history-close')).toBeNull();
+});
+
+// --- rename / delete / prune (docs/Review-findings.md P2 → agent) ---
+
+// The verbs are per row, in a menu behind the same ellipsis the roster
+// rows carry; the host does the confirming and the dialogs, so the panel
+// only reports which row and which verb.
+test('a row offers Rename and Delete, and Delete is disabled while it runs', () => {
+  const renamed: string[] = [];
+  const deleted: string[] = [];
+  const restarted: string[] = [];
+  const { getAllByTestId } = render(() => (
+    <HistoryPanel
+      sessions={() => [sess({ session_id: 's-gone' }), sess({ session_id: 's-live', live: true, row_key: 'acp:1' })]}
+      query={() => ''}
+      onQuery={noop}
+      onClose={noop}
+      onResume={noop}
+      onRestart={(s) => restarted.push(s.session_id)}
+      onRename={(s) => renamed.push(s.session_id)}
+      onDelete={(s) => deleted.push(s.session_id)}
+    />
+  ));
+  const verbs = getAllByTestId('ai-history-verbs');
+  expect(verbs).toHaveLength(2);
+
+  fireEvent.click(verbs[0]);
+  fireEvent.click(screen.getByTestId('ai-history-menu-restart'));
+  expect(restarted).toEqual(['s-gone']);
+
+  fireEvent.click(verbs[0]);
+  fireEvent.click(screen.getByTestId('ai-history-menu-rename'));
+  expect(renamed).toEqual(['s-gone']);
+  expect(screen.queryByTestId('ai-history-actions')).toBeNull();
+
+  fireEvent.click(verbs[0]);
+  fireEvent.click(screen.getByTestId('ai-history-menu-delete'));
+  expect(deleted).toEqual(['s-gone']);
+
+  // The running one: Rename still works (a name is a name), Delete does not.
+  fireEvent.click(verbs[1]);
+  expect(screen.getByTestId('ai-history-menu-restart').hasAttribute('disabled')).toBe(true);
+  expect(screen.getByTestId('ai-history-menu-delete').hasAttribute('disabled')).toBe(true);
+  expect(screen.getByTestId('ai-history-menu-delete').textContent).toContain('still running');
+  fireEvent.click(screen.getByTestId('ai-history-menu-rename'));
+  expect(renamed).toEqual(['s-gone', 's-live']);
+});
+
+test('a panel whose host offers no verbs shows no ellipsis and no prune button', () => {
+  const { queryByTestId } = panel();
+  expect(queryByTestId('ai-history-verbs')).toBeNull();
+  expect(queryByTestId('ai-history-prune')).toBeNull();
+});
+
+test('prune lives beside the count it acts on', () => {
+  let pruned = 0;
+  const { getByTestId } = render(() => (
+    <HistoryPanel sessions={() => [sess()]} query={() => ''} onQuery={noop} onClose={noop} onResume={noop}
+      onPrune={() => { pruned++; }} />
+  ));
+  fireEvent.click(getByTestId('ai-history-prune'));
+  expect(pruned).toBe(1);
+});
+
+// The always-visible History pane re-queries agentd when this moves, so it
+// must move for what a row shows and stay put for everything else.
+test('historySignature moves with a row\'s facts, not with the roster\'s churn', () => {
+  const base = [sess({ session_id: 'a', title: 'one' })];
+  const same = historySignature([sess({ session_id: 'a', title: 'one', events: 99 })]);
+  expect(historySignature(base)).toBe(same);
+  expect(historySignature([sess({ session_id: 'a', title: 'renamed' })])).not.toBe(historySignature(base));
+  expect(historySignature([sess({ session_id: 'a', title: 'one', live: true, row_key: 'acp:1' })])).not.toBe(historySignature(base));
+  expect(historySignature([...base, sess({ session_id: 'b' })])).not.toBe(historySignature(base));
 });

@@ -34,15 +34,13 @@
 // reload, the same one term-live-reconnect uses. Killing the router would
 // prove nothing: apps SHOULD die with their router.
 
-import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect, type RouterHandle } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify', 'term', 'fm'],
+    apps: [...AGENT_APPS, 'term', 'fm'],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
@@ -126,12 +124,10 @@ test.describe('reconnect torture', () => {
     // victim each run (chrome-windows, then agent-fs), which is what a
     // load problem looks like from the outside. A torture spec has to be
     // heavy on the thing it tests and cheap on everything else.
-    await launch(page, 'Agent', 'wash-app-ai');
-    const ai = page.locator('wash-app-ai').first();
-    await ai.locator('select').selectOption('codex');
-    await ai.getByRole('button', { name: 'Start session' }).click();
+    // The session starts from the Agents manager; what streams is its
+    // controller window.
+    const ai = await startAgentSession(page);
     const composer = ai.locator('textarea');
-    await expect(composer).toBeVisible({ timeout: 20_000 });
 
     for (let i = 0; i < 4; i++) {
       // Re-prompt each round so a stream is genuinely in flight when the
@@ -154,6 +150,10 @@ test.describe('reconnect torture', () => {
     await expect(page.locator('wash-app-session')).toBeVisible();
     await expect(page.locator('[data-testid="window-crashed"]')).toHaveCount(0);
     await expect(page.locator('wash-app-term').first()).toBeVisible();
+    // Still exactly one controller for the one session: the reattach after
+    // each drop re-binds the window agentd opened rather than having it
+    // claim the session a second time.
+    await expect(page.locator('wash-app-ai')).toHaveCount(1);
   });
 
   // GH #22. Icons are manifest-derived and ride the window record, so a

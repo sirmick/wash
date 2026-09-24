@@ -9,8 +9,9 @@
 export type SortKey = 'name' | 'mtime' | 'ctime' | 'size' | 'type';
 
 // The entry fields the sort/filter reads. fm/edit's richer Entry types
-// are structurally assignable. `type` is compared as a plain string and
-// the value 'dir' is special-cased for dir-before-file grouping.
+// are structurally assignable. `type` names the ENTRY KIND ('dir',
+// 'file', 'symlink'); "sort by type" means the user-facing kind of a
+// file — its extension — not that field.
 export interface SortableEntry {
   name: string;
   type: string;
@@ -25,11 +26,23 @@ export interface SortOptions {
   showHidden: boolean;
 }
 
+// extensionOf is the sort-by-type axis for a file: the lowercased final
+// suffix, without the dot. A name with no dot, or a leading-dot name with
+// no other dot (".bashrc"), has no extension and sorts before the ones
+// that do — the same place "no kind" belongs in a kind-ordered list.
+export function extensionOf(name: string): string {
+  const i = name.lastIndexOf('.');
+  if (i <= 0 || i === name.length - 1) return '';
+  return name.slice(i + 1).toLowerCase();
+}
+
 // sortedFiltered returns a NEW array (input untouched): dotfiles dropped
 // unless showHidden, then sorted. Directories sort before files for every
-// key EXCEPT 'type' (where the type field itself is the sort axis). Names
-// compare case-insensitively; a 'type' tie breaks by name. `desc` flips
-// the final comparison. Generic so callers get their own entry type back.
+// key INCLUDING 'type': "sort by type" groups by the kind of thing, and a
+// folder is not a kind of file. Within the files, 'type' orders by
+// extension and breaks ties by name. Names compare case-insensitively;
+// `desc` flips the final comparison. Generic so callers get their own
+// entry type back.
 export function sortedFiltered<E extends SortableEntry>(
   entries: readonly E[],
   opts: SortOptions,
@@ -38,10 +51,8 @@ export function sortedFiltered<E extends SortableEntry>(
   if (!opts.showHidden) out = out.filter((e) => !e.name.startsWith('.'));
   const { key, desc } = opts;
   out.sort((a, b) => {
-    if (key !== 'type') {
-      if (a.type === 'dir' && b.type !== 'dir') return -1;
-      if (a.type !== 'dir' && b.type === 'dir') return 1;
-    }
+    if (a.type === 'dir' && b.type !== 'dir') return -1;
+    if (a.type !== 'dir' && b.type === 'dir') return 1;
     let cmp = 0;
     switch (key) {
       case 'name':
@@ -57,7 +68,10 @@ export function sortedFiltered<E extends SortableEntry>(
         cmp = a.size - b.size;
         break;
       case 'type':
-        cmp = a.type.localeCompare(b.type);
+        // Dirs are already grouped above, so this is file-vs-file (or
+        // dir-vs-dir, where neither has an extension and it falls
+        // straight through to the name).
+        cmp = extensionOf(a.name).localeCompare(extensionOf(b.name));
         if (cmp === 0) cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
         break;
     }

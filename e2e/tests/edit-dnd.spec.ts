@@ -148,11 +148,11 @@ test.describe('wash-edit DnD', () => {
     expect(existsSync(join(router.fmRoot, 'hello.txt'))).toBe(false);
   });
 
-  test('Open in fm button spawns a wash-fm window', async ({ page, router }) => {
+  test('Reveal in Files button spawns a wash-fm window', async ({ page, router }) => {
     const editor = await openEditor(page, router);
     // wash-fm should NOT be present yet.
     await expect(page.locator('wash-app-fm')).toHaveCount(0);
-    await editor.locator('[data-testid="edit-open-in-fm"]').click();
+    await editor.locator('[data-testid="edit-reveal-in-fm"]').click();
     await expect(page.locator('wash-app-fm')).toBeVisible({ timeout: 3_000 });
   });
 });

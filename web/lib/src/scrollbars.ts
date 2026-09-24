@@ -41,6 +41,14 @@ export const WASH_SCROLL_CLASS = 'wash-scroll';
  */
 export const WASH_SCROLL_GUTTER_CLASS = 'wash-scroll-gutter';
 
+/**
+ * Class for a scroller that must show NO bar at all — a fixed-height strip
+ * (the terminal's tab strip) where a space-taking horizontal bar would eat
+ * the content it scrolls. The owner supplies another way to scroll (wheel,
+ * keep-active-in-view) and an overflow cue.
+ */
+export const WASH_SCROLL_HIDDEN_CLASS = 'wash-scroll-hidden';
+
 // Width in px. Wide enough to grab with a mouse, narrow enough that a
 // terminal doesn't lose a column it didn't have to.
 const BAR = 10;
@@ -77,6 +85,12 @@ const CSS = `
 }
 .${WASH_SCROLL_CLASS}::-webkit-scrollbar-corner, .xterm-viewport::-webkit-scrollbar-corner {
   background: transparent;
+}
+.${WASH_SCROLL_HIDDEN_CLASS} {
+  scrollbar-width: none;
+}
+.${WASH_SCROLL_HIDDEN_CLASS}::-webkit-scrollbar {
+  display: none;
 }
 `;
 

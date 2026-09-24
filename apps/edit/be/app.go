@@ -15,9 +15,12 @@
 //	             { kind: "read",  path }
 //	             { kind: "write", path, content }
 //	             fs.* messages handled by sdk.EnableFilePicker
+//	             prefs / prefs_set / recent_add / recent_drop — prefs.go
+//	             find / find_cancel — find.go
 //
 //	BE → FE  : { kind: "list_ok", id?, path, entries, truncated }
-//	             { kind: "read_ok", id?, path, content, size, binary, truncated }
+//	             { kind: "read_ok", id?, path, content, size, binary, truncated,
+//	                                writable }
 //	             { kind: "write_ok", id?, path, bytes }
 //	             { kind: "<op>_err", id?, path?, code, msg }
 package edit
@@ -25,11 +28,16 @@ package edit
 import (
 	"context"
 	"embed"
+	"errors"
 	"github.com/sirmick/wash/internal/version"
+	"io"
 	"io/fs"
 	"log"
 	"os"
 	"sync"
+	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/pty"
@@ -90,7 +98,7 @@ func init() {
 			Accent:          "#e0b060",
 			Instancing:      sdk.InstancingMulti,
 			Window:          &sdk.WindowHints{DefaultWidth: 900, DefaultHeight: 600},
-			// Declared so the FE's "Open in fm" button can ask the
+			// Declared so the FE's "Reveal in Files" button can ask the
 			// router to spawn fm via SpawnRequest. The router checks
 			// this capability before honoring the request.
 			Capabilities: []string{sdk.CapSpawn},
@@ -107,6 +115,9 @@ func init() {
 		},
 		Assets:  sub,
 		OnReady: onReady,
+		// The FE owns the dirty state, so the close handshake is answered
+		// there: see onCloseRequested.
+		OnCloseRequested: onCloseRequested,
 		// Installed BEFORE the bus, so NewBus captures it as the chain
 		// target: agentd's replies (transcript_snapshot, transcript_event,
 		// agent_started, state) have no bus handler of their own and fall
@@ -147,6 +158,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	initAgent(c)
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
+	registerPrefsHandlers(bus)
+	registerFindHandlers(bus)
 	registerAgentHandlers(bus)
 
 	if root == "" {
@@ -155,11 +168,19 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		log.Printf("wash-edit ready instance=%s window=%d root=%s", instanceID, windowID, root)
 	}
 
-	// Launched via the router's open routing (fm double-click → wash-edit
-	// --open <path>): drive the FE to that file. cmd.open_file is the same
-	// hook external drivers already use, so the FE opens it in a tab.
+	// A project shortcut opens the folder tree; ordinary file launches still
+	// open a tab. Resolve through the editor's filesystem boundary first.
 	if p := c.LaunchOpenPath(); p != "" {
-		_ = bus.Emit("cmd.open_file", map[string]any{"path": p})
+		abs, err := editFS.Confine(p)
+		if err != nil {
+			log.Printf("wash-edit: launch path %q: %v", p, err)
+			return
+		}
+		kind := "cmd.open_file"
+		if info, err := os.Stat(abs); err == nil && info.IsDir() {
+			kind = "cmd.set_root"
+		}
+		_ = bus.Emit(kind, map[string]any{"path": abs})
 	}
 }
 
@@ -170,6 +191,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 
 type spawnReq struct {
 	AppID string `json:"app_id"`
+	// Open is a launch path for the target (`--open <path>`): "Reveal in
+	// Files" spawns fm at the active file's folder.
+	Open string `json:"open"`
 }
 
 type termOpenReq struct {
@@ -229,16 +253,48 @@ func registerHandlers(b *sdk.Bus) {
 		return wfs.ListReply{Path: abs, Entries: entries, Truncated: truncated}, nil
 	})
 
-	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (wfs.ReadReply, error) {
-		return doRead(req.Path)
+	// The reply is a map, not wfs.ReadReply, for one extra key: whether
+	// the file can be written. internal/fs's wire types are shared with
+	// wash-fm, and an editor-only fact does not belong in them.
+	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (map[string]any, error) {
+		reply, err := doRead(req.Path)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]any{
+			"path":      reply.Path,
+			"content":   reply.Content,
+			"size":      reply.Size,
+			"binary":    reply.Binary,
+			"truncated": reply.Truncated,
+			"writable":  writable(reply.Path),
+		}
+		if reply.Blocked != "" {
+			out["blocked"] = reply.Blocked
+		}
+		return out, nil
 	})
 
-	sdk.Handle(b, "write", func(_ *sdk.Conn, _ string, req wfs.WriteReq) (wfs.WriteReply, error) {
+	sdk.Handle(b, "write", func(c *sdk.Conn, _ string, req wfs.WriteReq) (wfs.WriteReply, error) {
 		abs, n, err := editFS.Write(req.Path, []byte(req.Content), maxWriteBytes)
 		if err != nil {
+			// A save that fails is the one thing an editor must never be
+			// quiet about: the buffer looks saved and is not. The FE puts
+			// it in the status bar; the toast reaches a user who has
+			// already switched windows.
+			log.Printf("wash-edit: write failed path=%q: %v", req.Path, err)
+			c.Warn("Save failed", err.Error())
 			return wfs.WriteReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 		}
 		return wfs.WriteReply{Path: abs, Bytes: n}, nil
+	})
+
+	// close_window_confirmed: the FE has established that nothing unsaved
+	// remains (or the user chose to discard it). An unsolicited
+	// confirm_close(allow=true) runs the same teardown as a confirmed
+	// titlebar click — the term app's pattern (WIRE.md §10).
+	sdk.HandleVoid(b, "close_window_confirmed", func(c *sdk.Conn, _ string, _ struct{}) error {
+		return c.ConfirmClose(c.WindowID(), true)
 	})
 
 	sdk.Handle(b, "rename", func(_ *sdk.Conn, _ string, req wfs.RenameReq) (wfs.RenameReply, error) {
@@ -258,10 +314,19 @@ func registerHandlers(b *sdk.Bus) {
 	})
 
 	sdk.HandleVoid(b, "spawn", func(c *sdk.Conn, _ string, req spawnReq) error {
-		// FE-driven app spawn (e.g. the "Open in fm" button). The
-		// router validates CapSpawn on the manifest.
+		// FE-driven app spawn (e.g. the "Reveal in Files" button). The
+		// router validates CapSpawn on the manifest. The launch path is
+		// confined here so the editor never hands the router a path
+		// outside its own root.
 		if req.AppID == "" {
 			return nil
+		}
+		if req.Open != "" {
+			abs, err := editFS.Confine(req.Open)
+			if err != nil {
+				return sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+			}
+			return c.SpawnRequestOpen(req.AppID, abs)
 		}
 		return c.SpawnRequest(req.AppID)
 	})
@@ -369,25 +434,73 @@ func doRead(path string) (wfs.ReadReply, error) {
 		return wfs.ReadReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 	}
 	defer f.Close()
+	// ReadFull rather than one Read: a FUSE or network file may return
+	// short reads, and a short first read used to be mistaken for the
+	// whole file.
 	buf := make([]byte, maxReadBytes)
-	n, err := f.Read(buf)
-	if err != nil && n == 0 && info.Size() != 0 {
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		return wfs.ReadReply{}, sdk.Err{Code: sdk.ErrIO, Msg: err.Error()}
 	}
 	buf = buf[:n]
 	truncated := info.Size() > int64(n)
-	binary := wfs.LooksBinary(buf)
-	content := ""
-	if !binary {
-		content = string(buf)
+	reply := wfs.ReadReply{Path: abs, Size: info.Size(), Truncated: truncated}
+	// Anything the editor cannot faithfully write back is delivered
+	// without content and with the reason, so the FE shows a placeholder
+	// instead of a buffer whose save would destroy the file: a binary
+	// save used to write an empty document, a >cap save used to write
+	// the truncated prefix, and a Latin-1 save used to persist U+FFFD.
+	switch {
+	case wfs.LooksBinary(buf):
+		reply.Binary = true
+		reply.Blocked = wfs.BlockedBinary
+	case truncated:
+		reply.Blocked = wfs.BlockedTooLarge
+	case !utf8.Valid(buf):
+		reply.Blocked = wfs.BlockedEncoding
+	default:
+		reply.Content = string(buf)
 	}
-	return wfs.ReadReply{
-		Path:      abs,
-		Content:   content,
-		Size:      info.Size(),
-		Binary:    binary,
-		Truncated: truncated,
-	}, nil
+	return reply, nil
+}
+
+// writable answers whether THIS process could write the file: access(2)
+// with W_OK, so it accounts for the effective uid, the group, and a
+// read-only mount — not just the mode bits, which say nothing about who
+// is asking. Running as root it is true for everything, which is correct
+// (root really can write it) and is why the read-only e2e skips there.
+// A file that does not exist is reported writable: the editor's own
+// "deleted on disk" path owns that case, and saying "read-only" about a
+// file that is merely gone would be a lie.
+func writable(path string) bool {
+	if path == "" {
+		return true
+	}
+	if err := unix.Access(path, unix.W_OK); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+		return false
+	}
+	return true
+}
+
+// onCloseRequested answers the router's close handshake (WIRE.md §10).
+// Only the FE knows whether a tab is dirty, so the answer is always an
+// immediate veto plus a question to the FE, which replies with
+// close_window_confirmed once it has nothing unsaved (straight away when
+// every tab is clean, after the Save / Don't save / Cancel dialog when
+// not). Answering "no" first is what makes a dialog possible at all: the
+// router force-kills an app that leaves the handshake open past its
+// grace period, which is far too short to read a question in.
+func onCloseRequested(c *sdk.Conn, win uint32) bool {
+	if err := c.SendAppMsg(map[string]any{"kind": "close_blocked", "scope": "window"}); err != nil {
+		// No FE to ask means nobody is typing into it either; honour the
+		// click rather than leave a window that refuses to shut.
+		log.Printf("wash-edit close prompt: %v", err)
+		return true
+	}
+	return false
 }
 
 const editIcon = "file-pen"

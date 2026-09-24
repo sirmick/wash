@@ -6,7 +6,7 @@ import (
 )
 
 func req(tool string, input map[string]any, cwd string) Request {
-	return Request{SessionID: "s-1", ToolName: tool, ToolInput: input, Cwd: cwd}
+	return Request{ToolName: tool, ToolInput: input, Cwd: cwd}
 }
 
 // The property everything else rests on: with no policy, or the kill

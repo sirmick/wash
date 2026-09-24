@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	creackpty "github.com/creack/pty"
 	"github.com/sirmick/wash/pkg/sdk"
@@ -49,6 +50,17 @@ type Session struct {
 	closeOnce sync.Once
 	onClose   func(s *Session, reason string)
 
+	// hold (WithExitHold) is asked, once the pty has ended, whether the raw
+	// channel should outlive it. chHeld records the answer; ReleaseChannel
+	// closes the channel later. Guarded by chMu.
+	hold   func(s *Session, reason string) bool
+	chMu   sync.Mutex
+	chHeld bool
+
+	// dir is the working directory the child starts in (WithDir). Empty
+	// inherits the process cwd, as every caller did before cwd existed.
+	dir string
+
 	// cap is the optional output capture (WithCapture). Nil unless a
 	// caller asked for one: wash-term does not need it — the browser is
 	// its buffer — but a caller that must ANSWER for the output later
@@ -59,7 +71,11 @@ type Session struct {
 	// so a waiter that wakes on it always sees the status. The reaper is
 	// the authority: it runs whether the process exited on its own or
 	// because Close killed it.
-	done     chan struct{}
+	done chan struct{}
+	// drained closes when the pty→channel copy has returned: every byte
+	// the child wrote has been read (and captured). Nil for a Session
+	// built without a pty (tests).
+	drained  chan struct{}
 	exitMu   sync.Mutex
 	exitCode int
 	exitSig  string
@@ -109,13 +125,140 @@ func WithCapture(max int) Option {
 	}
 }
 
+// WithDir starts the child in dir instead of the process's own cwd — a
+// new tab inheriting the focused tab's directory, or `wash-term --open
+// <dir>`. The caller has already checked dir exists; a bad dir would
+// make StartWithSize fail and the tab never open, so Open ignores a dir
+// that is not a directory rather than failing the whole spawn.
+func WithDir(dir string) Option {
+	return func(s *Session) {
+		if dir == "" {
+			return
+		}
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+			log.Printf("pty: cwd %q unusable, inheriting: %v", dir, err)
+			return
+		}
+		s.dir = dir
+	}
+}
+
+// Cwd reports the child's current working directory from
+// /proc/<pid>/cwd. It follows the SHELL, not the foreground program: a
+// `cd` is what the user means by "where this tab is", and a build running
+// in a subdirectory does not move the tab. Empty when unreadable (the
+// child is gone, or a setuid child's /proc entry is not ours to read —
+// the Root Terminal case, where the caller falls back to inheriting).
+func (s *Session) Cwd() string {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return ""
+	}
+	dir, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", s.cmd.Process.Pid))
+	if err != nil {
+		return ""
+	}
+	// A directory deleted under the shell reads as "/path (deleted)".
+	if strings.HasSuffix(dir, " (deleted)") {
+		return ""
+	}
+	return dir
+}
+
+// WithExitHold keeps the raw channel open after the pty ends whenever
+// hold(s, reason) says so — for a tab that should stay on screen showing
+// how its process ended. The router drops a channel, replay buffer and
+// all, the moment the app closes it; holding it keeps the process's last
+// output reachable by an FE that attaches late, and lets the caller write
+// its own in-band epilogue with WriteChannel, ordered after everything the
+// process wrote. The caller owns the channel from then on and must
+// ReleaseChannel it. hold runs before onClose, so onClose can read
+// ChannelHeld.
+func WithExitHold(hold func(s *Session, reason string) bool) Option {
+	return func(s *Session) { s.hold = hold }
+}
+
+// ChannelHeld reports whether the raw channel outlived the pty
+// (WithExitHold) and has not been released yet.
+func (s *Session) ChannelHeld() bool {
+	s.chMu.Lock()
+	defer s.chMu.Unlock()
+	return s.chHeld
+}
+
+// WriteChannel writes bytes toward the FE on the session's channel — the
+// in-band epilogue of a held session. No-op on a session with no channel.
+func (s *Session) WriteChannel(p []byte) (int, error) {
+	if s.ch == nil {
+		return len(p), nil
+	}
+	return s.ch.Write(p)
+}
+
+// ReleaseChannel closes a held channel. Idempotent; a no-op on a session
+// that was not held.
+func (s *Session) ReleaseChannel() {
+	s.chMu.Lock()
+	held := s.chHeld
+	s.chHeld = false
+	s.chMu.Unlock()
+	if held {
+		s.closeChannel()
+	}
+}
+
+func (s *Session) closeChannel() {
+	if s.ch != nil {
+		_ = s.ch.Close()
+	}
+}
+
 // Output returns the captured tail and whether older bytes were dropped.
 // Empty and false when the session was opened without WithCapture.
 func (s *Session) Output() (text string, truncated bool) {
 	if s.cap == nil {
 		return "", false
 	}
+	s.awaitDrain()
 	return s.cap.snapshot()
+}
+
+// drainGrace bounds how long an exited child's output may take to finish
+// draining. A grandchild that keeps the pty open (`cmd &`) never lets the
+// copy see EOF, and must not hang Close or Output.
+var drainGrace = 2 * time.Second
+
+// awaitDrain waits, once the child has been reaped, for the pty→channel
+// copy to have read everything it wrote.
+//
+// The reaper and the copy are separate goroutines, and the reaper usually
+// wins: a caller woken by Done (ACP's wait_for_exit) that then asked for
+// the output got whatever the copy had reached — often nothing for a fast
+// `ls` — and a Close in that window closed the pty with the rest still in
+// the kernel buffer, so the transcript kept an empty result. A 2-core CI
+// runner lost `ls` output that way about one run in eight.
+//
+// A child still running is not waited for: its output is not finished,
+// and Output is also a live poll.
+func (s *Session) awaitDrain() {
+	if s.drained == nil || s.done == nil {
+		return
+	}
+	select {
+	case <-s.drained:
+		return
+	default:
+	}
+	select {
+	case <-s.done:
+	default:
+		return
+	}
+	t := time.NewTimer(drainGrace)
+	defer t.Stop()
+	select {
+	case <-s.drained:
+	case <-t.C:
+	}
 }
 
 // Done closes once the child has been reaped. A caller blocking on it —
@@ -167,11 +310,6 @@ type ForegroundUser struct {
 	State  string // "user" | "root" | "ssh"
 	User   string // login name of the foreground program's euid
 	Target string // ssh destination host, when State == "ssh"
-	// Agent is the coding-agent slug ("claude", "codex", …) when the
-	// foreground program is one — tier T0 of docs/AGENT_TERM.md §2.
-	// Empty for everything else, which is most things: a shell, vi, a
-	// build. Independent of State (an agent can run as root).
-	Agent string
 	// Busy reports that something other than the login shell holds the
 	// foreground — a build, an editor, ssh, an agent. False means the
 	// shell is sitting at its prompt, so closing the tab loses nothing the
@@ -370,7 +508,7 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 	// Bulk class (docs/QOS.md): terminal output rides the credit / behind /
 	// resync path and yields to interactive traffic, instead of sharing the
 	// Interactive queue with window ops and other apps (REVIEW-DATAPATH F1).
-	ch, err := conn.OpenChannelBulk(ctx, windowID)
+	ch, err := conn.OpenChannelPty(ctx, windowID)
 	if err != nil {
 		return nil, err
 	}
@@ -390,27 +528,32 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 	}
 	cmd.Env = env
 
-	f, startErr := creackpty.StartWithSize(cmd, &creackpty.Winsize{Cols: cols, Rows: rows})
-	if startErr != nil {
-		_ = ch.Close()
-		return nil, startErr
-	}
-
 	s := &Session{
-		pty:     f,
 		cmd:     cmd,
 		ch:      ch,
 		Shell:   shellPath,
 		cols:    cols,
 		rows:    rows,
 		onClose: onClose,
+		drained: make(chan struct{}),
 		done:    make(chan struct{}),
 	}
-	// Before the copy goroutines start, so a capture cannot miss the
-	// first bytes a fast command writes.
+	// Options run BEFORE the child starts: WithDir has to land on cmd.Dir
+	// ahead of StartWithSize, and a capture must exist before the copy
+	// goroutines so it cannot miss the first bytes a fast command writes.
 	for _, o := range opts {
 		o(s)
 	}
+	if s.dir != "" {
+		cmd.Dir = s.dir
+	}
+
+	f, startErr := creackpty.StartWithSize(cmd, &creackpty.Winsize{Cols: cols, Rows: rows})
+	if startErr != nil {
+		_ = ch.Close()
+		return nil, startErr
+	}
+	s.pty = f
 
 	// pty → channel, teed into the capture when one was asked for. The
 	// tee is on the READ side of the pty so the bytes captured are the
@@ -426,6 +569,9 @@ func Open(ctx context.Context, conn *sdk.Conn, windowID uint32, cols, rows uint1
 			// without this line the session just goes dark.
 			log.Printf("pty: win=%d shell=%s pty→channel copy: %v", windowID, shellPath, copyErr)
 		}
+		// Before closeWithReason: a Close already waiting in awaitDrain
+		// holds closeOnce, and this is what releases it.
+		close(s.drained)
 		s.closeWithReason("pty eof")
 	}()
 	// channel → pty
@@ -483,11 +629,23 @@ func (s *Session) CloseWithReason(reason string) {
 
 func (s *Session) closeWithReason(reason string) {
 	s.closeOnce.Do(func() {
-		if s.cmd.Process != nil {
+		// A child that already exited has nothing left to kill, but may
+		// still have output in the pty buffer: let it drain before the fd
+		// closes under it (awaitDrain).
+		s.awaitDrain()
+		if s.cmd != nil && s.cmd.Process != nil {
 			_ = s.cmd.Process.Kill()
 		}
-		_ = s.pty.Close()
-		_ = s.ch.Close()
+		if s.pty != nil {
+			_ = s.pty.Close()
+		}
+		if s.hold != nil && s.hold(s, reason) {
+			s.chMu.Lock()
+			s.chHeld = true
+			s.chMu.Unlock()
+		} else {
+			s.closeChannel()
+		}
 		if s.onClose != nil {
 			s.onClose(s, reason)
 		}
@@ -513,38 +671,51 @@ func userShell() string {
 	return "/bin/bash"
 }
 
-// WithWashEnv returns env with two wash-specific tweaks applied:
+// WithWashEnv returns env with three wash-specific tweaks applied:
 //
-//   - TERM=xterm-256color (always — the shell side renders via xterm.js)
+//   - TERM=xterm-256color and COLORTERM=truecolor (always — the shell
+//     side renders via xterm.js, which does 24-bit colour; bat, delta
+//     and neovim key on COLORTERM to use it)
 //   - PATH prefixed with $WASH_BIN_DIR when set, deduped — so the user
 //     can run sibling wash CLIs (wash-launch, wash-fm, …) without an
 //     absolute path. The router publishes WASH_BIN_DIR; if absent,
 //     PATH is left alone.
+//   - PATH prefixed with $WASH_SHIM_DIR, AHEAD of WASH_BIN_DIR and of
+//     everything else: that is where the host app puts shims that must
+//     shadow a system binary of the same name (`xdg-open`). A shim only
+//     works if it wins, so it goes first by construction rather than by
+//     the order the two happen to be inserted.
 //
 // Used by wash-term and any future PTY-hosting app that wants its
 // interactive shell to feel like a wash session.
 func WithWashEnv(env []string) []string {
 	binDir := lookupEnv(env, "WASH_BIN_DIR")
-	out := make([]string, 0, len(env)+1)
-	termSet := false
+	shimDir := lookupEnv(env, "WASH_SHIM_DIR")
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") && binDir != "" {
+		if strings.HasPrefix(kv, "PATH=") && (binDir != "" || shimDir != "") {
 			cur := kv[len("PATH="):]
-			out = append(out, "PATH="+prependPath(cur, binDir))
-			continue
-		}
-		if strings.HasPrefix(kv, "TERM=") {
-			out = append(out, "TERM=xterm-256color")
-			termSet = true
+			if binDir != "" {
+				cur = prependPath(cur, binDir)
+			}
+			if shimDir != "" {
+				cur = prependPath(cur, shimDir)
+			}
+			out = append(out, "PATH="+cur)
 			continue
 		}
 		out = append(out, kv)
 	}
-	if !termSet {
-		out = append(out, "TERM=xterm-256color")
-	}
-	if binDir != "" && lookupEnv(out, "PATH") == "" {
-		out = append(out, "PATH="+binDir)
+	out = PinTerm(out)
+	if lookupEnv(out, "PATH") == "" {
+		switch {
+		case shimDir != "" && binDir != "":
+			out = append(out, "PATH="+shimDir+string(os.PathListSeparator)+binDir)
+		case shimDir != "":
+			out = append(out, "PATH="+shimDir)
+		case binDir != "":
+			out = append(out, "PATH="+binDir)
+		}
 	}
 	out = mapDisplayEnv(out)
 	return out
@@ -571,25 +742,24 @@ func mapDisplayEnv(env []string) []string {
 	return env
 }
 
-// PinTerm returns env with TERM forced to xterm-256color but PATH
-// untouched. wash-edit's embedded terminal uses this — it doesn't
-// run user shell scripts that need wash CLIs on PATH, so the extra
-// dance from WithWashEnv would be noise.
+// PinTerm returns env with TERM forced to xterm-256color and COLORTERM
+// to truecolor, PATH untouched. wash-edit's embedded terminal uses this
+// directly — it doesn't run user shell scripts that need wash CLIs on
+// PATH, so the extra dance from WithWashEnv would be noise — and
+// WithWashEnv uses it for the same two pins. Both describe the one
+// renderer every wash pty has behind it: xterm.js, 256-colour palette
+// and 24-bit RGB. An inherited value is replaced, not kept: it came from
+// whatever launched the router, not from the terminal in front of the
+// user.
 func PinTerm(env []string) []string {
-	out := make([]string, 0, len(env)+1)
-	termSet := false
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "TERM=") {
-			out = append(out, "TERM=xterm-256color")
-			termSet = true
+		if strings.HasPrefix(kv, "TERM=") || strings.HasPrefix(kv, "COLORTERM=") {
 			continue
 		}
 		out = append(out, kv)
 	}
-	if !termSet {
-		out = append(out, "TERM=xterm-256color")
-	}
-	return out
+	return append(out, "TERM=xterm-256color", "COLORTERM=truecolor")
 }
 
 func lookupEnv(env []string, key string) string {

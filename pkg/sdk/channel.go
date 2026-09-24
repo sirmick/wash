@@ -189,6 +189,19 @@ func (c *Conn) OpenChannelBulk(ctx context.Context, windowID uint32) (*RawChanne
 	return ch, nil
 }
 
+// OpenChannelPty is OpenChannelBulk for a terminal's pty bytes: the same
+// credit-gated, resyncable Bulk stream, and the router knows the bytes
+// are a terminal's, so an observation (docs/COMMANDER.md §4.2) may read
+// the scrollback as text. Same callback/deadlock caveat as OpenChannel.
+func (c *Conn) OpenChannelPty(ctx context.Context, windowID uint32) (*RawChannel, error) {
+	ch, err := c.openChannelKind(ctx, windowID, wire.ChannelKindPty)
+	if err != nil {
+		return nil, err
+	}
+	ch.writeClass = wire.ClassBulk
+	return ch, nil
+}
+
 // OpenChannelFile opens a channel for a bulk app→FE file transfer (e.g.
 // fm download). The router omits the credit ledger and the channel writes
 // at Bulk class, so the transfer rides the lossless Bulk path: it yields

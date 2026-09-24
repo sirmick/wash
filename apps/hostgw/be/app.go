@@ -71,12 +71,13 @@ const FEKind = "hostgw.state"
 // contract is the app-id string, and a compile-time dependency on every
 // service package would drag them all into this binary.
 const (
-	NotifyAppID = "com.wash.notify"
-	BulkAppID   = "com.wash.bulk"
-	PrivAppID   = "com.wash.priv"
-	NetdAppID   = "com.wash.netd"
-	AudioAppID  = "com.wash.audio"
-	AgentdAppID = "com.wash.agentd"
+	NotifyAppID    = "com.wash.notify"
+	BulkAppID      = "com.wash.bulk"
+	PrivAppID      = "com.wash.priv"
+	NetdAppID      = "com.wash.netd"
+	AudioAppID     = "com.wash.audio"
+	AgentdAppID    = "com.wash.agentd"
+	CommanderAppID = "com.wash.commander"
 )
 
 // serviceName maps a service app id to the short name the FE keys its
@@ -103,13 +104,15 @@ func serviceName(appID string) string {
 		return "audio"
 	case AgentdAppID:
 		return "agent"
+	case CommanderAppID:
+		return "commander"
 	}
 	return ""
 }
 
 // watched is the subscribe list, in the order we subscribe at startup.
 var watched = []string{
-	NotifyAppID, BulkAppID, PrivAppID, NetdAppID, AudioAppID, AgentdAppID,
+	NotifyAppID, BulkAppID, PrivAppID, NetdAppID, AudioAppID, AgentdAppID, CommanderAppID,
 }
 
 var def *sdk.AppDef

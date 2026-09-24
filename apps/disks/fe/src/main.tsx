@@ -11,7 +11,7 @@
 import { For, Match, Show, Switch, createMemo, createSignal, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { WASH_ROW_CLASS, Button, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
+import { Button, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
 import {
   HardDrive,
   HardDriveDownload,
@@ -292,13 +292,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               fallback={<div style={sectionStyle} data-testid={`disks-section-${row.id}`}>{row.name}</div>}
             >
               <div
-                class={WASH_ROW_CLASS}
-                // A non-selectable row is inert; aria-disabled suppresses
-                // the hover and press so it doesn't advertise a click
-                // that goes nowhere.
-                aria-disabled={row.selectable ? undefined : 'true'}
                 style={rowStyle(row, selectedId() === row.id)}
-                data-testid={`disks-row-${row.id}`}
+                data-wash-hit="subtle"
+              data-testid={`disks-row-${row.id}`}
                 onClick={() => row.selectable && selectRow(row.id)}
               >
                 <span style={{ display: 'inline-flex', flex: '0 0 auto', width: `${row.depth * 14}px` }} />
@@ -659,7 +655,7 @@ function rowStyle(row: Row, selected: boolean): JSX.CSSProperties {
     gap: '0',
     padding: '4px 12px',
     cursor: row.selectable ? 'pointer' : 'default',
-    '--wash-row-bg': selected ? tokens.bgRowSelected : 'transparent',
+    background: selected ? tokens.bgRowSelected : 'transparent',
     'font-size': tokens.fontSizeBase,
     'white-space': 'nowrap',
   };

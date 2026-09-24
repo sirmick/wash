@@ -18,18 +18,23 @@
 // stored transcript into a fresh session — is not built yet. A button
 // that guesses is worse than one that is missing.
 
-import { For, Show, createSignal, onMount } from 'solid-js';
-import type { Component } from 'solid-js';
-import { WASH_ROW_CLASS, Button, Input, Overlay, fmtBytes, tokens } from '@wash/ui';
+import { For, Show, children, createSignal, onMount } from 'solid-js';
+import type { Component, ParentComponent } from 'solid-js';
+import { Button, Input, Menu, MenuItem, MenuSeparator, Overlay, fmtBytes, tokens } from '@wash/ui';
 
 /** One stored session, as agentd's history index describes it. */
 export interface SessionMeta {
   session_id: string;
   agent?: string;
+  /** the stack and tier it was started from; Restart starts them again */
+  stack?: string;
+  tier?: string;
   model?: string;
   cwd?: string;
   dir?: string;
   title?: string;
+  /** the name a person gave it; `title` is then the same string */
+  user_title?: string;
   started_ms?: number;
   ended_ms?: number;
   end_reason?: string;
@@ -47,6 +52,8 @@ export interface SessionMeta {
    * already shows the title and directory.
    */
   snippet?: string;
+  /** bounded recent transcript lines for the unfiltered history list */
+  preview?: string;
 }
 
 /**
@@ -95,7 +102,19 @@ export function highlightParts(text: string, query: string): { t: string; hit: b
  * the view that had no filter. The two views may differ in presentation;
  * they may not differ about what is safe to click.
  */
-export function historyAction(s: SessionMeta): 'resume' | 'reattach' | 'focus' | 'none' {
+/**
+ * historySignature is what History shows about agentd's remembered
+ * sessions, as one comparable string: which sessions, and the facts that
+ * change a row's text or verb. The manager re-queries the (disk-backed)
+ * list only when this moves.
+ */
+export function historySignature(recent: ReadonlyArray<SessionMeta & { last_seen?: number }>): string {
+  return recent
+    .map((s) => [s.session_id, s.title ?? '', s.live ? 1 : 0, s.detached ? 1 : 0, s.row_key ?? '', s.last_seen ?? ''].join('\u0001'))
+    .join('\u0002');
+}
+
+export function historyAction(s: SessionMeta): 'resume' | 'restart' | 'reattach' | 'focus' | 'none' {
   if (s.detached && s.row_key) return 'reattach';
   // Live with a window: picking it goes THERE (docs/AGENT_UX.md N1).
   // Resuming would fork a second adapter onto one conversation, which is
@@ -104,6 +123,9 @@ export function historyAction(s: SessionMeta): 'resume' | 'reattach' | 'focus' |
   // list was always implying.
   if (s.live && s.row_key) return 'focus';
   if (s.live) return 'none';
+  // A transcript can outlive the metadata needed by the agent's native
+  // resume API. It is still useful: restart a fresh session in its folder.
+  if (!s.agent) return 'restart';
   return 'resume';
 }
 
@@ -144,32 +166,90 @@ const metaStyle = {
   'white-space': 'nowrap',
 } as const;
 
+const HistoryFrame: ParentComponent<{
+  embedded?: boolean;
+  onClose?: () => void;
+}> = (props) => {
+  const content = children(() => props.children);
+  return (
+    <Show
+      when={props.embedded}
+      fallback={
+        <Overlay
+          onDismiss={() => props.onClose?.()}
+          align="top"
+          data-testid="ai-history-panel"
+          innerStyle={{ width: 'min(760px, 92vw)', 'max-height': '76vh', display: 'flex', 'flex-direction': 'column' }}
+        >
+          {content()}
+        </Overlay>
+      }
+    >
+      <section
+        data-testid="ai-history-panel"
+        style={{
+          height: '100%',
+          'min-height': 0,
+          display: 'flex',
+          'flex-direction': 'column',
+          padding: `${tokens.spaceMd}px`,
+          'box-sizing': 'border-box',
+          background: tokens.bgWindow,
+        }}
+      >
+        {content()}
+      </section>
+    </Show>
+  );
+};
+
 export const HistoryPanel: Component<{
   sessions: () => SessionMeta[];
   query: () => string;
   onQuery: (q: string) => void;
   onResume: (s: SessionMeta) => void;
-  onClose: () => void;
+  /** start a new agent session in this row's recorded folder */
+  onRestart?: (s: SessionMeta) => void;
+  onClose?: () => void;
+  /** render as a pane in the Agents workspace instead of a modal */
+  embedded?: boolean;
   /** true between asking and the answer landing — an empty list mid-flight
    *  is not the same claim as "nothing matched". */
   loading?: () => boolean;
+  /** give a session a name of your own; the host opens its dialog */
+  onRename?: (s: SessionMeta) => void;
+  /** delete a stored session — its transcript and its history entry. The
+   *  host confirms; a running session is refused by agentd and disabled
+   *  here. */
+  onDelete?: (s: SessionMeta) => void;
+  /** "Delete all older than…" — the host asks for the horizon */
+  onPrune?: () => void;
 }> = (props) => {
   const now = Date.now();
   let inputEl!: HTMLInputElement;
   // Typing is why the panel is open; landing focus anywhere else means
   // the first thing every user does is click the box.
-  onMount(() => inputEl?.focus());
+  onMount(() => { if (!props.embedded) inputEl?.focus(); });
   const [selected, setSelected] = createSignal(0);
+  // The per-row verbs menu: which row, and where. Menu portals to
+  // document.body, so these are viewport coordinates.
+  const [menuFor, setMenuFor] = createSignal<{ s: SessionMeta; x: number; y: number } | null>(null);
+  const hasVerbs = () => Boolean(props.onRestart || props.onRename || props.onDelete);
+  const activate = (s: SessionMeta) => {
+    const action = historyAction(s);
+    if (action === 'restart') props.onRestart?.(s);
+    else if (action !== 'none') props.onResume(s);
+  };
+  const openMenu = (s: SessionMeta, e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuFor({ s, x: e.clientX, y: e.clientY });
+  };
 
   const rows = () => props.sessions();
 
   return (
-    <Overlay
-      onDismiss={props.onClose}
-      align="top"
-      data-testid="ai-history-panel"
-      innerStyle={{ width: 'min(760px, 92vw)', 'max-height': '76vh', display: 'flex', 'flex-direction': 'column' }}
-    >
+    <HistoryFrame embedded={props.embedded} onClose={props.onClose}>
       <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px`, 'margin-bottom': `${tokens.spaceMd}px` }}>
         <div style={{ 'font-weight': 600 }}>History</div>
         <div style={{ font: tokens.type.textSm, color: tokens.fgMuted, 'margin-left': 'auto' }}>
@@ -177,6 +257,14 @@ export const HistoryPanel: Component<{
             <span data-testid="ai-history-count">{rows().length} session{rows().length === 1 ? '' : 's'}</span>
           </Show>
         </div>
+        {/* Pruning lives up here, beside the count it acts on. The store
+            grows without bound otherwise, and `rm` in the state dir was
+            the only way to lose a conversation. */}
+        <Show when={props.onPrune}>
+          <Button variant="ghost" data-testid="ai-history-prune" onClick={() => props.onPrune?.()}>
+            Delete older than…
+          </Button>
+        </Show>
       </div>
 
       <Input
@@ -196,7 +284,7 @@ export const HistoryPanel: Component<{
             setSelected((i) => Math.max(0, i - 1));
           } else if (e.key === 'Enter') {
             const s = rows()[selected()];
-            if (s && historyAction(s) !== 'none') props.onResume(s);
+            if (s) activate(s);
           }
         }}
       />
@@ -221,18 +309,13 @@ export const HistoryPanel: Component<{
           <For each={rows()}>
             {(s, i) => (
               <div
+                data-wash-hit="subtle"
                 data-testid="ai-history-row"
                 data-session-id={s.session_id}
                 data-action={historyAction(s)}
                 onMouseEnter={() => setSelected(i())}
-                onClick={() => { if (historyAction(s) !== 'none') props.onResume(s); }}
-                // onMouseEnter drives the keyboard cursor, so the fill
-                // stays a prop rather than a :hover — the two must not
-                // disagree about which row is current. The class adds the
-                // press state, and aria-disabled suppresses it (and the
-                // hover) on a row with no resumable action.
-                class={WASH_ROW_CLASS}
-                aria-disabled={historyAction(s) === 'none' ? 'true' : undefined}
+                onClick={() => activate(s)}
+                onContextMenu={(e) => hasVerbs() && openMenu(s, e)}
                 style={{
                   display: 'flex',
                   'flex-direction': 'column',
@@ -241,7 +324,7 @@ export const HistoryPanel: Component<{
                   'border-radius': tokens.radiusSm,
                   cursor: historyAction(s) === 'none' ? 'default' : 'pointer',
                   opacity: historyAction(s) === 'none' ? 0.55 : 1,
-                  '--wash-row-bg': selected() === i() ? tokens.bgRowSelected : 'transparent',
+                  background: selected() === i() ? tokens.bgRowSelected : 'transparent',
                 }}
               >
                 <div style={{ display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceMd}px` }}>
@@ -264,12 +347,42 @@ export const HistoryPanel: Component<{
                         color: historyAction(s) === 'reattach' ? tokens.accentAmber : tokens.fgMuted,
                       }}
                     >
-                      {historyAction(s) === 'reattach' ? 'running — open' : 'running — go to it'}
+                      {historyAction(s) === 'restart'
+                        ? 'restart fresh'
+                        : historyAction(s) === 'reattach'
+                          ? 'running — open'
+                          : 'running — go to it'}
                     </span>
                   </Show>
                   <span style={{ ...metaStyle, 'margin-left': 'auto', 'flex-shrink': 0 }}>
                     {fmtAgo(now, s.ended_ms || s.started_ms || 0)}
                   </span>
+                  {/* Right-click works on the row, but a right-click-only
+                      verb is a verb nobody finds — same ellipsis the
+                      roster rows carry. */}
+                  <Show when={hasVerbs()}>
+                    <button
+                      type="button"
+                      data-testid="ai-history-verbs"
+                      data-wash-hit
+                      title="Session actions"
+                      aria-label="Session actions"
+                      aria-haspopup="menu"
+                      onClick={(e) => openMenu(s, e)}
+                      style={{
+                        background: 'transparent',
+                        color: tokens.fg,
+                        border: 'none',
+                        padding: '0 2px',
+                        cursor: 'pointer',
+                        'font-size': '12px',
+                        'line-height': 1,
+                        'flex-shrink': 0,
+                      }}
+                    >
+                      ⋯
+                    </button>
+                  </Show>
                 </div>
                 {/* The metadata line is why this is a panel and not a
                     menu: it does not fit on one. */}
@@ -300,18 +413,21 @@ export const HistoryPanel: Component<{
                 {/* Why this row is in the list. Without it a search
                     result is a title you still have to open to identify,
                     which is the thing searching was meant to save. */}
-                <Show when={s.snippet}>
+                <Show when={s.snippet || s.preview}>
                   <div
                     data-testid="ai-history-snippet"
                     style={{
                       ...metaStyle,
                       'margin-top': '2px',
                       overflow: 'hidden',
-                      'text-overflow': 'ellipsis',
-                      'white-space': 'nowrap',
+                      'white-space': 'pre-line',
+                      display: '-webkit-box',
+                      '-webkit-line-clamp': 3,
+                      '-webkit-box-orient': 'vertical',
+                      'line-height': 1.35,
                     }}
                   >
-                    <For each={highlightParts(s.snippet ?? '', props.query())}>
+                    <For each={highlightParts(s.snippet || s.preview || '', s.snippet ? props.query() : '')}>
                       {(part) => (
                         <Show when={part.hit} fallback={<span>{part.t}</span>}>
                           <span
@@ -331,9 +447,47 @@ export const HistoryPanel: Component<{
         </Show>
       </div>
 
-      <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceMd}px` }}>
-        <Button data-testid="ai-history-close" onClick={props.onClose}>Close</Button>
-      </div>
-    </Overlay>
+      <Show when={!props.embedded}>
+        <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceMd}px` }}>
+          <Button data-testid="ai-history-close" onClick={() => props.onClose?.()}>Close</Button>
+        </div>
+      </Show>
+
+      <Show when={menuFor()}>
+        {(m) => (
+          <Menu x={m().x} y={m().y} onDismiss={() => setMenuFor(null)} data-testid="ai-history-actions">
+            <MenuItem
+              label={historyAction(m().s) === 'reattach' ? 'Open running session' : historyAction(m().s) === 'focus' ? 'Go to running session' : 'Resume natively'}
+              data-testid="ai-history-menu-resume"
+              disabled={historyAction(m().s) === 'none' || historyAction(m().s) === 'restart'}
+              onClick={() => { const s = m().s; setMenuFor(null); props.onResume(s); }}
+            />
+            <MenuItem
+              label={m().s.live ? 'Restart fresh (still running)' : 'Restart fresh'}
+              data-testid="ai-history-menu-restart"
+              disabled={!props.onRestart || m().s.live === true}
+              onClick={() => { const s = m().s; setMenuFor(null); props.onRestart?.(s); }}
+            />
+            <MenuSeparator />
+            <MenuItem
+              label="Rename…"
+              data-testid="ai-history-menu-rename"
+              disabled={!props.onRename}
+              onClick={() => { const s = m().s; setMenuFor(null); props.onRename?.(s); }}
+            />
+            <MenuSeparator />
+            {/* A running session cannot be deleted — its file is being
+                written — and the item says so by being disabled rather
+                than absent. End it first; then it is history. */}
+            <MenuItem
+              label={m().s.live ? 'Delete (still running)' : 'Delete…'}
+              data-testid="ai-history-menu-delete"
+              disabled={!props.onDelete || m().s.live === true}
+              onClick={() => { const s = m().s; setMenuFor(null); props.onDelete?.(s); }}
+            />
+          </Menu>
+        )}
+      </Show>
+    </HistoryFrame>
   );
 };

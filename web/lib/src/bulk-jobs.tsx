@@ -19,7 +19,6 @@
 import type { Component } from 'solid-js';
 import { For, Show } from 'solid-js';
 import { tokens } from './tokens';
-import { WASH_BTN_CLASS } from './controls';
 
 export interface BulkJob {
   job_id: string;
@@ -132,13 +131,17 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
           }
         >
           <button
+            data-wash-hit
             type="button"
             data-testid={`bulk-cancel-${props.job.job_id}`}
             onClick={props.onCancel}
-            class={WASH_BTN_CLASS}
-            data-variant="ghost"
             style={{
+              background: 'transparent',
+              color: tokens.fg,
+              border: `1px solid ${tokens.borderMenu}`,
+              'border-radius': tokens.radiusSm,
               padding: '1px 6px',
+              cursor: 'pointer',
               font: tokens.type.textSm,
               'flex-shrink': 0,
             }}

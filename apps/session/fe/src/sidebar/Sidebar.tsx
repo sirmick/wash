@@ -17,17 +17,14 @@
 
 import type { Component, JSX } from 'solid-js';
 import { Show } from 'solid-js';
-import { WASH_ROW_CLASS, Button, tokens } from '@wash/ui';
+import { Button, tokens } from '@wash/ui';
 
 // Glassy themed surfaces: the pack's menu/hover surface at partial
 // opacity so the wallpaper shows through the blur, but the tint follows
 // the active pack (dark on Midnight/Tokyo, light on Seoul).
 const GLASS_PANEL = `color-mix(in srgb, ${tokens.bgMenu} 85%, transparent)`;
-// The tab has no GLASS_TAB_HOVER twin any more: WASH_ROW_CLASS mixes the
-// hover off this resting value, which keeps the two in step when a pack
-// changes bgMenu (the old pair drifted — hover was derived from
-// bgRowHover, a different token, at a different opacity).
 const GLASS_TAB = `color-mix(in srgb, ${tokens.bgMenu} 70%, transparent)`;
+const GLASS_TAB_HOVER = `color-mix(in srgb, ${tokens.bgRowHover} 90%, transparent)`;
 
 export type SidebarMode = 'open' | 'hidden';
 
@@ -102,11 +99,9 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       position: 'absolute',
       right: 0,
       width: `${SIDEBAR_TAB_WIDTH}px`,
-      // Resting fill only — WASH_ROW_CLASS derives the hover from it, so
-      // the two inline handlers that used to assign .style.background on
-      // mouseenter/leave are gone, and the tab gains a press state.
-      '--wash-row-bg': GLASS_TAB,
+      background: GLASS_TAB,
       'border-left': `1px solid ${tokens.borderMenu}`,
+      cursor: 'pointer',
       'z-index': 9998,
       display: 'flex',
       'align-items': 'center',
@@ -186,6 +181,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       </div>
       <Show when={!isOpen()}>
         <div
+          data-wash-hit
           data-testid="sidebar-tab"
           title={
             props.badge
@@ -193,16 +189,9 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               : 'Show sidebar (Ctrl+Alt+S)'
           }
           onClick={props.onToggle}
-          class={WASH_ROW_CLASS}
-          role="button"
-          tabindex="0"
-          onKeyDown={(ev) => {
-            if (ev.key === 'Enter' || ev.key === ' ') {
-              ev.preventDefault();
-              props.onToggle();
-            }
-          }}
           style={tabStyle()}
+          onMouseEnter={(ev) => (ev.currentTarget.style.background = GLASS_TAB_HOVER)}
+          onMouseLeave={(ev) => (ev.currentTarget.style.background = GLASS_TAB)}
         >
           <Show when={props.badge} fallback={'‹'}>
             {/* A count, not a glyph: at 14px there is no room for both,

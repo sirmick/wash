@@ -7,7 +7,7 @@
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { ChevronLeft, ChevronRight, FolderOpen, Image as ImageIcon, ImagePlus, Maximize, ZoomIn, ZoomOut } from 'lucide-solid';
-import { WASH_ROW_CLASS, Button, FilePicker, VirtualGrid, createAppBus, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { Button, FilePicker, VirtualGrid, createAppBus, createFileClient, defineWashApp, tokens } from '@wash/ui';
 import type { FileClient } from '@wash/ui';
 import { isThumbableName } from '@wash/fs-client';
 
@@ -333,10 +333,10 @@ const Thumb: Component<{
   });
   return (
     <div
+      data-wash-hit
       ref={el}
       data-testid={`iv-thumb-${props.img.name}`}
-      class={WASH_ROW_CLASS}
-      style={{ ...thumbStyle, '--wash-row-bg': props.active ? tokens.bgRowSelected : 'transparent' }}
+      style={{ ...thumbStyle, background: props.active ? tokens.bgRowSelected : 'transparent' }}
       title={props.img.name}
       onClick={() => props.onClick()}
     >

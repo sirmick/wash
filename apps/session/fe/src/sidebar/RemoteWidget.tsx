@@ -13,7 +13,7 @@
 
 import type { Component } from 'solid-js';
 import { For, Show, createSignal } from 'solid-js';
-import { WASH_BTN_CLASS, tokens } from '@wash/ui';
+import { tokens } from '@wash/ui';
 import { hostHue } from './host-hue';
 
 export interface RemoteHost {
@@ -86,19 +86,20 @@ const HostEntry: Component<{
   return (
     <div style={{ position: 'relative' }}>
       <button
+        data-wash-hit
         type="button"
         data-testid={`remote-host-${props.host.origin}`}
         data-status={props.host.status}
         onClick={onClick}
         title={props.host.error ? `${props.host.host} — ${props.host.error}` : props.host.host}
-        class={WASH_BTN_CLASS}
         style={{
           display: 'flex',
           'align-items': 'center',
           gap: '6px',
           width: '100%',
-          '--wash-btn-bg': 'transparent',
-          '--wash-btn-border': 'transparent',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
           padding: '2px 0',
           'text-align': 'left',
           opacity: props.host.status === 'down' ? 0.55 : 1,
@@ -122,7 +123,7 @@ const HostEntry: Component<{
       </button>
 
       <Show when={open() && up()}>
-        <div style={backdropStyle} onClick={() => setOpen(false)} />
+        <div data-wash-no-hit style={backdropStyle} onClick={() => setOpen(false)} />
         <div style={menuStyle} data-testid={`remote-apps-${props.host.origin}`} role="menu">
           <Show
             when={props.appsFor(props.host.origin).length > 0}
@@ -131,8 +132,8 @@ const HostEntry: Component<{
             <For each={props.appsFor(props.host.origin)}>
               {(app) => (
                 <button
+                  data-wash-hit
                   type="button"
-                  class={WASH_BTN_CLASS}
                   style={menuItemStyle}
                   data-testid={`remote-launch-${props.host.origin}-${app.id}`}
                   role="menuitem"
@@ -178,13 +179,17 @@ export const RemoteWidget: Component<RemoteWidgetProps> = (props) => (
     </Show>
 
     <button
+      data-wash-hit
       type="button"
       data-testid="remote-manage"
       onClick={() => props.onManage()}
-      class={WASH_BTN_CLASS}
-      data-variant="ghost"
       style={{
+        background: 'transparent',
+        color: tokens.fg,
+        border: `1px solid ${tokens.borderMenu}`,
+        'border-radius': tokens.radiusSm,
         padding: '3px 8px',
+        cursor: 'pointer',
         font: tokens.type.textSm,
         'align-self': 'flex-start',
       }}

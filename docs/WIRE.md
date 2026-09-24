@@ -343,8 +343,16 @@ Carries window/lifecycle control and the FE half of app messages.
   awaits the app's `window.confirm_close` (§10).
 - `{"t":"window.focus","window_id":W}` — user clicked / raised; router
   relays to the app as `window.focus`.
-- `{"t":"window.move","window_id":W,"x":…,"y":…}`
-- `{"t":"window.resize","window_id":W,"w":…,"h":…}`
+- `{"t":"window.move","window_id":W,"x":…,"y":…,"tok":…?}`
+- `{"t":"window.resize","window_id":W,"w":…,"h":…,"tok":…?}`
+  `tok` is a shell-chosen non-zero nonce; the router stamps it on the
+  window as `geom_tok` and answers a tagged move/resize with an upsert
+  even when it changed nothing. While a shell has a commit in flight it
+  keeps its own geometry for any upsert that does not echo the pending
+  token, so a patch already on the wire with the pre-drag position (the
+  focus upsert from pointer-down, late on a slow link) cannot snap the
+  window back for a round trip. Untagged (0/absent) keeps the old
+  behaviour.
 - `{"t":"window.state","window_id":W,"state":"normal|minimized|maximized"}`
 - `{"t":"app_msg.send","instance_id":"…","data":<opaque>,"to":{…}?}` —
   unified FE→BE / cross-app app message. When `to` is set, the router

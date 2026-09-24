@@ -9,7 +9,7 @@
 #                            built by `make wash-standalone`).
 #
 # Other flags:
-#   --no-build       — skip the build.sh step
+#   --no-build       — skip the build step (build.sh)
 #   --listen HOST:PORT — override default 0.0.0.0:11000
 #   --fm-seed [PATH] — seed /tmp/wash-fm-smoke (or PATH) and pass
 #                      --fs-root to the router
@@ -71,9 +71,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$do_build" == "1" ]]; then
+  # Through build.sh, so there is one front door onto the build rather
+  # than two callers of make that can drift apart.
   case "$mode" in
-    standalone) make -C "$REPO" wash-standalone;;
-    *)          make -C "$REPO" wash;;
+    standalone) "$REPO/build.sh" wash-standalone;;
+    *)          "$REPO/build.sh" wash;;
   esac
 fi
 

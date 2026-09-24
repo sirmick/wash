@@ -55,7 +55,11 @@ export interface PasteAnalysis {
   issues: PasteIssue[];
   /** true when lines were joined (a structural change) */
   wrapped: boolean;
-  /** line count of the ORIGINAL paste */
+  /**
+   * logical line count of the ORIGINAL paste. A single trailing newline
+   * (LF or CRLF — a whole line copied from a terminal or a Windows editor)
+   * does not make a one-liner multi-line; it is still pasted, as Enter.
+   */
   lines: number;
 }
 
@@ -199,7 +203,7 @@ export function analyzePaste(text: string, opts: PasteOptions = {}): PasteAnalys
     });
   }
 
-  const originalLines = original.split(/\r\n|\r|\n/).length;
+  const originalLines = countLogicalLines(original);
   return {
     verdict: decide(original, s, issues, wrapped, originalLines),
     cleaned: s,
@@ -208,6 +212,16 @@ export function analyzePaste(text: string, opts: PasteOptions = {}): PasteAnalys
     wrapped,
     lines: originalLines,
   };
+}
+
+// countLogicalLines is the line count the multi-line rule keys on. One
+// trailing newline is the end of the last line, not a second line: "ls⏎"
+// copied from a terminal (or "ls\r\n" from Windows) is a one-liner, and
+// asking about it taught people to click through the dialog. A blank line
+// AFTER that ("ls⏎⏎") is structure again and still counts.
+function countLogicalLines(text: string): number {
+  const trimmed = text.replace(/(\r\n|\r|\n)$/, '');
+  return trimmed.split(/\r\n|\r|\n/).length;
 }
 
 // decide is the UX rule from §10: silence for the invisible stuff, a

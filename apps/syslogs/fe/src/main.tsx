@@ -16,7 +16,7 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { WASH_ROW_CLASS, Button, WASH_BTN_CLASS, createAppBus, defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
+import { Button, createAppBus, defineWashApp, fmtBytes, fmtClockTime, severityColor, tokens } from '@wash/ui';
 import { RefreshCw, ShieldAlert, Search, FileText } from 'lucide-solid';
 
 interface LogFile {
@@ -234,7 +234,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   const fileRowStyle = (sel: boolean) => ({
     padding: `4px ${tokens.spaceMd}px`,
-    '--wash-row-bg': sel ? tokens.bgRowSelected : 'transparent',
+    background: sel ? tokens.bgRowSelected : 'transparent',
+    cursor: 'pointer',
     'font-size': tokens.fontSizeMd,
     'white-space': 'nowrap' as const,
     'text-overflow': 'ellipsis',
@@ -350,9 +351,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             <For each={sortedFiles()}>
               {(f) => (
                 <div
+                  data-wash-hit
                   data-testid="syslogs-file-row"
                   data-file-path={f.path}
-                  class={WASH_ROW_CLASS}
                   style={fileRowStyle(selected() === f.path)}
                   onClick={() => onPickFile(f.path)}
                   title={`${f.path}\nsize ${fmtBytes(f.size)} · modified ${fmtRelTime(f.mtime)} ago`}
@@ -421,13 +422,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               <span style={{ opacity: 0.7 }}>{statusError()}</span>
             </span>
             <button
+              data-wash-hit
               data-testid="syslogs-retry-root"
               onClick={retryAsRoot}
-              class={WASH_BTN_CLASS}
               style={{
-                '--wash-btn-bg': tokens.bgDenied,
-                '--wash-btn-border': tokens.borderDenied,
+                background: tokens.bgDenied,
+                color: tokens.fg,
+                border: `1px solid ${tokens.borderDenied}`,
+                'border-radius': `${tokens.radiusSm}`,
                 padding: '4px 10px',
+                cursor: 'pointer',
                 'font-size': tokens.fontSizeMd,
               }}
             >
@@ -441,12 +445,15 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               tail: <span style={{ opacity: 0.85 }}>{statusError() || 'failed'}</span>
             </span>
             <button
+              data-wash-hit
               onClick={() => requestStream(selected())}
-              class={WASH_BTN_CLASS}
               style={{
-                '--wash-btn-bg': 'transparent',
-                '--wash-btn-border': tokens.borderDanger,
+                background: 'transparent',
+                color: tokens.fg,
+                border: `1px solid ${tokens.borderDanger}`,
+                'border-radius': `${tokens.radiusSm}`,
                 padding: '3px 10px',
+                cursor: 'pointer',
                 'font-size': tokens.fontSizeMd,
               }}
             >

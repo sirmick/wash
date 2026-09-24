@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCaptureKeepsTheTailAndSaysSo(t *testing.T) {
@@ -92,5 +93,48 @@ func TestOutputIsEmptyWithoutCapture(t *testing.T) {
 	WithCapture(0)(s)
 	if s.cap != nil {
 		t.Error("WithCapture(0) allocated a buffer; a zero limit means off")
+	}
+}
+
+// An exited child's output may still be draining when a caller woken by
+// Done asks for it, or closes the session. Waiting for the drain is what
+// keeps a fast command's output — the reaper usually beats the copy.
+func TestAwaitDrainWaitsForAnExitedChildsOutput(t *testing.T) {
+	s := &Session{done: make(chan struct{}), drained: make(chan struct{})}
+	close(s.done)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		close(s.drained)
+	}()
+	start := time.Now()
+	s.awaitDrain()
+	if waited := time.Since(start); waited < 20*time.Millisecond {
+		t.Fatalf("returned after %s, before the output drained", waited)
+	}
+}
+
+// A child still running has no finished output to wait for, and Output is
+// also a live poll: it must not block.
+func TestAwaitDrainDoesNotWaitForARunningChild(t *testing.T) {
+	s := &Session{done: make(chan struct{}), drained: make(chan struct{})}
+	start := time.Now()
+	s.awaitDrain()
+	if waited := time.Since(start); waited > 10*time.Millisecond {
+		t.Fatalf("waited %s on a running child", waited)
+	}
+}
+
+// A grandchild holding the pty open means EOF never comes; the wait is
+// bounded so Close and Output cannot hang on it.
+func TestAwaitDrainIsBounded(t *testing.T) {
+	old := drainGrace
+	drainGrace = 20 * time.Millisecond
+	t.Cleanup(func() { drainGrace = old })
+	s := &Session{done: make(chan struct{}), drained: make(chan struct{})}
+	close(s.done)
+	start := time.Now()
+	s.awaitDrain()
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("waited %s past a %s grace", waited, drainGrace)
 	}
 }

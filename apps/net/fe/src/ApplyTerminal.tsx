@@ -132,8 +132,8 @@ export function ApplyTerminal(props: ApplyTerminalProps) {
               Keep changes? Auto-reverting in {secs()}s
             </span>
           </div>
-          <button class="wash-net-btn" data-testid="discard-button" onClick={() => props.onDiscard()}>Discard</button>
-          <button class="wash-net-btn primary" data-testid="keep-button" onClick={() => props.onKeep()}>Keep</button>
+          <button data-wash-hit class="wash-net-btn" data-testid="discard-button" onClick={() => props.onDiscard()}>Discard</button>
+          <button data-wash-hit class="wash-net-btn primary" data-testid="keep-button" onClick={() => props.onKeep()}>Keep</button>
         </div>
       </Show>
     </div>

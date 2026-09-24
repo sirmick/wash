@@ -331,6 +331,12 @@ struct Toplevel {
     struct wl_listener request_resize;
     struct wl_listener set_title;
 
+    // The client explicitly asked for server-side decorations over
+    // xdg-decoration (it draws no chrome of its own: RetroArch, SDL/mpv-style
+    // apps). Such a toplevel is mapped as a FRAMED wash window rather than
+    // chromeless; see decoration_apply.
+    bool server_side_deco = false;
+
     WindowSink sink;         // shared window + capture/encode pipeline
 };
 
@@ -680,7 +686,10 @@ void toplevel_map(struct wl_listener* listener, void* /*data*/) {
     // modern toolkit (GTK/Qt/Chromium/Firefox) draws its own decorations
     // (CSD), so a wash frame on top would double the titlebar (M8). The
     // guest's own button closes it; Super+drag in the shell moves it.
-    sink_open(t->sink, t->server->conn, ttl, w, h, /*chromeless=*/true,
+    // Exception: a client that explicitly requested SERVER_SIDE decorations
+    // draws none itself, so it gets the wash frame instead of no chrome.
+    sink_open(t->sink, t->server->conn, ttl, w, h,
+              /*chromeless=*/!t->server_side_deco,
               min_w, min_h, max_w, max_h);
     register_win(t->sink.win, WinRef::XDG, t);
 }
@@ -804,26 +813,44 @@ void toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
     delete t;
 }
 
-// --- xdg-decoration: force client-side (M8) ------------------------
+// --- xdg-decoration: client-side unless SERVER_SIDE is requested (M8) ----
 //
-// We answer CLIENT_SIDE: Wayland toplevels are rendered chromeless (no wash
-// frame), so the client must draw its OWN titlebar/buttons. This pairs with
-// the chromeless window (sink_open) to give exactly ONE set of decorations.
-// In practice the toolkits that matter (GTK4/libadwaita, Chromium) draw CSD
-// regardless of what we answer — forcing CLIENT_SIDE just makes the apps that
-// DO honour the protocol (Qt/KDE) also draw their own, instead of expecting a
-// server frame we no longer draw. One Decoration per toplevel; re-forced on
-// every client request_mode, self-cleaned on destroy.
+// Default answer CLIENT_SIDE: Wayland toplevels are rendered chromeless (no
+// wash frame), so the client draws its OWN titlebar/buttons — exactly ONE set
+// of decorations. The toolkits that matter (GTK4/libadwaita, Chromium) draw
+// CSD regardless, and a client that never asks keeps CLIENT_SIDE.
+//
+// But a client that explicitly requests SERVER_SIDE is saying it draws no
+// chrome (RetroArch, SDL/mpv-style apps without libdecor). Forcing
+// CLIENT_SIDE on those left a bare, borderless window with no titlebar to
+// move or close it by. Honour the request: answer SERVER_SIDE and map the
+// toplevel as a framed wash window (Toplevel::server_side_deco → sink_open).
+// Clients set the mode before their first buffer, so it is known at map; a
+// change after map applies from the next map. One Decoration per toplevel;
+// re-applied on every client request_mode, self-cleaned on destroy.
 struct Decoration {
     struct wlr_xdg_toplevel_decoration_v1* deco = nullptr;
     struct wl_listener request_mode;
     struct wl_listener destroy;
 };
 
+static void decoration_apply(Decoration* d) {
+    const bool ssd = d->deco->requested_mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+    wlr_xdg_toplevel_decoration_v1_set_mode(
+        d->deco, ssd ? WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+                     : WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    // xdg_surface->data is the Toplevel (server_new_xdg_toplevel).
+    auto* t = static_cast<Toplevel*>(d->deco->toplevel->base->data);
+    if (!t || t->server_side_deco == ssd) return;
+    t->server_side_deco = ssd;
+    wlr_log(WLR_INFO, "wash-display: xdg-decoration %s requested%s",
+            ssd ? "server-side" : "client-side",
+            t->sink.win ? " after map (applies from next map)" : "");
+}
+
 void decoration_request_mode(struct wl_listener* listener, void* /*data*/) {
     Decoration* d = wl_container_of(listener, d, request_mode);
-    wlr_xdg_toplevel_decoration_v1_set_mode(
-        d->deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    decoration_apply(d);
 }
 
 void decoration_destroy(struct wl_listener* listener, void* /*data*/) {
@@ -841,9 +868,8 @@ void server_new_toplevel_decoration(struct wl_listener* /*listener*/, void* data
     wl_signal_add(&deco->events.request_mode, &d->request_mode);
     d->destroy.notify = decoration_destroy;
     wl_signal_add(&deco->events.destroy, &d->destroy);
-    // Force the initial mode now (the client may not send a request).
-    wlr_xdg_toplevel_decoration_v1_set_mode(
-        deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    // Set the initial mode now (the client may not send a request).
+    decoration_apply(d);
 }
 
 // --- xdg popups (menus/dropdowns/tooltips) → parent-window overlay -----

@@ -15,49 +15,28 @@
 // folder it was given, it is HELD there, and the only way to know that still
 // holds is to have an agent genuinely try to leave.
 
-import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/router';
-
-const FAKE_DIR = fileURLToPath(new URL('../../out/e2e', import.meta.url));
+import { AGENT_APPS, FAKE_DIR, startAgentSession } from '../fixtures/agents';
 
 test.use({
   routerOpts: {
-    apps: ['session', 'agentd', 'ai', 'notify'],
+    apps: [...AGENT_APPS],
     extraEnv: { PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}` },
   },
 });
 
-// startAgentIn opens an Agent window, points it at `dir` through the
-// launcher's folder picker, and starts the fake adapter there. The cwd is
-// the sandbox boundary, so a spec about that boundary has to set it
-// explicitly rather than inherit $HOME.
+// startAgentIn points the Agents manager's launcher at `dir` and starts the
+// fake adapter there, returning the controller window agentd opened for the
+// session. The cwd is the sandbox boundary, so a spec about that boundary
+// has to set it explicitly rather than inherit $HOME.
 async function startAgentIn(page: Page, url: string, dir: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  await page.locator('button[title="Apps"]').click();
-  await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Agent', exact: true }).click();
-  const win = page.locator('wash-app-ai').first();
-  await expect(win).toBeVisible();
-
-  await win.getByRole('button', { name: 'Choose…' }).click();
-  const picker = page.locator('[data-testid="ai-folder-picker"]');
-  await expect(picker).toBeVisible();
-  const bar = picker.locator('[data-testid="fp-path"]');
-  await bar.click();
-  await bar.fill(dir);
-  await bar.press('Enter');
-  await picker.locator('[data-testid="fp-confirm"]').click();
-  await expect(picker).toBeHidden();
-
-  await win.locator('select').first().selectOption('codex');
-  await win.getByRole('button', { name: 'Start session' }).click();
-  const composer = win.locator('textarea');
-  await expect(composer).toBeVisible({ timeout: 20_000 });
-  return win;
+  return startAgentSession(page, undefined, { cwd: dir });
 }
 
 async function ask(win: ReturnType<Page['locator']>, _page: Page, text: string) {
@@ -158,8 +137,14 @@ test.describe('agent filesystem capability', () => {
     await ask(win, page, `readfile ${join(dir, 'notes.md')}`);
     await expect(win).toContainText('READ<<the-secret-inside', { timeout: 30_000 });
 
-    // Same session, a path outside the folder it was started in.
+    // Same session, a path outside the folder it was started in. Since
+    // per-session roots landed this ASKS rather than refusing silently
+    // (apps/agentd/be/roots.go) — the refusal a person never saw read to
+    // them as the agent being broken. Saying no still refuses.
     await ask(win, page, `readfile ${join(outside, 'private.txt')}`);
+    const deny = win.getByRole('button', { name: /^Deny/ }).first();
+    await expect(deny).toBeVisible({ timeout: 30_000 });
+    await deny.click();
     await expect(win).toContainText('READ<<REFUSED', { timeout: 30_000 });
     // And the content never appeared, in any form.
     await expect(win).not.toContainText('do-not-read-me');
@@ -177,6 +162,9 @@ test.describe('agent filesystem capability', () => {
     expect(readFileSync(join(dir, 'made.txt'), 'utf8')).toContain('hello-from-the-agent');
 
     await ask(win, page, `writefile ${join(outside, 'escaped.txt')} should-not-exist`);
+    const deny = win.getByRole('button', { name: /^Deny/ }).first();
+    await expect(deny).toBeVisible({ timeout: 30_000 });
+    await deny.click();
     await expect(win).toContainText('WROTE<<REFUSED', { timeout: 30_000 });
     expect(existsSync(join(outside, 'escaped.txt'))).toBe(false);
   });

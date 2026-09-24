@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -46,6 +47,22 @@ type Policy struct {
 	// consulted when Enabled. Defaults to true via AskDesktopOrDefault —
 	// asking is the point of turning the policy on.
 	AskDesktop *bool `json:"ask_desktop,omitempty"`
+	// Agents configures how each adapter is LAUNCHED, keyed by adapter id
+	// (see AgentConfig). Nothing here affects the approval table above.
+	Agents map[string]AgentConfig `json:"agents,omitempty"`
+	// MCPServers are offered to every session, on top of whatever an
+	// individual agent's entry adds.
+	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
+	// Connections add named ways to reach an adapter ("claude@openrouter"),
+	// replacing a built-in connection of the same name (see Connection).
+	Connections map[string]Connection `json:"connections,omitempty"`
+	// Stacks override the built-in stacks by key, tier by tier. Kept as raw
+	// JSON here: a stack's tiers are swarm.AgentProfile values, swarm
+	// imports this package, and agentd, which reads them, owns the check.
+	// Keeping them at all matters: Save rewrites the whole file, and a
+	// field this struct did not know would be dropped by the next "always
+	// allow" click.
+	Stacks map[string]json.RawMessage `json:"stacks,omitempty"`
 }
 
 // Rule is one line of the table.
@@ -99,7 +116,9 @@ func Load(path string) Policy {
 }
 
 // Append adds a rule to the policy file and saves it, creating the file if
-// needed. Used by the "always allow" button (§12).
+// needed. Used by the "always allow" button (§12). cwd, when non-empty,
+// scopes the rule to requests at or under that directory (Rule.Cwd);
+// RuleScope says which tools get one.
 //
 // Read-modify-write against the file rather than an in-memory copy: the
 // Agents settings pane is the other writer, and re-reading immediately
@@ -107,19 +126,19 @@ func Load(path string) Policy {
 // Appends (not prepends) so a hand-written deny higher up the table keeps
 // beating a click made later.
 //
-// A rule that is already present is a no-op, so double-clicking "always
-// allow" doesn't grow the file.
-func Append(path, match, decision string) error {
+// A rule that is already present — same match, decision AND scope — is a
+// no-op, so double-clicking "always allow" doesn't grow the file.
+func Append(path, match, decision, cwd string) error {
 	if match == "" {
 		return nil
 	}
 	p := Load(path)
 	for _, r := range p.Rules {
-		if r.Match == match && r.Decision == decision && r.Cwd == "" {
+		if r.Match == match && r.Decision == decision && r.Cwd == cwd {
 			return nil
 		}
 	}
-	p.Rules = append(p.Rules, Rule{Match: match, Decision: decision})
+	p.Rules = append(p.Rules, Rule{Match: match, Decision: decision, Cwd: cwd})
 	// Appending a rule implies the table is meant to be consulted.
 	p.Enabled = true
 	return Save(path, p)
@@ -198,6 +217,23 @@ func SuggestRule(tool, subject, cwd string) string {
 	return tool
 }
 
+// RuleScope is the directory an "always allow" rule for tool should be
+// confined to: the session's cwd for the shell tools, nothing for the
+// rest.
+//
+// A Bash rule is about a command, and a command means different things in
+// different trees — `make deploy*` allowed for a toy project must not
+// also be allowed in production's checkout. Write/Edit already carry the
+// cwd in their pattern (SuggestRule), and the read-only tools are the same
+// risk everywhere, so a scope would only make those rules brittle.
+func RuleScope(tool, cwd string) string {
+	switch tool {
+	case "Bash", "BashOutput", "KillShell":
+		return strings.TrimRight(cwd, "/")
+	}
+	return ""
+}
+
 // isSubcommand rejects second tokens that are really arguments — a path, a
 // URL, a quoted string. `git push` is a subcommand; `cat /etc/hosts` is not.
 func isSubcommand(s string) bool {
@@ -230,4 +266,180 @@ func urlHost(raw string) string {
 		return ""
 	}
 	return path.Base(s)
+}
+
+// ---- adapter configuration -------------------------------------------
+//
+// The approval table above is what wash decides. This is how the adapter
+// is STARTED, which wash had no opinion about at all: the command was a
+// hardcoded name on PATH, the args were a hardcoded list, the environment
+// was whatever the router inherited, and `mcpServers` on session/new was
+// literally always `[]` — so an agent under wash could not reach a single
+// MCP server, however many the same agent reached from a terminal.
+//
+// It lives in the same file as the policy because it is the same file on
+// disk: one place a person configures agents, not two.
+
+// AgentConfig is one adapter's entry under `agents`, keyed by adapter id
+// ("claude", "codex", "gemini").
+type AgentConfig struct {
+	// Command replaces the binary wash would have looked up. A wrapper
+	// script, a version in ~/bin, a nix store path. Empty keeps the
+	// built-in name.
+	Command string `json:"command,omitempty"`
+	// Args are EXTRA arguments, appended after the ones the adapter needs
+	// to speak ACP at all — those are not a user's to remove, and an
+	// adapter launched without them is not an ACP adapter.
+	Args []string `json:"args,omitempty"`
+	// Env is added to the adapter's environment. The router's own
+	// environment is still inherited: this adds and overrides, it does not
+	// replace, so an adapter does not lose PATH by gaining an API key.
+	Env map[string]string `json:"env,omitempty"`
+	// MCPServers are offered to this adapter in addition to the top-level
+	// list.
+	MCPServers []MCPServer `json:"mcp_servers,omitempty"`
+}
+
+// MCPServer is one MCP server, in wash's shape rather than ACP's — env as
+// a map, because a config file is written by a person.
+type MCPServer struct {
+	Name    string            `json:"name"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+// Connection is a named way to reach one adapter: the adapter plus the
+// environment it runs with. `agents` has one entry per adapter, so it cannot
+// say "Claude Code direct" and "Claude Code through OpenRouter" at once; a
+// connection can. The adapter itself, by its id, is the direct connection
+// and needs no entry.
+type Connection struct {
+	Adapter string `json:"adapter"`
+	// Env is added after the adapter's own `agents` env.
+	Env map[string]string `json:"env,omitempty"`
+	// Key names a secret in the key store (keys.json), and KeyEnv the
+	// variables it is given to. A connection whose key is not set cannot
+	// start anything.
+	Key    string   `json:"key,omitempty"`
+	KeyEnv []string `json:"key_env,omitempty"`
+}
+
+// Launch is how one adapter is actually started, after the built-in
+// defaults and the user's file have been merged.
+type Launch struct {
+	Command string
+	Args    []string
+	// Env is KEY=VALUE, to be APPENDED to the inherited environment.
+	Env        []string
+	MCPServers []MCPServer
+}
+
+// AgentFor returns the configuration for one adapter id, or the zero
+// value. Nil-safe: an absent file configures nothing, which is the
+// behaviour every box had before this existed.
+func (p *Policy) AgentFor(id string) AgentConfig {
+	if p == nil {
+		return AgentConfig{}
+	}
+	return p.Agents[id]
+}
+
+// Merge folds this policy's configuration for `id` over the built-in
+// launch for that adapter.
+//
+// Precedence, stated once because every part of it is a decision:
+//
+//   - command: the user's wins outright when set.
+//   - args: built-in FIRST, then the user's. The built-in args are what
+//     make the process an ACP adapter (`--experimental-acp`); appending
+//     keeps them and still lets a later flag override an earlier one,
+//     which is how every CLI resolves a repeat.
+//   - env: added to what the process inherits, never replacing it.
+//     Sorted, so a launch is reproducible and a test can read it.
+//   - MCP servers: the top-level list, then this agent's. A per-agent
+//     entry with the same name REPLACES the global one — naming it again
+//     is how you say "not that one, this one" — and order is otherwise
+//     preserved.
+func (p *Policy) Merge(id string, base Launch) Launch {
+	cfg := p.AgentFor(id)
+	out := Launch{Command: base.Command, Args: append([]string(nil), base.Args...)}
+	if cfg.Command != "" {
+		out.Command = cfg.Command
+	}
+	out.Args = append(out.Args, cfg.Args...)
+	out.Env = envList(cfg.Env)
+	var global []MCPServer
+	if p != nil {
+		global = p.MCPServers
+	}
+	out.MCPServers = mergeMCP(global, cfg.MCPServers)
+	return out
+}
+
+// envList renders an env map as sorted KEY=VALUE. An entry with an empty
+// key is dropped: it cannot be set and would corrupt the block.
+func envList(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if k != "" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+m[k])
+	}
+	return out
+}
+
+// mergeMCP concatenates the global and per-agent lists, letting a
+// per-agent entry replace a global one of the same name IN PLACE, so the
+// order a person wrote is the order the agent sees. Entries missing a
+// name or a command are dropped: an MCP server wash cannot start is worse
+// than one that was never offered.
+func mergeMCP(global, own []MCPServer) []MCPServer {
+	out := make([]MCPServer, 0, len(global)+len(own))
+	for _, s := range global {
+		if s.Name != "" && s.Command != "" {
+			out = append(out, s)
+		}
+	}
+	for _, s := range own {
+		if s.Name == "" || s.Command == "" {
+			continue
+		}
+		replaced := false
+		for i := range out {
+			if out[i].Name == s.Name {
+				out[i], replaced = s, true
+				break
+			}
+		}
+		if !replaced {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// EnvPairs renders an env map as sorted {key, value} pairs — the shape a
+// caller needs when the destination is not KEY=VALUE (ACP's mcpServers
+// wants name/value objects). Same ordering and same empty-key rule as
+// envList, so one launch is one order everywhere.
+func EnvPairs(m map[string]string) [][2]string {
+	out := make([][2]string, 0, len(m))
+	for _, kv := range envList(m) {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			out = append(out, [2]string{k, v})
+		}
+	}
+	return out
 }

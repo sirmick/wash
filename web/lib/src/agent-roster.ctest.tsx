@@ -7,7 +7,7 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
-import { AgentRoster, fmtAgo, fmtElapsed, stateColor, stateLabel, type RosterAsk, type RosterRow } from './agent-roster.tsx';
+import { AgentRoster, rosterTeams, fmtAgo, fmtElapsed, stateColor, stateLabel, type RosterAsk, type RosterRow } from './agent-roster.tsx';
 
 afterEach(cleanup);
 
@@ -15,9 +15,6 @@ const row = (over: Partial<RosterRow> = {}): RosterRow => ({
   key: 'i-1:5',
   agent: 'claude',
   state: 'working',
-  term_instance: 'i-1',
-  window_id: 1,
-  channel_id: 5,
   since_ms: 0,
   ...over,
 });
@@ -71,14 +68,28 @@ test('elapsed counts from the row anchor, not the push', () => {
   expect(getByTestId('agents-row-a').textContent).toContain('1m');
 });
 
-test('clicking a row asks to focus that agent’s terminal', () => {
-  const rows = [row({ key: 'a' }), row({ key: 'b', term_instance: 'i-2' })];
+test('running preview is bounded to two transcript lines', () => {
+  const { getByTestId } = render(() => (
+    <AgentRoster
+      rows={() => [row({ preview: 'first question\nlatest answer\nnot shown' })]}
+      startedAt={at}
+      now={() => 0}
+      onActivate={noop}
+    />
+  ));
+  const preview = getByTestId('agents-preview');
+  expect(preview.textContent).toContain('first question');
+  expect(preview.style.getPropertyValue('-webkit-line-clamp')).toBe('2');
+});
+
+test('clicking a row activates that session', () => {
+  const rows = [row({ key: 'a' }), row({ key: 'b' })];
   const seen: string[] = [];
   const { getByTestId } = render(() => (
-    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={(r) => seen.push(r.term_instance)} />
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={(r) => seen.push(r.key)} />
   ));
   fireEvent.click(getByTestId('agents-row-b'));
-  expect(seen).toEqual(['i-2']);
+  expect(seen).toEqual(['b']);
 });
 
 test('state language matches the terminal’s own tab dot', () => {
@@ -114,7 +125,6 @@ const ask = (over: Partial<RosterAsk> = {}): RosterAsk => ({
   dir: 'wash',
   suggested_rule: 'Bash(git push*)',
   row_key: 'i-1:5',
-  term_instance: 'i-1',
   age_ms: 0,
   ...over,
 });
@@ -389,4 +399,162 @@ test('a detached row with no reattach handler is simply inert', () => {
   ));
   fireEvent.click(getByTestId('agents-row-d'));
   expect(activated).toBe(0);
+});
+
+// Rename (docs/Review-findings.md P2 → agent): the agent names a session
+// once and first wins; the menu is where a person overrides it. The row
+// hands the host the row and the host opens its own dialog — the roster
+// owns no state, so it owns no name box.
+test('verbs: Rename… hands the host the row; a row with no session id cannot be named', () => {
+  const renamed: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', session_id: 'sess-1' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onRename={(r) => renamed.push(r.key)} />
+  ));
+  openRowMenu(getByTestId);
+  const item = screen.getByTestId('agents-menu-rename');
+  expect(item.hasAttribute('disabled')).toBe(false);
+  fireEvent.click(item);
+  expect(renamed).toEqual(['a']);
+  expect(screen.queryByTestId('agents-row-actions')).toBeNull();
+
+  cleanup();
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done', session_id: '' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onRename={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-rename').hasAttribute('disabled')).toBe(true);
+});
+
+// "Also allow a folder…" (docs/Review-findings.md P2 → agent): the cwd is
+// the default scope, not the limit. The row hands the host the row and the
+// host opens its own picker; the label counts what is already allowed,
+// because the hazard of widening a session is forgetting that you did.
+test('verbs: Also allow a folder… hands the host the row and counts existing roots', () => {
+  const widened: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster
+      rows={() => [row({ key: 'a', state: 'done', cwd: '/w/app', roots: ['/w/lib', '/w/gen'] })]}
+      startedAt={at}
+      now={() => 0}
+      onActivate={noop}
+      onAddRoot={(r) => widened.push(r.key)}
+    />
+  ));
+  openRowMenu(getByTestId);
+  const item = screen.getByTestId('agents-menu-add-root');
+  expect(item.textContent).toContain('(2)');
+  fireEvent.click(item);
+  expect(widened).toEqual(['a']);
+
+  cleanup();
+  // A session still confined to its cwd says so by saying nothing.
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onAddRoot={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-add-root').textContent).not.toContain('(');
+});
+
+// "Open terminal here" (docs/Review-findings.md P2 → cross-app): where the
+// agent is working is exactly where a person wants a shell. The row hands
+// the host the row; the host spawns wash-term with the directory.
+test('verbs: Open terminal here needs a cwd, and hands the host the row', () => {
+  const opened: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => [row({ key: 'a', state: 'done', cwd: '/w/app' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onOpenTerminal={(r) => opened.push(r.cwd ?? '')} />
+  ));
+  openRowMenu(getByTestId);
+  fireEvent.click(screen.getByTestId('agents-menu-open-terminal'));
+  expect(opened).toEqual(['/w/app']);
+
+  cleanup();
+  const r2 = render(() => (
+    <AgentRoster rows={() => [row({ key: 'b', state: 'done', cwd: '' })]} startedAt={at} now={() => 0}
+      onActivate={noop} onOpenTerminal={noop} />
+  ));
+  openRowMenu(r2.getByTestId);
+  expect(screen.getByTestId('agents-menu-open-terminal').hasAttribute('disabled')).toBe(true);
+});
+
+// A push that re-sends a row as a new object — a usage or preview patch, a
+// roster state flip — must not rebuild it. It used to, and an open verbs
+// menu on that row closed itself under the cursor a beat after each turn.
+test('a row survives being re-sent as a new object, and its open menu with it', async () => {
+  const { createSignal } = await import('solid-js');
+  const [rows, setRows] = createSignal<RosterRow[]>([row({ key: 'a', used: 1 })]);
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={rows} startedAt={at} now={() => 0} onActivate={noop} onDetach={noop} />
+  ));
+  const before = getByTestId('agents-row-a');
+  fireEvent.click(getByTestId('agents-verbs-btn'));
+  expect(screen.getByTestId('agents-menu-detach')).toBeTruthy();
+
+  setRows([row({ key: 'a', used: 2, preview: 'latest answer' })]);
+  expect(getByTestId('agents-row-a')).toBe(before);
+  expect(screen.queryByTestId('agents-menu-detach')).not.toBeNull();
+  expect(getByTestId('agents-preview').textContent).toContain('latest answer');
+
+  setRows([]);
+  expect(screen.queryByTestId('agents-row-a')).toBeNull();
+});
+
+// The verbs menu is portalled, but its clicks are delegated through the row
+// that owns it. Picking a verb must not also activate the row — for the
+// manager that raised the controller window over the menu mid-confirm.
+test('picking a verb from the row menu does not also activate the row', () => {
+  const activated: string[] = [];
+  const detached: string[] = [];
+  const { getByTestId } = render(() => (
+    <AgentRoster
+      rows={() => [row({ key: 'a' })]}
+      startedAt={at}
+      now={() => 0}
+      onActivate={(r) => activated.push(r.key)}
+      onDetach={(r) => detached.push(r.key)}
+      onStop={noop}
+    />
+  ));
+  fireEvent.click(getByTestId('agents-verbs-btn'));
+  fireEvent.click(screen.getByTestId('agents-menu-detach'));
+  expect(detached).toEqual(['a']);
+  expect(activated).toEqual([]);
+  // End asks first: the clicked item is swapped for the confirm mid-click.
+  fireEvent.click(getByTestId('agents-verbs-btn'));
+  fireEvent.click(screen.getByTestId('agents-menu-end'));
+  expect(screen.getByTestId('agents-menu-end-confirm')).toBeTruthy();
+  expect(activated).toEqual([]);
+  fireEvent.click(getByTestId('agents-row-a'));
+  expect(activated).toEqual(['a']);
+});
+
+test('team: members nest under their orchestrator, grouped by package, and say whose they are', () => {
+  const ws = (over: Partial<NonNullable<RosterRow['workspace']>>) => ({ id: 'w', name: 'Redoubt', lead_session: 'lead-s', member: '', ...over });
+  const rows = [
+    // Attention order from agentd: a member needing input sorts first.
+    row({ key: 'rev', state: 'needs-input', session_id: 'rev-s', workspace: ws({ member: 'reviewer', package: 'K5', package_title: 'Timer' }) }),
+    row({ key: 'solo', session_id: 'solo-s' }),
+    row({ key: 'lead', session_id: 'lead-s', workspace: ws({ orchestrator: true, member: 'orchestrator' }) }),
+    row({ key: 'impl', session_id: 'impl-s', workspace: ws({ member: 'implementer', package: 'K5', package_title: 'Timer' }) }),
+    row({ key: 'arch', session_id: 'arch-s', workspace: ws({ member: 'architect' }) }),
+    row({ key: 'stray', session_id: 'stray-s', workspace: ws({ member: 'scout', lead_session: 'elsewhere', name: 'Other' }) }),
+  ];
+  const { top, teams } = rosterTeams(rows);
+  expect(top).toEqual(['solo', 'lead', 'stray']);
+  expect(teams.get('lead')).toEqual([{ key: 'arch' }, { pkg: 'K5', label: 'K5 · Timer' }, { key: 'impl' }, { key: 'rev' }]);
+
+  const { getByTestId } = render(() => (
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={noop} />
+  ));
+  const team = getByTestId('agents-team-lead');
+  expect(team.contains(getByTestId('agents-row-impl'))).toBe(true);
+  expect(team.contains(getByTestId('agents-package-K5'))).toBe(true);
+  expect(team.contains(getByTestId('agents-row-solo'))).toBe(false);
+  expect(getByTestId('agents-row-lead').textContent).toContain('Orchestrator · Redoubt · 3 members');
+  expect(getByTestId('agents-row-rev').textContent).toContain('reviewer');
+  // An orphaned member stays top-level but still names its workspace.
+  expect(getByTestId('agents-row-stray').textContent).toContain('Member of Other');
 });

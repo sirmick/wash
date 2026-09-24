@@ -24,6 +24,7 @@ import (
 	"log"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -84,12 +85,16 @@ func init() {
 			Icon:            fmIcon,
 			Accent:          "#6090e0",
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{sdk.CapOpen},
-			Window:          &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
+			// CapOpen: routing double-click/Enter to the registered app.
+			// CapSpawn: the "Open with…" chooser and "Open terminal here"
+			// name the target app themselves (openwith.go).
+			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
+			Window:       &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 520},
 		},
 		Assets:             sub,
 		OnReady:            onReady,
 		OnClipboardChanged: onClipboardChanged,
+		OnCloseRequested:   onCloseRequested,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-fm",
@@ -112,6 +117,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		log.Printf("wash-fm: sandbox root=%s (from router session)", fmRoot)
 	}
 	fmFS = wfs.New(fmRoot)
+	launchDir = resolveLaunchDir(c.LaunchOpenPath())
 
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
@@ -132,8 +138,44 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	go pushFilesClipboardToFE(c)
 }
 
+// launchDir is the folder a `--open <path>` launch asked for (see
+// resolveLaunchDir); empty for a normal launch.
+var launchDir string
+
+// resolveLaunchDir turns the `--open <path>` launch argv (edit's "Reveal
+// in Files", or any spawn.request carrying an open path) into the folder
+// fm should land on: a directory is listed itself, a file's parent is
+// listed. Confined to fm's root like every other path; anything outside
+// or missing falls back to the default start so a bad argv never leaves
+// fm blank. Selecting the file within that listing is the FE's job and
+// is not wired yet — the launch only positions the window.
+func resolveLaunchDir(p string) string {
+	if p == "" {
+		return ""
+	}
+	abs, err := fmFS.Confine(p)
+	if err != nil {
+		log.Printf("wash-fm: launch open=%q rejected: %v", p, err)
+		return ""
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		log.Printf("wash-fm: launch open=%q rejected: %v", p, err)
+		return ""
+	}
+	dir := abs
+	if !st.IsDir() {
+		dir = filepath.Dir(abs)
+	}
+	log.Printf("wash-fm: launch open=%s dir=%s", abs, dir)
+	return dir
+}
+
 // initialPath is the directory fm shows on first paint.
 func initialPath() string {
+	if launchDir != "" {
+		return launchDir
+	}
 	if fmRoot != "" {
 		return fmRoot
 	}
@@ -207,7 +249,15 @@ func registerHandlers(b *sdk.Bus) {
 	fmWatch = sdk.NewWatchClient(c) // intercepts the service's fs_event pushes
 
 	sdk.Handle(b, "list", func(_ *sdk.Conn, _ string, req wfs.ListReq) (wfs.ListReply, error) {
-		return listReplyFor("", req.Path)
+		reply, err := listReplyFor("", req.Path)
+		// Audit line for every explicit FE list (not the initial paint):
+		// e2e uses it to prove WHICH directory a Reload re-requested.
+		if err != nil {
+			log.Printf("fm: list path=%q: %v", req.Path, err)
+		} else {
+			log.Printf("fm: list path=%q n=%d truncated=%v total=%d", reply.Path, len(reply.Entries), reply.Truncated, max(reply.Total, len(reply.Entries)))
+		}
+		return reply, err
 	})
 	sdk.Handle(b, "read", func(_ *sdk.Conn, _ string, req wfs.ReadReq) (wfs.ReadReply, error) {
 		return readFile(req.Path)
@@ -301,6 +351,22 @@ func registerHandlers(b *sdk.Bus) {
 	// Download egress (confined fs → browser save); see download.go.
 	registerDownloadHandlers(b)
 
+	// Recursive name search under a folder (the filter box's "search
+	// subtree" mode); see search.go.
+	registerSearchHandlers(b)
+
+	// "Open with…" chooser (candidate apps + the explicit spawn); see
+	// openwith.go.
+	registerOpenWithHandlers(b)
+
+	// Archives: "Extract here" / "Compress", both as bulk jobs; see
+	// archive.go.
+	registerArchiveHandlers(b)
+
+	// Duplicate (Ctrl+D) — free "(copy)" names + a named bulk job; see
+	// duplicate.go.
+	registerDuplicateHandlers(b)
+
 	// Image bytes / thumbnails over a raw channel, for the folder-grid
 	// preview. Confined to the same fs root as every other fm operation.
 	thumbs.RegisterServer(b, fmFS.Confine)
@@ -311,8 +377,12 @@ func registerHandlers(b *sdk.Bus) {
 	sdk.HandleVoid(b, "open", func(conn *sdk.Conn, _ string, req openReq) error {
 		abs, err := fmFS.Confine(req.Path)
 		if err != nil {
+			log.Printf("fm: open path=%q: %v", req.Path, err)
 			return fsErr(err, req.Path)
 		}
+		// Audit line: the router logs only FAILED opens, so this is the
+		// durable trace that a double-click / Enter reached open routing.
+		log.Printf("fm: open path=%q", abs)
 		return conn.OpenPath(abs)
 	})
 
@@ -333,7 +403,19 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		return b.Emit("list_ok", reply)
 	})
-	sdk.HandlePersist(b)
+	// save_state is sdk.HandlePersist plus one read: the blob's path is
+	// the folder this window is showing, which is what closing it records
+	// for the start menu (recent.go).
+	sdk.HandleVoid(b, "save_state", func(c *sdk.Conn, _ string, req persistReq) error {
+		if err := c.SaveState(req.State); err != nil {
+			return err
+		}
+		if p, ok := req.State["path"].(string); ok {
+			shownDir.set(p)
+		}
+		log.Printf("bus: com.wash.fm save_state persisted")
+		return nil
+	})
 	sdk.HandleVoid(b, "clipboard_copy_path", func(conn *sdk.Conn, _ string, req clipboardCopyPathReq) error {
 		if req.Path == "" {
 			return nil
@@ -369,11 +451,16 @@ func listReplyFor(_, path string) (wfs.ListReply, error) {
 	if path == "" {
 		return wfs.ListReply{}, sdk.Errf(sdk.ErrBadRequest, "missing path")
 	}
-	entries, abs, truncated, err := fmFS.List(path, maxListEntries)
+	entries, abs, total, err := fmFS.ListN(path, maxListEntries)
 	if err != nil {
 		return wfs.ListReply{}, fsErr(err, path)
 	}
-	return wfs.ListReply{Path: abs, Entries: entries, Truncated: truncated}, nil
+	reply := wfs.ListReply{Path: abs, Entries: entries}
+	if total > len(entries) {
+		reply.Truncated = true
+		reply.Total = total
+	}
+	return reply, nil
 }
 
 // readFile loads up to maxReadBytes of path. Binary files report a

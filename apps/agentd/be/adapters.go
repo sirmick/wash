@@ -18,17 +18,21 @@ package agentd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentpolicy"
 	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/pkg/sdk"
 )
@@ -78,12 +82,78 @@ var adapters = []Adapter{
 		// Gemini speaks ACP natively rather than through an adapter.
 		Args: []string{"--experimental-acp"},
 	},
+	{
+		ID:      "opencode",
+		Name:    "OpenCode",
+		Command: "opencode",
+		// Native ACP, like Gemini; the npm package ships the binary.
+		Args:    []string{"acp"},
+		Package: "opencode-ai",
+	},
+}
+
+// opencodePermissions makes OpenCode ask before it edits a file or runs a
+// command. Its default is to do both inside the session folder without
+// asking (verified 2026-09-24, OpenCode 1.18.32), so no approval ever
+// reached wash's queue. Asked, it sends session/request_permission with
+// kind "execute" and rawInput.command, the same shape Claude sends.
+const opencodePermissions = `{"permission":{"edit":"ask","bash":"ask"}}`
+
+// npx installs and launches through one shared cache. Two cold launches can
+// otherwise observe each other's half-populated dependency tree: one of the
+// failures seen in practice found @openai/codex but not its native optional
+// package, while another found codex-acp but not @openai/codex at all. Hold the
+// lock only through adapter initialization; live sessions remain concurrent.
+var npxLaunchMu sync.Mutex
+
+// builtinEnv is the environment wash adds before agents.json's, which is
+// appended after it and so wins.
+//
+// codex-acp is pointed at the Codex the user already installed. Without this
+// it resolves its bundled @openai/codex dependency from npx's transient
+// cache, needlessly depending on a second copy and its platform package. A
+// configured codex command keeps complete control of its own environment.
+//
+// OpenCode is told to ask for permission (opencodePermissions), configured
+// command or not: approvals are wash's to see, not an implementation detail.
+func (a Adapter) builtinEnv(cfg agentpolicy.AgentConfig) []string {
+	if a.ID == "opencode" {
+		return []string{"OPENCODE_CONFIG_CONTENT=" + opencodePermissions}
+	}
+	if a.ID != "codex" || cfg.Command != "" {
+		return nil
+	}
+	if os.Getenv("CODEX_PATH") != "" {
+		return nil
+	}
+	p, err := exec.LookPath("codex")
+	if err != nil {
+		return nil
+	}
+	return []string{"CODEX_PATH=" + p}
 }
 
 // launch resolves how to actually start an adapter: its own binary if
 // installed, else npx with the package. Returns ok=false when neither is
 // possible, with a note a human can act on.
 func (a Adapter) launch() (cmd string, args []string, note string, ok bool) {
+	return a.launchWith(agentpolicy.AgentConfig{})
+}
+
+// launchWith is launch with the user's agents.json entry applied. A
+// configured `command` replaces the built-in name outright and skips the
+// npx fallback: someone who named a binary meant that binary, and quietly
+// running a package from the registry instead would be the opposite of
+// what they asked for. It is still resolved through PATH, so a bare name
+// works as well as an absolute path.
+func (a Adapter) launchWith(cfg agentpolicy.AgentConfig) (cmd string, args []string, note string, ok bool) {
+	if cfg.Command != "" {
+		p, err := exec.LookPath(cfg.Command)
+		if err != nil {
+			return "", nil, cfg.Command + " (from agents.json) not found", false
+		}
+		return p, a.Args, "configured: " + cfg.Command, true
+	}
 	if p, err := exec.LookPath(a.Command); err == nil {
 		return p, a.Args, "", true
 	}
@@ -100,18 +170,35 @@ func (a Adapter) launch() (cmd string, args []string, note string, ok bool) {
 }
 
 // Probe reports which adapters this box can actually launch. Cheap enough
-// to call whenever the launcher opens — it is a PATH lookup per row.
-func Probe() []Adapter {
+// to call on every sweep — it is a PATH lookup per row.
+func Probe(pol agentpolicy.Policy) []Adapter {
 	out := make([]Adapter, 0, len(adapters))
 	for _, a := range adapters {
-		cmd, _, note, ok := a.launch()
+		_, _, note, ok := a.launchWith(pol.AgentFor(a.ID))
 		a.Available, a.Note = ok, note
-		if ok {
-			log.Printf("agentd: adapter %s -> %s %s", a.ID, cmd, note)
-		}
 		out = append(out, a)
 	}
 	return out
+}
+
+// refreshLaunchers republishes what the launcher offers when it changed:
+// adapters installed or removed, agents.json edited, a key set or cleared.
+// Re-read on every sweep, like the default prompt, because each of those
+// can happen outside wash. Reports whether anything changed.
+func refreshLaunchers(s *State) bool {
+	pol, keys := hostedPolicy(), keyStore()
+	adapters, stacks, keyViews := Probe(pol), publishStacks(pol, keys), publishKeys(pol, keys)
+	if reflect.DeepEqual(adapters, s.Adapters) && reflect.DeepEqual(stacks, s.Stacks) && reflect.DeepEqual(keyViews, s.Keys) {
+		return false
+	}
+	s.Adapters, s.Stacks, s.Keys = adapters, stacks, keyViews
+	for _, a := range adapters {
+		log.Printf("agentd: adapter %s available=%v %s", a.ID, a.Available, a.Note)
+	}
+	for _, st := range stacks {
+		log.Printf("agentd: stack %s available=%v %s", st.ID, st.Available, st.Note)
+	}
+	return true
 }
 
 func adapterByID(id string) (Adapter, bool) {
@@ -123,22 +210,44 @@ func adapterByID(id string) (Adapter, bool) {
 	return Adapter{}, false
 }
 
-// startHosted launches an adapter, completes the handshake, opens a
-// session and puts it on the roster. The returned session is live; the
+// sessionLaunch is how a session starts: the connection it runs through,
+// the stack tier it was chosen from, and a workspace member's restrictions.
+// The zero value is an ordinary session on the adapter direct, which may go
+// on to lead a workspace.
+type sessionLaunch struct {
+	// connection names an agentpolicy.Connection for the adapter; "" is
+	// the adapter direct.
+	connection string
+	// stack and tier are where the session's settings came from, kept so
+	// History can say so and the launcher can default to the stack used
+	// last. They change nothing about the launch itself.
+	stack, tier string
+	// capability "reviewer" restricts the provider's tools (Claude only).
+	capability string
+	// member is a session launched into a workspace rather than one that
+	// may lead it: its bridge lists only the tools it may call, and it
+	// cannot approve its own way out of plan mode.
+	member bool
+	// noSubagents removes the provider's own subagent tool (Claude only).
+	noSubagents bool
+}
+
+// startHostedCapability launches an adapter, completes the handshake, opens
+// a session and puts it on the roster. The returned session is live; the
 // caller prompts it.
 //
 // Every early failure kills the process before returning — a half-started
 // adapter is a stray child that outlives the desktop, which is the bug
 // class the child-process audit already cost us once.
-func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
-	h, err := dialAdapter(agentID, cwd, svcConn)
+func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
+	h, err := dialAdapterCapability(agentID, cwd, svcConn, launch)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
 	defer cancel()
 
-	res2, err := h.client.NewSession(ctx, h.cwd, nil)
+	res2, err := h.client.NewSession(ctx, h.cwd, h.mcp, h.sessionMeta)
 	if err != nil {
 		h.stop()
 		if len(h.authMethods) > 0 {
@@ -150,9 +259,13 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	h.sessionID = res2.SessionID
 	// Name the transcript now: before the adapter answers there is no
 	// session id to file it under, and every event from here on persists.
-	bindTranscript(h.key, h.sessionID, agentID, h.cwd, time.Now())
+	bindTranscript(h.key, h.sessionID, h.record(), h.cwd, time.Now())
 	h.applyModes(res2.Modes)
 	h.register()
+	if workspaces != nil {
+		workspaces.bindSession(h)
+	}
+	go h.watchExit()
 	// The settings block arrives with the session, not only on later
 	// updates — without this the controls were empty until the agent
 	// happened to change something itself.
@@ -161,14 +274,23 @@ func startHosted(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 	// the LAST summary, so a session the router outlives still says what
 	// it was running rather than only cleanly-retired ones.
 	h.noteSession("", time.Now())
-	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d",
-		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes))
+	h.sessionReady.Store(true)
+	log.Printf("agentd: acp session started key=%s agent=%s session=%s cwd=%s mode=%s modes=%d mcp=%d",
+		h.key, agentID, res2.SessionID, h.cwd, res2.Modes.CurrentModeID, len(res2.Modes.AvailableModes), len(h.mcp))
 	return h, nil
 }
 
-// dialAdapter launches an adapter and completes the handshake. Shared by
-// start and resume, which differ only in session/new vs session/load.
-func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
+// dialAdapterCapability launches an adapter and completes the handshake.
+// Shared by start and resume, which differ only in session/new vs
+// session/load.
+func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
+	capability := launch.capability
+	if capability != "" && (capability != "reviewer" || agentID != "claude") {
+		return nil, fmt.Errorf("capability %q unsupported by %s; no session started", capability, agentID)
+	}
+	if launch.noSubagents && agentID != "claude" {
+		return nil, fmt.Errorf("subagents \"deny\" unsupported by %s; no session started", agentID)
+	}
 	a, ok := adapterByID(agentID)
 	if !ok {
 		return nil, fmt.Errorf("unknown agent %q", agentID)
@@ -178,12 +300,43 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		return nil, err
 	}
 
-	bin, args, _, ok := a.launch()
+	// agents.json (internal/agentpolicy): the command override, extra
+	// args, and the environment to add. Read at LAUNCH, not at boot, so
+	// editing the file takes effect on the next session rather than the
+	// next router restart.
+	pol := hostedPolicy()
+	cfg := pol.AgentFor(agentID)
+	bin, args, note, ok := a.launchWith(cfg)
 	if !ok {
-		return nil, fmt.Errorf("agent %q is not installed here: %s", agentID, a.Note)
+		return nil, fmt.Errorf("agent %q is not installed here: %s", agentID, note)
 	}
-	cmd := exec.Command(bin, args...)
+	if strings.HasPrefix(note, "via npx ") {
+		npxLaunchMu.Lock()
+		defer npxLaunchMu.Unlock()
+	}
+	run := pol.Merge(agentID, agentpolicy.Launch{Command: bin, Args: args})
+	// Built-ins come first so an explicit agents.json environment entry is
+	// appended later and retains the documented user-wins precedence. The
+	// connection's environment is more specific than the adapter's, so it
+	// comes last of all.
+	connEnv, err := connectionEnv(pol, keyStore(), agentID, launch.connection)
+	if err != nil {
+		return nil, err
+	}
+	run.Env = append(append(a.builtinEnv(cfg), run.Env...), connEnv...)
+	cmd := exec.Command(run.Command, run.Args...)
 	cmd.Dir = cwd
+	// Added to the inherited environment, not substituted for it: an
+	// adapter that gained an API key must not have lost PATH.
+	if len(run.Env) > 0 {
+		cmd.Env = append(os.Environ(), run.Env...)
+		log.Printf("agentd: adapter %s env+=%d args=%d", agentID, len(run.Env), len(run.Args))
+	}
+	// Its own process group, so stop() can kill the whole tree. The common
+	// launch is `npx --yes <package>`, which is a node wrapper around the
+	// node adapter around the agent: killing the pid alone reaped the
+	// wrapper and orphaned the rest, still holding its half of the wire.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -200,10 +353,26 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		return nil, fmt.Errorf("start %s: %w", bin, err)
 	}
 
+	hostedMu.Lock()
+	hostedSeq++
+	key := "acp:" + itoa(hostedSeq)
+	hostedMu.Unlock()
+
+	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, connection: launch.connection, stack: launch.stack, tier: launch.tier, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
+
+	// Only the injected coordination server is available to restricted reviewers.
+	if capability == "reviewer" {
+		h.mcp = nil
+	}
+
 	// The adapter's own diagnostics. Without this, "needs authentication"
-	// is indistinguishable from "hung".
+	// is indistinguishable from "hung". The tail is also kept on the
+	// session, because when the adapter dies the last thing it said is
+	// the one line that explains why — and it belongs in the transcript,
+	// not only in a log the person watching the window never sees.
 	go func() {
-		b, _ := io.ReadAll(stderr)
+		defer close(h.stderrDone)
+		b, _ := io.ReadAll(io.TeeReader(stderr, h.stderrTail()))
 		if len(b) > 0 {
 			log.Printf("agentd: adapter %s stderr: %s", a.ID, truncate(b, 2000))
 		}
@@ -214,18 +383,21 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		once.Do(func() {
 			_ = stdin.Close()
 			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+				killGroup(cmd.Process)
 			}
 			_ = cmd.Wait()
 		})
 	}
 
-	hostedMu.Lock()
-	hostedSeq++
-	key := "acp:" + itoa(hostedSeq)
-	hostedMu.Unlock()
-
-	h := &hosted{key: key, agent: a.ID, cwd: cwd, stop: stop, conn: svcConn}
+	h.stop = stop
+	if workspaces != nil {
+		if err := workspaces.inject(h, launch.member); err != nil {
+			h.stop()
+			return nil, err
+		}
+		originalStop := h.stop
+		h.stop = func() { workspaces.revoke(h); originalStop() }
+	}
 	h.client = acp.NewClient(stdout, stdin, h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
@@ -247,37 +419,129 @@ func dialAdapter(agentID, cwd string, svcConn *sdk.Conn) (*hosted, error) {
 		Terminal: true,
 	}, acp.Implementation{Name: "wash", Title: "wash", Version: version.Version})
 	if err != nil {
-		stop()
+		h.stop()
 		return nil, fmt.Errorf("initialize %s: %w", a.ID, err)
 	}
 	// The adapter's auth methods are kept for the error message the
 	// caller may need: authMethods advertises what is AVAILABLE, not what
 	// is required, so it is only meaningful once a session call fails.
 	h.authMethods = res.AuthMethods
+	switch {
+	case capability != "":
+		h.sessionMeta, err = reviewerMetadata(agentID, res.AgentInfo)
+	case launch.noSubagents:
+		h.sessionMeta, err = noSubagentMetadata(res.AgentInfo)
+	}
+	if err != nil {
+		h.stop()
+		return nil, err
+	}
 	return h, nil
 }
 
-// promptHosted runs one turn. Returns when the agent stops; the roster
-// follows along from SessionUpdate underneath.
-func promptHosted(h *hosted, text string) {
-	if h.conn != nil {
+// promptHosted runs one turn. Returns when the agent stops — with the
+// next queued prompt to run, or "" — and the roster follows along from
+// SessionUpdate underneath. Callers go through hosted.submitPrompt, which
+// owns the turn claim; calling this directly is only right when the turn
+// is already claimed (tests).
+func promptHosted(h *hosted, t turn) (next turn) {
+	text := t.text
+	if t.origin != "" {
+		body := t.displayText
+		if body == "" {
+			body = text
+		}
+		e := appendEvent(h.key, Event{Kind: "collaboration", Text: t.origin + "\n\n" + body}, time.Now())
+		if h.conn != nil {
+			pushEvent(h.conn, h.key, e)
+		}
+	} else if h.conn != nil {
 		pushEvent(h.conn, h.key, appendPrompt(h.key, text, time.Now()))
+		queuePreviewPatch(h.key)
+	} else {
+		appendPrompt(h.key, text, time.Now())
 	}
 	h.beginTurn()
-	res, err := h.client.Prompt(context.Background(), h.sessionID, acp.Text(text))
+	// Text first, then the attachments: the sentence is what frames them,
+	// and an adapter reading the blocks in order should see the question
+	// before the screenshot it is about.
+	blocks := make([]acp.ContentBlock, 0, 1+len(t.blocks))
+	if text != "" {
+		blocks = append(blocks, acp.Text(text))
+	}
+	blocks = append(blocks, t.blocks...)
+	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
+	if workspaces != nil {
+		workspaces.captureUsage(h)
+		var end error
+		interrupted := h.interrupted.Swap(false)
+		if err == nil && res.StopReason == acp.StopCancelled && !interrupted {
+			end = workspaces.store.TurnStopped(h.sessionID, t.mailIDs)
+		} else {
+			end = workspaces.store.TurnEnded(h.sessionID, t.mailIDs, err != nil)
+		}
+		if e := end; e != nil {
+			log.Printf("agentd: workspace turn outcome: %v", e)
+		}
+		defer workspaces.signal()
+	}
 	switch {
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
 		// "failed", not "done": a turn that died on an adapter error is
 		// not a turn that finished, and reporting it as done made every
 		// surface paint it GREEN — indistinguishable from success
-		// (docs/AGENT_MESSENGER.md M5).
-		h.endTurn("failed", "error")
+		// (docs/AGENT_MESSENGER.md M5). A turn that died because the
+		// adapter went away is "exited", which the exit watcher explains.
+		if h.closing.Load() {
+			h.endTurn("failed", "exited")
+		} else {
+			h.endTurn("failed", "error")
+			// The error itself goes in the transcript. A red dot alone
+			// said nothing about WHY — expired auth, a rate limit, a
+			// refused request all looked the same — and the person had
+			// to find the router log to learn which. The composer stays
+			// usable: the session is still up, so the next prompt is the
+			// retry.
+			h.note("The turn failed: " + turnError(err) + "\n\nThe session is still open — send again to retry.")
+		}
+		return turn{}
 	case res.StopReason == acp.StopCancelled:
-		h.endTurn("done", "cancelled")
+		return h.endTurn("done", "cancelled")
 	default:
-		h.endTurn("done", res.StopReason)
+		return h.endTurn("done", res.StopReason)
 	}
+}
+
+// killGroup ends a process started with Setpgid and everything it forked.
+// SIGKILL, not SIGTERM: an adapter is a stateless bridge (the agent's
+// own session state is the vendor's and already on disk), and this runs
+// on the bus handler's goroutine, so there is nothing to wait politely
+// for. The direct kill is the fallback for a process that somehow is not
+// its own group leader.
+func killGroup(p *os.Process) {
+	if err := syscall.Kill(-p.Pid, syscall.SIGKILL); err != nil {
+		_ = p.Kill()
+	}
+}
+
+// turnError is the adapter's error as a person should read it. An RPC
+// error's message is the adapter's own words ("authentication required",
+// "rate limit exceeded") and is kept verbatim; the client's framing
+// prefix is dropped, and a closed wire is named for what it means.
+func turnError(err error) string {
+	if errors.Is(err, acp.ErrClosed) {
+		return "the agent's adapter has gone away"
+	}
+	msg := err.Error()
+	msg = strings.TrimPrefix(msg, "acp: ")
+	if i := strings.Index(msg, "rpc "); i == 0 {
+		// "rpc -32000: <message>" → "<message>"
+		if j := strings.Index(msg, ": "); j > 0 {
+			msg = msg[j+2:]
+		}
+	}
+	return msg
 }
 
 // authNames renders the auth methods an adapter offers, for an error a
@@ -344,8 +608,17 @@ func resolveCwd(cwd string) (string, error) {
 // notifications before it answers, so the transcript is repopulated by
 // the same handler that fills it live. The history comes back on screen,
 // rather than as a terminal scrolled to wherever it happened to be.
-func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
-	h, err := dialAdapter(agentID, cwd, svcConn)
+//
+// It launches through the connection the session was started with: a
+// session opened on OpenRouter resumed on the adapter direct would come back
+// without the key, and without the models it was using.
+func resumeHosted(rec launchRecord, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
+	launch := savedWorkspaceLaunch(sessionID)
+	launch.connection, launch.stack, launch.tier = rec.Connection, rec.Stack, rec.Tier
+	return resumeHostedCapability(rec.Agent, cwd, sessionID, svcConn, launch)
+}
+func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
+	h, err := dialAdapterCapability(agentID, cwd, svcConn, launch)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +633,11 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	// Register BEFORE loading: the replay arrives as notifications, and
 	// they need a roster row and a transcript to land in.
 	h.register()
-	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, nil)
+	if workspaces != nil {
+		workspaces.bindSession(h)
+	}
+	go h.watchExit()
+	res, err := h.client.LoadSession(ctx, sessionID, h.cwd, h.mcp, h.sessionMeta)
 	if err != nil {
 		h.retire()
 		return nil, fmt.Errorf("reopen %s: %w", sessionID, err)
@@ -374,7 +651,8 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	h.applyConfigs(res.ConfigOptions)
 	// The replay has landed by the time LoadSession answers, so this is
 	// the moment the stored and replayed records can be settled.
-	reconcileResume(h.key, sessionID, time.Now())
+	reconcileResume(h.key, sessionID, agentID, h.cwd, time.Now())
+	h.journal("agent.resume", "session resumed")
 	// Logged like the started path, so "resumed with settings" and
 	// "resumed without" are visible rather than inferred. A started
 	// session reported mode=default modes=6 and a resumed one reported
@@ -382,5 +660,26 @@ func resumeHosted(agentID, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, e
 	log.Printf("agentd: acp session resumed key=%s agent=%s session=%s cwd=%s mode=%s modes=%d configs=%d",
 		h.key, agentID, sessionID, h.cwd, res.Modes.CurrentModeID, len(res.Modes.AvailableModes), len(res.ConfigOptions))
 	h.setState("done", "resumed")
+	h.sessionReady.Store(true)
 	return h, nil
+}
+
+// acpMCPServers converts wash's config shape (env as a map, because a
+// person writes it) to ACP's (env as a list of name/value pairs). Returns
+// nil for an empty list, which the client turns into the `[]` the spec
+// requires — the value wash sent unconditionally before there was
+// anything to put in it.
+func acpMCPServers(list []agentpolicy.MCPServer) []acp.McpServer {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]acp.McpServer, 0, len(list))
+	for _, s := range list {
+		m := acp.McpServer{Name: s.Name, Command: s.Command, Args: s.Args}
+		for _, kv := range agentpolicy.EnvPairs(s.Env) {
+			m.Env = append(m.Env, acp.EnvVar{Name: kv[0], Value: kv[1]})
+		}
+		out = append(out, m)
+	}
+	return out
 }

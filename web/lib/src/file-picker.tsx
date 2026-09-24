@@ -33,8 +33,6 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import type { Component, JSX } from 'solid-js';
 import { File as FileIcon, Folder as FolderIcon, Link2 } from 'lucide-solid';
 import { tokens } from './tokens';
-import { Button } from './button';
-import { WASH_BTN_CLASS, WASH_ROW_CLASS } from './controls';
 import { Overlay, ConfirmDialog } from './overlay';
 import { isDirLike } from './file-tree';
 
@@ -262,10 +260,31 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
   // free the BE), so any disk changes that happened in the gap
   // are invisible to the watcher. A re-list closes that gap so
   // the user never sees a stale picker.
+  //
+  // The open transition also re-seeds the per-open props. start and
+  // defaultName used to be read once, when the component was created —
+  // but hosts keep one <FilePicker> mounted and toggle `open`, so a
+  // Save As suggested name, or a host that wants THIS open to land in a
+  // different folder (edit re-saving a file that vanished from disk),
+  // never reached the dialog. A start that has not changed since the
+  // last open is left alone so the picker still remembers where the
+  // user navigated.
   let prevOpen = false;
+  let lastStart = props.start || '';
   createEffect(() => {
     const open = props.open;
-    const c = cwd();
+    let c = cwd();
+    if (open && !prevOpen) {
+      setSaveName(props.defaultName ?? '');
+      setSelectedName('');
+      const start = props.start || '';
+      if (start && start !== lastStart) {
+        c = start;
+        setCwd(start);
+        setPathInput(start);
+      }
+      lastStart = start;
+    }
     const want = open ? c : '';
     if (want !== watchedPath) {
       if (watchedPath) sendUnwatch(watchedPath);
@@ -598,43 +617,47 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
 
           {/* path bar */}
           <div style={pathBarStyle}>
-            <Button
-              variant="ghost"
+            <button
+              data-wash-hit
+              type="button"
               data-testid="fp-back"
               onClick={goBack}
               disabled={!canGoBack()}
-              style={iconBtnStyle}
+              style={{ ...iconBtnStyle, opacity: canGoBack() ? 1 : 0.35 }}
               title="Back to previous directory"
             >
               ←
-            </Button>
-            <Button
-              variant="ghost"
+            </button>
+            <button
+              data-wash-hit
+              type="button"
               data-testid="fp-up"
               onClick={goUp}
               style={iconBtnStyle}
               title="Up one directory"
             >
               ↑
-            </Button>
-            <Button
-              variant="ghost"
+            </button>
+            <button
+              data-wash-hit
+              type="button"
               data-testid="fp-root"
               onClick={goRoot}
               style={iconBtnStyle}
               title="Go to filesystem root"
             >
               /
-            </Button>
-            <Button
-              variant="ghost"
+            </button>
+            <button
+              data-wash-hit
+              type="button"
               data-testid="fp-home"
               onClick={goHome}
               style={iconBtnStyle}
               title="Go to home directory"
             >
               ~
-            </Button>
+            </button>
             <input
               type="text"
               data-testid="fp-path"
@@ -665,13 +688,13 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
           <div style={headerRowStyle}>
             {(['name', 'size', 'mtime'] as SortKey[]).map((k) => (
               <button
+                data-wash-hit
                 type="button"
                 data-testid={`fp-col-${k}`}
                 onClick={() => {
                   if (sortKey() === k) setSortDesc(!sortDesc());
                   else { setSortKey(k); setSortDesc(false); }
                 }}
-                class={WASH_BTN_CLASS}
                 style={headerCellStyle(k)}
               >
                 {k === 'name' ? 'Name' : k === 'size' ? 'Size' : 'Modified'}
@@ -697,12 +720,12 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
                 const sel = () => selectedName() === e.name;
                 return (
                   <div
+                    data-wash-hit
                     data-testid={`fp-entry-${e.name}`}
                     data-type={e.type}
                     data-selected={sel() ? 'true' : undefined}
                     onClick={() => onRowClick(e)}
                     onDblClick={() => onRowDblClick(e)}
-                    class={WASH_ROW_CLASS}
                     style={rowStyle(sel())}
                   >
                     <span style={rowNameCellStyle}>
@@ -758,15 +781,16 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
             </Show>
             <div style={{ flex: 1 }} />
             <button
+              data-wash-hit
               type="button"
               data-testid="fp-cancel"
               onClick={props.onCancel}
-              class={WASH_BTN_CLASS}
               style={actionBtnStyle(false)}
             >
               Cancel
             </button>
             <button
+              data-wash-hit
               type="button"
               data-testid="fp-confirm"
               onClick={() => void onConfirmClick()}
@@ -775,7 +799,6 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
                 (props.mode === 'save' && !saveName().trim())
                 // directory mode is always actionable (falls back to cwd)
               }
-              class={WASH_BTN_CLASS}
               style={actionBtnStyle(true)}
             >
               {props.mode === 'open' ? 'Open' : props.mode === 'directory' ? 'Open Folder' : 'Save'}
@@ -821,12 +844,15 @@ const pathBarStyle: JSX.CSSProperties = {
   padding: '8px 12px',
 };
 
-// Footprint only; <Button variant="ghost"> carries the chrome and the
-// hover / press / focus states.
 const iconBtnStyle: JSX.CSSProperties = {
+  background: 'transparent',
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
+  'border-radius': `${tokens.radiusSm}`,
   width: '26px',
   height: '26px',
-  padding: 0,
+  cursor: 'pointer',
+  font: tokens.type.textMd,
 };
 
 const pathInputStyle: JSX.CSSProperties = {
@@ -857,19 +883,15 @@ const headerRowStyle: JSX.CSSProperties = {
   'user-select': 'none',
 };
 
-// Column headers brighten their label on hover rather than taking a
-// fill — a filled header reads as a selected column, which sorting is
-// not. Same treatment as the file-tree headers.
 function headerCellStyle(_k: SortKey): JSX.CSSProperties {
   return {
-    '--wash-btn-bg': 'transparent',
-    '--wash-btn-border': 'transparent',
-    '--wash-btn-fg': tokens.fgMuted,
-    '--wash-btn-fg-hover': tokens.fg,
+    background: 'transparent',
+    border: 'none',
+    color: tokens.fgMuted,
     font: tokens.type.textSm,
+    cursor: 'pointer',
     padding: '0 8px',
     height: `${HEADER_ROW_H}px`,
-    'border-radius': '0',
     'box-sizing': 'border-box',
     display: 'flex',
     'align-items': 'center',
@@ -896,8 +918,9 @@ function rowStyle(selected: boolean): JSX.CSSProperties {
     'grid-template-columns': '1fr 90px 110px',
     'align-items': 'center',
     padding: '4px 8px',
-    '--wash-row-bg': selected ? tokens.bgRowSelected : 'transparent',
+    background: selected ? tokens.bgRowSelected : 'transparent',
     color: tokens.fg,
+    cursor: 'pointer',
     'user-select': 'none',
     font: tokens.type.textMd,
   };
@@ -945,14 +968,15 @@ const selectStyle: JSX.CSSProperties = {
   font: tokens.type.textMd,
 };
 
-// The dialog's Cancel / Confirm pair. Fills go in as custom properties
-// so the confirm button's heavier resting fill still lifts under the
-// cursor and deepens on press (controls.ts).
 function actionBtnStyle(primary: boolean): JSX.CSSProperties {
   return {
-    '--wash-btn-bg': primary ? tokens.bgRowSelected : 'transparent',
-    '--wash-btn-border': primary ? tokens.borderFocus : tokens.borderMenu,
+    background: primary ? tokens.bgRowSelected : 'transparent',
+    color: tokens.fg,
+    border: `1px solid ${primary ? tokens.borderFocus : tokens.borderMenu}`,
+    'border-radius': `${tokens.radiusSm}`,
     padding: '5px 14px',
+    cursor: 'pointer',
+    font: tokens.type.textMd,
   };
 }
 

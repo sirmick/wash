@@ -15,8 +15,8 @@
 // customElements.get).
 
 import { render } from 'solid-js/web';
+import { ensureHitStyles } from './hit';
 import { ensureScrollbarStyles } from './scrollbars';
-import { ensureControlStyles } from './controls';
 import type { Component } from 'solid-js';
 
 /** Props every wash app component receives. */
@@ -33,6 +33,13 @@ export interface WashAppProps {
    * owning host. Apps that only use app_msg can ignore it.
    */
   origin: string;
+  /**
+   * Replace this app's default session-state context with a richer, current
+   * representation. The provider is called synchronously only when another
+   * wash app explicitly asks for window context (for example Session Summary).
+   * Return undefined to fall back to the router-backed app state.
+   */
+  provideContent(provider: () => unknown): void;
 }
 
 export interface DefineWashAppOptions {
@@ -77,15 +84,21 @@ export function defineWashApp(
   // overlay bars otherwise paint over content — and get painted over by
   // it — most visibly in the terminal.
   ensureScrollbarStyles();
-  // …and the control states (controls.ts): hover, press, focus and
-  // disabled are selectors, so they can't ride along on the inline
-  // styles the rest of the UI is built from.
-  ensureControlStyles();
+  // …and the interaction layer (hit.ts): hover/press/focus feedback for
+  // anything the app marks `data-wash-hit`. Same light-DOM reasoning — one
+  // stylesheet in the document head serves every app.
+  ensureHitStyles();
 
   if (customElements.get(realTag)) return;
 
   class WashAppElement extends HTMLElement {
     private cleanup?: () => void;
+    private contentProvider?: () => unknown;
+
+    /** Shell-facing half of the Content API; apps register through props. */
+    washContent(): unknown {
+      return this.contentProvider?.();
+    }
 
     connectedCallback() {
       if (options.style) {
@@ -93,12 +106,18 @@ export function defineWashApp(
       }
       const instance = this.getAttribute('data-wash-instance') ?? '';
       const origin = this.getAttribute('data-wash-origin') || 'local';
-      this.cleanup = render(() => App({ instance, host: this, origin }), this);
+      this.cleanup = render(() => App({
+        instance,
+        host: this,
+        origin,
+        provideContent: (provider) => { this.contentProvider = provider; },
+      }), this);
     }
 
     disconnectedCallback() {
       this.cleanup?.();
       this.cleanup = undefined;
+      this.contentProvider = undefined;
     }
   }
 

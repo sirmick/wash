@@ -1,34 +1,12 @@
-// Package agentd is wash-agentd (com.wash.agentd) — the coding-agent
-// roster (docs/AGENT_TERM.md §7). It is a singleton background service
-// holding one row per agent wash can see, across every terminal window on
-// the box, so the desktop can answer "what are my agents doing?" in one
-// place instead of one tab chip at a time.
+// Package agentd is wash-agentd (com.wash.agentd): the singleton service
+// that hosts coding agents over ACP, and the roster of them the desktop
+// shows. One row per hosted session, so "what are my agents doing?" has one
+// answer across every Agent window.
 //
-// It owns no agents and talks to none: wash-term is the producer (it is
-// the process that owns the pty and therefore the only thing that knows),
-// and the session sidebar is the consumer. That is what earns this a
-// service rather than a library — N terminal processes producing, the
-// sidebar (and later the policy audit) consuming, with no way for the
-// producers to see each other otherwise.
-//
-// Wire shape — inbound from a terminal (cross-app, From router-attested):
-//
-//	{kind:"agent_status", channel_id, window_id, agent, state, reason,
-//	                      session_id, cwd, since_ms}
-//	{kind:"agent_gone",   channel_id}
-//
-// Wire shape — inbound from a subscriber (the session gateway):
-//
-//	{kind:"subscribe"} / {kind:"unsubscribe"}
-//
-// Wire shape — state pushed to subscribers (sdk.StateService):
-//
-//	{kind:"state", state:{ rows:[…] }}
-//
-// Liveness is the service's own job: a terminal that crashes never says
-// goodbye, so rows carry a last-seen stamp, go stale after
-// staleAfter, and are dropped after dropAfter. A dead window can leave a
-// grey row for a minute; it can never leave a ghost.
+// Subscribers (the session gateway, Agent windows) send {kind:"subscribe"}
+// / {kind:"unsubscribe"} and receive {kind:"state", state:{rows:[…], …}}
+// through sdk.StateService. A session that has exited keeps its row, greyed,
+// until the sweep drops it.
 package agentd
 
 import (
@@ -58,6 +36,18 @@ type State struct {
 	// with their reason rather than hiding them, so "why can I not pick
 	// Claude here" has an answer on screen.
 	Adapters []Adapter `json:"adapters,omitempty"`
+	// Stacks are what the launcher offers first (stacks.go): each with the
+	// availability of its tiers, greyed with a reason like an adapter.
+	Stacks []StackView `json:"stacks,omitempty"`
+	// Keys are the connection keys the launcher can store: set or not, and
+	// a stored key's last four characters. Never a value.
+	Keys []KeyView `json:"keys,omitempty"`
+	// HasDefaultPrompt says whether a stored default prompt exists, so the
+	// launcher can say that a new session will not start empty. Only the
+	// FLAG rides the state push — the text itself is fetched on demand
+	// (agent_default prompt), because a page of prose on every roster push
+	// would reach every subscriber several times a second during a turn.
+	HasDefaultPrompt bool `json:"has_default_prompt,omitempty"`
 }
 
 // Row is one agent in one terminal tab.
@@ -83,11 +73,6 @@ type Row struct {
 	// cached — never from the agent's hooks (§7).
 	Branch string `json:"branch,omitempty"`
 	Dirty  bool   `json:"dirty,omitempty"`
-	// TermInstance + WindowID address the owning terminal window, so a
-	// click on the row can focus it.
-	TermInstance string `json:"term_instance"`
-	WindowID     uint64 `json:"window_id"`
-	ChannelID    uint64 `json:"channel_id"`
 	// SinceMS is how long the row has been in this state, as of the push.
 	// The FE anchors its own clock to it (no cross-clock comparison).
 	SinceMS int64 `json:"since_ms"`
@@ -96,6 +81,10 @@ type Row struct {
 	Used  int64  `json:"used,omitempty"`
 	Size  int64  `json:"size,omitempty"`
 	Title string `json:"title,omitempty"`
+	// Preview is populated only in the compact manager projection. Live
+	// transcript changes arrive as bounded Bulk patches, never by
+	// republishing the complete roster.
+	Preview string `json:"preview,omitempty"`
 	// Mode is the agent's active approval preset and Modes what it offers
 	// (docs/AGENT_APP.md §9). Empty for an agent with no such notion.
 	Mode  string `json:"mode,omitempty"`
@@ -113,9 +102,37 @@ type Row struct {
 	// Detached marks a session still running with no window pointing at
 	// it — the sidebar offers Reattach rather than focus.
 	Detached bool `json:"detached,omitempty"`
+	// Queued is how many prompts are waiting for the current turn to end
+	// (docs/AGENT_MESSENGER.md semantics: a message typed mid-reply is
+	// sent when the reply finishes, not dropped and not interleaved).
+	Queued int `json:"queued,omitempty"`
+	// Roots are folders this session may reach BEYOND its cwd (roots.go).
+	// On the row because every surface that shows a session must be able
+	// to say how wide it is: a session with three extra roots is a
+	// different thing from one confined to its own folder, and only the
+	// person who widened it would otherwise know.
+	Roots []string `json:"roots,omitempty"`
 	// Stale marks a row whose terminal stopped reporting: shown greyed,
 	// then dropped. See staleAfter / dropAfter.
 	Stale bool `json:"stale,omitempty"`
+	// Workspace places the session in a workspace team, so the Agents
+	// window lists members under the orchestrator that leads them. Set
+	// only on the manager's projection.
+	Workspace *RowWorkspace `json:"workspace,omitempty"`
+}
+
+// RowWorkspace is one session's place in a workspace team.
+type RowWorkspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// LeadSession is the orchestrator's session: a member row nests under
+	// the row with this session_id.
+	LeadSession  string `json:"lead_session"`
+	Orchestrator bool   `json:"orchestrator,omitempty"`
+	Member       string `json:"member"`
+	Role         string `json:"role,omitempty"`
+	Package      string `json:"package,omitempty"`
+	PackageTitle string `json:"package_title,omitempty"`
 }
 
 // Mode is one approval/sandbox preset an agent offers.
@@ -165,7 +182,7 @@ func init() {
 			// which is true of a desktop and false of an agent — an agent
 			// matters most exactly when nobody is watching. This service
 			// is the only thing on the box that knows the difference.
-			Capabilities: []string{sdk.CapSpawn, sdk.CapIdleInhibit},
+			Capabilities: []string{sdk.CapSpawn, sdk.CapIdleInhibit, sdk.CapActivityNote},
 		},
 		OnReady:        onReady,
 		OnInstanceGone: onInstanceGone,

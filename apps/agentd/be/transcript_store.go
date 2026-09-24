@@ -59,8 +59,13 @@ type transcriptMeta struct {
 	Version   int    `json:"v"`
 	SessionID string `json:"session_id"`
 	Agent     string `json:"agent,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
-	StartedMS int64  `json:"started_ms"`
+	// Connection, Stack and Tier are the launchRecord: written once, in the
+	// head, where a resume finds them however long the transcript grew.
+	Connection string `json:"connection,omitempty"`
+	Stack      string `json:"stack,omitempty"`
+	Tier       string `json:"tier,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	StartedMS  int64  `json:"started_ms"`
 }
 
 const (
@@ -150,7 +155,7 @@ func safeFileName(s string) string {
 // bindTranscript ties a roster key to the session id its events persist
 // under, and writes the meta line. Called once the adapter has answered
 // with a session id — before that there is no name to file it under.
-func bindTranscript(key, sessionID, agent, cwd string, now time.Time) {
+func bindTranscript(key, sessionID string, launch launchRecord, cwd string, now time.Time) {
 	if key == "" || sessionID == "" {
 		return
 	}
@@ -175,7 +180,8 @@ func bindTranscript(key, sessionID, agent, cwd string, now time.Time) {
 	}
 	line, err := json.Marshal(transcriptMeta{
 		Kind: metaKind, Version: transcriptVer, SessionID: sessionID,
-		Agent: agent, Cwd: cwd, StartedMS: now.UnixMilli(),
+		Agent: launch.Agent, Connection: launch.Connection, Stack: launch.Stack, Tier: launch.Tier,
+		Cwd: cwd, StartedMS: now.UnixMilli(),
 	})
 	if err != nil {
 		return
@@ -429,7 +435,7 @@ func loadTranscript(sessionID string) ([]Event, error) {
 //
 // The second case is transcript replay doing real work: a session the
 // agent has half-forgotten still comes back whole.
-func reconcileResume(key, sessionID string, now time.Time) {
+func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 	if key == "" || sessionID == "" {
 		return
 	}
@@ -460,6 +466,9 @@ func reconcileResume(key, sessionID string, now time.Time) {
 		}
 		t.seq = max
 	}
+	if workspaces != nil {
+		workspaces.restoreProvenance(sessionID, t.events)
+	}
 	events := append([]Event(nil), t.events...)
 	transMu.Unlock()
 
@@ -472,7 +481,7 @@ func reconcileResume(key, sessionID string, now time.Time) {
 	storeMu.Lock()
 	storeSession[key] = sessionID
 	storeMu.Unlock()
-	if err := rewriteTranscript(sessionID, events, now); err != nil {
+	if err := rewriteTranscript(sessionID, agent, cwd, events, now); err != nil {
 		log.Printf("agentd: transcript rewrite session=%s: %v", sessionID, err)
 	}
 }
@@ -482,7 +491,7 @@ func reconcileResume(key, sessionID string, now time.Time) {
 // new one — never a half-written conversation. This is the one path that
 // does not append; it exists because resume has to reconcile two
 // numbering schemes into one.
-func rewriteTranscript(sessionID string, events []Event, now time.Time) error {
+func rewriteTranscript(sessionID, agent, cwd string, events []Event, now time.Time) error {
 	path := transcriptPath(sessionID)
 	if path == "" {
 		return nil
@@ -505,9 +514,25 @@ func rewriteTranscript(sessionID string, events []Event, now time.Time) error {
 		tmp.Close()
 		return err
 	}
+	// Reconciliation used to replace a rich header with only the session id.
+	// Preserve the original start time, and prefer the adapter identity from
+	// this live resume so an already-damaged header repairs itself.
+	startedMS := now.UnixMilli()
+	if old, ok := readSessionMeta(path); ok {
+		if old.StartedMS != 0 {
+			startedMS = old.StartedMS
+		}
+		if agent == "" {
+			agent = old.Agent
+		}
+		if cwd == "" {
+			cwd = old.Cwd
+		}
+	}
 	w := bufio.NewWriter(tmp)
 	meta, _ := json.Marshal(transcriptMeta{
-		Kind: metaKind, Version: transcriptVer, SessionID: sessionID, StartedMS: now.UnixMilli(),
+		Kind: metaKind, Version: transcriptVer, SessionID: sessionID,
+		Agent: agent, Cwd: cwd, StartedMS: startedMS,
 	})
 	w.Write(meta)
 	w.WriteByte('\n')
@@ -585,6 +610,12 @@ type transcriptSummary struct {
 	// Title is the agent's own name for the work. "codex · wash" tells
 	// you nothing a week later; "Fix the reconnect banner race" does.
 	Title string `json:"title,omitempty"`
+	// UserTitle is the person's name for it (session_admin.go), and
+	// UserTitleSet says this record carries one — so an empty UserTitle
+	// with the flag set means "cleared", while without it the field is
+	// simply absent and must not erase an earlier record's.
+	UserTitle    string `json:"user_title,omitempty"`
+	UserTitleSet bool   `json:"user_title_set,omitempty"`
 	// Events is the folded event count, known only when we write this at
 	// the end. Zero means "not counted yet", not "empty".
 	Events int `json:"events,omitempty"`
@@ -617,12 +648,20 @@ func writeSummary(sessionID string, s transcriptSummary) {
 // transcript's head and tail without reading the conversation in
 // between — a history list must not cost the sum of every transcript.
 type SessionMeta struct {
-	SessionID string `json:"session_id"`
-	Agent     string `json:"agent,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
-	Dir       string `json:"dir,omitempty"`
-	Title     string `json:"title,omitempty"`
+	SessionID  string `json:"session_id"`
+	Agent      string `json:"agent,omitempty"`
+	Connection string `json:"connection,omitempty"`
+	Stack      string `json:"stack,omitempty"`
+	Tier       string `json:"tier,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Dir        string `json:"dir,omitempty"`
+	Title      string `json:"title,omitempty"`
+	// UserTitle is the person's name for the session, when they gave one.
+	// Title above is then the SAME string — the effective title, so every
+	// reader shows the name without knowing where it came from — and this
+	// field says it was theirs.
+	UserTitle string `json:"user_title,omitempty"`
 	StartedMS int64  `json:"started_ms,omitempty"`
 	EndedMS   int64  `json:"ended_ms,omitempty"`
 	EndReason string `json:"end_reason,omitempty"`
@@ -630,6 +669,10 @@ type SessionMeta struct {
 	// Bytes is the transcript's size on disk, so the UI can say what
 	// history costs and offer to prune the expensive ones.
 	Bytes int64 `json:"bytes,omitempty"`
+	// Preview is a few recent human/agent lines taken from the same bounded
+	// tail read used for the metadata. It gives the always-visible history
+	// list enough context without loading or sending whole transcripts.
+	Preview string `json:"preview,omitempty"`
 	// Snippet is the line that matched, with a little either side. Absent
 	// when the query matched metadata instead (the row already shows the
 	// title and directory, so quoting them back is noise) or when there
@@ -679,6 +722,7 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		if err := json.Unmarshal(head.Bytes(), &m); err == nil && m.Kind == metaKind {
 			out.SessionID = m.SessionID
 			out.Agent = m.Agent
+			out.Connection, out.Stack, out.Tier = m.Connection, m.Stack, m.Tier
 			out.Cwd = m.Cwd
 			out.Dir = dirLabel(m.Cwd)
 			out.StartedMS = m.StartedMS
@@ -703,6 +747,8 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		tail.Scan() // discard the partial first line
 	}
 	var lastEventAt int64
+	previewBySeq := make(map[uint64]string)
+	previewOrder := make([]uint64, 0, 3)
 	for tail.Scan() {
 		b := tail.Bytes()
 		if len(b) == 0 {
@@ -718,6 +764,13 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		if probe.Kind != summaryKind {
 			if probe.AtMS > lastEventAt {
 				lastEventAt = probe.AtMS
+			}
+			var e Event
+			if json.Unmarshal(b, &e) == nil && (e.Kind == EventUser || e.Kind == EventMessage) && e.Text != "" {
+				if _, seen := previewBySeq[e.Seq]; !seen {
+					previewOrder = append(previewOrder, e.Seq)
+				}
+				previewBySeq[e.Seq] = previewLine(e.Text)
 			}
 			continue
 		}
@@ -737,6 +790,9 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 		}
 		if s.Title != "" {
 			out.Title = s.Title
+		}
+		if s.UserTitleSet {
+			out.UserTitle = s.UserTitle
 		}
 		if s.Cwd != "" {
 			out.Cwd, out.Dir = s.Cwd, dirLabel(s.Cwd)
@@ -760,7 +816,38 @@ func readSessionMeta(path string) (SessionMeta, bool) {
 	if out.EndedMS == 0 && lastEventAt > 0 {
 		out.EndedMS = lastEventAt
 	}
+	// The person's name wins wherever the title is shown.
+	if out.UserTitle != "" {
+		out.Title = out.UserTitle
+	}
+	if len(previewOrder) > 3 {
+		previewOrder = previewOrder[len(previewOrder)-3:]
+	}
+	preview := make([]string, 0, len(previewOrder))
+	for _, seq := range previewOrder {
+		if line := previewBySeq[seq]; line != "" {
+			preview = append(preview, line)
+		}
+	}
+	out.Preview = strings.Join(preview, "\n")
 	return out, true
+}
+
+// previewLine keeps each preview row compact before it crosses the app bus.
+// The UI clamps the result visually too, but bounding it here is what keeps
+// the history response proportional to the number of sessions rather than to
+// the size of their messages.
+func previewLine(s string) string {
+	const maxBytes = 180
+	s = collapseSpace(s)
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return strings.TrimSpace(s[:end]) + "…"
 }
 
 // listSessionMeta is the history index: every stored transcript, newest

@@ -534,18 +534,20 @@ export class WashAppDisplay extends HTMLElement {
     // (Remote video frames don't flow until the bind is un-gated in main.tsx;
     // this keeps the path origin-correct for when they do.)
     this.unsubscribe = subscribeRaw(this.origin, channelID, (bytes) => this.onFrame(bytes));
-    // The router resets this channel (channel.resync) after it went "behind".
-    // For a WebP frame stream the ring replay is meaningless (the router now
-    // skips it), so clear the canvas to a known-blank state instead of leaving
-    // stale/torn regions on screen forever (REVIEW-X11-WAYLAND #6).
+    // The router resets this channel (channel.resync) after it went "behind"
+    // (e.g. on reattach). For a WebP frame stream the ring replay is
+    // meaningless (the router skips it) and the router nudges wash-display for
+    // a whole frame right after the reset (REVIEW-X11-WAYLAND #6).
     this.unsubscribeResync = subscribeResync(this.origin, channelID, () => this.onResync());
   }
 
-  private onResync(): void {
-    if (this.canvas && this.ctx) {
-      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    }
-  }
+  // onResync deliberately KEEPS the last frame on the canvas. The whole frame
+  // the router requests right after the reset repaints every pixel, so any
+  // stale region lasts only until it lands. Clearing here instead showed the
+  // desktop through the window for that gap — a chromeless window has nothing
+  // behind its canvas — which a busy guest (a 70 fps emulator outrunning the
+  // channel credit) turned into constant transparent flicker.
+  private onResync(): void {}
 
   private onFrame(bytes: Uint8Array): void {
     if (!this.canvas || !this.ctx) return;

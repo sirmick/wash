@@ -29,7 +29,7 @@ import {
 import { ModalLayer, registerModal, summonModal, hasModal, forgetModalsFor } from './modal';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import { RelayChannelSocket } from './relay-socket';
-import { tokens, ensureControlStyles, WASH_BTN_CLASS } from '@wash/ui';
+import { ensureHitStyles, tokens } from '@wash/ui';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
@@ -52,9 +52,24 @@ import {
   viewportFor,
   windows,
   dropOrigin,
+  focused,
   type Win,
+  type WinState,
+  nextGeomTok,
+  markGeomPending,
 } from './wm';
 import { Desktop } from './desktop';
+import {
+  chordReleased,
+  cycle,
+  initialIndex,
+  isShowDesktopChord,
+  isSwitcherChord,
+  mruOrder,
+  showDesktopPlan,
+} from './switcher';
+import { SwitcherOverlay } from './switcher-ui';
+import { shouldSwallowDesktopKey } from './keyguard';
 import { FloatingWindow } from './window';
 import {
   CatalogApp,
@@ -68,7 +83,9 @@ import {
   deliverResync,
   deliverToInstance,
   forgetVideoChannel,
+  mountedElement,
   replaceSavedStates,
+  resolveWindowContent,
   setSavedState,
   subscribeRaw,
   subscribeResync,
@@ -78,6 +95,18 @@ import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
 import { bootStep, bootFinish } from './boot';
 import { ingestLinkStats, linkHealth, onLinkHealth, noteConnState, type RawLinkStatsMsg, type LinkHealth } from './linkstats';
+import {
+  activityQuery as activityQueryOn, activityStats as activityStatsOn, activityClear as activityClearOn,
+  onActivity as onActivityEntry, tailWanted as activityTailWanted,
+  handleActivityQueryOK, handleActivityQueryErr, handleActivityStatsOK, handleActivityClearOK, handleActivityEntry,
+  rejectPendingFor as rejectActivityFor,
+  type ActivityEntry, type ActivityQuery, type ActivityPage, type ActivityStats,
+} from './activity';
+import { origins as activityOrigins, LOCAL_ORIGIN as ACTIVITY_LOCAL } from './clients';
+import {
+  observe as observeOn, handleObserveOK, handleObserveErr, rejectPendingFor as rejectObserveFor,
+  fallback as observeFallback, type Observation,
+} from './observe';
 import {
   HOSTGW_APP_ID,
   dropHostgwOrigin,
@@ -128,6 +157,8 @@ export interface SessionWindow {
   min_h?: number;
   max_w?: number;
   max_h?: number;
+  /** Echo of the shell's last window.move / window.resize tok (wm.ts). */
+  geom_tok?: number;
   // is_root is router-attested (SO_PEERCRED uid==0, or app_id is in
   // the privilege-chain reserved set). When true the WM paints a red
   // stripe + ROOT label on the titlebar. Never set by the app itself.
@@ -287,6 +318,16 @@ export interface ShellAppCrashed {
   log: string;
 }
 
+// Activity journal replies (docs/COMMANDER.md §3.5; pkg/wire/activity.go).
+export interface ShellActivityQueryOK { t: 'activity.query.ok'; req_id: number; entries: ActivityEntry[]; cursor?: string }
+export interface ShellActivityQueryErr { t: 'activity.query.err'; req_id: number; code: string; msg?: string }
+export interface ShellActivityEntryMsg { t: 'activity.entry'; entry: ActivityEntry }
+export interface ShellActivityStatsOK { t: 'activity.stats.ok'; req_id: number; stats: ActivityStats }
+export interface ShellActivityClearOK { t: 'activity.clear.ok'; req_id: number }
+// Observe replies (docs/COMMANDER.md §4; pkg/wire/observe.go).
+export interface ShellObserveOK { t: 'observe.ok'; req_id: number; observation: Omit<Observation, 'host'> }
+export interface ShellObserveErr { t: 'observe.err'; req_id: number; code: string; msg?: string }
+
 // ShellCtrlMsg is the discriminated union of every control-plane message
 // the shell dispatches on (the `t` field; WIRE.md §8). makeHandlers'
 // onCtrl narrows on `msg.t`, so each case sees a fully-typed shape and
@@ -312,6 +353,13 @@ type ShellCtrlMsg =
   | ShellClipboardChanged
   | ShellPeerError
   | ShellSuperseded
+  | ShellActivityQueryOK
+  | ShellActivityQueryErr
+  | ShellActivityEntryMsg
+  | ShellActivityStatsOK
+  | ShellActivityClearOK
+  | ShellObserveOK
+  | ShellObserveErr
   | RawLinkStatsMsg;
 
 // Reactive subs the chrome (mounted via window.wash) listens to.
@@ -366,9 +414,15 @@ function raiseWindow(w: WindowInfo): void {
 // appIDForWindow resolves a window's app id from the router-attested
 // instance→app-id map (app.declared). The app cannot forge it, which is
 // what makes it safe to route navigation off.
+//
+// The window's own origin decides which host's map to read. Window infos
+// carry the BARE instance id ("i-1"), which parses as LOCAL — so a remote
+// window was looked up in this host's table, and ids are small counters
+// that collide: B's controller at i-1 read as A's manager at i-1, and the
+// door to B's manager raised the wrong window instead of launching.
 function appIDForWindow(w: WindowInfo): string {
-  const { origin, bare } = parseInstanceId(w.instanceID);
-  return clientForOrigin(origin)?.appIDs.get(bare) ?? '';
+  const { bare } = parseInstanceId(w.instanceID);
+  return clientForOrigin(w.origin)?.appIDs.get(bare) ?? '';
 }
 
 // focusOrLaunch is the one door primitive (docs/AGENT_UX.md N1): raise this
@@ -567,6 +621,9 @@ function makeHandlers(client: RouterClient): ClientHandlers {
   onCtrl: (msg: ShellCtrlMsg) => {
     switch (msg.t) {
       case 'catalog': {
+        // A catalog is the first thing a (re)connected router sends, and a
+        // tail is per connection: re-arm it if anyone is listening.
+        if (activityTailWanted()) conn.sendCtrl({ t: 'activity.tail', on: true });
         // The local catalog drives the launcher + settings panels. A
         // remote host's catalog is stored per-origin so wash-connect can
         // list "apps you can launch on B" (docs/REMOTE.md §6.1).
@@ -689,6 +746,30 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       // it via window.wash.onLinkStats.
       case 'link.stats':
         if (isLocal) ingestLinkStats(msg, conn.bufferedAmount());
+        break;
+      // Activity journal (docs/COMMANDER.md): every host journals itself,
+      // so these are NOT local-only — the Timeline merges every origin.
+      case 'activity.query.ok':
+        handleActivityQueryOK(client.origin, msg);
+        break;
+      case 'activity.query.err':
+        handleActivityQueryErr(msg);
+        break;
+      case 'activity.entry':
+        handleActivityEntry(client.origin, msg);
+        break;
+      case 'activity.stats.ok':
+        handleActivityStatsOK(client.origin, msg);
+        break;
+      case 'activity.clear.ok':
+        handleActivityClearOK(msg);
+        break;
+      // Observe (docs/COMMANDER.md §4): per origin, like the journal.
+      case 'observe.ok':
+        handleObserveOK(client.origin, msg);
+        break;
+      case 'observe.err':
+        handleObserveErr(msg);
         break;
       // asset.read / panel.read are the shell fetching its OWN assets +
       // settings panels from its router — a local-only concern.
@@ -1070,6 +1151,8 @@ function detachClient(origin: Origin): void {
   forgetModalsFor(origin);
   sentDisplayMetrics.delete(origin);
   unregisterClient(origin);
+  rejectActivityFor(origin);
+  rejectObserveFor(origin);
 }
 
 {
@@ -1136,6 +1219,7 @@ createEffect(() => {
       origin: w.origin,
       windowID: w.windowID,
       instanceID: w.instanceID,
+      appID: clientForOrigin(w.origin)?.appIDs.get(parseInstanceId(w.instanceID).bare) ?? '',
       element: w.element,
       icon: w.icon,
       title: w.title,
@@ -1291,7 +1375,11 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
     (id) => client.waitForBundle(id),
   );
   for (const m of moves) {
-    client.conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y });
+    // Tagged like a user move: a focus patch already queued behind this
+    // one still carries the (40,40) cascade origin in cell (0,0).
+    const tok = nextGeomTok();
+    markGeomPending(client.origin, m.id, tok);
+    client.conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y, tok });
   }
 }
 
@@ -1451,6 +1539,29 @@ createEffect(() => {
 
 // Ctrl+Alt+Arrows pan one viewport. Listening at the document level
 // means the chord works regardless of which (if any) window has focus.
+// An OS file dropped where nothing accepts it — the wallpaper, a window's
+// chrome, an app without a drop handler — used to take the browser's
+// default action: navigate this tab to file://…, which tears the whole
+// desktop down. Both halves of the guard are needed: without a prevented
+// dragover the drop event never fires and the navigation happens anyway.
+// Bubble phase, so an app that takes OS drops (fm's upload) has already
+// run and preventDefault'd — the guard only acts on drops nobody claimed.
+// Internal wash drags (application/x-wash-paths) are not touched, so the
+// file managers' move/copy gestures are unaffected. Deliberately no
+// beforeunload prompt: reconnect relies on plain reloads.
+const isOsFileDrag = (dt: DataTransfer | null): boolean =>
+  !!dt && Array.from(dt.types).includes('Files');
+window.addEventListener('dragover', (ev: DragEvent) => {
+  if (ev.defaultPrevented || !isOsFileDrag(ev.dataTransfer)) return;
+  ev.preventDefault();
+});
+window.addEventListener('drop', (ev: DragEvent) => {
+  if (ev.defaultPrevented || !isOsFileDrag(ev.dataTransfer)) return;
+  ev.preventDefault();
+  const n = ev.dataTransfer?.files.length ?? 0;
+  shellLog('info', 'shell', `swallowed an OS file drop outside any drop target files=${n}`);
+});
+
 // Apps inside windows that want to swallow these keys can preventDefault
 // on their own keydown handler — keypresses bubble up to here only when
 // nobody else stops them.
@@ -1477,6 +1588,122 @@ window.addEventListener('keydown', (ev: KeyboardEvent) => {
   }
   ev.preventDefault();
   setViewport(vp.vx + dx, vp.vy + dy);
+});
+
+// ---- window switcher (Ctrl+Alt+Tab) and show desktop (Ctrl+Alt+D) ----
+//
+// The decisions live in switcher.ts (unit-tested); this is the wiring:
+// which store the windows come from, what "focus it" means, and when the
+// overlay goes away.
+//
+// MRU order is the wm's gz counter — bumped on every raise/focus/first
+// appearance — so the switcher reads the focus history the WM already
+// keeps rather than maintaining a second list that could drift from it.
+// The order is SNAPSHOT when the overlay opens: cycling must not re-sort
+// under the highlight, and committing bumps gz for the window you land on,
+// which is exactly what makes the next Ctrl+Alt+Tab go back where you came
+// from.
+const [switcher, setSwitcher] = createSignal<{ wins: Win[]; index: number } | null>(null);
+// The set Ctrl+Alt+D minimised, so the second press can put it back.
+let showDesktopMemory: Array<{ origin: Origin; windowID: number }> | null = null;
+
+// focusWin is "switch to this window": snap the camera to its viewport
+// cell first (focusing a window one cell over otherwise "works" with
+// nothing visible happening), then restore-or-focus.
+function focusWin(w: { origin: Origin; windowID: number; state: WinState; x: number; y: number; w: number; h: number }): void {
+  const cell = viewportFor(w);
+  setViewport(cell.vx, cell.vy);
+  if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+  else window.wash.focusWindow(w.windowID, w.origin);
+}
+
+function openOrAdvanceSwitcher(backwards: boolean): void {
+  const cur = switcher();
+  if (cur) {
+    setSwitcher({ wins: cur.wins, index: cycle(cur.index, cur.wins.length, backwards) });
+    return;
+  }
+  const wins = mruOrder(windows.filter((w) => !w.crashed));
+  if (wins.length === 0) return;
+  const start = backwards ? cycle(0, wins.length, true) : initialIndex(wins.length);
+  setSwitcher({ wins, index: start });
+}
+
+// commitSwitcher focuses the highlighted window and closes the overlay. A
+// window that closed while the chord was held is skipped rather than
+// resurrecting a dead id.
+function commitSwitcher(): void {
+  const cur = switcher();
+  setSwitcher(null);
+  if (!cur) return;
+  const want = cur.wins[cur.index];
+  if (!want) return;
+  const live = windows.find((w) => w.origin === want.origin && w.windowID === want.windowID);
+  if (!live) return;
+  shellLog('info', 'shell', `switcher: focus win=${live.windowID} title=${live.title}`);
+  focusWin(live);
+}
+
+function toggleShowDesktop(): void {
+  const plan = showDesktopPlan(windows, showDesktopMemory);
+  if (plan.action === 'minimize') {
+    showDesktopMemory = plan.targets;
+    shellLog('info', 'shell', `show desktop: minimising ${plan.targets.length} window(s)`);
+    for (const t of plan.targets) window.wash.minimizeWindow(t.windowID, t.origin);
+    return;
+  }
+  if (plan.action === 'restore') {
+    shellLog('info', 'shell', `show desktop: restoring ${plan.targets.length} window(s)`);
+    for (const t of plan.targets) window.wash.restoreWindow(t.windowID, t.origin);
+    showDesktopMemory = null;
+  }
+}
+
+// Capture phase, unlike the viewport pan above: these are WM chords, and a
+// focused app (xterm binds nearly everything) must not be able to eat the
+// gesture that switches away from it.
+window.addEventListener(
+  'keydown',
+  (ev: KeyboardEvent) => {
+    if (isSwitcherChord(ev)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openOrAdvanceSwitcher(ev.shiftKey);
+      return;
+    }
+    if (isShowDesktopChord(ev)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleShowDesktop();
+    }
+  },
+  true,
+);
+
+window.addEventListener(
+  'keyup',
+  (ev: KeyboardEvent) => {
+    if (switcher() && chordReleased(ev.key)) commitSwitcher();
+  },
+  true,
+);
+
+// Losing the browser window mid-chord means the keyup never arrives; commit
+// rather than leaving the overlay stuck over the desktop forever.
+window.addEventListener('blur', () => {
+  if (switcher()) commitSwitcher();
+});
+
+// Desktop-background browser-key guard (keyguard.ts): with no wash window
+// focused, Ctrl+W / Ctrl+N / Ctrl+T would reach the browser and close or
+// duplicate the tab the whole desktop lives in. Bubbling, not capture: an
+// app that wants these keys is welcome to them, and the guard only fires
+// when nothing has focus at all. F5 is deliberately left alone — reload is
+// how you recover a wedged shell — and there is no beforeunload.
+window.addEventListener('keydown', (ev: KeyboardEvent) => {
+  if (!shouldSwallowDesktopKey(ev, focused() != null)) return;
+  ev.preventDefault();
+  shellLog('info', 'shell', `swallowed browser chord ctrl+${ev.key.toLowerCase()} on the desktop background`);
 });
 
 // Viewport pan: the cam div translates the windows layer by
@@ -1508,6 +1735,7 @@ const App = () => (
     </div>
     {/* Above the camera, so the blur covers every window rather than
         riding along with the viewport transform. */}
+    <Show when={switcher()}>{(s) => <SwitcherOverlay wins={s().wins} index={s().index} />}</Show>
     <ModalLayer />
     <ConnectionBanner state={connState()} />
   </>
@@ -1597,18 +1825,17 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
         </span>
         <Show when={canRetry()}>
           <button
+            data-wash-hit
             data-testid="wash-connection-retry"
             onClick={() => conn.reconnectNow()}
-            class={WASH_BTN_CLASS}
             style={{
               font: tokens.type.textSm,
-              // The banner sits on its own tinted strip, so this button's
-              // fill is a wash of white over it rather than a token
-              // surface; hover/press derive off it as usual.
-              '--wash-btn-bg': 'rgba(255,255,255,0.12)',
-              '--wash-btn-border': tokens.borderDanger,
+              color: tokens.fg,
+              background: 'rgba(255,255,255,0.12)',
+              border: `1px solid ${tokens.borderDanger}`,
               'border-radius': '4px',
               padding: '2px 8px',
+              cursor: 'pointer',
             }}
           >
             Reconnect now
@@ -1616,18 +1843,17 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
         </Show>
         <Show when={superseded() && props.state === 'open'}>
           <button
+            data-wash-hit
             data-testid="wash-connection-use-here"
             onClick={() => location.reload()}
-            class={WASH_BTN_CLASS}
             style={{
               font: tokens.type.textSm,
-              // The banner sits on its own tinted strip, so this button's
-              // fill is a wash of white over it rather than a token
-              // surface; hover/press derive off it as usual.
-              '--wash-btn-bg': 'rgba(255,255,255,0.12)',
-              '--wash-btn-border': tokens.borderDenied,
+              color: tokens.fg,
+              background: 'rgba(255,255,255,0.12)',
+              border: `1px solid ${tokens.borderDenied}`,
               'border-radius': '4px',
               padding: '2px 8px',
+              cursor: 'pointer',
             }}
           >
             Use here
@@ -1639,10 +1865,10 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
 };
 
 void conn.ready();
-// Shell chrome — taskbar, window frames, start menu — is not a wash app,
-// so it doesn't pass through defineWashApp's style injection. Inject the
-// control states here instead, before first paint.
-ensureControlStyles();
+// The interaction layer for the shell's OWN chrome (titlebars, resize
+// handles, crash-card controls). Apps get it via defineWashApp; the
+// shell never goes through that path, so it injects here.
+ensureHitStyles();
 render(App, document.getElementById('root')!);
 
 // Provide a tiny FE-side API for apps that want to send app_msg back
@@ -1694,6 +1920,11 @@ declare global {
       displayScaleMode(): DisplayScaleMode;
       setDisplayScaleMode(mode: DisplayScaleMode): DisplayScaleMode;
       windows(): WindowInfo[];
+      windowContexts(options?: { excludeInstance?: string }): Array<WindowInfo & {
+        contentSource: 'app' | 'backing-store' | 'none';
+        content?: unknown;
+        contentError?: string;
+      }>;
       onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
       // origin (optional) addresses the WM intent to a specific router:
       // window ids are per-router, so the shell chrome passes the Win's
@@ -1720,6 +1951,21 @@ declare global {
       // About screen render it. null until the first link.stats arrives.
       linkStats(): LinkHealth | null;
       onLinkStats(cb: (h: LinkHealth) => void): () => void;
+      // Activity journal (docs/COMMANDER.md §3): one page of one host's
+      // journal, or a page from every connected host; live entries from all
+      // of them while anyone listens; stats and clear per host.
+      activityQuery(origin: Origin | undefined, q?: ActivityQuery): Promise<ActivityPage>;
+      activityQueryAll(q?: ActivityQuery): Promise<ActivityPage[]>;
+      activityStats(origin?: Origin): Promise<ActivityStats>;
+      activityClear(origin?: Origin): Promise<void>;
+      onActivity(cb: (e: ActivityEntry) => void): () => void;
+      // Observe (docs/COMMANDER.md §4): one look at one instance, from what
+      // its router holds — an app export, a terminal's scrollback tail, or
+      // the saved state blob — and, for an eligible app the router holds
+      // nothing for, the app's FE provider or the window's rendered text.
+      // instanceID is the WindowInfo id (origin-tagged) or the bare id;
+      // origin, when given, names whose instance it is.
+      observe(origin: Origin | undefined, instanceID: string, maxBytes?: number): Promise<Observation>;
       // Host-awareness state, merged across origins (docs/SIDEBAR.md M1):
       // origin → service → that service's latest snapshot, fed by each
       // host's com.wash.hostgw. Read-only by design — the rail routes
@@ -1933,6 +2179,17 @@ window.wash = {
   displayScaleMode: () => displayScaleMode(),
   setDisplayScaleMode: (mode) => setDisplayScaleMode(mode),
   windows: () => windowsSub.value,
+  windowContexts: (options) => windowsSub.value
+    .filter((w) => w.instanceID !== options?.excludeInstance)
+    .map((w) => {
+      const resolved = resolveWindowContent(w.instanceID);
+      return {
+        ...w,
+        contentSource: resolved.source,
+        ...(resolved.content !== undefined ? { content: resolved.content } : {}),
+        ...(resolved.error ? { contentError: resolved.error } : {}),
+      };
+    }),
   onWindowsChanged: (cb) => windowsSub.on(cb),
   focusWindow(id, origin) {
     // Local raise gives instant visual focus feedback; the router's
@@ -1945,10 +2202,18 @@ window.wash = {
     wmSend(origin ?? originForWindow(id), id, { t: 'window.close_clicked', window_id: id });
   },
   moveWindow(id, x, y, origin) {
-    wmSend(origin ?? originForWindow(id), id, { t: 'window.move', window_id: id, x, y });
+    // Tagged commit: the store holds our geometry against in-flight
+    // patches until the router echoes tok (wm.ts markGeomPending).
+    const o = origin ?? originForWindow(id);
+    const tok = nextGeomTok();
+    markGeomPending(o, id, tok);
+    wmSend(o, id, { t: 'window.move', window_id: id, x, y, tok });
   },
   resizeWindow(id, w, h, origin) {
-    wmSend(origin ?? originForWindow(id), id, { t: 'window.resize', window_id: id, w, h });
+    const o = origin ?? originForWindow(id);
+    const tok = nextGeomTok();
+    markGeomPending(o, id, tok);
+    wmSend(o, id, { t: 'window.resize', window_id: id, w, h, tok });
   },
   minimizeWindow(id, origin) {
     wmSend(origin ?? originForWindow(id), id, { t: 'window.state', window_id: id, state: 'minimized' });
@@ -1969,6 +2234,47 @@ window.wash = {
   onScreenSize: (cb) => screenSub.on(cb),
   linkStats: () => linkHealth(),
   onLinkStats: (cb) => onLinkHealth(cb),
+  activityQuery: (origin, q) => {
+    const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
+    return activityQueryOn((m) => c.conn.sendCtrl(m), c.origin, q ?? {});
+  },
+  activityQueryAll: (q) => Promise.all(activityOrigins().map((o) =>
+    window.wash.activityQuery(o, q).catch(() => ({ host: o === ACTIVITY_LOCAL ? 'local' : o, entries: [] } as ActivityPage)))),
+  activityStats: (origin) => {
+    const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
+    return activityStatsOn((m) => c.conn.sendCtrl(m), c.origin);
+  },
+  activityClear: (origin) => {
+    const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
+    return activityClearOn((m) => c.conn.sendCtrl(m), c.origin);
+  },
+  observe: async (origin, instanceID, maxBytes) => {
+    // instanceID may be the app-facing (origin-tagged) id a WindowInfo
+    // carries or the bare id; the router gets the bare id, the shell's
+    // own holdings are keyed by the tagged one.
+    const parsed = parseInstanceId(instanceID);
+    const c = clientForOrigin(origin ?? parsed.origin ?? ACTIVITY_LOCAL) ?? local;
+    const cid = compoundInstanceId(c.origin, parsed.bare);
+    const o = await observeOn((m) => c.conn.sendCtrl(m), c.origin, parsed.bare, maxBytes);
+    // Auto means auto (docs/COMMANDER.md §4.1): when the router holds
+    // nothing for an eligible app, the app's FE provider or saved state,
+    // then the window's rendered text.
+    return observeFallback(o, {
+      provider: () => resolveWindowContent(cid),
+      text: () => mountedElement(cid)?.innerText,
+    }, maxBytes);
+  },
+  onActivity: (cb) => {
+    const first = !activityTailWanted();
+    const off = onActivityEntry(cb);
+    // The routers push only while a tail is on; turn it on for every host
+    // with the first listener and off again with the last.
+    if (first) for (const o of activityOrigins()) (clientForOrigin(o) ?? local).conn.sendCtrl({ t: 'activity.tail', on: true });
+    return () => {
+      off();
+      if (!activityTailWanted()) for (const o of activityOrigins()) (clientForOrigin(o) ?? local).conn.sendCtrl({ t: 'activity.tail', on: false });
+    };
+  },
   hostgwState: () => hostgwState(),
   onHostgwState: (cb) => onHostgwState(cb),
   log(level, source, msg, stack) {

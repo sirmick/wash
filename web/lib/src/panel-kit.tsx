@@ -9,7 +9,6 @@
 import { For, splitProps } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
-import { WASH_BTN_CLASS } from './controls';
 
 const sectionTitleStyle: JSX.CSSProperties = {
   font: tokens.type.titleSm,
@@ -35,15 +34,17 @@ export const Row: Component<{ label: string; children: JSX.Element }> = (props) 
   </div>
 );
 
-// Geometry only — WASH_BTN_CLASS supplies the palette and the
-// hover/press/focus states (controls.ts). The radius override is the one
-// place this differs from a stock button: panes use the medium radius.
 const smallBtnStyle: JSX.CSSProperties = {
   display: 'inline-flex',
   'align-items': 'center',
   gap: '5px',
+  background: tokens.bgMenu,
+  color: tokens.fg,
+  border: `1px solid ${tokens.borderMenu}`,
   'border-radius': `${tokens.radiusMd}`,
   padding: '4px 10px',
+  font: tokens.type.textMd,
+  cursor: 'pointer',
 };
 
 /** SmallBtn is the compact action button used across panes. */
@@ -52,13 +53,7 @@ export const SmallBtn: Component<{
   'data-testid'?: string;
   children: JSX.Element;
 }> = (props) => (
-  <button
-    type="button"
-    data-testid={props['data-testid']}
-    onClick={props.onClick}
-    class={WASH_BTN_CLASS}
-    style={smallBtnStyle}
-  >
+  <button type="button" data-wash-hit data-testid={props['data-testid']} onClick={props.onClick} style={smallBtnStyle}>
     {props.children}
   </button>
 );
@@ -73,10 +68,12 @@ const selectStyle: JSX.CSSProperties = {
   cursor: 'pointer',
 };
 
-/** Select is a styled <select> over [value, label] option pairs. */
+/** Select is a styled <select> over [value, label] option pairs. A third
+ *  element `true` greys an option out: shown, with its label saying why,
+ *  but not choosable. */
 export const Select: Component<{
   value: string;
-  options: [string, string][];
+  options: [string, string, boolean?][];
   onChange: (v: string) => void;
   'data-testid'?: string;
 }> = (props) => (
@@ -86,7 +83,7 @@ export const Select: Component<{
     onInput={(e) => props.onChange(e.currentTarget.value)}
     style={selectStyle}
   >
-    <For each={props.options}>{([v, l]) => <option value={v}>{l}</option>}</For>
+    <For each={props.options}>{([v, l, off]) => <option value={v} disabled={off}>{l}</option>}</For>
   </select>
 );
 
@@ -129,7 +126,7 @@ export const Checkbox: Component<{
   disabled?: boolean;
   'data-testid'?: string;
 }> = (props) => (
-  <label style={{ ...checkboxLabelStyle, ...(props.disabled ? { opacity: 0.5, cursor: 'default' } : {}) }}>
+  <label data-wash-hit style={{ ...checkboxLabelStyle, ...(props.disabled ? { opacity: 0.5, cursor: 'default' } : {}) }}>
     <input
       type="checkbox"
       checked={props.checked}

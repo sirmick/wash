@@ -85,3 +85,24 @@ test('the press that opened the menu does not immediately close it', () => {
   press(document.body);
   expect(m.dismissed()).toBe(0);
 });
+
+// A submenu trigger (the start menu's Recent rows) is announced as a menu
+// item with a popup, not as a button — "Files" the app and "Files" the
+// recent-folders row must not read as the same control.
+test('a popup item is a menuitem that says whether its submenu is open', () => {
+  const { getByText } = render(() => (
+    <>
+      <MenuItem label="Plain" onClick={() => {}} />
+      <MenuItem label="Closed" popup={{ expanded: false }} onClick={() => {}} />
+      <MenuItem label="Open" popup={{ expanded: true }} onClick={() => {}} />
+    </>
+  ));
+  const plain = getByText('Plain').closest('button')!;
+  expect(plain.getAttribute('role')).toBeNull();
+  expect(plain.getAttribute('aria-haspopup')).toBeNull();
+  const closed = getByText('Closed').closest('button')!;
+  expect(closed.getAttribute('role')).toBe('menuitem');
+  expect(closed.getAttribute('aria-haspopup')).toBe('menu');
+  expect(closed.getAttribute('aria-expanded')).toBe('false');
+  expect(getByText('Open').closest('button')!.getAttribute('aria-expanded')).toBe('true');
+});

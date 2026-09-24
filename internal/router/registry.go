@@ -46,6 +46,10 @@ var reservedIDs = map[string]bool{
 	// user-writable shadow could claim the id and forge that trust. Reserved
 	// for the same reason as com.wash.priv.
 	"com.wash.netd": true,
+	// The inference service holds API credentials and is the allowlist boundary
+	// for private window contents. Do not let a user-writable shadow impersonate
+	// it and receive prompts intended for the core service.
+	"com.wash.inference": true,
 }
 
 // Entry is one row of the catalog.

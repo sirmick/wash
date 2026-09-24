@@ -144,6 +144,133 @@ hand. Read its types; hand-roll the client.
   official Claude Agent SDK. Renamed from `@zed-industries/claude-code-acp`,
   which now only prints a deprecation warning.
 - **Gemini CLI, Copilot CLI** — native ACP, no adapter.
+- **OpenCode** — native ACP (`opencode acp`), npm package `opencode-ai`.
+  See below.
+
+### OpenCode, verified 2026-09-24 (OpenCode 1.18.32)
+
+Run against `internal/acp` with a scratch probe and the conformance test
+(`WASH_ACP_ADAPTER='opencode acp'`).
+
+- **The model is an ACP config option.** `session/new` returns `model`
+  (category `model`, type select) and `mode` (`build` | `plan`). Setting
+  `model` with `session/set_config_option` works, so
+  `configureWorkspaceSession` sets it like any other adapter's; no config
+  file or environment workaround is needed. After a model change an
+  `effort` option (category `thought_level`) appears, and it **resets to
+  `low`**, so a launch that cares must set it. Every OpenRouter model
+  checked offers `low | high | max | default` (Opus also `medium | xhigh`).
+- **The model list depends on credentials.** Without any key it lists only
+  OpenCode's free Zen models (`opencode/big-pickle`, the default).
+  With `OPENROUTER_API_KEY` in its environment it lists 770
+  `openrouter/<id>` models, including OpenRouter's self-updating
+  `openrouter/~vendor/family-latest` aliases. The list is not checked
+  against the key, so a wrong key surfaces on the first prompt.
+- **Presets are not accepted.** `openrouter/@preset/<name>` fails with
+  `model not found`: the option is a closed select.
+- **`OPENCODE_CONFIG_CONTENT`** is read as an extra config layer (JSON). It
+  could set `model` at launch, but ACP makes that unnecessary. Wash uses it
+  for permissions (next point).
+- **Permissions: by default OpenCode does not ask.** Edits and shell
+  commands inside the session folder ran with no
+  `session/request_permission` at all; only paths outside the folder asked
+  (kind `other`, `rawInput.filepath` / `rawInput.command`). Wash therefore
+  launches it with
+  `OPENCODE_CONFIG_CONTENT={"permission":{"edit":"ask","bash":"ask"}}`
+  (`adapters.go`, `opencodePermissions`). Asked, a command arrives as kind
+  `execute` with `rawInput.command`, the shape `toolRequest` already turns
+  into `Bash(…)`. An edit arrives as kind `edit` with the path as its title
+  (`rawInput.filepath`, lower case, so the title fallback supplies the
+  subject). Options are `once` / `always` / `reject` with the standard
+  kinds, so the approval queue and "Always allow" work unchanged.
+- **It does not use wash's `fs/*` or `terminal/*`**, although both are
+  advertised: it reads, writes and runs commands itself. The session-cwd
+  confinement of `acpfs.go` and `acpterm.go` therefore does not apply;
+  approvals are the only gate.
+- **Usage reaches the status bar.** It sends `usage_update` with `used`,
+  `size` and `cost` (the last is ignored), which agentd already reads.
+- `loadSession: true`. `authMethods` lists `opencode-login` even when
+  sessions open fine, as codex-acp does.
+- **Real work on OpenRouter models, verified with the owner's key.** Task: a
+  Go module whose `Clamp` returned `hi` for values below `lo`, with a failing
+  test; "fix calc.go without changing the test, then run `go test`". Effort
+  high, every permission approved.
+  - DeepSeek V4 Pro (`openrouter/deepseek/deepseek-v4-pro-0813`): correct
+    fix (both bounds), test left alone, passed; 17 s, 11k tokens, $0.024.
+    Asked for the edit and for `go test`.
+  - GLM-5.3 (`openrouter/z-ai/glm-5.3`): the same fix; ran `go test` before
+    and after; 11 s, 10.5k tokens, $0.048. Three asks.
+  - Through Wash itself, in an isolated test router: key saved and tested
+    from the Connections section ("valid"), "OpenRouter budget / coding"
+    started OpenCode with `effort:high model:openrouter/deepseek/deepseek-v4-pro-0813`
+    through `opencode@openrouter`, the three asks were answered with the
+    window's Allow buttons, the fix passed, the status bar read 15k/1049k,
+    and the key appeared in no log.
+- **`claude@openrouter` works** for a one-line turn (claude-agent-acp
+  0.81.2, default model). With a wrong token the prompt does not fail: it
+  hangs, retrying, until the caller's deadline.
+
+Model options offered by the other adapters on the same day, which the
+stacks' defaults (`apps/agentd/be/stacks.json`) are chosen from:
+
+| Adapter | `model` values | effort option |
+|---|---|---|
+| claude-agent-acp 0.81.2 | `default`, `opus[1m]`, `claude-fable-5-1[1m]`, `sonnet`, `haiku` | `effort`: default…max; **none for `haiku`** |
+| codex-acp 1.13.1 | `gpt-6-astra` (frontier), `gpt-6-sol` (workhorse), `gpt-6-luna` (fast), `gpt-5.6-*`, `gpt-5.5` | `reasoning_effort`: low…max (+`ultra` except luna); resets to `low` |
+
+Claude Code's short names (`sonnet`, `haiku`, `opus[1m]`) follow new
+releases; Fable 5.1 and every Codex model are pinned IDs. Codex's `read-only`
+mode still asks rather than refusing ("Always ask to edit external files"),
+so it does not make a reviewer read-only.
+
+### Stacks, connections and keys (2026-09-24)
+
+The launcher picks a **stack** and a **tier** rather than an adapter. A stack
+is a named set of four tiers (`frontier`, `coding`, `review`, `small`); a tier
+is a `swarm.AgentProfile` naming an adapter, a connection, a model, an effort
+and optionally `capability:"reviewer"`. Three ship, as data in
+`apps/agentd/be/stacks.json`:
+
+| Stack | frontier | coding | review | small |
+|---|---|---|---|---|
+| All Anthropic (Claude Code) | `claude-fable-5-1[1m]` | `sonnet` | `sonnet`, reviewer (enforced) | `haiku` |
+| All OpenAI (Codex) | `gpt-6-astra` high | `gpt-6-sol` medium | `gpt-6-sol` medium (read-only by instruction) | `gpt-6-luna` low |
+| OpenRouter budget (OpenCode) | `~anthropic/claude-opus-latest` high | `deepseek/deepseek-v4-pro-0813` high | `z-ai/glm-5.3` high | `~deepseek/deepseek-v4-flash-latest` low |
+
+OpenRouter prices on 2026-09-24, per 1M tokens in/out: Opus 5.5 4.00/20.00,
+GLM-5.3 1.40/4.40, DeepSeek V4 Pro 0813 0.46/1.39, DeepSeek V4 Flash 0731
+0.03/0.32. The `~…-latest` aliases are used only where one priced the same as
+the intended model that day (Opus, V4 Flash); `~deepseek/deepseek-pro-latest`
+and `~z-ai/glm-latest` priced differently, so those tiers pin the snapshot.
+
+- **Overrides.** `agents.json` `stacks` overrides a stack by key, tier by
+  tier (`{"stacks":{"anthropic":{"tiers":{"frontier":{"provider":"claude","model":"opus[1m]"}}}}}`),
+  or adds one with a `name` and all four tiers. A stack that fails the
+  profile rules, names an unknown adapter or connection, sets `approval`, or
+  asks for a reviewer capability off Claude Code is shown greyed with the
+  reason. Availability (adapter installed, key set) is re-read every sweep.
+- **Starting.** `agent_start {stack, tier, agent?, model?, cwd}`: the tier is
+  resolved, the adapter launched through its connection, and the settings
+  applied with `configureWorkspaceSession`, which fails the start, listing
+  the adapter's values, if a model is not offered. `agent` and `model` are
+  the launcher's Advanced overrides; another adapter drops the tier's
+  adapter-specific values. `wash ai --agent X` is `agent` alone. agentd logs
+  `session settings … effective=` with what the adapter reports.
+- **Connections** are an adapter plus environment, named `adapter@provider`
+  (`opencode@openrouter`, `claude@openrouter`); the adapter's own id is its
+  direct connection. `agents.json` `connections` replaces or adds them. A
+  session's connection is recorded in History and the transcript head, and a
+  resume launches through it again.
+- **Keys** live in `~/.config/wash/keys.json`, beside `agents.json` and not
+  in it, written 0600. The launcher's Connections section saves, tests
+  (`GET https://openrouter.ai/api/v1/key`) and clears them; after saving, the
+  window sees only "set" and the last four characters, and no log carries a
+  value. A key is injected into the environment of adapters on connections
+  that name it (`OPENROUTER_API_KEY`; `ANTHROPIC_AUTH_TOKEN` for
+  `claude@openrouter`). **There is no keychain yet**: the file is plain JSON
+  protected by its mode only.
+- **Workspaces** take the orchestrator's stack; members say `"tier":"review"`
+  (AGENT_SWARM_BULK.md, API 3.3).
 
 **So Node is a prerequisite for the managed tier as a whole**, not just for
 Claude, and the "Codex first because its adapter is static" argument does
@@ -219,7 +346,8 @@ when wash-edit became its second consumer.
 
 | Surface | Shape | Notes |
 |---|---|---|
-| **`com.wash.ai`** | standalone window, `InstancingMulti`, one per session + a roster pane | empty state **is** the launcher; the default surface. Since [SIDEBAR.md](SIDEBAR.md) M2 the window is master-detail: `<AgentRoster>` lists every session agentd holds, and the per-session verbs live here rather than in the desktop rail |
+| **`com.wash.agents`** | singleton manager window | owns the launcher, live roster, history, and row-addressed verbs; it subscribes to agentd's global roster |
+| **`com.wash.ai`** | standalone controller window, `InstancingMulti`, one per live session | renders only one `<AgentSession>`; agentd enforces an exclusive controller lease and sends a keyed session view rather than the global roster |
 | **wash-term** | a pane in the layout tree | `Group.tabs` is `number[]` — the tree never asks what a channel is, so `layout.ts` needs **no change**. Needs a non-colliding id space, a renderer branch in `main.tsx`, and a prune rule matching TERM_LAYOUT §238 |
 | **wash-edit** | a side panel | third consumer; already embeds `terminal.tsx`, so the seam exists |
 
@@ -233,15 +361,26 @@ Three rules that must be designed in, not discovered:
   defer-on-nobody-home for approvals. A transcript subscription is not a
   roster subscription; sharing the counter would make opening a pane change
   approval behaviour, and closing the last pane defer a live question.
-- **A transcript is bulk traffic.** A streamed reply is one push per chunk,
-  each carrying the message accumulated so far, so one paragraph is hundreds
-  of frames. Both hops — agentd → the app, and the app → its FE — send it on
-  the Bulk class (docs/QOS.md §3), the same class pty output rides, so the
+- **A transcript is bulk traffic.** Streamed chunks are coalesced into text
+  deltas rather than re-sending the accumulated message. Both hops — agentd →
+  the app, and the app → its FE — send them on the Bulk class (docs/QOS.md
+  §3), the same class pty output rides, so the
   scheduler puts a talking agent behind the keystrokes and window moves the
   human is making while it talks. The cost is that Bulk can be overtaken:
   session-scoped frames carry the key they belong to, and a window drops the
   ones addressed to a session it has since switched away from.
-- **N renderers, zero affinity.** With three surfaces plus the sidebar, a
+- **Usage is a latest-wins Bulk patch.** An adapter may report changing token
+  counts for every streamed chunk. agentd updates its canonical roster state
+  immediately, but coalesces those counters for 500ms and sends only
+  `{kind:"usage_patch",rows:[…]}`. One send may be in flight; values arriving
+  behind it replace the pending value for that row. Permission, lifecycle and
+  other structural roster changes remain full Interactive snapshots.
+- **N renderers, one controller.** Permission asks remain pure state and may
+  be answered from any authorized renderer, but a hosted session has exactly
+  zero or one controlling `com.wash.ai` window. Transcript-only consumers do
+  not acquire that lease.
+
+- **N renderers for approvals.** With three surfaces plus the sidebar, a
   pending ask is pure state in agentd with no per-view ownership. Answering
   anywhere resolves everywhere. This is what let SIDEBAR.md §3.2(8) keep
   answering in the rail while every other verb moved into the app: the two
@@ -252,11 +391,11 @@ Three rules that must be designed in, not discovered:
   to route every verb through the session BE gateway — which resolves
   inside its own router, and therefore could never act on a remote host. An
   app talking to its own host's agentd is attested by construction, so
-  `launchOn(origin, 'com.wash.ai')` yields working verbs on any host with
+  `focusOrLaunch(origin, 'com.wash.agents')` yields working verbs on any host with
   no new addressing.
 
-Naming: `com.wash.agent` is claimed by `docs/AGENT.md` (the
-desktop-operating AI). This app is `com.wash.ai` unless that doc is renamed.
+Naming: `com.wash.agent` remains claimed by `docs/AGENT.md`; the manager is
+`com.wash.agents` and individual controllers remain `com.wash.ai`.
 
 ## 10. Removal — and the migration obligation
 
@@ -381,8 +520,8 @@ Three things real traffic taught that the spec pages did not:
   version field, so that leniency is load-bearing rather than sloppy.
 - Adapters emit update variants beyond the documented set —
   `available_commands_update`, `usage_update`, `session_info_update`. All
-  decoded; none consumed. They are named in `types.go` so that ignoring
-  one is a decision rather than a surprise.
+  decoded and consumed. In particular, `usage_update` takes the coalesced Bulk
+  patch path above rather than republishing the full roster at stream cadence.
 - `authMethods` advertises what is *available*, not what is *required*
   (§6).
 

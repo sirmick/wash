@@ -15,6 +15,11 @@ func intp(n int) *int { return &n }
 // The agent is not trusted to stay in the folder it was given; it is held
 // there. Every one of these paths is a plausible thing an agent asks for.
 func TestAgentFsRefusesOutsideTheSessionCwd(t *testing.T) {
+	// No desktop attached: a path outside every root asks, and an ask
+	// nobody can answer defers — which is still a refusal, and is what
+	// this test has always been about.
+	withStateDir(t)
+	withState(t, 0)
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(outside, []byte("private\n"), 0o600); err != nil {

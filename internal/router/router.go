@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"github.com/sirmick/wash/internal/activity"
 	"net"
 	"net/http"
 	"os"
@@ -99,6 +100,15 @@ type Config struct {
 	// reaping for it. Runner default is 24 hours when ListenUnix is set,
 	// and an app holding an idle-inhibit suspends it entirely — so the
 	// timer only ever collects sessions with nothing in flight.
+	// NoActivity turns the activity journal off (kiosk, CI); the shell
+	// verbs then answer empty. ActivityDir is where day files live
+	// (ActivityDir()); ActivityRetention / ActivityMaxBytes bound it
+	// (docs/COMMANDER.md §3.4; zero = the store's defaults).
+	NoActivity        bool
+	ActivityDir       string
+	ActivityRetention time.Duration
+	ActivityMaxBytes  int64
+
 	IdleTimeout time.Duration
 	// IdleTimeoutUnattached is the same period for a router no shell has
 	// ever reached. It wants to be short — this is the population the
@@ -180,6 +190,8 @@ type Router struct {
 	// decremented on disconnect — "has anyone ever been here" is a
 	// different question from "is anyone here now".
 	shellsSeen atomic.Uint64
+	// nextObserveReq mints observe.request ids (observe.go).
+	nextObserveReq atomic.Uint64
 
 	nextWindow   atomic.Uint32
 	nextInstance atomic.Uint64
@@ -190,7 +202,9 @@ type Router struct {
 	// panel's MB figures and the About screen survive WS reconnects;
 	// connectCount is the number of shell connections served; started
 	// stamps session (router process) start for the uptime readout.
-	linkTotals   *LinkStats
+	linkTotals *LinkStats
+	// journal is the activity journal (activity.go); nil when off.
+	journal      *activity.Store
 	connectCount atomic.Uint64
 	started      time.Time
 	// shellID is a per-router-run identity included in session snapshots.
@@ -323,6 +337,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		ingress:           newIngressRegistry(log),
 		peers:             make(map[string]peerTarget),
 		linkTotals:        &LinkStats{},
+		journal:           openJournal(cfg, log),
 		started:           now,
 		shellID:           fmt.Sprintf("%x", now.UnixNano()),
 	}
@@ -687,6 +702,16 @@ type channelBinding struct {
 	shell   *ShellSession
 	buf     *ringBuffer
 
+	// pty marks a generic channel the app opened as ChannelKindPty: the
+	// bytes are a terminal's, so an observation (observe.go) may read
+	// the ring as text. seen counts every byte the app has written on it
+	// and wroteAt is when the last one landed — the observation's
+	// revision, and how the busiest of an instance's channels is chosen.
+	// Guarded by shellMu.
+	pty     bool
+	seen    uint64
+	wroteAt int64
+
 	// behind marks a terminal channel whose FE has stopped keeping up:
 	// a non-blocking forward (docs/PTY_ROBUST.md, Fix B) found neither
 	// credit nor scheduler room, so live output is suppressed and held
@@ -696,6 +721,17 @@ type channelBinding struct {
 	// reset + realigned snapshot), never by merely resuming. Guarded by
 	// shellMu. Always false for peer/noCredit channels.
 	behind bool
+
+	// videoNeedFull marks a video channel that dropped a frame because the
+	// FE was out of credit. Video never goes behind on a would-block (see
+	// forwardVideoFrame): a dropped delta only leaves its rect stale, so the
+	// frame is discarded and, once credit is back, the owning app is asked
+	// for one whole frame. videoDrops counts the frames dropped since the
+	// last recovery log line (videoLoggedAt rate-limits those lines).
+	// Guarded by shellMu.
+	videoNeedFull bool
+	videoDrops    uint64
+	videoLoggedAt time.Time
 
 	// credit is the FE-→router flow-control ledger for this
 	// channel (docs/QOS.md §5). Bulk-class router→shell writes
@@ -823,6 +859,9 @@ func (r *Router) bringUp(ctx context.Context, inst *AppInstance) {
 	// The one "this instance exists" line — without it the registered
 	// set can't be reconstructed from the log.
 	r.log("app %s up instance=%s win=%d", inst.AppID, inst.InstanceID, inst.WindowID)
+	if inst.WindowID != 0 {
+		r.noteWindow("window.open", inst, inst.WindowID, inst.Manifest.Name, inst.Manifest.Name, nil)
+	}
 	if err := r.declareAppToAllShells(ctx, inst); err != nil {
 		r.log("declare %s instance=%s: %v", inst.AppID, inst.InstanceID, err)
 	}
@@ -873,6 +912,7 @@ func (r *Router) tearDown(inst *AppInstance) {
 	r.ingress.dropInstance(inst.InstanceID)
 	r.winSession.dropAppState(inst.InstanceID)
 	if inst.WindowID != 0 {
+		r.noteWindowClose(inst, inst.WindowID, inst.expectedExit.Load())
 		r.broadcastPatches(r.winSession.destroyWindow(inst.WindowID))
 	}
 	// Multi-window: tell shells about every window created via
@@ -886,8 +926,30 @@ func (r *Router) tearDown(inst *AppInstance) {
 	inst.extraWins = nil
 	inst.winMu.Unlock()
 	for _, w := range extra {
+		r.noteWindowClose(inst, w, true)
 		r.broadcastPatches(r.winSession.destroyWindow(w))
 	}
+}
+
+// noteWindowClose journals a window going away, once: approveWindowClose
+// and tearDown both end here, and destroyWindow's record is the guard —
+// a window already deleted is a close already noted.
+func (r *Router) noteWindowClose(inst *AppInstance, win uint32, orderly bool) {
+	if r.journal == nil {
+		return
+	}
+	title, ok := r.winSession.info(win)
+	if !ok {
+		return
+	}
+	line := "closed"
+	if !orderly {
+		line = "exited unexpectedly"
+	}
+	r.journal.Append(activity.Entry{
+		Kind: "window.close", App: inst.AppID, Instance: inst.InstanceID, Window: win, Title: title, Line: line,
+		Intent: &wire.ActivityIntent{Kind: "open", AppID: inst.AppID},
+	})
 }
 
 // broadcastInstanceGone lets long-lived services clean subscription sets
@@ -1410,6 +1472,13 @@ func (r *Router) resolveRecipient(ctx context.Context, rec wire.Recipient) (*App
 		return nil, wire.ErrCodeNotFound, fmt.Errorf("no app %q", rec.AppID)
 	}
 	if entry.Manifest.Instancing != InstancingSingleton {
+		// The desktop is the one non-singleton with exactly one live
+		// instance and a well-known id: apps report to the start menu
+		// (recent.note) without having to learn the session's instance
+		// id first. Never spawned on demand — no desktop, nobody to tell.
+		if sess := r.sessionInstance(); sess != nil && sess.Manifest.ID == rec.AppID {
+			return sess, "", nil
+		}
 		return nil, wire.ErrCodeForbidden, fmt.Errorf("app %q is not singleton; address by instance_id", rec.AppID)
 	}
 	if inst := r.singletonInstance(rec.AppID); inst != nil {
@@ -1559,22 +1628,19 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 		r.log("bundle bind %s: %v", inst.InstanceID, err)
 		return
 	}
-	// Chunk the write so very large bundles don't pin a giant
-	// allocation in the WS layer.
-	const chunkSize = 256 * 1024
-	for off := 0; off < len(payload); off += chunkSize {
-		end := off + chunkSize
-		if end > len(payload) {
-			end = len(payload)
-		}
-		// Bulk class: a bundle gates the window the user just launched, so
-		// it should beat Background assets but yield to interactive input
-		// and control. Safe on Bulk because the shell completes on the
-		// Size in the bind, not on the Unbind (docs/QOS.md tc reclass).
-		if err := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBulk); err != nil {
-			r.log("bundle frame %s: %v", inst.InstanceID, err)
-			return
-		}
+	// Chunk the write so very large bundles don't pin a giant allocation
+	// in the WS layer — and, sized well under the shell socket's send
+	// buffer (shell_sndbuf.go), so a control frame queued behind a bundle
+	// waits for one small frame, not a quarter-megabyte one.
+	// Bulk class: a bundle gates the window the user just launched, so
+	// it should beat Background assets but yield to interactive input
+	// and control. Safe on Bulk because the shell completes on the
+	// Size in the bind, not on the Unbind (docs/QOS.md tc reclass).
+	if err := writeChunked(payload, func(p []byte) error {
+		return s.WriteRawFrameClass(id, p, wire.ClassBulk)
+	}); err != nil {
+		r.log("bundle frame %s: %v", inst.InstanceID, err)
+		return
 	}
 	s.statsLink().recordCompression(len(raw), len(payload))
 	if err := s.WriteCtrl(wire.NewShellChannelUnbind(id, "bundle complete")); err != nil {
@@ -1696,10 +1762,30 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 			}
 		}
 		if len(replay) > 0 {
-			// Interactive class so the replay arrives in the same
-			// transactional window as the Bind that preceded it —
-			// see replayBundleToShell for the same rule.
-			if err := s.WriteRawFrameClass(id, replay, wire.ClassInteractive); err != nil {
+			// Bulk, chunked — matching resyncChannel, which already moved
+			// this traffic off the interactive lane. A reattached terminal
+			// replays its whole ring, up to ChannelScrollbackMaxBytes: 4
+			// MiB in ONE frame, on the lane that carries pointer motion,
+			// is a second of frozen UI on a slow link and the scheduler
+			// cannot preempt a frame it has already committed. The Bind
+			// above rides Interactive and so still lands first; live
+			// output that follows is Bulk too, so it stays behind this.
+			// CREDITLESS, like resyncChannel's snapshot: a recovery
+			// replay is not paced by the FE, and the credit gate keys on
+			// the CLASS, so moving this write to Bulk silently subjected
+			// it to a 64 KB window it had never needed. It then blocked
+			// in Reserve while holding shellMu, and the whole reattach
+			// stalled — no windows came back at all.
+			// ONE frame, for the reason resyncChannel spells out: a replay
+			// split across frames breaks xterm's viewport follow at a chunk
+			// boundary, and the terminal stops showing its own output while
+			// parsing every byte of it.
+			if err := func() error {
+				if !s.tryWriteRawClass(id, replay, wire.ClassBulk) {
+					return errReplayRefused
+				}
+				return nil
+			}(); err != nil {
 				// The FE just got a reset (channel.resync) but the
 				// scrollback snapshot behind it was lost — without a
 				// retry the terminal sits WIPED until new output
@@ -1762,9 +1848,9 @@ func (r *Router) resyncChannel(b *channelBinding) {
 	// ring is a concatenation of framed WebP payloads, and realignReplay's
 	// UTF-8/CSI trimming would corrupt them — replaying it hands the FE
 	// garbage (at best one frame decodes, the rest are discarded). Send the
-	// reset ONLY; the FE clears its canvas on channel.resync and waits for the
-	// next frame (REVIEW-X11-WAYLAND #6). Terminal (generic) channels keep the
-	// realigned scrollback replay.
+	// reset ONLY; the FE keeps its last frame on channel.resync and the
+	// force-frame nudge below repaints it (REVIEW-X11-WAYLAND #6). Terminal
+	// (generic) channels keep the realigned scrollback replay.
 	if b.buf != nil && !isVideoKind(b.kind) {
 		replay = b.buf.Snapshot()
 		if b.buf.Truncated() {
@@ -1787,7 +1873,26 @@ func (r *Router) resyncChannel(b *channelBinding) {
 		r.log("channel %d: resync deferred (bulk queue full) conn=%d", b.channelID, sh.connID)
 		return
 	}
-	if len(replay) > 0 && !sh.tryWriteRawClass(b.channelID, replay, wire.ClassBulk) {
+	// ONE frame, deliberately — this is the one writer that must not chunk.
+	// The FE writes a resync's bytes into xterm's own write queue, and xterm
+	// only keeps the viewport following its output while ydisp == ybase.
+	// Split across frames, the follow breaks at a chunk boundary: every byte
+	// still arrives and parses, and the viewport stays where it was while the
+	// buffer climbs past it — a terminal that has stopped showing its own
+	// output, which is indistinguishable from a hang (measured at ydisp=1232
+	// with ybase=15183 after a 20k-line burst; two runs in six).
+	//
+	// The cost is the one chunking was added to avoid: a replay frame is not
+	// preemptible once the writer commits it, so a grown ring (up to
+	// ChannelScrollbackMaxBytes) can delay a higher lane for its duration.
+	// That is the trade this path had before 54191d8f and it is the right way
+	// round — a resync is rare and recovers a terminal, while the frames it
+	// might delay are a drag's next position.
+	replayOK := true
+	if len(replay) > 0 {
+		replayOK = sh.tryWriteRawClass(b.channelID, replay, wire.ClassBulk)
+	}
+	if !replayOK {
 		// Reset went out but the snapshot didn't fit; leave behind set so
 		// the next grant resends reset + snapshot (re-reset is harmless).
 		r.log("channel %d: resync reset sent, snapshot deferred (%d bytes) conn=%d", b.channelID, len(replay), sh.connID)
@@ -1797,10 +1902,10 @@ func (r *Router) resyncChannel(b *channelBinding) {
 	b.behind = false
 
 	// Video kinds carry a DELTA stream that assumes lossless delivery, and the
-	// resync above sent NO ring replay for them (isVideoKind) — the FE just
-	// cleared its canvas on channel.resync. Nudge the owning app (wash-display)
-	// to clear its per-surface delta state and re-emit a whole frame, or the
-	// canvas stays blank until natural damage (REVIEW-X11-WAYLAND #6). On its
+	// resync above sent NO ring replay for them (isVideoKind), and frames were
+	// suppressed while behind. Nudge the owning app (wash-display) to clear its
+	// per-surface delta state and re-emit a whole frame, or the stale canvas
+	// stays until natural damage (REVIEW-X11-WAYLAND #6). On its
 	// own goroutine so the app write — bounded by appWriteTimeout but still a
 	// network write — never blocks the forward path holding shellMu here.
 	if isVideoKind(b.kind) && b.app != nil {
@@ -1811,6 +1916,69 @@ func (r *Router) resyncChannel(b *channelBinding) {
 			}
 		}()
 	}
+}
+
+// videoLogInterval rate-limits the per-channel video drop/recovery log lines:
+// a 60-70 fps guest over a slow link can drop and recover several times a
+// second, and a line per episode would flood the router log.
+const videoLogInterval = 5 * time.Second
+
+// forwardVideoFrame is the credit-gated forward for a video channel. Unlike a
+// terminal, a video stream tolerates a hole: each frame is an independent
+// image of a dirty rect, so a dropped frame only leaves that rect stale until
+// something repaints it. So a would-block DROPS the frame instead of marking
+// the channel behind — behind → channel.resync made the FE clear its canvas,
+// and a busy guest (e.g. a 70 fps emulator whose frames outran the 64 KiB
+// credit window) cycled that several times a second: the window flashed
+// transparent. The first successful forward after a drop asks the app for a
+// whole frame to repaint the stale rects (recoverVideoChannel).
+func (r *Router) forwardVideoFrame(sh *ShellSession, b *channelBinding, payload []byte) {
+	if !sh.tryWriteRawBulk(b, payload) {
+		b.shellMu.Lock()
+		b.videoNeedFull = true
+		b.videoDrops++
+		b.shellMu.Unlock()
+		return
+	}
+	r.recoverVideoChannel(b)
+}
+
+// recoverVideoChannel nudges the owning app (wash-display) for a whole frame
+// if the channel dropped frames since the last nudge. Called after a
+// successful video forward and on a credit grant (so a guest that went quiet
+// right after a drop still gets its stale rects repainted). If the forced
+// frame itself doesn't fit, it's dropped like any other and the next grant or
+// forward nudges again — one nudge per recovery, never a loop on its own.
+func (r *Router) recoverVideoChannel(b *channelBinding) {
+	b.shellMu.Lock()
+	if !b.videoNeedFull {
+		b.shellMu.Unlock()
+		return
+	}
+	b.videoNeedFull = false
+	app, win, ch := b.app, b.windowID, b.channelID
+	var drops uint64
+	now := time.Now()
+	logIt := now.Sub(b.videoLoggedAt) >= videoLogInterval
+	if logIt {
+		drops = b.videoDrops
+		b.videoDrops = 0
+		b.videoLoggedAt = now
+	}
+	b.shellMu.Unlock()
+	if logIt {
+		r.log("channel %d: video dropped %d frame(s) for lack of FE credit — requested a full frame", ch, drops)
+	}
+	if app == nil {
+		return
+	}
+	// Own goroutine, as in resyncChannel: the app write must never block the
+	// forward path.
+	go func() {
+		if err := app.WriteEvt(wire.NewEvtWindowForceFrame(win)); err != nil {
+			r.log("channel %d: force-frame nudge failed: %v", ch, err)
+		}
+	}()
 }
 
 // resyncBehindChannels re-runs resyncChannel for every channel currently
@@ -1868,10 +2036,7 @@ func (r *Router) broadcastPatches(patches []wire.SessionPatch) {
 	if len(patches) == 0 {
 		return
 	}
-	msg := wire.NewShellSessionPatch(patches...)
 	for _, s := range r.shellList() {
-		if err := s.WriteCtrl(msg); err != nil {
-			r.log("broadcast patch: %v", err)
-		}
+		s.queuePatches(patches)
 	}
 }

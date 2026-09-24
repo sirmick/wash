@@ -24,8 +24,12 @@ type windowSession struct {
 	// (the human looked) and by the app withdrawing the request.
 	attnWanted map[uint32]bool
 	appState   map[string]json.RawMessage // by instance_id; opaque to router
-	nextZ      uint32
-	nextOffset int32
+	// appStateVer counts the sets per instance_id: an observation's
+	// revision for the blob (observe.go), never reset while the instance
+	// lives.
+	appStateVer map[string]uint64
+	nextZ       uint32
+	nextOffset  int32
 }
 
 // snapshot returns a stable, lock-released copy of the windows
@@ -56,12 +60,37 @@ func (s *windowSession) setAppState(instanceID string, state json.RawMessage) []
 	if s.appState == nil {
 		s.appState = make(map[string]json.RawMessage)
 	}
+	if s.appStateVer == nil {
+		s.appStateVer = make(map[string]uint64)
+	}
 	if state == nil {
 		delete(s.appState, instanceID)
 	} else {
 		s.appState[instanceID] = state
 	}
+	s.appStateVer[instanceID]++
 	return []wire.SessionPatch{{Op: wire.SessionPatchAppState, InstanceID: instanceID, State: state}}
+}
+
+// appStateFor returns an instance's saved blob and its version, for an
+// observation. ok is false when nothing is saved.
+func (s *windowSession) appStateFor(instanceID string) (state json.RawMessage, version uint64, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok = s.appState[instanceID]
+	return state, s.appStateVer[instanceID], ok
+}
+
+// window returns a copy of one window's record, for an observation's
+// metadata.
+func (s *windowSession) window(windowID uint32) (wire.SessionWindow, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := s.windows[windowID]
+	if w == nil {
+		return wire.SessionWindow{}, false
+	}
+	return *w, true
 }
 
 // dropAppState removes the state for instance_id. Called when the
@@ -71,6 +100,7 @@ func (s *windowSession) dropAppState(instanceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.appState, instanceID)
+	delete(s.appStateVer, instanceID)
 }
 
 // focusedWindowID returns the id of the focused window, or 0 if none.
@@ -146,6 +176,25 @@ func (s *windowSession) destroyWindow(windowID uint32) []wire.SessionPatch {
 	delete(s.windows, windowID)
 	delete(s.attnWanted, windowID)
 	return []wire.SessionPatch{{Op: wire.SessionPatchWindowDelete, WindowID: windowID}}
+}
+
+// info reports a window's current title and whether it exists. Read
+// before destroyWindow by the journal, which wants the title a window
+// closed with.
+func (s *windowSession) info(windowID uint32) (title string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := s.windows[windowID]
+	if w == nil {
+		return "", false
+	}
+	return w.Title, true
+}
+
+// title is info without the existence bit.
+func (s *windowSession) title(windowID uint32) string {
+	t, _ := s.info(windowID)
+	return t
 }
 
 // setTitle updates a window's title and returns the upsert patch.
@@ -227,15 +276,28 @@ func (s *windowSession) blurred(windowID uint32, w *wire.SessionWindow) {
 
 // move updates a window's position. State==maximized/minimized
 // windows ignore moves (the FE doesn't let you drag them anyway).
-func (s *windowSession) move(windowID uint32, x, y int32) []wire.SessionPatch {
+//
+// tok is the shell's nonce for this commit (ShellWindowMove.Tok). A tagged
+// move ALWAYS yields a patch, even a no-op or a refused one (window not
+// normal): the shell has already applied the move locally and is holding
+// its own geometry until the router echoes the token, so silence would
+// leave it holding forever. The echo carries the router's truth either way.
+func (s *windowSession) move(windowID uint32, x, y int32, tok uint32) []wire.SessionPatch {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w := s.windows[windowID]
-	if w == nil || w.State != wire.WindowStateNormal {
+	if w == nil {
 		return nil
 	}
-	if w.X == x && w.Y == y {
-		return nil
+	if tok != 0 {
+		w.GeomTok = tok
+	}
+	if w.State != wire.WindowStateNormal || (w.X == x && w.Y == y) {
+		if tok == 0 {
+			return nil
+		}
+		cp := *w
+		return []wire.SessionPatch{{Op: wire.SessionPatchWindowUpsert, Window: &cp}}
 	}
 	w.X = x
 	w.Y = y
@@ -244,15 +306,23 @@ func (s *windowSession) move(windowID uint32, x, y int32) []wire.SessionPatch {
 }
 
 // resize updates a window's size.
-func (s *windowSession) resize(windowID, width, height uint32) []wire.SessionPatch {
+// tok: see move.
+func (s *windowSession) resize(windowID, width, height uint32, tok uint32) []wire.SessionPatch {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w := s.windows[windowID]
-	if w == nil || w.State != wire.WindowStateNormal {
+	if w == nil {
 		return nil
 	}
-	if w.W == width && w.H == height {
-		return nil
+	if tok != 0 {
+		w.GeomTok = tok
+	}
+	if w.State != wire.WindowStateNormal || (w.W == width && w.H == height) {
+		if tok == 0 {
+			return nil
+		}
+		cp := *w
+		return []wire.SessionPatch{{Op: wire.SessionPatchWindowUpsert, Window: &cp}}
 	}
 	w.W = width
 	w.H = height

@@ -2,7 +2,6 @@ import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import type { Component, JSX, ParentComponent } from 'solid-js';
 import { tokens } from './tokens';
-import { WASH_BTN_CLASS } from './controls';
 
 // Menu positions one of two ways:
 //   - cursor-relative (x/y in props): drop-on-target menus,
@@ -91,6 +90,12 @@ export const Menu: ParentComponent<MenuProps> = (props) => {
           'border-radius': `${tokens.radiusMd}`,
           padding: '4px 0',
           'min-width': '160px',
+          // A menu taller than the viewport clamps to the top edge above and
+          // then runs off the bottom, where its last rows render but cannot be
+          // clicked — edit's Syntax menu, whose last row is Word Wrap, on a
+          // short window. Bound it to the viewport and let it scroll.
+          'max-height': 'calc(100vh - 8px)',
+          'overflow-y': 'auto',
           'box-shadow': tokens.shadowMenu,
           'z-index': props.zIndex ?? tokens.zMenu,
           ...positionFor(props),
@@ -136,11 +141,22 @@ export const MenuSeparator: Component = () => (
 // MenuItem is the row inside a Menu. Most uses are a label +
 // onClick; chrome menus add an icon; disabled is for unavailable
 // entries (greyed out, no hover, cursor not-allowed).
+//
+// The highlight comes from the interaction layer (hit.ts) rather than the
+// onMouseEnter/createSignal pair this used to carry — one stylesheet
+// instead of a signal per rendered row, and it brings the press and
+// keyboard-focus states the hand-rolled version never had. "strong" keeps
+// the emphatic solid-bar highlight a menu wants; the default 10% wash
+// reads too timid for a menu row.
 export interface MenuItemProps {
   label: string;
+  title?: string;
   icon?: JSX.Element;
   trailing?: JSX.Element;
   disabled?: boolean;
+  /** opens a submenu (a start-menu Recent row): announced as a menu item
+   *  with a popup rather than a button, which is what it is */
+  popup?: { expanded: boolean };
   'data-testid'?: string;
   onClick: () => void;
 }
@@ -149,36 +165,35 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
   return (
     <button
       type="button"
+      data-wash-hit="strong"
       data-testid={props['data-testid']}
+      title={props.title}
       // Disabled for real, not just dimmed: without the attribute the item
       // stays keyboard-focusable and assistive tech announces it as
       // available. The onClick guard below stays as the belt to this
       // braces (a click can still be dispatched programmatically).
       disabled={props.disabled}
       aria-disabled={props.disabled ? 'true' : undefined}
+      role={props.popup ? 'menuitem' : undefined}
+      aria-haspopup={props.popup ? 'menu' : undefined}
+      aria-expanded={props.popup ? (props.popup.expanded ? 'true' : 'false') : undefined}
       onClick={() => {
         if (!props.disabled) props.onClick();
       }}
-      // Hover used to be a per-item signal and a re-render; it's the
-      // stylesheet's job now (controls.ts), which also brings the press
-      // and keyboard-focus states a menu row never had.
-      class={WASH_BTN_CLASS}
       style={{
         display: 'flex',
         'align-items': 'center',
         gap: props.icon ? '8px' : undefined,
         width: '100%',
         'text-align': 'left',
-        // A menu row takes the FULL selection fill on hover, not the
-        // subtle derived lift a button gets — that's the convention every
-        // menu in every desktop follows, and the row is large enough to
-        // carry it without shouting.
-        '--wash-btn-bg': 'transparent',
-        '--wash-btn-border': 'transparent',
-        '--wash-btn-bg-hover': tokens.bgRowSelected,
+        background: 'transparent',
+        color: tokens.fg,
+        border: 'none',
+        'border-radius': `${tokens.radiusSm}`,
         padding: '4px 10px',
         cursor: props.disabled ? 'not-allowed' : 'pointer',
         opacity: props.disabled ? 0.5 : 1,
+        font: tokens.type.textMd,
       }}
     >
       <Show when={props.icon}>

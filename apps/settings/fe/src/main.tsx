@@ -22,7 +22,6 @@ import {
   Section,
   Select,
   SmallBtn,
-  WASH_BTN_CLASS,
   createAppBus,
   defaultPackId,
   defineWashApp,
@@ -440,20 +439,20 @@ const PanelHost: Component<{
 
 const RailItem: Component<{ label: string; active: boolean; onClick: () => void }> = (props) => (
   <button
+    data-wash-hit
     type="button"
     onClick={props.onClick}
     data-active={props.active}
-    aria-current={props.active ? 'page' : undefined}
-    class={WASH_BTN_CLASS}
     style={{
       display: 'block',
       width: '100%',
       'text-align': 'left',
       padding: '8px 12px',
-      // Selected pane rests filled; both branches feed --wash-btn-bg so
-      // the current pane still responds to the cursor (controls.ts).
-      '--wash-btn-bg': props.active ? tokens.bgRowSelected : 'transparent',
-      '--wash-btn-border': 'transparent',
+      background: props.active ? tokens.bgRowSelected : 'transparent',
+      color: tokens.fg,
+      border: 'none',
+      cursor: 'pointer',
+      font: tokens.type.textMd,
       'border-radius': `${tokens.radiusMd}`,
     }}
   >
@@ -611,24 +610,21 @@ const PackCard: Component<{ pack: Pack; active: boolean; onSelect: () => void }>
   const swatch = (name: string, fallbackHex: string) => props.pack.scheme[name] || fallbackHex;
   return (
     <button
+      data-wash-hit
       type="button"
       onClick={props.onSelect}
       data-testid={`pack-card-${props.pack.id}`}
       data-active={props.active}
-      aria-pressed={props.active}
       title={props.pack.name}
-      class={WASH_BTN_CLASS}
       style={{
         display: 'flex',
         'flex-direction': 'column',
         gap: '6px',
         padding: '6px',
-        '--wash-btn-bg': props.active ? tokens.bgRowSelected : tokens.bgInset,
-        '--wash-btn-border': props.active ? tokens.accentBlue : tokens.borderMenu,
-        // The card's selection ring is 2px, not the class's 1px — the
-        // active pack has to be obvious across a wide gallery.
-        'border-width': '2px',
+        background: props.active ? tokens.bgRowSelected : tokens.bgInset,
+        border: `2px solid ${props.active ? tokens.accentBlue : tokens.borderMenu}`,
         'border-radius': `${tokens.radiusLg}`,
+        cursor: 'pointer',
         width: '160px',
       }}
     >

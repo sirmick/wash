@@ -17,10 +17,9 @@
 // down unchanged rows (see the prevRows comment).
 
 import type { Component, JSX } from 'solid-js';
-import { createMemo, createEffect, For, Show } from 'solid-js';
+import { createMemo, createSignal, createEffect, For, Show } from 'solid-js';
 import { ChevronRight, ChevronDown, ChevronUp } from 'lucide-solid';
 import { tokens } from './tokens';
-import { WASH_BTN_CLASS, WASH_ROW_CLASS } from './controls';
 
 // A single flattened row, matching @wash/fs-client's flattenTree output.
 export interface FileTreeRow<E> {
@@ -86,6 +85,13 @@ export interface FileTreeProps<E extends FileTreeEntry> {
   rowTint?: (entry: E) => string | undefined; // name + icon colour; undefined → default fg
   rowHint?: (entry: E) => string | undefined; // value for the data-hint attribute (e2e + styling)
   rowTrailing?: (entry: E) => JSX.Element | null; // slot after the name (fm's setid badge)
+  // Replaces the plain name text (not the rename input): fm's filter
+  // highlighting and search-result relative paths. Omit → entry.name.
+  renderName?: (entry: E, path: string) => JSX.Element;
+  // Rows to render dimmed: fm's cut-but-not-yet-pasted items. The row
+  // stays fully interactive — dimming says "this is going somewhere",
+  // not "this is disabled". Omit → nothing is dimmed.
+  isDimmed?: (path: string) => boolean;
 
   // ---- columns + header ----
   // Extra columns beyond Name. Omit/[] → name-only (edit). The Name track is
@@ -207,27 +213,19 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
     const arrow = h.sortKey !== key ? null : h.sortDesc ? <ChevronDown size={11} /> : <ChevronUp size={11} />;
     return (
       <button
+        data-wash-hit
         type="button"
         data-testid={`${props.testIdPrefix}-header-${key}`}
         disabled={!sortable}
         onClick={() => sortable && h.onSort(key)}
-        class={WASH_BTN_CLASS}
         style={{
-          '--wash-btn-bg': 'transparent',
-          '--wash-btn-border': 'transparent',
-          '--wash-btn-fg': tokens.fgMuted,
-          // A sortable header brightens its label rather than filling —
-          // a fill here would read as a selected column, which it isn't.
-          '--wash-btn-fg-hover': tokens.fg,
+          background: 'transparent',
+          border: 'none',
+          color: tokens.fgMuted,
           font: tokens.type.textSm,
           cursor: sortable ? 'pointer' : 'default',
-          // A non-sortable header is `disabled` so it isn't a tab stop,
-          // but it's a column label, not a dead control — hold it at full
-          // opacity rather than taking the sheet's disabled dimming.
-          opacity: 1,
           padding: '0 8px',
           height: `${HEADER_ROW_H}px`,
-          'border-radius': '0',
           'box-sizing': 'border-box',
           display: 'flex',
           'align-items': 'center',
@@ -243,6 +241,9 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
 
   return (
     <div
+      // The scrolling viewport. Its click handler is for clearing the
+      // selection on empty space; the rows inside are the hit targets.
+      data-wash-no-hit
       ref={containerEl!}
       data-testid={props.listTestId}
       {...(props.containerAttrs ?? {})}
@@ -277,51 +278,49 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
       {props.prepend}
       <For each={stableRows()}>
         {(row) => {
+          const [hover, setHover] = createSignal(false);
           const entry = () => row.entry;
           const renameState = () => props.renaming?.(row.path) ?? null;
           const dropTarget = () => !!props.isDropTarget?.(row.path);
           return (
             <div
+              data-wash-hit="subtle"
               data-testid={`${props.testIdPrefix}-entry-${entry().name}`}
               data-type={entry().type}
               data-path={row.path}
               data-hint={props.rowHint?.(entry())}
               data-selected={props.isSelected(row.path) ? 'true' : undefined}
               data-drop-target={dropTarget() ? 'true' : undefined}
+              data-dimmed={props.isDimmed?.(row.path) ? 'true' : undefined}
               draggable="true"
               onDragStart={(ev) => props.onRowDragStart?.(ev, row.path, entry())}
               onDragEnd={props.onRowDragEnd}
               onDragOver={(ev) => props.onRowDragOver?.(ev, row.path, entry())}
               onDrop={(ev) => props.onRowDrop?.(ev, row.path, entry())}
+              onMouseEnter={() => setHover(true)}
+              onMouseLeave={() => setHover(false)}
               onClick={(ev) => props.onRowClick(row.path, entry(), ev)}
               onDblClick={() => props.onRowDblClick?.(row.path, entry())}
               onContextMenu={(ev) => props.onRowContextMenu?.(ev, entry(), row.path)}
-              // Hover was a signal per row — one createSignal and one
-              // re-render for every entry in the directory. WASH_ROW_CLASS
-              // does it in CSS, and adds the press and keyboard-focus
-              // states rows never had.
-              class={WASH_ROW_CLASS}
               style={{
                 display: 'grid',
                 'grid-template-columns': template(),
                 'align-items': 'center',
                 padding: '3px 8px',
-                // Resting fill only. Hover and press derive from it, so a
-                // selected row (or a live drop target) still responds to
-                // the cursor instead of freezing at its highlight.
-                '--wash-row-bg': dropTarget()
+                background: dropTarget()
                   ? tokens.bgDropTarget
                   : props.isSelected(row.path)
                   ? tokens.bgRowSelected
+                  : (props.hoverHighlight ?? true) && hover()
+                  ? tokens.bgRowHover
                   : 'transparent',
-                // hoverHighlight={false} pins hover to the resting fill
-                // rather than dropping the class, so a picker that doesn't
-                // want row highlighting keeps its focus ring.
-                ...((props.hoverHighlight ?? true) ? {} : { '--wash-row-bg-hover': 'var(--wash-row-bg)' }),
                 color: tokens.fg,
+                cursor: 'pointer',
                 'user-select': 'none',
                 font: tokens.type.textMd,
                 'box-shadow': dropTarget() ? `inset 0 0 0 2px ${tokens.borderDropTarget}` : 'none',
+                outline: 'none',
+                opacity: props.isDimmed?.(row.path) ? 0.45 : 1,
               }}
             >
               {/* Name cell: chevron + icon + name (+ trailing). The tint colours
@@ -337,12 +336,8 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                 }}
               >
                 <span
+                  data-wash-hit
                   data-testid={`${props.testIdPrefix}-chevron-${entry().name}`}
-                  // Only a control on a directory row — a file's chevron
-                  // slot is a spacer. aria-disabled keeps the hover and
-                  // press off the ones that don't expand anything.
-                  class={WASH_BTN_CLASS}
-                  aria-disabled={isDirLike(entry()) ? undefined : 'true'}
                   style={{
                     width: '12px',
                     display: 'inline-flex',
@@ -350,9 +345,6 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                     'justify-content': 'center',
                     opacity: 0.6,
                     'flex-shrink': 0,
-                    border: 'none',
-                    '--wash-btn-bg': 'transparent',
-                    '--wash-btn-fg-hover': tokens.fg,
                     cursor: isDirLike(entry()) ? 'pointer' : 'default',
                   }}
                   onClick={(ev) => {
@@ -387,7 +379,7 @@ export function FileTree<E extends FileTreeEntry>(props: FileTreeProps<E>): JSX.
                     'font-weight': props.isCurrent?.(row.path) ? 'bold' : 'normal',
                   }}
                 >
-                  <Show when={renameState()} fallback={entry().name}>
+                  <Show when={renameState()} fallback={props.renderName ? props.renderName(entry(), row.path) : entry().name}>
                     <input
                       data-testid={`${props.testIdPrefix}-rename-input`}
                       ref={(el) => setTimeout(() => { el.focus(); el.select(); }, 0)}

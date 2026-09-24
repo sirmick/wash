@@ -58,7 +58,6 @@ test.use({
     // Isolate code-server's user-data/extensions under a per-test
     // XDG dir so the run doesn't touch the developer's config; also
     // where the workbench's per-instance folder SaveState lands.
-    xdgConfig: true,
   },
 });
 

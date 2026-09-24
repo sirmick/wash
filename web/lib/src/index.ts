@@ -1,6 +1,6 @@
 /// <reference path="./window-wash.d.ts" />
 
-export { tokens, accentColor, hoverFill, activeFill, borderHoverFill } from './tokens';
+export { tokens, accentColor } from './tokens';
 export type { Tokens } from './tokens';
 export { packs, defaultPackId, getPack, applyScheme, washAppearance, onAppearanceChange } from './packs';
 export type { Pack } from './packs';
@@ -11,6 +11,8 @@ export type { AppBus, AppBusMessage, AppBusMsgBound, AppBusOptions } from './app
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';
 export { Menu, MenuItem, MenuSeparator } from './menu';
+export { Tab, TAB_HEIGHT } from './tab';
+export type { TabProps } from './tab';
 export { MenuBar, kbdStyle } from './menubar';
 export type { MenuBarProps, MenuBarMenu } from './menubar';
 export type { MenuProps, MenuItemProps } from './menu';
@@ -36,15 +38,19 @@ export {
   fontById,
   TERM_THEMES,
   themeById,
+  parseOsc7,
+  TERM_SCROLLBACK_LINES,
 } from './terminal';
-export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme } from './terminal';
+export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme, TermSearchOptions, TermCursorStyle, TermLinks } from './terminal';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
 export { Markdown, parseBlocks, parseInline } from './markdown';
 export type { MarkdownProps, Align } from './markdown';
 export { AgentSession } from './agent-session';
-export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus, AgentConfig } from './agent-session';
+export type { AgentSessionProps, AgentEvent, AgentAsk, AgentStatus, AgentConfig, PromptBlock, InsertedDraft } from './agent-session';
+export { applyAgentEvent, mergeAgentEvents, utf8Len } from './agent-events';
+export type { ApplyResult } from './agent-events';
 // The roster (docs/SIDEBAR.md M2): com.wash.ai's list pane, and the
 // desktop rail's Agents section until M2c retires that use. Types are
 // Roster* rather than Agent* because agent-session already owns AgentAsk
@@ -56,6 +62,9 @@ export {
   AGENT_STATES,
   agentStateColor,
   agentStateLabel,
+  agentActivityLabel,
+  agentActivityColor,
+  agentActivityPulses,
   detachedLabel,
   isOver,
   isWorking,
@@ -78,14 +87,8 @@ export type { PrivUnlockOverlayProps, PrivUnlockState } from './priv-unlock';
 export { b64encode, b64decode, encryptPassword } from './priv-crypto';
 export type { AgentRosterProps, RosterRow, RosterAsk, RosterSession } from './agent-roster';
 export { defineWashApp } from './define-app';
-export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS } from './scrollbars';
-export {
-  ensureControlStyles,
-  WASH_BTN_CLASS,
-  WASH_ROW_CLASS,
-  WASH_REVEAL_CLASS,
-  WASH_REVEAL_HOST_CLASS,
-} from './controls';
+export { ensureScrollbarStyles, WASH_SCROLL_CLASS, WASH_SCROLL_GUTTER_CLASS, WASH_SCROLL_HIDDEN_CLASS } from './scrollbars';
+export { ensureHitStyles, HIT_ATTR } from './hit';
 export type { WashAppProps, DefineWashAppOptions } from './define-app';
 export { defineSettingsPanel, PANEL_PORT_PROP } from './define-settings-panel';
 export type {

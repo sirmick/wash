@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.14.1
+Version:        0.16.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,63 @@ fi
 exit 0
 
 %changelog
+* Wed Sep 16 2026 sirmick <sirmick@gmail.com> - 0.16.0-1
+- Optional AI provider service (com.wash.inference): OpenAI-compatible,
+  Codex CLI and Claude CLI adapters behind one contract, credentials kept
+  in the service, callers allowlisted, every request guarded and audited.
+- Session Summary (experimental): an explicit, bounded capture of the open
+  windows reduced into one briefing, with a Content API apps can implement.
+- Agent resume is idempotent, npx adapter launches no longer race, and a
+  dying adapter's reason reaches the transcript.
+* Mon Sep 14 2026 sirmick <sirmick@gmail.com> - 0.15.0-1
+- Agents split into a single Agents manager (New, History, Running) and one
+  leased window per live session; per-window views and coalesced usage and
+  preview patches end the roster flood a chatty agent caused.
+- Start menu Recent pops out per app: Files (last fm folder), Edit, Agent
+  sessions and Radio stations, plus any other app with recent files.
+- Radio, Washamp and Music bind private sockets, so two routers on one host
+  no longer cross streams; assorted agent window and roster fixes.
+* Fri Sep 11 2026 sirmick <sirmick@gmail.com> - 0.14.5-1
+- The apps sweep part two (docs/Review-findings.md P2): the everyday
+  workflows fm, edit, term and the agent were still missing — search,
+  quick open, find/replace, per-tab cwd, session rename, attachments —
+  plus the desktop keys the shell owed (Ctrl+Alt+Tab, show desktop,
+  pinned apps, recent files).
+- Taskbar icons no longer flicker on a window event; wash-display frames
+  clients that ask for server-side decorations and drops a video frame
+  instead of flashing the window clear; wash-login scopes its session
+  registry to an explicit --run-root.
+* Tue Sep 09 2026 sirmick <sirmick@gmail.com> - 0.14.4-1
+- The apps sweep: seven data-loss items closed (editor saves keep file
+  identity; binary/oversized/non-UTF-8 files refuse to save; CRLF kept;
+  failed saves surfaced; unsaved work asks before closing; fm refuses a
+  paste into itself) and some thirty mid-use breakages fixed across the
+  agent, terminal, editor and file manager. See docs/Review-findings.md.
+- QoS lanes: interactive, bulk and background traffic no longer share one
+  FIFO; window drags stay smooth under a talking agent.
+* Mon Sep 08 2026 sirmick <sirmick@gmail.com> - 0.14.3-1
+- agent: a talking agent no longer floods the interactive traffic class. Every
+  chunk an agent narrated republished the whole roster - all rows, all pending
+  questions, the entire session history - to every subscriber, twice over.
+  Measured at 200 pushes for 200 chunks; it now publishes when something
+  actually changed.
+- about: the Link section splits traffic by the app that produced it, per
+  class, so "which app is using the link" has an answer on screen.
+* Mon Sep 07 2026 sirmick <sirmick@gmail.com> - 0.14.2-1
+- edit: Ctrl+S no longer throws away the buffer it just saved. Saving re-ran
+  the editor's tab-seeding path, which reset the caret and undo history, and
+  on a tab you had switched away from and back it restored a stale snapshot:
+  the text just written to disk vanished from the screen and the next save
+  wrote the old text back over the good file.
+- edit: Save As carries the live buffer and retires the editor handle the
+  rename orphaned.
+- agent: a default prompt, stored once and sent ahead of every new session.
+  Set it from the launcher or File menu; it lives in
+  ~/.config/wash/agent-default-prompt.txt and is re-read from the file, so
+  editing it by hand agrees with what the UI says.
+- desktop: dragging a window over a slow link no longer snaps back for a
+  round trip; QoS now survives the kernel send buffer.
+- build: a bare `make` builds instead of printing the binary list.
 * Wed Aug 27 2026 sirmick <sirmick@gmail.com> - 0.14.1-1
 - agent: a failed session renders red instead of green. A turn that died on
   an adapter error reported as done, and done paints green, so failure was

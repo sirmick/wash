@@ -16,11 +16,11 @@ import (
 func seedTwo(t *testing.T) time.Time {
 	t.Helper()
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "s-reconnect", "codex", "/home/mick/wash", now)
+	bindTranscript("acp:1", "s-reconnect", launchRecord{Agent: "codex"}, "/home/mick/wash", now)
 	writeSummary("s-reconnect", transcriptSummary{Agent: "codex", Cwd: "/home/mick/wash"})
 	appendPrompt("acp:1", "why does the banner race on reconnect", now)
 
-	bindTranscript("acp:2", "s-radio", "claude", "/home/mick/radio", now.Add(time.Minute))
+	bindTranscript("acp:2", "s-radio", launchRecord{Agent: "claude"}, "/home/mick/radio", now.Add(time.Minute))
 	writeSummary("s-radio", transcriptSummary{Agent: "claude", Cwd: "/home/mick/radio"})
 	appendPrompt("acp:2", "add somafm stations to the list", now.Add(time.Minute))
 	waitForTranscriptWrites()
@@ -182,7 +182,7 @@ func TestIndexIgnoresImagePayloads(t *testing.T) {
 	// agreeing is what keeps the two consistent.
 	withStateDir(t)
 	now := time.Unix(1_700_000_000, 0)
-	bindTranscript("acp:1", "s-img", "codex", "/home/mick", now)
+	bindTranscript("acp:1", "s-img", launchRecord{Agent: "codex"}, "/home/mick", now)
 	appendEvent("acp:1", Event{Kind: EventImage, Mime: "image/png", Text: strings.Repeat("QUJD", 40)}, now)
 	waitForTranscriptWrites()
 

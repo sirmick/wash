@@ -10,6 +10,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
+import { createStore, reconcile } from 'solid-js/store';
 import {
   AgentAsks,
   Menu,
@@ -20,8 +21,6 @@ import {
   getPack,
   tokens,
   washAssetUrl,
-  WASH_BTN_CLASS,
-  WASH_ROW_CLASS,
 } from '@wash/ui';
 import { PrivWidget, PrivUnlockOverlay } from '@wash/ui';
 import type { Pack, PrivReq, PrivUnlockState, RosterAsk, RosterRow } from '@wash/ui';
@@ -32,10 +31,34 @@ import { Section, type SectionState } from './sidebar/Section';
 import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
+import { TimelineWidget } from './sidebar/TimelineWidget';
+import { mergeNewestFirst, prependLive, type TimelineEntry } from './timeline';
 
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
 import { reconcileRemoteAttachments } from './remote-reconcile';
+import {
+  appMatches,
+  paletteEntries,
+  pinnedRows,
+  recentDir,
+  aimingAt,
+  recentGroups,
+  recordPointer,
+  recentMatches,
+  recentName,
+  recentPathOf,
+  rectIsLaid,
+  sameKeys,
+  stepSelection,
+  type AgentRecent,
+  type AgentRecentAction,
+  type PaletteEntry,
+  type PointerSample,
+  type RecentEntry,
+  type RecentGroup,
+  type RecentItem,
+} from './launcher';
 import { LinkWidget } from './sidebar/LinkWidget';
 import { AudioWidget, type AudioState } from './sidebar/AudioWidget';
 import { ClipboardWidget } from './sidebar/ClipboardWidget';
@@ -111,6 +134,15 @@ interface WindowInfo {
   w: number;
   h: number;
   viewport: { vx: number; vy: number };
+}
+
+// WinRow is a WindowInfo carrying the identity reconcile() matches rows on.
+// (origin, windowID) is the only unique window identity — window ids are
+// per-router — so the key folds both.
+type WinRow = WindowInfo & { key: string };
+
+function keyWindows(wins: WindowInfo[]): WinRow[] {
+  return wins.map((w) => ({ ...w, key: `${w.origin}#${w.windowID}` }));
 }
 
 // DesktopConfigMsg mirrors the BE's desktop.config app_msg. `bytes` is
@@ -255,7 +287,20 @@ function describeErr(err: unknown): string {
 const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // ---- reactive state ----
   const [catalog, setCatalog] = createSignal<CatalogApp[]>(window.wash.catalog());
-  const [windows, setWindows] = createSignal<WindowInfo[]>(window.wash.windows());
+  // Window rows are RECONCILED, never replaced wholesale. The shell rebuilds
+  // the entire WindowInfo array on every wm patch (a focus change, a move, a
+  // retitle), so a plain signal handed <For> all-new object references — and
+  // <For> keys on reference, so it tore down and rebuilt every taskbar pill on
+  // every window event. A rebuilt pill re-creates its <svg><use
+  // href="/icons.svg#…">, and an external-document <use> does not paint on the
+  // frame it is inserted: the icon blanked for a frame each time, which is the
+  // taskbar icon flicker. reconcile keyed on origin#windowID (ids are
+  // per-router, so neither half is unique alone) merges field changes into the
+  // existing row objects, so the pill's DOM — and its icon — survives and only
+  // the changed properties re-render.
+  const [winRows, setWinRows] = createStore<{ list: WinRow[] }>({ list: keyWindows(window.wash.windows()) });
+  const windows = (): WinRow[] => winRows.list;
+  const setWindows = (next: WindowInfo[]) => setWinRows('list', reconcile(keyWindows(next), { key: 'key' }));
   // Pager subscribes to viewport + screen size so it can highlight the
   // active cell and scale window outlines correctly when the user
   // resizes the browser.
@@ -265,6 +310,23 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [paletteOpen, setPaletteOpen] = createSignal(false);
   const [paletteQuery, setPaletteQuery] = createSignal('');
   const [paletteSelected, setPaletteSelected] = createSignal(0);
+  // Launcher memory, fed by the session BE's launcher.state push
+  // (apps/session/be/launcher.go): recent files the router routed to a
+  // handler (newest first, missing files already filtered BE-side) and
+  // the pinned app ids. Persisted under $XDG_STATE_HOME/wash/recent.json.
+  const [recent, setRecent] = createSignal<RecentEntry[]>([]);
+  // Right-click menu on a Recent row: {x, y, path} while open. Held at
+  // App level (not inside StartMenu) so the start menu's outside-click
+  // dismissal can be suppressed while it is up — the context menu is a
+  // portal, so to the start menu a click on it looks like "outside".
+  // `group` is set when the menu was opened from a flyout: Remove and Clear
+  // then act on that app's entries only.
+  const [recentMenu, setRecentMenu] = createSignal<{ x: number; y: number; entry: RecentEntry; group?: { id: string; label: string } } | null>(null);
+  // Right-click on an APP row: {x, y, appID} while open. Same portal
+  // caveat as recentMenu — the start menu must not dismiss under it.
+  const [appMenu, setAppMenu] = createSignal<{ x: number; y: number; appID: string } | null>(null);
+  // Pinned app ids in pin order, from the same launcher.state push.
+  const [pinned, setPinned] = createSignal<string[]>([]);
   // Desktop config arrives from the BE as desktop.config app_msg
   // (initial push on connect + every fswatch fire). Defaults below
   // = "no config file yet", matching the BE's zero-value reply.
@@ -286,6 +348,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     viewport: 'expanded',
     about: 'collapsed',
     notify: 'collapsed',
+    timeline: 'collapsed',
     bulk: 'collapsed',
     priv: 'collapsed',
     net: 'collapsed',
@@ -338,6 +401,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // roster push. An agent blocked on a human is the one thing in the
   // sidebar worth opening the section for on its own.
   const [agentAsks, setAgentAsks] = createSignal<RosterAsk[]>([]);
+  // agentd's session history (State.recent), newest first — the start
+  // menu's Agent flyout. Same push as the roster.
+  const [agentRecent, setAgentRecent] = createSignal<AgentRecent[]>([]);
 
   // Audio mixer — com.wash.audio's StateService snapshot (sources +
   // master volume), forwarded by the session BE as audio.state.
@@ -554,16 +620,166 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Filtered palette results. Root rows are mixed into the normal
   // catalog and sorted by name like everything else — the red row
   // already makes them stand out, no pinning needed.
-  const paletteResults = createMemo(() => {
-    const q = paletteQuery().trim().toLowerCase();
+  //
+  // Recent files ride along as rows too (launcher.ts paletteEntries): a
+  // query matches anywhere in the path, so "notes" and "home/u" both find
+  // /home/u/notes.md; with no query the newest few are listed under the apps.
+  const paletteResults = createMemo((): PaletteEntry[] => {
     const apps = [...catalog().filter((a) => !a.disabled), ...rootEntries()];
-    apps.sort((a, b) => a.name.localeCompare(b.name));
-    if (!q) return apps;
-    return apps.filter((a) => a.id.toLowerCase().includes(q) || a.name.toLowerCase().includes(q));
+    return paletteEntries(apps, recent(), paletteQuery());
   });
 
   const launchApp = (appID: string) => {
     window.wash.sendAppMsg(props.instance, { action: 'launch', app_id: appID });
+  };
+
+  // ---- launcher memory (recent files / pins) ----
+  // All mutations go through the session BE, which owns the state file and
+  // pushes launcher.state back; the FE never edits its copy locally.
+  // openRecent carries the app that recorded the entry: a folder has no
+  // extension for the router to resolve, so the BE spawns that app on it.
+  // A flyout item names its app (the same path can be under Files and
+  // Terminal); a palette or search row is the path's newest entry.
+  const openRecent = (path: string, appID?: string) => {
+    const app = appID ?? recent().find((r) => r.path === path)?.app_id ?? '';
+    window.wash.sendAppMsg(props.instance, { kind: 'recent.open', path, app_id: app });
+  };
+  const playRecent = (e: RecentEntry) => {
+    window.wash.sendAppMsg(props.instance, { kind: 'recent.play', app_id: e.app_id, name: e.name ?? '' });
+  };
+  const openAgentRecent = (s: AgentRecent, action: AgentRecentAction) => {
+    window.wash.sendAppMsg(props.instance, {
+      kind: 'agent_open',
+      action,
+      session_id: s.session_id,
+      row_key: s.row_key ?? '',
+    });
+  };
+  // Scoped to the entry's app from a flyout, which lists one app's entries.
+  // The flat search list shows a path once for every app that recorded it,
+  // so Remove there forgets the path everywhere (a path with no app_id), or
+  // an older twin would take the removed row's place. A name always belongs
+  // to its app.
+  const removeRecent = (e: RecentEntry, scoped: boolean) => {
+    const appID = scoped || !e.path ? e.app_id : '';
+    window.wash.sendAppMsg(props.instance, { kind: 'recent.remove', path: e.path, name: e.name ?? '', app_id: appID });
+  };
+  // No app id clears every app's entries.
+  const clearRecent = (appID?: string) => {
+    window.wash.sendAppMsg(props.instance, appID ? { kind: 'recent.clear', app_id: appID } : { kind: 'recent.clear' });
+  };
+  // One memo, not an inline prop expression: a prop expression is re-run on
+  // every read, and the start menu reads its groups from rows, keyboard
+  // handlers and the flyout alike.
+  const menuGroups = createMemo(() =>
+    recentGroups(recent(), agentRecent(), (id) => catalog().find((a) => a.id === id)?.name, agentRows()),
+  );
+  const setPin = (appID: string, on: boolean) => {
+    window.wash.sendAppMsg(props.instance, { kind: 'launcher.pin', app_id: appID, on });
+  };
+
+  // Mission Commander's switch (docs/COMMANDER.md §5.3): the local host's
+  // commander publishes its settings and stats through hostgw; the toggle
+  // goes to our own BE, which forwards it attested.
+  const commanderAuto = (): { on: boolean; detail: string } | null => {
+    const st = stateFor(hostgw(), LOCAL_ORIGIN, 'commander') as
+      { settings?: { automatic?: boolean }; stats?: { running?: boolean; reason?: string; briefs?: number; provider?: string } } | undefined;
+    if (!st?.settings) return null;
+    const on = !!st.settings.automatic;
+    const stats = st.stats ?? {};
+    const detail = !on ? 'Automatic briefs are off'
+      : stats.running ? `Briefing via ${stats.provider ?? 'provider'} · ${stats.briefs ?? 0} so far`
+        : `Not running: ${stats.reason ?? 'waiting'}`;
+    return { on, detail };
+  };
+
+  // ---- activity timeline (docs/COMMANDER.md §6) ----
+  // The journal is per host; the widget shows every connected host's,
+  // merged newest first. Loaded on mount and whenever the section opens,
+  // kept live by the routers' tails while the section is expanded, so a
+  // collapsed Timeline costs nothing but the query it made on mount.
+  const [timeline, setTimeline] = createSignal<TimelineEntry[]>([]);
+  const [timelineCursors, setTimelineCursors] = createSignal<Record<string, string>>({});
+  const [timelineLoading, setTimelineLoading] = createSignal(false);
+  const [timelineOff, setTimelineOff] = createSignal(false);
+  const loadTimeline = async (more = false) => {
+    setTimelineLoading(true);
+    try {
+      const cursors = timelineCursors();
+      const pages = more
+        ? await Promise.all(Object.entries(cursors).map(([host, cursor]) =>
+            window.wash.activityQuery(host === 'local' ? undefined : host, { limit: 100, cursor })
+              .catch(() => ({ host, entries: [] as TimelineEntry[] }))))
+        : await window.wash.activityQueryAll({ limit: 100 });
+      const next: Record<string, string> = more ? {} : {};
+      for (const p of pages) if (p.cursor) next[p.host] = p.cursor;
+      setTimelineCursors(next);
+      setTimeline((prev) => mergeNewestFirst(more ? [{ entries: prev }, ...pages] : pages, more ? 2000 : 500));
+      // Every host refusing is the journal being off, not a quiet day.
+      setTimelineOff(!more && pages.length > 0 && pages.every((p) => p.entries.length === 0) && await allJournalsOff());
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
+  const allJournalsOff = async () => {
+    try {
+      const st = await window.wash.activityStats(undefined);
+      return !st.enabled;
+    } catch {
+      return true;
+    }
+  };
+  let timelineTailOff: (() => void) | null = null;
+  createEffect(() => {
+    const open = (sectionStates().timeline ?? 'collapsed') === 'expanded';
+    if (open && !timelineTailOff) {
+      void loadTimeline();
+      timelineTailOff = window.wash.onActivity((e) => setTimeline((prev) => prependLive(prev, e)));
+    } else if (!open && timelineTailOff) {
+      timelineTailOff();
+      timelineTailOff = null;
+    }
+  });
+  onCleanup(() => { timelineTailOff?.(); });
+  // jumpTimeline acts on a row's intent through the paths the desktop
+  // already has: a window is focused (restored first) on its host, a
+  // session goes through agent_open, a path through recent.open.
+  const jumpTimeline = (e: TimelineEntry) => {
+    const i = e.intent;
+    if (!i) return;
+    const origin = e.host === 'local' ? 'local' : e.host;
+    switch (i.kind) {
+      case 'focus': {
+        const w = i.window_id ? windows().find((x) => x.origin === origin && x.windowID === i.window_id) : undefined;
+        if (w) {
+          // Restore first when buried, then focus: a restore alone brings
+          // the window back where it was in the stack, not to the front.
+          if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
+          window.wash.focusWindow(w.windowID, w.origin);
+        } else if (i.app_id) {
+          window.wash.focusOrLaunch(origin, i.app_id);
+        }
+        return;
+      }
+      case 'resume': {
+        const live = i.row_key ? agentRows().some((r) => r.key === i.row_key) : false;
+        window.wash.sendAppMsg(props.instance, {
+          kind: 'agent_open', action: live ? 'focus' : 'resume', session_id: i.session_id ?? '', row_key: live ? i.row_key : '',
+        });
+        return;
+      }
+      case 'open':
+        if (i.path) openRecent(i.path, i.app_id);
+        else if (i.app_id) window.wash.focusOrLaunch(origin, i.app_id);
+        return;
+    }
+  };
+  const clearTimeline = async () => {
+    await Promise.all(window.wash.windows().map((w) => w.origin).filter((o, k, a) => a.indexOf(o) === k)
+      .map((o) => window.wash.activityClear(o === 'local' ? undefined : o).catch(() => undefined)));
+    await window.wash.activityClear(undefined).catch(() => undefined);
+    setTimeline([]);
+    setTimelineCursors({});
   };
 
   // ---- remote hosts (sidebar) ----
@@ -590,6 +806,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // rows. Routes the latter through the session BE → wash-priv path
   // (queue + approval + password modal + sudo).
   const launchPick = (id: string) => {
+    const recentPath = recentPathOf(id);
+    if (recentPath !== null) {
+      openRecent(recentPath);
+      return;
+    }
     const src = rootSourceID(id);
     if (src) {
       const app = catalog().find((a) => a.id === src);
@@ -890,6 +1111,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         case 'host.ifaces':
           setNetIfaces((data.interfaces as NetIface[] | undefined) ?? []);
           return;
+        case 'launcher.state': {
+          const d = data as unknown as { recent?: RecentEntry[]; pinned?: string[] };
+          setRecent(Array.isArray(d.recent) ? d.recent : []);
+          setPinned(Array.isArray(d.pinned) ? d.pinned : []);
+          return;
+        }
         case 'notify.state': {
           // notify service → session BE forwards StateService payload
           // verbatim under a service-specific kind so the FE doesn't
@@ -958,7 +1185,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           const state = data.state as unknown as {
             rows?: RosterRow[];
             asks?: RosterAsk[];
+            recent?: AgentRecent[];
           };
+          setAgentRecent(Array.isArray(state?.recent) ? state.recent : []);
           const next = (state?.rows ?? []) as RosterRow[];
           const asks = (state?.asks ?? []) as RosterAsk[];
           const hadAsks = agentAsks().length > 0;
@@ -1246,6 +1475,29 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           />
         </Section>
         <Section
+          id="timeline"
+          title="Timeline"
+          icon="activity"
+          iconColor={tokens.accentViolet}
+          state={sectionStates().timeline ?? 'collapsed'}
+          onToggle={() => toggleSection('timeline')}
+          badge={timeline().length > 0 && (sectionStates().timeline ?? 'collapsed') === 'collapsed' ? String(Math.min(timeline().length, 99)) : ''}
+        >
+          <TimelineWidget
+            entries={timeline}
+            more={() => Object.keys(timelineCursors()).length > 0}
+            loading={timelineLoading}
+            off={timelineOff}
+            onJump={jumpTimeline}
+            onLoadMore={() => void loadTimeline(true)}
+            onClear={() => void clearTimeline()}
+            hostColor={(h) => hostHue(h)}
+            auto={commanderAuto}
+            onAuto={(on) => window.wash.sendAppMsg(props.instance, { kind: 'commander_set', automatic: on })}
+            onBriefNow={() => window.wash.sendAppMsg(props.instance, { kind: 'commander_run' })}
+          />
+        </Section>
+        <Section
           id="bulk"
           title="Bulk Ops"
           icon="list-checks"
@@ -1429,7 +1681,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               })
             }
           />
-          {/* The roster and its verbs live in com.wash.ai now. The rail
+          {/* The roster and its verbs live in com.wash.agents now. The rail
               says how many and where, and opens the app on the right
               host — which is the whole point: launchOn carries an origin,
               and the verbs it used to hold could not.
@@ -1440,17 +1692,17 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               among four identical windows. */}
           <AgentOpen
             hosts={() => agentHostSummary(hostgw())}
-            onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.ai')}
+            onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.agents')}
           />
           {/* The sharpest case in the whole plan (§1.2): an agent on B was
               invisible here. It now has a host, a count and a summary that
               distinguishes "waiting on you" from "working". The roster and
-              its verbs move into com.wash.ai in M2. */}
+              its verbs move into com.wash.agents. */}
           <HostGroups
             section="agents"
             rows={() => hostRows(SERVICE_AGENT, countBadge(waitingAgents), agentSummary)}
             {...groupProps}
-            onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.ai')}
+            onOpen={(origin) => window.wash.focusOrLaunch(origin, 'com.wash.agents')}
             openTitle={(origin) => `Open Agent on ${origin}`}
           />
         </Section>
@@ -1559,11 +1811,42 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <StartMenu
           apps={catalog()}
           rootRows={rootEntries()}
+          recent={recent()}
+          groups={menuGroups()}
+          holdFlyout={recentMenu() !== null}
           version={sysInfo()?.router?.version}
-          onDismiss={() => setMenuOpen(false)}
+          onDismiss={() => {
+            // A click on a row context menu is "outside" the start menu
+            // (portal); keep the menu up until that menu is gone.
+            if (recentMenu() || appMenu()) return;
+            setMenuOpen(false);
+          }}
           onPick={(id) => {
             setMenuOpen(false);
             launchPick(id);
+          }}
+          onOpenRecent={(path) => {
+            setMenuOpen(false);
+            openRecent(path);
+          }}
+          onRecentItem={(item) => {
+            setMenuOpen(false);
+            if (item.kind === 'path') openRecent(item.entry.path, item.entry.app_id);
+            else if (item.kind === 'station') playRecent(item.entry);
+            else openAgentRecent(item.session, item.action);
+          }}
+          pinned={pinned()}
+          onRecentContextMenu={(ev, entry, group) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            setAppMenu(null);
+            setRecentMenu({ x: ev.clientX, y: ev.clientY, entry, group });
+          }}
+          onAppContextMenu={(ev, appID) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            setRecentMenu(null);
+            setAppMenu({ x: ev.clientX, y: ev.clientY, appID });
           }}
           onLogout={() => {
             setMenuOpen(false);
@@ -1584,6 +1867,76 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
             window.location.href = '/logout';
           }}
         />
+      </Show>
+
+      <Show when={recentMenu()}>
+        {(m) => (
+          <Menu
+            data-testid="start-menu-recent-menu"
+            x={m().x}
+            y={m().y}
+            zIndex={tokens.zStartMenu + 1}
+            onDismiss={() => setRecentMenu(null)}
+          >
+            <MenuItem
+              data-testid="start-menu-recent-remove"
+              label="Remove"
+              onClick={() => {
+                removeRecent(m().entry, !!m().group);
+                setRecentMenu(null);
+              }}
+            />
+            {/* From a flyout, Clear is that app's: clearing the Edit row
+                must not also forget folders, stations and every other
+                app's files. The search list, which mixes apps, keeps the
+                clear-everything verb. */}
+            <Show
+              when={m().group}
+              fallback={
+                <MenuItem
+                  data-testid="start-menu-recent-clear"
+                  label="Clear recent"
+                  onClick={() => {
+                    clearRecent();
+                    setRecentMenu(null);
+                  }}
+                />
+              }
+            >
+              {(g) => (
+                <MenuItem
+                  data-testid="start-menu-recent-clear-group"
+                  label={`Clear ${g().label} history`}
+                  onClick={() => {
+                    clearRecent(g().id);
+                    setRecentMenu(null);
+                  }}
+                />
+              )}
+            </Show>
+          </Menu>
+        )}
+      </Show>
+
+      <Show when={appMenu()}>
+        {(m) => (
+          <Menu
+            data-testid="start-menu-app-menu"
+            x={m().x}
+            y={m().y}
+            zIndex={tokens.zStartMenu + 1}
+            onDismiss={() => setAppMenu(null)}
+          >
+            <MenuItem
+              data-testid="start-menu-pin"
+              label={pinned().includes(m().appID) ? 'Unpin from start' : 'Pin to start'}
+              onClick={() => {
+                setPin(m().appID, !pinned().includes(m().appID));
+                setAppMenu(null);
+              }}
+            />
+          </Menu>
+        )}
       </Show>
 
       <Show when={paletteOpen()}>
@@ -1935,11 +2288,10 @@ const PagerCell: Component<{
     top: `${top()}px`,
     width: `${props.cellW}px`,
     height: `${props.cellH}px`,
-    '--wash-row-bg': props.active
-      ? `color-mix(in srgb, ${tokens.accentBlue} 28%, transparent)`
-      : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
+    background: props.active ? `color-mix(in srgb, ${tokens.accentBlue} 28%, transparent)` : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
     border: props.active ? `1.5px solid ${tokens.accentBlue}` : `1px solid ${tokens.borderMenu}`,
     'border-radius': tokens.radiusSm,
+    cursor: 'pointer',
     overflow: 'hidden',
     'box-sizing': 'border-box',
   });
@@ -1952,9 +2304,9 @@ const PagerCell: Component<{
   };
   return (
     <div
+      data-wash-hit
       data-testid={`pager-cell-${props.cell.vx}-${props.cell.vy}`}
       data-active={props.active ? 'true' : 'false'}
-      class={WASH_ROW_CLASS}
       style={cellStyle()}
       onClick={onCellClick}
     >
@@ -1997,12 +2349,11 @@ const PagerWindow: Component<{
       top: `${r.top}px`,
       width: `${r.width}px`,
       height: `${r.height}px`,
-      '--wash-row-bg': props.win.focused
-        ? `color-mix(in srgb, ${tokens.accentBlue} 60%, transparent)`
-        : `color-mix(in srgb, ${tokens.fgMuted} 28%, transparent)`,
+      background: props.win.focused ? `color-mix(in srgb, ${tokens.accentBlue} 60%, transparent)` : `color-mix(in srgb, ${tokens.fgMuted} 28%, transparent)`,
       border: `1px solid ${props.win.focused ? tokens.accentBlue : tokens.borderFocus}`,
       'border-radius': tokens.radiusSm,
       'box-sizing': 'border-box',
+      cursor: 'pointer',
     };
   };
   const onClick = (ev: MouseEvent) => {
@@ -2013,8 +2364,8 @@ const PagerWindow: Component<{
   };
   return (
     <div
+      data-wash-hit
       data-testid={`pager-window-${props.win.windowID}-${props.cell.vx}-${props.cell.vy}`}
-      class={WASH_ROW_CLASS}
       style={style()}
       onClick={onClick}
       title={props.win.title}
@@ -2029,22 +2380,25 @@ const IconButton: Component<{
   onClick: (ev: MouseEvent) => void;
   children: JSX.Element;
 }> = (props) => {
+  const [hover, setHover] = createSignal(false);
   return (
     <button
+      data-wash-hit
       type="button"
       title={props.title}
       data-testid={props.testid}
       ref={props.ref}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       onClick={props.onClick}
-      // Hover was a per-button signal and a re-render; the stylesheet
-      // does it now, and brings the press and focus states with it.
-      class={WASH_BTN_CLASS}
       style={{
-        '--wash-btn-bg': 'transparent',
-        '--wash-btn-border': 'transparent',
+        background: hover() ? `color-mix(in srgb, ${tokens.fg} 8%, transparent)` : 'transparent',
+        color: tokens.fg,
+        border: '1px solid transparent',
         width: '32px',
         height: '32px',
         'border-radius': tokens.radiusMd,
+        cursor: 'pointer',
         display: 'flex',
         'align-items': 'center',
         'justify-content': 'center',
@@ -2071,10 +2425,11 @@ const WindowPill: Component<{
   };
   return (
     <button
+      data-wash-hit
       type="button"
       data-testid="taskbar-pill"
       data-attention={props.attention ? 'true' : undefined}
-      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, right-click to close`}
+      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, middle- or right-click to close`}
       onClick={visit}
       onDblClick={() => {
         // Snap the camera to the cell holding this window, then focus
@@ -2089,19 +2444,28 @@ const WindowPill: Component<{
         ev.preventDefault();
         window.wash.closeWindow(props.win.windowID, props.win.origin);
       }}
-      class={WASH_BTN_CLASS}
+      // Middle-click closes, the way it does on every browser tab strip and
+      // every other taskbar. It goes through window.wash.closeWindow, so the
+      // app gets the same close handshake a titlebar × gives it — an unsaved
+      // editor still gets to object.
+      onMouseDown={(ev) => {
+        // Chromium starts autoscroll on middle mousedown; Firefox pastes the
+        // X selection. Neither is what a taskbar middle-click means.
+        if (ev.button === 1) ev.preventDefault();
+      }}
+      onAuxClick={(ev) => {
+        if (ev.button !== 1) return;
+        ev.preventDefault();
+        window.wash.closeWindow(props.win.windowID, props.win.origin);
+      }}
       style={{
-        // The focused window's pill rests at the selection fill and the
-        // rest at a 4% wash of the foreground; both go through
-        // --wash-btn-bg so each hovers and presses from its own resting
-        // colour rather than one of them going inert.
-        '--wash-btn-bg': props.win.focused
-          ? tokens.bgRowSelected
-          : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
-        '--wash-btn-border': props.win.focused ? tokens.borderFocus : 'transparent',
+        background: props.win.focused ? tokens.bgRowSelected : `color-mix(in srgb, ${tokens.fg} 4%, transparent)`,
+        color: tokens.fg,
+        border: `1px solid ${props.win.focused ? tokens.borderFocus : 'transparent'}`,
         padding: '0 12px',
         height: '28px',
         'border-radius': tokens.radiusMd,
+        cursor: 'pointer',
         'max-width': '220px',
         // Window name on the start bar uses the title type (matches the
         // window's own titlebar — Chicago in Copland, etc.).
@@ -2139,7 +2503,20 @@ const WindowPill: Component<{
 const StartMenu: Component<{
   apps: CatalogApp[];
   rootRows: CatalogApp[];
+  /** recent files, newest first (session BE launcher.state) */
+  recent: RecentEntry[];
+  /** the Recent rows and their flyout items (launcher.ts recentGroups) */
+  groups: RecentGroup[];
+  /** keep the flyout up while an App-level menu it opened is showing */
+  holdFlyout: boolean;
+  /** pinned app ids, in pin order (session BE launcher.state) */
+  pinned: string[];
   onPick: (id: string) => void;
+  onOpenRecent: (path: string) => void;
+  onRecentItem: (item: RecentItem) => void;
+  /** `group` is the flyout the entry was right-clicked in, if any */
+  onRecentContextMenu: (ev: MouseEvent, entry: RecentEntry, group?: { id: string; label: string }) => void;
+  onAppContextMenu: (ev: MouseEvent, appID: string) => void;
   onDismiss: () => void;
   onLogout: () => void;
   onDisconnect: () => void;
@@ -2155,13 +2532,263 @@ const StartMenu: Component<{
     return merged;
   });
   const isRootRow = (id: string) => id.startsWith(ROOT_PREFIX);
+
+  // ---- search + keyboard ----
+  // The menu opens with the filter focused, so the whole launcher is
+  // type-then-Enter without ever reaching for the mouse. The three sections
+  // (Pinned, Recent, Apps) are ONE keyboard list: `rows` flattens them in
+  // render order so Arrow keys walk straight through the headers.
+  const [query, setQuery] = createSignal('');
+  const [selected, setSelected] = createSignal(0);
+  // The cursor is the Enter target from the moment the menu opens, so
+  // type-then-Enter needs no ceremony. PAINTING it on open is a different
+  // matter: the top row then wears a highlight before the pointer has been
+  // anywhere near it, which reads as "why is About wash already selected?".
+  // So the cursor only becomes visible once the keyboard is actually
+  // driving — a filter keystroke or an arrow. `data-selected` still marks
+  // the Enter target throughout, because that is what it means.
+  const [keyboardDriving, setKeyboardDriving] = createSignal(false);
+  const pinnedApps = createMemo(() => appMatches(pinnedRows(items(), props.pinned), query()));
+  // Searching flattens Recent back into matching files: a query is a
+  // question about names, and making someone open four flyouts to find
+  // the answer would hide it. With no query, Recent is one row per app.
+  const searching = () => query().trim() !== '';
+  const recentHits = createMemo(() => (searching() ? recentMatches(props.recent, query()) : []));
+  const groups = createMemo(() => (searching() ? [] : props.groups));
+  const appHits = createMemo(() => appMatches(items(), query()));
+  // The rows are keyed by group id, not by object: every agentd push and
+  // launcher.state rebuilds the group objects, and a <For> over those tore
+  // down each row — and the flyout's items — under a pointer about to click.
+  const groupByID = createMemo(() => new Map(groups().map((g) => [g.id, g] as const)));
+  const groupIDs = createMemo(() => groups().map((g) => g.id), undefined, { equals: sameKeys });
+  // The flyout reads the unfiltered groups: it is closed while searching.
+  const liveGroupByID = createMemo(() => new Map(props.groups.map((g) => [g.id, g] as const)));
+
+  // ---- Recent flyouts ----
+  // A group row pops its items out to the right of the menu. The flyout is
+  // a second portal <Menu>, so to the start menu a click inside it is
+  // "outside"; downInFlyout, set by a capture listener registered before
+  // Menu's own, is what tells the two apart.
+  const [flyout, setFlyout] = createSignal<{ id: string; x: number; y: number; kb: boolean } | null>(null);
+  const [flyoutSel, setFlyoutSel] = createSignal(0);
+  const groupEls = new Map<string, HTMLDivElement>();
+  let menuPanel: HTMLElement | null = null;
+  let downInFlyout = false;
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  // Recent pointer samples, for aim (see hoverGroup).
+  let trail: PointerSample[] = [];
+  onMount(() => {
+    const onDown = (ev: Event) => {
+      downInFlyout = !!(ev.target as Element | null)?.closest?.('[data-testid="start-menu-flyout"]');
+    };
+    const onMove = (ev: MouseEvent) => {
+      trail = recordPointer(trail, { x: ev.clientX, y: ev.clientY, t: performance.now() });
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('mousemove', onMove, true);
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('mousemove', onMove, true);
+      clearTimeout(hoverTimer);
+    });
+  });
+  // Opening is idempotent: a click on a row the hover already opened must
+  // not close it again. A keyboard open of a pointer-opened flyout does
+  // hand it the arrows, from the top.
+  const openFlyout = (id: string, kb: boolean) => {
+    clearTimeout(hoverTimer);
+    const cur = flyout();
+    if (cur?.id === id && cur.kb === kb) return;
+    const row = groupEls.get(id);
+    // A timer can outlive its row (a search, a push that dropped the group):
+    // a detached row measures all zeroes and would park the flyout in the
+    // corner of the screen.
+    if (!row || !row.isConnected) return;
+    const r = row.getBoundingClientRect();
+    if (!rectIsLaid(r)) return;
+    const panel = menuPanel ?? row.closest<HTMLElement>('[data-testid="start-menu"]');
+    // Beside the menu, its first item level with the row (the flyout's 4px
+    // top padding is why y sits 4px above the row).
+    const x = (panel?.getBoundingClientRect().right ?? r.right) + 2;
+    setFlyoutSel(0);
+    setFlyout({ id, x, y: r.top - 4, kb });
+  };
+  const closeFlyout = () => {
+    clearTimeout(hoverTimer);
+    setFlyout(null);
+  };
+  // Hover opens after a beat. A fixed beat alone was not enough: heading
+  // diagonally for an item low in the flyout crosses the rows below its
+  // own, and a pointer that takes longer than the beat to cross one swapped
+  // the flyout out from under itself. So while the pointer is still AIMING
+  // at the open flyout (launcher.ts aimingAt), the swap waits and is asked
+  // again; a pointer that stops on a row stops aiming, and gets its row.
+  const hoverGroup = (id: string) => {
+    clearTimeout(hoverTimer);
+    if (flyout()?.id === id) return;
+    if (!flyout()) {
+      hoverTimer = setTimeout(() => openFlyout(id, false), 120);
+      return;
+    }
+    if (aimingAtFlyout()) {
+      hoverTimer = setTimeout(() => hoverGroup(id), 80);
+      return;
+    }
+    hoverTimer = setTimeout(() => openFlyout(id, false), 150);
+  };
+  // Leaving the Recent rows for anything else closes the flyout after a
+  // beat — unless the pointer is still aiming at it: the way to a low item
+  // can pass over the app rows below the Recent section.
+  //
+  // A pointer already inside the flyout's box counts as having arrived: its
+  // own padding is outside the element that cancels these timers, so a
+  // re-check landing there used to find "not aiming" and close the flyout
+  // the pointer had just reached.
+  const aimingAtFlyout = () => {
+    const target = document.querySelector('[data-testid="start-menu-flyout"]')?.getBoundingClientRect();
+    if (!target) return false;
+    const p = trail[trail.length - 1];
+    if (p && p.x >= target.left && p.x <= target.right && p.y >= target.top && p.y <= target.bottom) return true;
+    return aimingAt(trail, performance.now(), target);
+  };
+  const hoverOther = () => {
+    clearTimeout(hoverTimer);
+    if (!flyout() || flyout()!.kb) return;
+    hoverTimer = setTimeout(() => (aimingAtFlyout() ? hoverOther() : closeFlyout()), aimingAtFlyout() ? 80 : 250);
+  };
+  // The live group, not the one captured at open: a launcher.state push
+  // while the flyout is up must show in it.
+  const flyoutGroup = createMemo(() => {
+    const f = flyout();
+    return f ? (liveGroupByID().get(f.id) ?? null) : null;
+  });
+  // A group can go while its flyout is up — the last Image Viewer entry
+  // removed, its file deleted. The flyout goes with it rather than keep
+  // offering the items it last showed.
+  createEffect(() => {
+    const f = flyout();
+    if (f && !liveGroupByID().has(f.id)) closeFlyout();
+  });
+  // Flyout items are keyed like the rows: by their stable key.
+  const flyoutItemByKey = createMemo(() => new Map((flyoutGroup()?.items ?? []).map((it) => [it.key, it] as const)));
+  const flyoutItemKeys = createMemo(() => (flyoutGroup()?.items ?? []).map((it) => it.key), undefined, { equals: sameKeys });
+  const runItem = (item: RecentItem) => {
+    closeFlyout();
+    props.onRecentItem(item);
+  };
+  // A Recent row is the app it names first and a submenu second. It used
+  // to be only the second, which made the four most-used rows in the menu
+  // the one place where clicking a row named "Files" did not start Files.
+  // The recents are still one hover — or one ArrowRight — away.
+  const runGroup = (id: string) => {
+    const app = props.apps.find((a) => a.id === id && !a.disabled);
+    // A group left behind by an app that is gone (or disabled) has nothing
+    // to start, so for it the click stays the submenu open it always was.
+    if (!app) {
+      openFlyout(id, false);
+      return;
+    }
+    closeFlyout();
+    props.onPick(app.id);
+  };
+
+  type Row = { run: () => void; group?: RecentGroup };
+  const rows = createMemo<Row[]>(() => [
+    ...pinnedApps().map((a) => ({ run: () => props.onPick(a.id) })),
+    ...groups().map((g) => ({ run: () => runGroup(g.id), group: g })),
+    ...recentHits().map((r) => ({ run: () => props.onOpenRecent(r.path) })),
+    ...appHits().map((a) => ({ run: () => props.onPick(a.id) })),
+  ]);
+  // Section offsets into that flat list, for the per-row selected mark.
+  const groupBase = createMemo(() => pinnedApps().length);
+  const recentBase = createMemo(() => groupBase() + groups().length);
+  const appBase = createMemo(() => recentBase() + recentHits().length);
+  // A new query renumbers everything; start again at the top. It also
+  // takes the Recent rows away, so any flyout goes too: a keyboard flyout
+  // left up would keep Enter and the arrows while the list below shows
+  // search hits, and Enter would run an item nobody was looking at. A hover
+  // timer armed on a row the search just removed must not fire either.
+  createEffect(() => {
+    query();
+    setSelected(0);
+    closeFlyout();
+  });
+  // Typing in the filter is keyboard driving, so the cursor shows from the
+  // first keystroke — which is also when it starts being useful.
+  createEffect(() => {
+    if (query() !== '') setKeyboardDriving(true);
+  });
+  const selMark = (i: number) => (i === selected() ? 'true' : undefined);
+  const onKey = (ev: KeyboardEvent) => {
+    // A keyboard-opened flyout takes the arrows until it is closed again;
+    // Escape and ArrowLeft close only it, the way a submenu does.
+    const f = flyout();
+    if (f?.kb) {
+      const items = flyoutGroup()?.items ?? [];
+      if (ev.key === 'Escape' || ev.key === 'ArrowLeft') {
+        ev.preventDefault();
+        closeFlyout();
+        return;
+      }
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        const item = items[flyoutSel()];
+        if (item) runItem(item);
+        return;
+      }
+      const next = stepSelection(ev.key, flyoutSel(), items.length);
+      if (next !== null) {
+        ev.preventDefault();
+        setFlyoutSel(next);
+      }
+      return;
+    }
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      // Like a submenu: Escape closes the innermost level first.
+      if (flyout()) closeFlyout();
+      else props.onDismiss();
+      return;
+    }
+    // ArrowRight is the submenu, Enter is the row: on a Recent row those
+    // are now two different things — the recents, and the app it names.
+    const group = rows()[selected()]?.group;
+    if (ev.key === 'ArrowRight' && group) {
+      ev.preventDefault();
+      setKeyboardDriving(true);
+      openFlyout(group.id, true);
+      return;
+    }
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      setKeyboardDriving(true);
+      rows()[selected()]?.run();
+      return;
+    }
+    const next = stepSelection(ev.key, selected(), rows().length);
+    if (next === null) return;
+    ev.preventDefault();
+    if (!keyboardDriving()) {
+      // The first arrow REVEALS the cursor where it already sits — which is
+      // the row Enter would have launched all along. Stepping on this press
+      // instead would walk straight past the top row without it ever having
+      // been seen.
+      setKeyboardDriving(true);
+      return;
+    }
+    setSelected(next);
+  };
   return (
+    <>
     <Menu
       data-testid="start-menu"
       anchor="bottom-left"
       animation="slide-up"
       zIndex={tokens.zStartMenu}
-      onDismiss={props.onDismiss}
+      onDismiss={() => {
+        if (downInFlyout) return;
+        props.onDismiss();
+      }}
       // overflow:hidden clips the one-shot shimmer band to the menu
       // panel so the diagonal sweep can't escape past the rounded
       // corners. Pointer-events on the shimmer div are off so it
@@ -2177,7 +2804,7 @@ const StartMenu: Component<{
         background: `var(--wash-startmenu-bg, ${tokens.bgMenu})`,
       }}
     >
-      <div class="wash-shimmer-sweep" aria-hidden="true" />
+      <div class="wash-shimmer-sweep" aria-hidden="true" ref={(el) => queueMicrotask(() => (menuPanel = el.parentElement))} />
       {/* Brand header: the wash logo + "wash <version>" in a larger
           italic face, sitting above the launcher rows. */}
       <div
@@ -2211,10 +2838,171 @@ const StartMenu: Component<{
           wash{props.version ? ` ${props.version}` : ''}
         </span>
       </div>
-      <div style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }}>
-      <Show when={items().length > 0} fallback={<div style={emptyStyle}>no apps registered</div>}>
-        <For each={items()}>
-          {(app) => {
+      <div onKeyDown={onKey}>
+      {/* Filter: matches app names/ids and recent PATHS, the same rule the
+          Ctrl+Space palette uses (launcher.ts). Autofocused, so opening the
+          menu and typing is the fast path; Arrows/Enter/Esc are handled on
+          the wrapper below so they work wherever focus sits inside. */}
+      <input
+        type="text"
+        data-testid="start-menu-search"
+        placeholder="Search…"
+        value={query()}
+        ref={(el) => queueMicrotask(() => el.focus())}
+        onInput={(e) => setQuery(e.currentTarget.value)}
+        style={{
+          width: '100%',
+          'box-sizing': 'border-box',
+          padding: '6px 10px',
+          margin: '0 0 4px',
+          background: 'transparent',
+          color: tokens.fg,
+          border: `1px solid ${tokens.borderMenu}`,
+          'border-radius': tokens.radiusSm,
+          outline: 'none',
+          font: tokens.type.text,
+        }}
+      />
+      <div style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }} onScroll={closeFlyout}>
+      {/* Pinned: apps the person put here by hand (right-click → Pin to
+          start), in pin order, above everything the machine decided. An
+          uninstalled app's id simply drops out (pinnedRows). */}
+      <Show when={pinnedApps().length > 0}>
+        <div data-testid="start-menu-pinned" style={sectionHeaderStyle}>Pinned</div>
+        <For each={pinnedApps()}>
+          {(app, i) => (
+            <div
+              data-selected={selMark(i())}
+              style={rowSelStyle(keyboardDriving() && i() === selected())}
+              onMouseEnter={hoverOther}
+              onContextMenu={(ev) => props.onAppContextMenu(ev, app.id)}
+            >
+              <MenuItem
+                data-testid="start-menu-pinned-item"
+                label={app.name}
+                disabled={app.disabled}
+                icon={
+                  app.icon ? (
+                    <span style={{ color: accentFor(app), display: 'inline-flex' }}>
+                      <SpriteIcon name={app.icon} size={16} />
+                    </span>
+                  ) : undefined
+                }
+                onClick={() => props.onPick(app.id)}
+              />
+            </div>
+          )}
+        </For>
+      </Show>
+      {/* Recent: one row per app — Files, Edit, Agent, Radio, then any
+          other app with recent files — each popping out its last few
+          items (launcher.ts recentGroups). The named rows show even when
+          empty, so where to look is learnable before there is anything to
+          find; the flyout says there is nothing yet. */}
+      <Show when={groups().length > 0}>
+        <div data-testid="start-menu-recent" style={sectionHeaderStyle}>Recent</div>
+        <For each={groupIDs()}>
+          {(id, i) => {
+            const group = () => groupByID().get(id);
+            const label = () => group()?.label ?? '';
+            const app = () => props.apps.find((a) => a.id === id);
+            const open = () => flyout()?.id === id;
+            let rowEl: HTMLDivElement | undefined;
+            onCleanup(() => {
+              if (rowEl && groupEls.get(id) === rowEl) groupEls.delete(id);
+            });
+            return (
+              <div
+                ref={(el) => {
+                  rowEl = el;
+                  groupEls.set(id, el);
+                }}
+                data-selected={selMark(groupBase() + i())}
+                data-open={open() ? 'true' : undefined}
+                style={rowSelStyle((keyboardDriving() && groupBase() + i() === selected()) || open())}
+                onMouseEnter={() => hoverGroup(id)}
+                onMouseLeave={() => clearTimeout(hoverTimer)}
+              >
+                <MenuItem
+                  data-testid={`start-menu-recent-group-${label().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+                  label={label()}
+                  title={app() ? `Open ${label()} — its recent items are in the submenu` : undefined}
+                  icon={
+                    <span style={{ color: app() ? accentFor(app()!) : tokens.fgMuted, display: 'inline-flex' }}>
+                      <SpriteIcon name={app()?.icon ?? groupIcon(id)} size={16} />
+                    </span>
+                  }
+                  // Both a launcher and a submenu trigger. "Files" was
+                  // only ever the second, which made the most-used rows in
+                  // the menu the one place a click did not start the app
+                  // it names. Hovering (or ArrowRight) still pops the
+                  // recents out to the side; the chevron says so.
+                  popup={{ expanded: open() }}
+                  trailing={<span aria-hidden="true" style={{ color: tokens.fgMuted }}>›</span>}
+                  // A group whose app is not installed — a recent file
+                  // left behind by one that was removed — has nothing to
+                  // launch, so for it the click still opens the flyout.
+                  // That open is idempotent: the hover has usually opened
+                  // it by the time the click lands, and a toggle would
+                  // close it again.
+                  onClick={() => runGroup(id)}
+                />
+              </div>
+            );
+          }}
+        </For>
+      </Show>
+      {/* Searching: matching recent files, flat, newest first. A row
+          re-issues the open through the session BE (same ext → handler
+          resolution as the original double-click); right-click offers
+          Remove / Clear recent. */}
+      <Show when={recentHits().length > 0}>
+        <div data-testid="start-menu-recent-hits" style={sectionHeaderStyle}>Recent</div>
+        <For each={recentHits()}>
+          {(r, i) => (
+            <div
+              data-selected={selMark(recentBase() + i())}
+              style={rowSelStyle(keyboardDriving() && recentBase() + i() === selected())}
+              onContextMenu={(ev) => props.onRecentContextMenu(ev, r)}
+            >
+              <MenuItem
+                data-testid="start-menu-recent-item"
+                label={recentName(r.path)}
+                icon={
+                  <span style={{ color: tokens.fgMuted, display: 'inline-flex' }}>
+                    <SpriteIcon name="file-text" size={16} />
+                  </span>
+                }
+                trailing={
+                  <span
+                    title={r.path}
+                    style={{
+                      color: tokens.fgMuted,
+                      'font-size': tokens.fontSizeSm,
+                      'max-width': '160px',
+                      overflow: 'hidden',
+                      'text-overflow': 'ellipsis',
+                      'white-space': 'nowrap',
+                    }}
+                  >
+                    {recentDir(r.path)}
+                  </span>
+                }
+                onClick={() => props.onOpenRecent(r.path)}
+              />
+            </div>
+          )}
+        </For>
+      </Show>
+      <Show when={pinnedApps().length > 0 || groups().length > 0 || recentHits().length > 0}>
+        <div data-testid="start-menu-apps" style={sectionHeaderStyle}>Apps</div>
+      </Show>
+      <Show
+        when={appHits().length > 0}
+        fallback={<div style={emptyStyle}>{items().length === 0 ? 'no apps registered' : 'no matches'}</div>}
+      >
+        <For each={appHits()}>
+          {(app, i) => {
             const root = isRootRow(app.id);
             // Stable data-testid hook for every launcher row so e2e
             // tests can disambiguate without relying on accessible
@@ -2236,6 +3024,12 @@ const StartMenu: Component<{
               </span>
             ) : undefined;
             return (
+              <div
+                data-selected={selMark(appBase() + i())}
+                style={rowSelStyle(keyboardDriving() && appBase() + i() === selected())}
+                onMouseEnter={hoverOther}
+                onContextMenu={(ev) => props.onAppContextMenu(ev, app.id)}
+              >
               <MenuItem
                 data-testid={rowTestid}
                 label={app.name}
@@ -2250,10 +3044,12 @@ const StartMenu: Component<{
                 }
                 onClick={() => props.onPick(app.id)}
               />
+              </div>
             );
           }}
         </For>
       </Show>
+      </div>
       </div>
       <div
         aria-hidden="true"
@@ -2276,14 +3072,129 @@ const StartMenu: Component<{
         onClick={() => props.onLogout()}
       />
     </Menu>
+    <Show when={flyoutGroup()}>
+      {(group) => (
+        <Menu
+          data-testid="start-menu-flyout"
+          x={flyout()!.x}
+          y={flyout()!.y}
+          zIndex={tokens.zStartMenu + 1}
+          style={{ 'min-width': '220px', 'max-width': '360px', padding: '4px' }}
+          onDismiss={() => {
+            // A click back on the start menu (another group, the search
+            // box) or on the Remove menu this flyout opened is not a reason
+            // to go; everything else outside is.
+            if (props.holdFlyout) return;
+            setTimeout(() => {
+              if (!downInFlyout && !menuPanel?.matches(':hover')) closeFlyout();
+            }, 0);
+          }}
+        >
+          <div data-group={group().id} onMouseEnter={() => clearTimeout(hoverTimer)}>
+            <Show
+              when={group().items.length > 0}
+              fallback={<MenuItem data-testid="start-menu-flyout-empty" label={group().empty} disabled onClick={() => {}} />}
+            >
+              <For each={flyoutItemKeys()}>
+                {(key, i) => {
+                  // Read through the map so a push that rebuilds the item
+                  // (a new verb, a new title) updates this row in place.
+                  const item = () => flyoutItemByKey().get(key);
+                  const action = () => {
+                    const it = item();
+                    return it?.kind === 'agent' ? it.action : undefined;
+                  };
+                  const detail = () => {
+                    const it = item();
+                    return it && it.kind !== 'station' ? it.detail : '';
+                  };
+                  const detailTitle = () => {
+                    const it = item();
+                    return it?.kind === 'path' ? it.entry.path : it?.kind === 'agent' ? it.session.cwd : undefined;
+                  };
+                  const sel = () => !!flyout()?.kb && i() === flyoutSel();
+                  return (
+                    <Show when={item()}>
+                      {(it) => (
+                        <div
+                          data-kind={it().kind}
+                          data-action={action()}
+                          data-selected={sel() ? 'true' : undefined}
+                          style={rowSelStyle(sel())}
+                          onContextMenu={(ev) => {
+                            const cur = it();
+                            // Agent sessions are history agentd owns; the
+                            // Agents app is where they are renamed and deleted.
+                            if (cur.kind === 'agent') return;
+                            props.onRecentContextMenu(ev, cur.entry, { id: group().id, label: group().label });
+                          }}
+                        >
+                          <MenuItem
+                            data-testid="start-menu-flyout-item"
+                            label={it().label}
+                            icon={
+                              <span style={{ color: tokens.fgMuted, display: 'inline-flex' }}>
+                                <SpriteIcon name={it().icon} size={16} />
+                              </span>
+                            }
+                            trailing={
+                              detail() ? (
+                                <span
+                                  title={detailTitle()}
+                                  style={{
+                                    color: tokens.fgMuted,
+                                    'font-size': tokens.fontSizeSm,
+                                    // Narrow screens give the name the room:
+                                    // a 160px path left "note-0.md" wrapping.
+                                    'max-width': 'min(160px, 25vw)',
+                                    'min-width': 0,
+                                    overflow: 'hidden',
+                                    'text-overflow': 'ellipsis',
+                                    'white-space': 'nowrap',
+                                  }}
+                                >
+                                  {detail()}
+                                </span>
+                              ) : undefined
+                            }
+                            onClick={() => runItem(it())}
+                          />
+                        </div>
+                      )}
+                    </Show>
+                  );
+                }}
+              </For>
+            </Show>
+          </div>
+        </Menu>
+      )}
+    </Show>
+    </>
   );
 };
+
+// groupIcon is a Recent row's icon when its app is not in the catalog (the
+// Agents app on a host without it, say).
+function groupIcon(appID: string): string {
+  switch (appID) {
+    case 'com.wash.fm':
+      return 'folder';
+    case 'com.wash.edit':
+      return 'file-pen';
+    case 'com.wash.agents':
+      return 'bot';
+    case 'com.wash.radio':
+      return 'radio';
+  }
+  return 'file-text';
+}
 
 const Palette: Component<{
   inputRef: (el: HTMLInputElement) => void;
   query: string;
   onQueryChange: (v: string) => void;
-  results: CatalogApp[];
+  results: PaletteEntry[];
   selected: number;
   isRootRowID: (id: string) => boolean;
   onHover: (i: number) => void;
@@ -2293,6 +3204,9 @@ const Palette: Component<{
 }> = (props) => {
   return (
     <div
+      // Dismiss backdrop — a click on the scrim closes the palette, but the
+      // scrim is not a thing you point at.
+      data-wash-no-hit
       data-testid="palette"
       onClick={(ev) => {
         if (ev.currentTarget === ev.target) props.onClose();
@@ -2323,7 +3237,7 @@ const Palette: Component<{
       >
         <input
           type="text"
-          placeholder="Search apps…"
+          placeholder="Search apps and recent files…"
           data-testid="palette-input"
           ref={props.inputRef}
           value={props.query}
@@ -2365,7 +3279,7 @@ const Palette: Component<{
 };
 
 const PaletteRow: Component<{
-  app: CatalogApp;
+  app: PaletteEntry;
   selected: boolean;
   isRoot?: boolean;
   onHover: () => void;
@@ -2378,25 +3292,24 @@ const PaletteRow: Component<{
   });
   return (
     <button
+      data-wash-hit
       type="button"
       data-testid={`palette-item-${props.app.id}`}
+      data-path={props.app.recent?.path}
       ref={el!}
-      // onMouseEnter moves the palette's keyboard cursor, so the
-      // selected fill stays a prop rather than a :hover — the two must
-      // not disagree about which row is current.
       onMouseEnter={props.onHover}
       onClick={props.onPick}
-      class={WASH_BTN_CLASS}
       style={{
         display: 'flex',
         'align-items': 'center',
         gap: '10px',
         width: '100%',
         padding: '8px 16px',
-        '--wash-btn-bg': props.selected ? tokens.bgRowSelected : 'transparent',
-        '--wash-btn-border': 'transparent',
-        'border-radius': '0',
+        background: props.selected ? tokens.bgRowSelected : 'transparent',
+        color: tokens.fg,
+        border: 'none',
         'text-align': 'left',
+        cursor: 'pointer',
         font: tokens.type.textLg,
       }}
     >
@@ -2418,7 +3331,7 @@ const PaletteRow: Component<{
         </Show>
       </span>
       <span style={{ flex: 1 }}>{props.app.name}</span>
-      <span style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.id}</span>
+      <span style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.subtitle ?? props.app.id}</span>
     </button>
   );
 };
@@ -2511,6 +3424,24 @@ const clockStyle: JSX.CSSProperties = {
   'font-variant-numeric': 'tabular-nums',
   opacity: 0.7,
   'font-size': '13px',
+};
+
+// Keyboard highlight for a start-menu row. MenuItem paints itself
+// transparent at rest, so a background on the wrapper reads as the row's
+// own selection — no fork of the shared component to add one prop.
+const rowSelStyle = (on: boolean): JSX.CSSProperties => ({
+  background: on ? tokens.bgRowSelected : 'transparent',
+  'border-radius': tokens.radiusSm,
+});
+
+// Section label inside the start menu ("Recent", "Pinned", "Apps").
+const sectionHeaderStyle: JSX.CSSProperties = {
+  padding: '6px 10px 2px',
+  color: tokens.fgMuted,
+  font: tokens.type.textSm,
+  'text-transform': 'uppercase',
+  'letter-spacing': '0.6px',
+  'user-select': 'none',
 };
 
 const emptyStyle: JSX.CSSProperties = {

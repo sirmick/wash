@@ -20,11 +20,10 @@ import {
   tokens,
   type AudioSource,
   type WashAppProps,
-  WASH_BTN_CLASS,
-  WASH_ROW_CLASS,
 } from '@wash/ui';
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { ChevronDown, ChevronRight, Info, Plus, Radio, Star } from 'lucide-solid';
+import { decideTune } from './tune';
 
 interface Station {
   name: string;
@@ -38,6 +37,8 @@ interface StationsOk {
   kind: 'stations_ok';
   base: string;
   stations: Station[];
+  /** a start-menu pick that arrived before this list did (be/recents.go) */
+  tune?: string;
 }
 interface Custom {
   name: string;
@@ -224,6 +225,11 @@ function RadioApp(props: WashAppProps) {
   let treeInitialized = false;
   let revealedLastName = '';
   let pendingRevealName = '';
+  // A station the start menu asked for before this FE had a list to find
+  // it in — a remount after reload gets the BE's `tune` ahead of its own
+  // stations_ok. Looked up against that one list, then forgotten
+  // (tune.ts decideTune).
+  let pendingTuneName = '';
 
   const [stations, setStations] = createSignal<Station[]>([]);
   const [base, setBase] = createSignal('');
@@ -464,8 +470,19 @@ function RadioApp(props: WashAppProps) {
     sendCustom();
   }
 
-  const handleBE = (m: { kind?: string; title?: string; station?: number; info?: StreamInfo }) => {
-    if (m?.kind === 'now_playing') {
+  // tuneByName plays the station the start menu's Radio flyout picked.
+  // Only an FE with no list yet holds the name; one whose list lacks it
+  // drops it (decideTune says why).
+  const tuneByName = (name: string) => {
+    const d = decideTune(name, stations().map((st) => st.name), !!base());
+    pendingTuneName = d.kind === 'hold' ? name : '';
+    if (d.kind === 'play') tune(d.be);
+  };
+
+  const handleBE = (m: { kind?: string; title?: string; station?: number; info?: StreamInfo; name?: string }) => {
+    if (m?.kind === 'tune') {
+      tuneByName(String(m.name ?? ''));
+    } else if (m?.kind === 'now_playing') {
       if (m.station == null || m.station === index()) {
         setIcyTitle(m.title ?? '');
         audio?.report();
@@ -511,6 +528,13 @@ function RadioApp(props: WashAppProps) {
           audio?.register({ title: lastRow?.name ?? rows[0]?.name ?? '' });
         }
       }
+
+      const want = s.tune || pendingTuneName;
+      // One attempt per list: a name this list lacks is dropped rather
+      // than left to fire when some later edit happens to add it.
+      pendingTuneName = '';
+      if (want) tuneByName(want);
+      pendingTuneName = '';
     }
   };
   // wash:state (always fires on mount, null = first launch): restore
@@ -659,24 +683,23 @@ function RadioApp(props: WashAppProps) {
             {(entry) =>
               entry.kind === 'genre' ? (
                 <button
+                  data-wash-hit
                   type="button"
                   data-testid={`genre-${slug(entry.genre)}`}
                   aria-expanded={!entry.collapsed}
                   title={`${entry.collapsed ? 'Expand' : 'Collapse'} ${entry.genre}`}
                   onClick={() => toggleGroup(entry.key)}
-                  class={WASH_BTN_CLASS}
                   style={{
                     width: '100%',
                     display: 'flex',
                     'align-items': 'center',
                     gap: '7px',
                     padding: '6px 9px',
-                    '--wash-btn-bg': tokens.bgInset,
-                    '--wash-btn-fg': tokens.fgMuted,
-                    '--wash-btn-fg-hover': tokens.fg,
+                    background: tokens.bgInset,
+                    color: tokens.fgMuted,
                     border: 0,
                     'border-top': `1px solid ${tokens.borderMenu}`,
-                    'border-radius': '0',
+                    cursor: 'pointer',
                     'font-size': tokens.fontSizeSm,
                     'text-align': 'left',
                   }}
@@ -687,24 +710,23 @@ function RadioApp(props: WashAppProps) {
                 </button>
               ) : entry.kind === 'subtype' ? (
                 <button
+                  data-wash-hit
                   type="button"
                   data-testid={`subtype-${slug(entry.genre)}-${slug(entry.subtype)}`}
                   aria-expanded={!entry.collapsed}
                   title={`${entry.collapsed ? 'Expand' : 'Collapse'} ${entry.subtype}`}
                   onClick={() => toggleGroup(entry.key)}
-                  class={WASH_BTN_CLASS}
                   style={{
                     width: '100%',
                     display: 'flex',
                     'align-items': 'center',
                     gap: '7px',
                     padding: '5px 9px 5px 22px',
-                    '--wash-btn-bg': tokens.bgNeutral,
-                    '--wash-btn-fg': tokens.fgMuted,
-                    '--wash-btn-fg-hover': tokens.fg,
+                    background: tokens.bgNeutral,
+                    color: tokens.fgMuted,
                     border: 0,
                     'border-top': `1px solid ${tokens.borderMenu}`,
-                    'border-radius': '0',
+                    cursor: 'pointer',
                     'font-size': tokens.fontSizeSm,
                     'text-align': 'left',
                   }}
@@ -721,20 +743,21 @@ function RadioApp(props: WashAppProps) {
                   const fav = () => favs().has(r.name);
                   return (
                     <div
+                      data-wash-hit="subtle"
                       data-testid={`media-row-${entry.di}`}
                       data-selected={selected() ? 'true' : undefined}
                       data-playing={playing() ? 'true' : undefined}
                       onClick={() => setSelectedDisplay(entry.di)}
                       onDblClick={() => tune(r.be)}
-                      class={WASH_ROW_CLASS}
                       style={{
                         display: 'flex',
                         'align-items': 'center',
                         gap: '8px',
                         padding: `4px 10px 4px ${entry.depth > 1 ? 30 : 18}px`,
+                        cursor: 'default',
                         'user-select': 'none',
                         'border-left': `2px solid ${playing() ? tokens.accentGreen : 'transparent'}`,
-                        '--wash-row-bg': selected() ? tokens.bgRowSelected : 'transparent',
+                        background: selected() ? tokens.bgRowSelected : 'transparent',
                         color: playing() ? tokens.accentGreen : tokens.fg,
                         'font-size': tokens.fontSizeBase,
                       }}
@@ -745,6 +768,7 @@ function RadioApp(props: WashAppProps) {
                       <span style={{ flex: 1, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{r.name}</span>
                       <span style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeSm, 'flex-shrink': 0 }}>{r.codec}</span>
                       <span
+                        data-wash-hit
                         data-testid={`fav-${r.be}`}
                         data-fav={fav() ? 'true' : undefined}
                         title={fav() ? 'Unfavorite' : 'Favorite'}
@@ -752,16 +776,12 @@ function RadioApp(props: WashAppProps) {
                           e.stopPropagation();
                           toggleFav(r.name);
                         }}
-                        class={WASH_BTN_CLASS}
                         style={{
                           'flex-shrink': 0,
-                          border: 'none',
-                          padding: '0 2px',
+                          cursor: 'pointer',
                           display: 'inline-flex',
                           'align-items': 'center',
-                          '--wash-btn-bg': 'transparent',
-                          '--wash-btn-fg': fav() ? tokens.accentAmber : tokens.fgDim,
-                          '--wash-btn-fg-hover': tokens.accentAmber,
+                          color: fav() ? tokens.accentAmber : tokens.fgDim,
                         }}
                       >
                         <Star size={13} fill={fav() ? 'currentColor' : 'none'} />

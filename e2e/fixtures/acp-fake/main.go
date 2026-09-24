@@ -15,7 +15,12 @@
 //
 // Behaviour is driven by the prompt text, which keeps the e2e readable:
 //
-//	"ask"    → requests permission, then reports what was answered
+//	"ask"        → requests permission, then reports what was answered
+//	"echoblocks" → reports the content blocks the prompt carried
+//	"launchinfo" → reports its own argv, $WASH_FAKE_MARK and which keys it got
+//
+// Run as `opencode`, it offers OpenCode's options instead (opencode.go).
+//	"crash"  → says why on stderr and exits mid-turn (the adapter died)
 //	anything → a short markdown reply with a tool call
 package main
 
@@ -38,6 +43,9 @@ var sessionID = "fake-session-1"
 const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 func main() {
+	if os.Getenv("WASH_FAKE_WORKSPACE") == "1" {
+		sessionID = fmt.Sprintf("fake-session-%d", os.Getpid())
+	}
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64<<10), 8<<20)
 	out := bufio.NewWriter(os.Stdout)
@@ -80,6 +88,7 @@ func main() {
 			})
 
 		case "session/new":
+			captureWorkspace(m)
 			reply(out, id, map[string]any{
 				"sessionId": sessionID,
 				"modes": map[string]any{
@@ -90,13 +99,31 @@ func main() {
 						map[string]any{"id": "agent-full-access", "name": "Agent (full access)", "description": "No approval required."},
 					},
 				},
-				"configOptions": []any{configState("model", "fast")["configOptions"].([]any)[0]},
+				"configOptions": initialConfigOptions(),
 			})
 
 		case "session/set_config_option":
 			params, _ := m["params"].(map[string]any)
 			cfgID, _ := params["configId"].(string)
 			val, _ := params["value"].(string)
+			if isOpencode() {
+				result, err := opencodeSetConfig(cfgID, val)
+				if err != nil {
+					replyErr(out, id, -32602, err.Error())
+				} else {
+					reply(out, id, result)
+				}
+				continue
+			}
+			if os.Getenv("WASH_FAKE_WORKSPACE") == "1" {
+				result, err := workspaceSetConfig(cfgID, val)
+				if err != nil {
+					replyErr(out, id, -32602, err.Error())
+				} else {
+					reply(out, id, result)
+				}
+				continue
+			}
 			// The agent's answer is authoritative and returns the WHOLE
 			// list, which is why the client replaces rather than patches.
 			reply(out, id, configState(cfgID, val))
@@ -110,6 +137,7 @@ func main() {
 			notify(out, update(map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": mode}))
 
 		case "session/load":
+			captureWorkspace(m)
 			// A load MUST replay the conversation before it answers.
 			// Reproducing that ordering is the point of covering it here.
 			notify(out, chunk("Earlier in this session we discussed **resuming**."))
@@ -165,10 +193,63 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 	text := promptText(m)
 	raw := promptTextRaw(m)
 	id := m["id"]
+	if os.Getenv("WASH_FAKE_WORKSPACE") == "1" && raw == "workspace_activity" {
+		notify(out, update(map[string]any{"sessionUpdate": "usage_update", "used": 14689, "size": 258400}))
+		notify(out, update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "Checking the implementation."}}))
+		time.Sleep(2 * time.Second)
+		notify(out, update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "activity-test", "title": "Running test suite", "kind": "execute", "status": "in_progress"}))
+		time.Sleep(2 * time.Second)
+		notify(out, update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "activity-test", "status": "completed"}))
+		notify(out, chunk("Activity fixture complete"))
+		time.Sleep(2 * time.Second)
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+	if text, ok := workspaceScript(raw); ok {
+		notify(out, update(map[string]any{"sessionUpdate": "usage_update", "used": 2048, "size": 32000}))
+		// Preserve JSON option names verbatim through the Markdown transcript.
+		if strings.HasPrefix(text, "WORKSPACE_") {
+			text = "```\n" + text + "\n```"
+		}
+		notify(out, chunk(text))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
 
 	notify(out, update(map[string]any{
 		"sessionUpdate": "usage_update", "used": 14689, "size": 258400,
 	}))
+
+	if strings.Contains(text, "crash") {
+		// The adapter dies mid-turn: the prompt is never answered, the
+		// pipe closes, and the last thing on stderr is the only clue. This
+		// is what an expired token or a bubblewrap refusal looks like from
+		// wash's side, and it is what the exit watcher exists for.
+		fmt.Fprintln(os.Stderr, "acp-fake: fatal: simulated crash (token expired)")
+		os.Exit(3)
+	}
+
+	if strings.Contains(text, "launchinfo") {
+		// Report how THIS process was started: the extra argv wash added
+		// and one marker variable. agents.json can override the command,
+		// append args and add environment; none of that is observable
+		// from the UI, so the adapter says what it actually got.
+		notify(out, chunk(fmt.Sprintf("LAUNCH<<args=%s mark=%s>>",
+			strings.Join(os.Args[1:], ","), os.Getenv("WASH_FAKE_MARK"))))
+		notify(out, chunk(" "+keyReport()))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.Contains(text, "echoblocks") {
+		// Report the SHAPE of the prompt that arrived — one entry per
+		// content block, type first. A composer that says it attached
+		// something proves nothing; this is how a spec sees that the
+		// image or the resource_link actually reached the wire.
+		notify(out, chunk("BLOCKS<<"+blockSummary(m)+">>"))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
 
 	if strings.Contains(text, "ask") {
 		// A permission request, with the option kinds a real adapter
@@ -377,6 +458,7 @@ func await(id string) any {
 	if ch == nil {
 		return nil
 	}
+	defer func() { pendingMu.Lock(); delete(pending, id); pendingMu.Unlock() }()
 	select {
 	case v := <-ch:
 		return v
@@ -388,10 +470,12 @@ func await(id string) any {
 func deliver(id string, result any) {
 	pendingMu.Lock()
 	ch := pending[id]
-	delete(pending, id)
 	pendingMu.Unlock()
 	if ch != nil {
-		ch <- result
+		select {
+		case ch <- result:
+		default:
+		}
 	}
 }
 
@@ -418,7 +502,7 @@ func configState(configID, value string) map[string]any {
 	return map[string]any{
 		"configOptions": []any{
 			map[string]any{
-				"id": configID, "name": "Model", "type": "select", "currentValue": value,
+				"id": configID, "name": "Model", "category": "model", "type": "select", "currentValue": value,
 				"options": []any{
 					map[string]any{"value": "fast", "name": "Fast"},
 					map[string]any{"value": "smart", "name": "Smart"},
@@ -433,6 +517,36 @@ func configState(configID, value string) map[string]any {
 // the prompt — a path — must use promptTextRaw instead: lowercasing a path
 // silently asks for a different file, which the fs sandbox then refuses,
 // and the refusal looks like a bug in the sandbox rather than in here.
+// blockSummary describes each prompt content block: its type, and enough
+// of its payload to identify it without reproducing it. Payload LENGTHS
+// rather than payloads, so a 200 KB screenshot does not land in a log.
+func blockSummary(m map[string]any) string {
+	params, _ := m["params"].(map[string]any)
+	blocks, _ := params["prompt"].([]any)
+	parts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		t, _ := bm["type"].(string)
+		switch t {
+		case "image":
+			data, _ := bm["data"].(string)
+			mime, _ := bm["mimeType"].(string)
+			parts = append(parts, fmt.Sprintf("image:%s:%d", mime, len(data)))
+		case "resource_link":
+			uri, _ := bm["uri"].(string)
+			name, _ := bm["name"].(string)
+			parts = append(parts, fmt.Sprintf("resource_link:%s:%s", uri, name))
+		default:
+			txt, _ := bm["text"].(string)
+			parts = append(parts, fmt.Sprintf("%s:%d", t, len(txt)))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func promptText(m map[string]any) string {
 	return strings.ToLower(promptTextRaw(m))
 }

@@ -22,12 +22,10 @@
 package fm
 
 import (
-	"archive/zip"
 	"bufio"
 	"context"
 	"errors"
 	"io"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -35,6 +33,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/sirmick/wash/internal/bulkops"
 	"github.com/sirmick/wash/pkg/sdk"
 )
 
@@ -208,53 +207,13 @@ func streamFile(w io.Writer, abs string) error {
 // streamZip writes a zip of every path to w. Directories are walked
 // recursively; each top-level selection keeps its own base name as the
 // archive prefix (so dl of dir "proj" yields proj/… inside the zip).
-// Non-regular entries (symlinks, devices) and empty dirs are skipped —
-// v1 ships file contents only.
+//
+// The writer itself is bulkops.WriteArchive — the same one fm's
+// "Compress" verb uses — so a downloaded zip and a zip made on the host
+// have identical contents. That is what fixed this function's two
+// long-standing holes: symlinks were dropped (a top-level one silently
+// produced an EMPTY zip, since it is neither a dir nor a regular file),
+// and empty directories vanished because only file entries were written.
 func streamZip(w io.Writer, paths []string) error {
-	zw := zip.NewWriter(w)
-	for _, abs := range paths {
-		fi, err := os.Lstat(abs)
-		if err != nil {
-			return err
-		}
-		switch {
-		case fi.IsDir():
-			base := filepath.Dir(abs) // rel-anchor so the dir name is included
-			err := filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if !d.Type().IsRegular() {
-					return nil
-				}
-				rel, err := filepath.Rel(base, p)
-				if err != nil {
-					return err
-				}
-				return addZipFile(zw, p, rel)
-			})
-			if err != nil {
-				return err
-			}
-		case fi.Mode().IsRegular():
-			if err := addZipFile(zw, abs, filepath.Base(abs)); err != nil {
-				return err
-			}
-		}
-	}
-	return zw.Close()
-}
-
-func addZipFile(zw *zip.Writer, abs, name string) error {
-	f, err := os.Open(abs)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	dst, err := zw.Create(filepath.ToSlash(name))
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(dst, f)
-	return err
+	return bulkops.WriteArchive(w, "download.zip", paths, nil)
 }

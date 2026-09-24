@@ -40,12 +40,16 @@ func init() {
 			Surface:         sdk.SurfaceDesktop,
 			Icon:            washIcon,
 			Instancing:      sdk.InstancingSingle,
-			Capabilities:    []string{sdk.CapSpawn},
-			Window:          &sdk.WindowHints{},
+			// CapOpen: the start menu's Recent rows re-issue an open.request
+			// for the path, so the router picks the handler the same way the
+			// original open did.
+			Capabilities: []string{sdk.CapSpawn, sdk.CapOpen},
+			Window:       &sdk.WindowHints{},
 		},
-		Assets:   sub,
-		OnReady:  onReady,
-		OnAppMsg: onAppMsg,
+		Assets:        sub,
+		OnReady:       onReady,
+		OnAppMsg:      onAppMsg,
+		OnSpawnResult: onSpawnResult,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-session",
@@ -72,14 +76,17 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	bus := sdk.NewBus(c)
 	startConfigWatcher(c, sdk.NewWatchClient(c))
 	startHostStats(c)
+	launcher := newLauncherStore(launcherStatePath())
 	sdk.HandleVoid(bus, "desktop.request", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		sendDesktopConfig(conn)
 		// Resend the banner facts too so a late-connecting shell (or
 		// a tab refresh that fires desktop.request on mount) gets a
 		// full state, not just the config.
 		sendSystemInfo(conn)
+		sendLauncherState(conn, launcher)
 		return nil
 	})
+	registerLauncher(bus, launcher)
 	// save_state mirrors the wash-edit / wash-fm pattern: the FE
 	// ships its persistable blob (sidebar mode, per-section state)
 	// and we hand it to the SDK's router-side persistence. On every
@@ -118,6 +125,7 @@ func onReady(c *sdk.Conn, _ string, _ uint32) {
 	registerNotifyGateway(bus)
 	registerPrivGateway(bus)
 	registerNetGateway(bus)
+	registerCommanderGateway(bus)
 	registerAudioGateway(bus)
 	registerRemoteGateway(bus)
 	// The agent gateway is down to subscribe/unsubscribe + answer: the
@@ -175,13 +183,14 @@ func registerPrivPassthrough(bus *sdk.Bus, kind string) {
 // dependency on the service packages; the contract is the app-id
 // string, which is the same trust boundary either way.
 const (
-	NotifyAppID = "com.wash.notify"
-	BulkAppID   = "com.wash.bulk"
-	PrivAppID   = "com.wash.priv"
-	NetdAppID   = "com.wash.netd"
-	AudioAppID  = "com.wash.audio"
-	RemoteAppID = "com.wash.remote"
-	AgentdAppID = "com.wash.agentd"
+	NotifyAppID    = "com.wash.notify"
+	BulkAppID      = "com.wash.bulk"
+	PrivAppID      = "com.wash.priv"
+	NetdAppID      = "com.wash.netd"
+	AudioAppID     = "com.wash.audio"
+	CommanderAppID = "com.wash.commander"
+	RemoteAppID    = "com.wash.remote"
+	AgentdAppID    = "com.wash.agentd"
 )
 
 // serviceFEKind maps a service app id to the FE-side kind we
@@ -210,6 +219,26 @@ func serviceFEKind(appID string) string {
 // pushes return as {kind:"state"} and are re-branded to "net.state" by the
 // shared state forwarder (serviceFEKind). The sidebar widget's "configure"
 // click launches com.wash.net via the existing launcher path, not here.
+// registerCommanderGateway forwards the rail's Mission Commander controls
+// (docs/COMMANDER.md §5.3) to com.wash.commander as attested sends from
+// this BE — the service accepts settings only from the session app and
+// Settings, never from a FE directly. The payload is the service's own
+// partial-update shape; this BE adds nothing and checks nothing.
+func registerCommanderGateway(bus *sdk.Bus) {
+	sdk.HandleVoid(bus, "commander_set", func(conn *sdk.Conn, _ string, req map[string]any) error {
+		msg := map[string]any{"kind": "commander.set"}
+		for _, k := range []string{"automatic", "hosted", "interval_sec", "budget_per_hour", "batch_max"} {
+			if v, ok := req[k]; ok {
+				msg[k] = v
+			}
+		}
+		return conn.SendAppMsgTo(wire.Recipient{AppID: CommanderAppID}, msg)
+	})
+	sdk.HandleVoid(bus, "commander_run", func(conn *sdk.Conn, _ string, _ struct{}) error {
+		return conn.SendAppMsgTo(wire.Recipient{AppID: CommanderAppID}, map[string]any{"kind": "commander.run"})
+	})
+}
+
 func registerNetGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "net_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: NetdAppID}, map[string]any{"kind": "subscribe"})
@@ -278,6 +307,43 @@ func registerAgentGateway(bus *sdk.Bus) {
 			"rule":     req.Rule,
 		})
 	})
+	// agent_open reopens a session from the start menu's Agent flyout —
+	// the one per-session verb besides answer the chrome keeps, because a
+	// recent list you cannot open is not a recent list. Three verbs,
+	// never confused: resuming a session that is still running would
+	// start a second adapter on one conversation.
+	sdk.HandleVoid(bus, "agent_open", func(conn *sdk.Conn, _ string, req agentOpenReq) error {
+		to := wire.Recipient{AppID: AgentdAppID}
+		log.Printf("wash-session: agent open action=%s session=%s key=%s", req.Action, req.SessionID, req.RowKey)
+		switch req.Action {
+		case "resume":
+			if req.SessionID == "" {
+				return nil
+			}
+			return conn.SendAppMsgTo(to, map[string]any{"kind": "agent_resume", "session_id": req.SessionID})
+		case "reattach":
+			if req.RowKey == "" {
+				return nil
+			}
+			return conn.SendAppMsgTo(to, map[string]any{"kind": "agent_reattach", "key": req.RowKey})
+		case "focus":
+			if req.RowKey == "" {
+				return nil
+			}
+			return conn.SendAppMsgTo(to, map[string]any{"kind": "wash.focus", "key": req.RowKey})
+		}
+		return nil
+	})
+}
+
+// agentOpenReq is the start menu's Agent flyout picking a session. The FE
+// chooses the action by the same rule the Agents history list uses
+// (launcher.ts agentRecentAction), because only it can tell a running
+// session from a finished one without a second round trip.
+type agentOpenReq struct {
+	Action    string `json:"action"`
+	SessionID string `json:"session_id"`
+	RowKey    string `json:"row_key"`
 }
 
 type agentAnswerReq struct {
@@ -315,7 +381,6 @@ func registerNotifyGateway(bus *sdk.Bus) {
 		return conn.SendAppMsgTo(wire.Recipient{AppID: NotifyAppID}, map[string]any{"kind": "clear_all"})
 	})
 }
-
 
 func registerPrivGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "priv_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {

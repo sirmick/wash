@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/activity"
 	"path"
 	"strings"
 	"sync"
@@ -21,6 +22,17 @@ type ShellSession struct {
 
 	router  *Router
 	writeMu sync.Mutex
+
+	// tailStop ends this connection's activity tail (activity.go).
+	tailMu   sync.Mutex
+	tailStop func()
+
+	// patches collapses successive session patches for the same window
+	// while the writer is behind, so a drag does not deliver a backlog
+	// of stale positions. See patchcoalesce.go. Lazily built by
+	// queuePatches so a zero-value ShellSession (tests) still works.
+	patchesOnce sync.Once
+	patches     *patchCoalescer
 
 	// declared is guarded by writeMu (set when announcing, cleared
 	// when undeclaring) — kept under the same lock as writes so a
@@ -45,6 +57,9 @@ type ShellSession struct {
 	// drainerDone is closed by the drainer goroutine on exit so
 	// HandleShell can wait for it during teardown.
 	drainerDone chan struct{}
+	// lastSlowCtrlLog rate-limits the "control write blocked" line in
+	// drainLoop. Touched by the drainer goroutine only.
+	lastSlowCtrlLog time.Time
 
 	// peerChannels tracks this shell's remote-apps relay channels
 	// (docs/REMOTE.md), channel id → binding, so they're torn down (socket
@@ -146,12 +161,17 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	sess.lastReadAtNanos.Store(time.Now().UnixNano())
 	connStart := time.Now()
 	r.log("shell: connect conn=%d", sess.connID)
+	r.note(activity.Entry{Kind: "session.attach", Line: "browser connected", Ref: map[string]any{"conn": sess.connID}})
 	sess.installStallLog()
 	defer func() {
+		sess.stopActivityTail()
 		// Stop the drainer first so it doesn't try to write to a
 		// closing transport, then wait for it to exit.
 		sess.scheduler.Close()
 		<-sess.drainerDone
+		// The coalescer's retry timer outlives the scheduler otherwise,
+		// firing a flush at a closed queue for every dropped connection.
+		sess.coalescer().stop()
 		// Bank this connection's counters into the session running totals
 		// so the desktop info panel + About survive the disconnect.
 		snap := sess.scheduler.StatsSnapshot()
@@ -162,6 +182,8 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 			sess.connID, time.Since(connStart).Round(time.Millisecond),
 			snap.RxFrames, sumU64(snap.TxFrames[:]),
 			time.Since(time.Unix(0, sess.lastReadAtNanos.Load())).Round(time.Millisecond))
+		r.note(activity.Entry{Kind: "session.detach", Line: "browser disconnected after " + time.Since(connStart).Round(time.Second).String(),
+			Ref: map[string]any{"conn": sess.connID}})
 	}()
 	go sess.drainLoop(ctx)
 	go sess.readIdleLoop(ctx)
@@ -260,7 +282,7 @@ func (s *ShellSession) emitLinkStats() {
 	if err != nil {
 		return
 	}
-	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(wire.ClassControl)
+	f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: data}.WithClass(telemetryClass)
 	s.scheduler.SubmitTelemetry(f)
 }
 
@@ -488,6 +510,16 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:
 		return s.handleChannelCredit(m)
+	case wire.ShellActivityQuery:
+		return s.handleActivityQuery(m)
+	case wire.ShellActivityTail:
+		return s.handleActivityTail(m)
+	case wire.ShellActivityStats:
+		return s.handleActivityStats(m)
+	case wire.ShellActivityClear:
+		return s.handleActivityClear(m)
+	case wire.ShellObserve:
+		return s.handleObserve(m)
 	case wire.ShellAssetRead:
 		return s.handleAssetRead(m)
 	case wire.ShellPanelRead:
@@ -574,15 +606,10 @@ func (s *ShellSession) handleAssetRead(m wire.ShellAssetRead) error {
 // scheduler closed mid-stream) just ends the stream — the channel is
 // transient and unregistered, so there's nothing to clean up.
 func (s *ShellSession) streamAssetChunks(id uint32, payload []byte, rawLen int) {
-	const chunkSize = 64 * 1024
-	for off := 0; off < len(payload); off += chunkSize {
-		end := off + chunkSize
-		if end > len(payload) {
-			end = len(payload)
-		}
-		if werr := s.WriteRawFrameClass(id, payload[off:end], wire.ClassBackground); werr != nil {
-			return
-		}
+	if werr := writeChunked(payload, func(p []byte) error {
+		return s.WriteRawFrameClass(id, p, wire.ClassBackground)
+	}); werr != nil {
+		return
 	}
 	// Account raw vs on-the-wire bytes for the compression-ratio readout.
 	s.statsLink().recordCompression(rawLen, len(payload))
@@ -623,17 +650,22 @@ func (s *ShellSession) handlePanelRead(m wire.ShellPanelRead) error {
 	}
 	// Same Interactive class as bundle/asset delivery so the strict-
 	// priority scheduler can't let the Unbind overtake the data frames.
-	const chunkSize = 256 * 1024
-	for off := 0; off < len(bundle); off += chunkSize {
-		end := off + chunkSize
-		if end > len(bundle) {
-			end = len(bundle)
-		}
-		if err := s.WriteRawFrameClass(id, bundle[off:end], wire.ClassInteractive); err != nil {
-			return err
-		}
+	// Bulk, like app bundles: a panel is a sizeable transfer, and the
+	// shell now completes it on the byte count promised in panel.read.ok
+	// rather than on the Unbind, so a control frame overtaking the data
+	// can no longer truncate it. Interactive was the workaround for that
+	// completion rule, and it put a quarter-megabyte transfer in the lane
+	// that carries pointer motion.
+	if err := writeChunked(bundle, func(p []byte) error {
+		return s.WriteRawFrameClass(id, p, wire.ClassBulk)
+	}); err != nil {
+		return err
 	}
-	return s.WriteCtrl(wire.NewShellChannelUnbind(id, "panel complete"))
+	// Bulk, with the data: a transaction's terminator must ride its own
+	// data's lane or it overtakes it. On a faster lane this Unbind
+	// reached the shell before the first byte and tore the transfer
+	// down, and every settings panel failed to mount.
+	return s.WriteCtrlClass(wire.NewShellChannelUnbind(id, "panel complete"), wire.ClassBulk)
 }
 
 // handleChannelCredit applies an FE-issued credit grant to the
@@ -660,6 +692,11 @@ func (s *ShellSession) handleChannelCredit(m wire.ShellChannelCredit) error {
 	// which live forwarding resumes. No-op if the channel isn't behind.
 	// (docs/PTY_ROBUST.md, Fix B)
 	s.router.resyncChannel(b)
+	// A video channel that dropped frames (it never goes behind for that)
+	// gets its whole-frame repaint now that credit is back.
+	if isVideoKind(b.kind) {
+		s.router.recoverVideoChannel(b)
+	}
 	return nil
 }
 
@@ -706,7 +743,8 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 func (r *Router) approveWindowClose(inst *AppInstance, win uint32) {
 	// Tell shells the window is gone now. The app's loop teardown will
 	// also call destroyWindow when it exits; the second call is a no-op
-	// (already deleted).
+	// (already deleted) — and so is its journal note.
+	r.noteWindowClose(inst, win, true)
 	r.broadcastPatches(r.winSession.destroyWindow(win))
 	// expectedExit suppresses the crash-broadcast in the cleanup
 	// goroutine — a close the app confirmed is an orderly exit, not a
@@ -760,18 +798,29 @@ func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
 	if inst == nil {
 		return nil
 	}
+	// One line per focus change (user-rate): the BE half of a window-
+	// switcher / focus e2e, and the trail for "which window had focus
+	// when X happened" in a log excerpt.
+	s.router.log("focus: win=%d app=%s instance=%s", m.WindowID, inst.AppID, inst.InstanceID)
+	// A fact only when focus MOVED: a click on the already-focused window
+	// re-raises it (patches) but is not a switch, and a Timeline of
+	// "switched to X" three times in a row says nothing.
+	if prev != m.WindowID {
+		title := s.router.winSession.title(m.WindowID)
+		s.router.noteWindow("window.focus", inst, m.WindowID, title, title, nil)
+	}
 	return inst.WriteEvt(wire.NewEvtWindowFocus(m.WindowID))
 }
 
 func (s *ShellSession) handleWindowMove(m wire.ShellWindowMove) error {
-	s.router.broadcastPatches(s.router.winSession.move(m.WindowID, m.X, m.Y))
+	s.router.broadcastPatches(s.router.winSession.move(m.WindowID, m.X, m.Y, m.Tok))
 	// No EvtWindowMove on the app side yet — apps that care about
 	// position would need a new event; nothing requests it today.
 	return nil
 }
 
 func (s *ShellSession) handleWindowResize(m wire.ShellWindowResize) error {
-	s.router.broadcastPatches(s.router.winSession.resize(m.WindowID, m.W, m.H))
+	s.router.broadcastPatches(s.router.winSession.resize(m.WindowID, m.W, m.H, m.Tok))
 	s.router.mu.Lock()
 	inst := s.router.byWin[m.WindowID]
 	s.router.mu.Unlock()
@@ -795,6 +844,7 @@ func (s *ShellSession) handleWindowState(m wire.ShellWindowState) error {
 	if inst == nil {
 		return nil
 	}
+	s.router.noteWindow("window.state", inst, m.WindowID, "", m.State, nil)
 	return inst.WriteEvt(wire.NewEvtWindowState(m.WindowID, m.State))
 }
 
@@ -933,10 +983,13 @@ func (s *ShellSession) writeCtrlLocked(m any) error {
 // Defaults to Bulk class so it yields to user-interactive frames
 // from other channels.
 //
-// Bundle/replay-style transactional flows (Bind → raw … → Unbind)
-// must use WriteRawFrameClass with ClassInteractive instead — Bulk
-// would let the Interactive Unbind overtake the data frames under
-// strict priority, breaking the transaction.
+// Transactional flows (Bind → raw … → Unbind) do NOT need promoting to
+// a higher lane to stay intact: bundles and panels both complete on the
+// byte count announced in their bind, so an Unbind that overtakes the
+// data cannot truncate anything. Promoting them was the old workaround,
+// and it put sizeable transfers in the lane that carries pointer
+// motion. Replay-style flows that still complete on the Unbind must
+// keep their frames in ONE lane, whichever it is.
 //
 // No writeMu: see WriteCtrl. The scheduler's channel handles
 // concurrent-producer ordering.
@@ -1011,6 +1064,28 @@ func (s *ShellSession) tryWriteRawBulk(b *channelBinding, payload []byte) bool {
 		return false
 	}
 	return true
+}
+
+// queuePatches sends a batch of session patches, collapsing them against
+// anything still waiting for the wire. Interactive class: geometry and
+// focus are what a human is waiting on.
+func (s *ShellSession) queuePatches(patches []wire.SessionPatch) {
+	s.coalescer().add(patches)
+}
+
+// coalescer is the one door to s.patches. Teardown used to read the field
+// bare while an app's tearDown on another goroutine was still creating it
+// through the Once — a data race the CI race gate caught on the 0.14.4 tag
+// run. Going through the Once on every path gives the read its
+// happens-before; a teardown that builds a coalescer only to stop it
+// costs a struct with a nil timer.
+func (s *ShellSession) coalescer() *patchCoalescer {
+	s.patchesOnce.Do(func() {
+		s.patches = newPatchCoalescer(func(batch []wire.SessionPatch) bool {
+			return s.tryWriteCtrlClass(wire.NewShellSessionPatch(batch...), wire.ClassInteractive)
+		})
+	})
+	return s.patches
 }
 
 // tryWriteCtrlClass enqueues a control message non-blocking at an explicit
@@ -1106,7 +1181,24 @@ func (s *ShellSession) drainLoop(ctx context.Context) {
 			return
 		}
 		count++
-		if err := s.Transport.WriteFrame(f); err != nil {
+		wstart := time.Now()
+		err = s.Transport.WriteFrame(f)
+		if f.Class() == wire.ClassControl {
+			// A control write that blocks is a control frame queued
+			// behind bulk on the wire — the thing shell_sndbuf.go bounds.
+			// Logged rate-limited so a slow link shows up in the router
+			// log by mechanism, not as "the desktop feels laggy".
+			if d := time.Since(wstart); d > slowCtrlWrite && s.router != nil {
+				if last := s.lastSlowCtrlLog; last.IsZero() || time.Since(last) > slowCtrlLogEvery {
+					s.lastSlowCtrlLog = time.Now()
+					dd := s.scheduler.Depths()
+					s.router.log("shell: control write blocked %s conn=%d bytes=%d queued(ctrl/inter/bulk/bg)=%d/%d/%d/%d",
+						d.Round(time.Millisecond), s.connID, len(f.Payload),
+						dd[wire.ClassControl], dd[wire.ClassInteractive], dd[wire.ClassBulk], dd[wire.ClassBackground])
+				}
+			}
+		}
+		if err != nil {
 			// Transport write failed — FE gone. Close the
 			// scheduler so any blocked producers unblock with
 			// ErrSchedulerClosed and the shell tears down.
@@ -1132,8 +1224,16 @@ func (s *ShellSession) drainLoop(ctx context.Context) {
 		// link-health stats (per-class throughput).
 		s.scheduler.Stats.recordTx(f.Class(), len(f.Payload))
 		if s.router != nil && f.Channel != ChannelControl {
-			if b := s.router.lookupChannel(f.Channel); b != nil && isDisplayChannelKind(b.kind) {
-				s.scheduler.Stats.recordDisplayTx(len(f.Payload))
+			if b := s.router.lookupChannel(f.Channel); b != nil {
+				if isDisplayChannelKind(b.kind) {
+					s.scheduler.Stats.recordDisplayTx(len(f.Payload))
+				}
+				// Raw-channel bytes belong to the app on the other end
+				// of the binding: pty output, bundles, thumbnails,
+				// video. One lookup serves both counters.
+				if b.app != nil {
+					s.scheduler.Stats.recordAppTx(b.app.AppID, f.Class(), len(f.Payload))
+				}
 			}
 		}
 	}

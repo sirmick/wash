@@ -569,6 +569,11 @@ be the only one:
   chromeless (Washamp). wash-display marks Wayland xdg toplevels chromeless,
   X11 surfaces framed (xclock has no CSD titlebar, so it keeps a wash frame to
   grab). xdg-decoration now answers CLIENT_SIDE (consistent with chromeless).
+  **Exception (2026-09-11):** a client that explicitly *requests* SERVER_SIDE
+  draws no chrome of its own (RetroArch, SDL/mpv-style apps without libdecor),
+  so forcing CLIENT_SIDE left a bare borderless window. Such a toplevel is
+  answered SERVER_SIDE and mapped framed (`Toplevel::server_side_deco`); clients
+  that never ask keep CLIENT_SIDE + chromeless.
 - **The move bridge.** A chromeless window has no wash titlebar, so dragging
   the guest's OWN titlebar must move it. The guest's `xdg_toplevel.move`
   request is relayed to its `<wash-app-display>` as a `{move:true}` control

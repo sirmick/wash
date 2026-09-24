@@ -151,3 +151,80 @@ func TestSchedulerSubmitQueueFullCounted(t *testing.T) {
 		t.Fatalf("queue_full = %d, want 1", got)
 	}
 }
+
+// Per-app attribution: the table splits by app AND class, and is sorted so
+// the panel renders in a stable order rather than Go's map order.
+func TestAppTrafficSplitsByAppAndClass(t *testing.T) {
+	l := &LinkStats{}
+	l.recordAppTx("com.wash.term", wire.ClassBulk, 400)
+	l.recordAppTx("com.wash.term", wire.ClassBulk, 600)
+	l.recordAppTx("com.wash.term", wire.ClassInteractive, 30)
+	l.recordAppTx("com.wash.ai", wire.ClassBulk, 1200)
+	// No app to blame: router lifecycle traffic must not land in a row.
+	l.recordAppTx("", wire.ClassControl, 999)
+
+	rows := l.snapshot([numClasses]int{}).Apps
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2: %+v", len(rows), rows)
+	}
+	if rows[0].AppID != "com.wash.ai" || rows[1].AppID != "com.wash.term" {
+		t.Errorf("not sorted by app id: %s, %s", rows[0].AppID, rows[1].AppID)
+	}
+	term := rows[1]
+	if got := term.TxBytes[wire.ClassBulk]; got != 1000 {
+		t.Errorf("term bulk bytes = %d, want 1000", got)
+	}
+	if got := term.TxFrames[wire.ClassBulk]; got != 2 {
+		t.Errorf("term bulk frames = %d, want 2", got)
+	}
+	if got := term.TxBytes[wire.ClassInteractive]; got != 30 {
+		t.Errorf("term interactive bytes = %d, want 30", got)
+	}
+	if got := term.TxBytes[wire.ClassControl]; got != 0 {
+		t.Errorf("unattributed bytes leaked into a row: %d", got)
+	}
+}
+
+// The per-app table must survive a reconnect the same way the scalar
+// counters do: each finished connection is folded into the running totals.
+func TestAppTrafficFoldsIntoSessionTotals(t *testing.T) {
+	conn1 := &LinkStats{}
+	conn1.recordAppTx("com.wash.fm", wire.ClassBulk, 100)
+	conn2 := &LinkStats{}
+	conn2.recordAppTx("com.wash.fm", wire.ClassBulk, 50)
+	conn2.recordAppTx("com.wash.edit", wire.ClassInteractive, 7)
+
+	session := &LinkStats{}
+	session.add(conn1.snapshot([numClasses]int{}))
+	session.add(conn2.snapshot([numClasses]int{}))
+
+	rows := session.snapshot([numClasses]int{}).Apps
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2: %+v", len(rows), rows)
+	}
+	byID := map[string]wire.AppClassStats{}
+	for _, r := range rows {
+		byID[r.AppID] = r
+	}
+	if got := byID["com.wash.fm"].TxBytes[wire.ClassBulk]; got != 150 {
+		t.Errorf("fm bulk bytes across two connections = %d, want 150", got)
+	}
+	if got := byID["com.wash.fm"].TxFrames[wire.ClassBulk]; got != 2 {
+		t.Errorf("fm bulk frames = %d, want 2", got)
+	}
+	if got := byID["com.wash.edit"].TxBytes[wire.ClassInteractive]; got != 7 {
+		t.Errorf("edit interactive bytes = %d, want 7", got)
+	}
+}
+
+// A snapshot already handed out must not change when the live counters
+// move on — the copy-on-write rule the race gate enforces.
+func TestAppTrafficSnapshotIsACopy(t *testing.T) {
+	l := &LinkStats{}
+	l.recordAppTx("com.wash.term", wire.ClassBulk, 10)
+	snap := l.snapshot([numClasses]int{})
+	l.recordAppTx("com.wash.term", wire.ClassBulk, 990)
+	if got := snap.Apps[0].TxBytes[wire.ClassBulk]; got != 10 {
+		t.Errorf("snapshot moved under its holder: %d, want 10", got)
+	}
+}

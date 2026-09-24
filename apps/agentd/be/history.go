@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -54,13 +53,22 @@ const historyFlush = 30 * time.Second
 type Session struct {
 	SessionID string `json:"session_id"`
 	Agent     string `json:"agent"`
-	Cwd       string `json:"cwd,omitempty"`
-	Dir       string `json:"dir,omitempty"`
+	// Connection is what a resume must launch through again; Stack and
+	// Tier are what the launcher defaults to next time (launchRecord).
+	Connection string `json:"connection,omitempty"`
+	Stack      string `json:"stack,omitempty"`
+	Tier       string `json:"tier,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Dir        string `json:"dir,omitempty"`
 	// Title is what this session was ABOUT, in the agent's own words —
 	// it names its sessions on session_info_update once it works out what
 	// the work is. "codex · mick" tells you nothing a week later; "Fix
 	// the reconnect banner race" does.
 	Title string `json:"title,omitempty"`
+	// UserTitle is the name a PERSON gave the session (session_admin.go).
+	// When set it is what publishHistory puts in Title; the agent's own
+	// title stays here underneath so clearing the user's falls back to it.
+	UserTitle string `json:"user_title,omitempty"`
 	// LastSeen is unix seconds — an absolute the FE renders as "2h ago",
 	// and the only field a keepalive touches.
 	LastSeen int64 `json:"last_seen"`
@@ -109,6 +117,13 @@ func rosterIndex(rs []Row) map[string]rosterState {
 		if r.SessionID == "" {
 			continue
 		}
+		// A row whose adapter exited lingers on the roster (failed/exited,
+		// until the sweep drops it) so the failure is visible — but there
+		// is no session behind it. It must read as resumable, not as
+		// "running — go to it".
+		if r.State == "failed" && r.Reason == "exited" {
+			continue
+		}
 		out[r.SessionID] = rosterState{Live: true, Detached: r.Detached, RowKey: r.Key}
 	}
 	return out
@@ -120,12 +135,24 @@ var (
 	historySaved time.Time
 )
 
+// launchRecord is what history keeps about how a session started: the
+// adapter and connection a resume must use again, and the stack and tier the
+// launcher defaults to next time.
+type launchRecord struct {
+	Agent, Connection, Stack, Tier string
+}
+
+func (h *hosted) record() launchRecord {
+	return launchRecord{Agent: h.agent, Connection: h.connection, Stack: h.stack, Tier: h.tier}
+}
+
 // rememberSession records (or refreshes) a session. Called from the roster
 // path, so anything the roster can see is remembered — including sessions
 // that end by having their terminal killed, which never say goodbye.
 //
 // Returns true when something worth persisting changed.
-func rememberSession(agent, sessionID, cwd, title string, now time.Time) bool {
+func rememberSession(launch launchRecord, sessionID, cwd, title string, now time.Time) bool {
+	agent := launch.Agent
 	if sessionID == "" {
 		return false
 	}
@@ -147,6 +174,16 @@ func rememberSession(agent, sessionID, cwd, title string, now time.Time) bool {
 			changed = changed || history[i].Agent != agent
 			history[i].Agent = agent
 		}
+		// A resumed session knows its connection but not always its stack:
+		// only what it says replaces what was recorded.
+		for _, f := range []struct {
+			to *string
+			v  string
+		}{{&history[i].Connection, launch.Connection}, {&history[i].Stack, launch.Stack}, {&history[i].Tier, launch.Tier}} {
+			if f.v != "" && *f.to != f.v {
+				*f.to, changed = f.v, true
+			}
+		}
 		history[i].LastSeen = now.Unix()
 		// Move-to-front so the list reads most-recent-first.
 		s := history[i]
@@ -155,12 +192,15 @@ func rememberSession(agent, sessionID, cwd, title string, now time.Time) bool {
 		return changed
 	}
 	history = append([]Session{{
-		SessionID: sessionID,
-		Agent:     agent,
-		Cwd:       cwd,
-		Dir:       dirLabel(cwd),
-		Title:     title,
-		LastSeen:  now.Unix(),
+		SessionID:  sessionID,
+		Agent:      agent,
+		Connection: launch.Connection,
+		Stack:      launch.Stack,
+		Tier:       launch.Tier,
+		Cwd:        cwd,
+		Dir:        dirLabel(cwd),
+		Title:      title,
+		LastSeen:   now.Unix(),
 	}}, history...)
 	if len(history) > historyCap {
 		history = history[:historyCap]
@@ -182,6 +222,9 @@ func publishHistory() []Session {
 	for _, s := range history {
 		st := idx[s.SessionID]
 		s.Live, s.Detached, s.RowKey = st.Live, st.Detached, st.RowKey
+		if s.UserTitle != "" {
+			s.Title = s.UserTitle
+		}
 		out = append(out, s)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].LastSeen > out[j].LastSeen })
@@ -191,79 +234,112 @@ func publishHistory() []Session {
 	return out
 }
 
-// resumeArgv is the command a Resume/Fork click runs. Pure, so what gets
-// executed is a table in the tests rather than a string built at a call
-// site.
-//
-// The agent is exec'd from a login shell so it inherits the user's real
-// PATH, and the shell is given the session's directory — resuming into
-// the wrong tree would be worse than not resuming at all. Single quotes
-// are escaped the POSIX way ('\”) because a path or session id is
-// attacker-adjacent data (it came off a hook payload).
-func resumeArgv(shell, agent, sessionID, cwd string, fork bool) []string {
-	if shell == "" {
-		shell = "/bin/sh"
+var (
+	resumeMu      sync.Mutex
+	resumeFlights = map[string]bool{}
+)
+
+func beginResume(sessionID string) bool {
+	resumeMu.Lock()
+	defer resumeMu.Unlock()
+	if resumeFlights[sessionID] {
+		return false
 	}
-	if agent == "" {
-		agent = "claude"
-	}
-	cmd := shQuote(agent) + " --resume " + shQuote(sessionID)
-	if fork {
-		cmd += " --fork-session"
-	}
-	if cwd != "" {
-		cmd = "cd " + shQuote(cwd) + " && exec " + cmd
-	} else {
-		cmd = "exec " + cmd
-	}
-	return []string{shell, "-c", cmd}
+	resumeFlights[sessionID] = true
+	return true
 }
 
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+func finishResume(sessionID string) {
+	resumeMu.Lock()
+	delete(resumeFlights, sessionID)
+	resumeMu.Unlock()
 }
 
-// resumeSession spawns a terminal and tells it to run the resume command.
-// Two steps, because a normal spawn carries no argv: the router replies
-// with the new instance id (OnSpawnResult), and the terminal accepts an
-// exec'd tab only from this service (see wash-term's exec_tab handler).
+// resumeSession restores a stopped conversation through ACP and opens an
+// Agent controller for it. If it is already live, the operation instead
+// focuses (or reattaches) its existing controller.
 func resumeSession(c *sdk.Conn, sessionID string, _ bool) {
-	var s *Session
-	for i := range history {
-		if history[i].SessionID == sessionID {
-			s = &history[i]
-			break
-		}
-	}
-	if s == nil {
-		log.Printf("agentd: resume unknown session=%s", sessionID)
+	// History is eventually consistent with the live roster: a browser can
+	// still show a Resume affordance for a moment after another click has
+	// successfully loaded the session. Treat Resume as an idempotent "take me
+	// to this conversation" action. ACP loadSession is not idempotent and a
+	// second load of the same Codex session fails with an opaque Internal error.
+	if h := hostedBySession(sessionID); h != nil {
+		log.Printf("agentd: resume session=%s already live key=%s — focusing", sessionID, h.key)
+		focusHosted(c, h.key)
 		return
 	}
-	agent, cwd, sid := s.Agent, s.Cwd, s.SessionID
+	s, ok := resolveResumeTarget(sessionID)
+	if !ok {
+		log.Printf("agentd: resume unknown session=%s", sessionID)
+		// Said where the click happened, not only in the log: a row that
+		// does nothing when clicked reads as a dead app.
+		c.Warn("Could not reopen that session", "wash has no record of it — not in its history and no transcript on disk.")
+		return
+	}
+	cwd, sid := s.Cwd, s.SessionID
+	launch := launchRecord{Agent: s.Agent, Connection: s.Connection, Stack: s.Stack, Tier: s.Tier}
+	// The live-session check above closes the eventual-consistency window after
+	// registration. This closes the earlier window: repeated clicks while the
+	// adapter is still starting must share the first loadSession rather than
+	// issuing another non-idempotent load for the same native session.
+	if !beginResume(sid) {
+		log.Printf("agentd: resume session=%s already in flight — coalescing", sid)
+		return
+	}
 
 	// Reopen on our own goroutine: session/load replays the whole
 	// conversation before it answers, which can take a while on a long
 	// history, and the service must keep dispatching meanwhile.
 	go func() {
-		hs, err := resumeHosted(agent, cwd, sid, c)
+		defer finishResume(sid)
+		hs, err := resumeHosted(launch, cwd, sid, c)
 		if err != nil {
 			log.Printf("agentd: resume session=%s: %v", sid, err)
 			c.Warn("Could not reopen that session", err.Error())
-			// A session the agent no longer knows is not coming back, and
-			// leaving it in the list invites the same failed click
-			// forever.
-			forgetSession(sid)
+			// Keep the transcript in History. Native state can disappear
+			// independently of wash's transcript, and the row still offers
+			// the explicit restart-fresh and delete choices.
 			return
 		}
-		pendingAttachMu.Lock()
-		pendingAttach = append(pendingAttach, hs.key)
-		pendingAttachMu.Unlock()
-		if err := c.SpawnRequest(aiAppID); err != nil {
-			log.Printf("agentd: resume spawn session=%s: %v", sid, err)
-			popAttach()
-			restoreDetached(hs.key)
-		}
+		openHosted(c, hs.key)
 	}()
+}
+
+// resolveResumeTarget finds what to reopen for a session id: the
+// in-memory history first, then the transcript store's own header.
+//
+// The History panel lists every transcript on disk, while `history` is
+// capped at historyCap. A session older than the cap was therefore
+// listed, clickable, and inert: resume looked it up in the slice, missed,
+// and logged "resume unknown session". The file's meta line carries
+// exactly what a resume needs (agent, cwd, id), so the store is the
+// fallback — and a failed resume that forgets the slice entry no longer
+// leaves a permanently dead row, because the next click resolves from
+// the file again.
+func resolveResumeTarget(sessionID string) (Session, bool) {
+	for i := range history {
+		if history[i].SessionID == sessionID {
+			s := history[i]
+			return s, s.Agent != ""
+		}
+	}
+	m, ok := readSessionMeta(transcriptPath(sessionID))
+	if !ok || m.SessionID != sessionID {
+		return Session{}, false
+	}
+	return Session{
+		SessionID:  m.SessionID,
+		Agent:      m.Agent,
+		Connection: m.Connection,
+		Stack:      m.Stack,
+		Tier:       m.Tier,
+		Cwd:        m.Cwd,
+		Dir:        m.Dir,
+		Title:      m.Title,
+		UserTitle:  m.UserTitle,
+		LastSeen:   sessionRecency(m) / 1000,
+	}, m.Agent != ""
 }
 
 // aiAppID is the window a reopened session appears in. Resume used to
@@ -290,6 +366,17 @@ func popAttach() (string, bool) {
 	return k, true
 }
 
+func removePendingAttach(key string) {
+	pendingAttachMu.Lock()
+	defer pendingAttachMu.Unlock()
+	for i, pending := range pendingAttach {
+		if pending == key {
+			pendingAttach = append(pendingAttach[:i], pendingAttach[i+1:]...)
+			return
+		}
+	}
+}
+
 // onSpawnResult fires when the router has started the window a resume
 // asked for; it is then told which live session to attach to.
 func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
@@ -302,7 +389,18 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 	}
 	if err != nil {
 		log.Printf("agentd: resume spawn failed: %v", err)
+		clearControllerLaunch(key)
 		restoreDetached(key)
+		return
+	}
+	if owner, ok := claimController(key, instanceID); !ok {
+		clearControllerLaunch(key)
+		if owner == "" {
+			// The window died before it could be told its session: leave
+			// the session detached, so the roster offers to open it again.
+			log.Printf("agentd: controller instance=%s gone before attach key=%s", instanceID, key)
+			restoreDetached(key)
+		}
 		return
 	}
 	if e := c.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
@@ -310,6 +408,7 @@ func onSpawnResult(c *sdk.Conn, appID, instanceID string, err error) {
 		"key":  key,
 	}); e != nil {
 		log.Printf("agentd: resume attach instance=%s: %v", instanceID, e)
+		releaseController(instanceID)
 		restoreDetached(key)
 	}
 }

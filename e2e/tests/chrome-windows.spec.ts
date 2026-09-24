@@ -370,4 +370,52 @@ test.describe('chrome (test app via --show-hidden)', () => {
     await expect(app.locator('[data-testid="event-row-spawn_err"]')).toBeVisible();
     await expect(app.locator('[data-testid="counter-events"]')).not.toHaveText('0');
   });
+  // Regression: a window event must UPDATE the taskbar pills, not rebuild
+  // them. The shell hands the chrome a whole fresh WindowInfo array on every
+  // wm patch; when that array went straight into a signal, <For> (which keys
+  // on object reference) tore down and re-created every pill, and each new
+  // pill re-created its <svg><use href="/icons.svg#…"> — an external-document
+  // reference that does not paint on its first frame, so the icon blanked for
+  // a frame on every focus change (the taskbar flicker). The rows are
+  // reconciled by origin#windowID now, so the pill elements survive and only
+  // their attributes change.
+  test('focus changes restyle the taskbar pills without replacing them', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const win0 = page.locator('wash-app-test').nth(0);
+    await expect(win0).toBeVisible();
+    await win0.locator('[data-testid="action-spawn-self"]').click();
+    await expect(page.locator('wash-app-test')).toHaveCount(2);
+
+    const pills = page.locator('[data-testid="taskbar-pill"]');
+    await expect(pills).toHaveCount(2);
+    // Both pills carry an icon; it is the thing that flickered.
+    await expect(pills.nth(0).locator('svg')).toBeVisible();
+
+    // Stamp the live DOM nodes, then watch the strip for structural churn.
+    await pills.first().evaluate((pill) => {
+      const strip = pill.parentElement!;
+      const w = window as unknown as { __churn: number; __stamped: Element[] };
+      w.__stamped = [...strip.children];
+      w.__churn = 0;
+      new MutationObserver((recs) => {
+        for (const r of recs) w.__churn += r.addedNodes.length + r.removedNodes.length;
+      }).observe(strip, { childList: true });
+    });
+
+    // Bounce focus between the two windows a few times.
+    for (let i = 0; i < 4; i++) {
+      await pills.nth(i % 2).click();
+      await expect(page.locator('wash-app-test').nth(i % 2).locator('[data-testid="focused"] b')).toHaveText('yes');
+    }
+
+    const churn = await pills.first().evaluate((pill) => {
+      const strip = pill.parentElement!;
+      const w = window as unknown as { __churn: number; __stamped: Element[] };
+      const same = w.__stamped.length === strip.children.length
+        && w.__stamped.every((el, i) => el === strip.children[i]);
+      return { churn: w.__churn, sameNodes: same };
+    });
+    expect(churn).toEqual({ churn: 0, sameNodes: true });
+  });
 });

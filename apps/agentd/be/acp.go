@@ -23,16 +23,24 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
-	"github.com/sirmick/wash/internal/pty"
+	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
+
+// stderrTailBytes is how much of the adapter's stderr a session keeps for
+// the moment it dies: enough for the stack trace's last lines or the
+// "not logged in" it printed on the way out, small enough to sit on every
+// session for its lifetime.
+const stderrTailBytes = 2048
 
 // hostedAskTTL bounds how long the agent waits on a human. Slightly longer
 // than the queue's own ceiling so the queue's expiry is what fires, and the
@@ -51,6 +59,14 @@ const reasonAskOff = "ask_desktop off"
 
 // hosted is one ACP session this process owns.
 type hosted struct {
+	// Immutable for the lifetime of this provider connection.
+	capability      string
+	workspaceMember bool
+	sessionMeta     map[string]any
+	// interrupted marks a cancel the orchestrator asked for: the turn ends
+	// as a normal one and the member stays available, rather than being
+	// paused like a turn the human stopped.
+	interrupted atomic.Bool
 	// conn is the service connection, used to push transcript events to
 	// the windows watching this session.
 	conn *sdk.Conn
@@ -58,7 +74,9 @@ type hosted struct {
 	// terminal tier's "<instance>:<channel>" so the two can never collide.
 	key   string
 	agent string
-	cwd   string
+	// connection, stack and tier are how it was launched (sessionLaunch).
+	connection, stack, tier string
+	cwd                     string
 
 	client *acp.Client
 	// authMethods is what the adapter said it offers, kept only so a
@@ -73,6 +91,10 @@ type hosted struct {
 	// nothing else consumes.
 	used, size int64
 	title      string
+	// userTitle is the person's name for the session (session_admin.go).
+	// It wins over title wherever the title is shown; title is kept so
+	// clearing it falls back to the agent's own.
+	userTitle string
 	// modes are the agent's own approval presets, and mode is the one in
 	// force. Changing it is ACP's answer to "stop asking me" — the AGENT's
 	// setting, visible to it and reversible from either side, rather than a
@@ -97,9 +119,31 @@ type hosted struct {
 	configs []acp.ConfigOption
 	// commands are the agent's own slash commands.
 	commands []acp.AvailableCommand
+	// toolKinds retains the kind from a tool's opening notification. ACP
+	// completion updates commonly omit it; without this, completed reads
+	// would be mistaken for mutations and needlessly invalidate Git.
+	toolKinds map[string]string
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
+	// closing is set the moment retire starts, before the adapter is
+	// killed, so the exit watcher can tell "we ended it" from "it died".
+	closing      atomic.Bool
+	sessionReady atomic.Bool
+	// tail is the adapter's last stderr bytes (see stderrTail).
+	// stderrDone closes when the adapter's stderr reader has drained. The
+	// exit watcher wakes on stdout closing, which routinely beats the last
+	// stderr line — the crash reason — through the pipe.
+	stderrDone chan struct{}
+	tailMu     sync.Mutex
+	tail       []byte
+	// exited is closed when watchExit has finished its cleanup, and idle
+	// receives one value each time the turn goroutine returns. Both nil in
+	// production (nothing waits); tests set them so they can wait for the
+	// goroutines rather than poll their side effects — and so nothing of a
+	// test's session outlives the test.
+	exited chan struct{}
+	idle   chan struct{}
 
 	// turnMu guards turnLive, and — crucially — is held ACROSS the
 	// state write that depends on it, so the two orderings below cannot
@@ -118,6 +162,72 @@ type hosted struct {
 	// no longer claim the agent is busy.
 	turnMu   sync.Mutex
 	turnLive bool
+	// Transient activity is guarded by turnMu and never inferred from a saved
+	// transcript. Concurrent tools stay active until each reports completion.
+	activityPhase string
+	activityTools map[string]string
+	activityAsks  int
+	// pending are prompts typed while a turn was open, in order. They run
+	// one after another when the turn ends — messenger semantics — rather
+	// than as concurrent session/prompt calls, which the protocol does not
+	// allow and which flipped beginTurn/endTurn out of order. Guarded by
+	// turnMu; queued mirrors len(pending) for the roster row, readable
+	// without the lock (setState runs UNDER turnMu from begin/endTurn).
+	pending []turn
+	queued  atomic.Int32
+	// extraRoots are folders allowed beyond cwd (roots.go). Guarded by
+	// hostedMu like everything else a roster push reads.
+	extraRoots []string
+	// mcp are the MCP servers this session was opened with (agents.json).
+	// Held so a RESUME offers the same set: session/load takes the list
+	// too, and a resumed session that silently lost its tools is worse
+	// than one that never had them.
+	mcp []acp.McpServer
+}
+
+// turn is one submitted prompt: what was typed, plus whatever was attached
+// to it. Attachments ride WITH the text rather than as a prompt of their
+// own — a screenshot with "what is wrong here?" is one message, and
+// splitting it into two turns would make the agent answer the first
+// without the second.
+type turn struct {
+	origin      string
+	displayText string
+	mailIDs     []string
+	text        string
+	blocks      []acp.ContentBlock
+}
+
+// empty reports a turn with nothing in it, which is what the queue drain
+// stops on.
+func (t turn) empty() bool { return t.text == "" && len(t.blocks) == 0 }
+
+// submitPrompt is the one entry for a prompt on a live session. Inside a
+// turn it is queued and the row says so; otherwise it claims the turn
+// under the lock and runs. Claiming here — not in beginTurn — is what
+// stops two prompts arriving in the same instant from both seeing a
+// closed turn and both starting one.
+func (h *hosted) submitPrompt(t turn) (queued bool) {
+	h.turnMu.Lock()
+	if h.turnLive {
+		h.pending = append(h.pending, t)
+		h.queued.Store(int32(len(h.pending)))
+		h.turnMu.Unlock()
+		log.Printf("agentd: acp prompt queued key=%s queued=%d", h.key, len(h.pending))
+		h.republish()
+		return true
+	}
+	h.turnLive = true
+	h.turnMu.Unlock()
+	go func() {
+		if h.idle != nil {
+			defer func() { h.idle <- struct{}{} }()
+		}
+		for next := t; !next.empty(); {
+			next = promptHosted(h, next)
+		}
+	}()
+	return false
 }
 
 // beginTurn opens a turn: narration counts as "working" from here.
@@ -125,17 +235,61 @@ func (h *hosted) beginTurn() {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
 	h.turnLive = true
+	h.activityPhase = "working"
+	h.activityTools = map[string]string{}
 	h.setState("working", "")
 }
 
 // endTurn closes a turn and records how it ended. Holding turnMu across
 // the write is what makes it final: a SessionUpdate racing this either
 // runs entirely before (and is overwritten here) or sees a closed turn.
-func (h *hosted) endTurn(state, reason string) {
+//
+// It returns the next queued prompt, if the turn ended in a way that
+// should run one: a turn that finished normally hands over to the next
+// message with the turn still claimed (so nothing can slip in between,
+// and the row does not flash done→working). A turn that failed or was
+// stopped drops the queue — the error would repeat, and Stop means stop
+// — and the transcript lists what was dropped so nothing typed is lost
+// from view.
+func (h *hosted) endTurn(state, reason string) (next turn) {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
+	clean := state == "done" && reason != "cancelled"
+	if clean && len(h.pending) > 0 {
+		next, h.pending = h.pending[0], h.pending[1:]
+		h.queued.Store(int32(len(h.pending)))
+		h.setState("working", "")
+		return next
+	}
+	dropped := h.pending
+	h.pending = nil
+	h.queued.Store(0)
+	wasLive := h.turnLive
 	h.turnLive = false
 	h.setState(state, reason)
+	if wasLive {
+		switch {
+		case state == "done":
+			h.journal("agent.turn", "turn done")
+		case reason == "cancelled":
+			h.journal("agent.turn", "turn stopped")
+		case state == "failed":
+			h.journal("agent.turn", "turn failed: "+reason)
+		}
+	}
+	if len(dropped) > 0 {
+		why := "the error"
+		if reason == "cancelled" {
+			why = "Stop"
+		}
+		text := "Dropped " + itoa(uint64(len(dropped))) + " queued prompt(s) after " + why + ":"
+		for _, d := range dropped {
+			text += "\n> " + strings.ReplaceAll(d.text, "\n", "\n> ")
+		}
+		log.Printf("agentd: acp prompts dropped key=%s n=%d reason=%s", h.key, len(dropped), reason)
+		h.note(text)
+	}
+	return turn{}
 }
 
 // narrated reports that the agent said or did something. It only moves the
@@ -188,10 +342,50 @@ func (h *hosted) register() {
 	hostedAll[h.key] = h
 	hostedMu.Unlock()
 	h.setState("running", "")
+	h.journal("agent.start", h.agent+" started in "+dirLabel(h.cwd))
 }
+
+// journal notes a fact about this session in the router's activity
+// journal (docs/COMMANDER.md §3.2): one line and the way back — resume by
+// session id, or focus by roster key while it runs. A note the router
+// refuses is its concern; here it is fire-and-forget.
+func (h *hosted) journal(kind, line string) {
+	if h.conn == nil {
+		return
+	}
+	// shownTitle takes hostedMu itself: read the id under the lock, the
+	// title outside it. (Holding it across the call deadlocked agentd on
+	// its first session — no controller ever opened.)
+	hostedMu.Lock()
+	sid := h.sessionID
+	hostedMu.Unlock()
+	title := h.shownTitle()
+	_ = noteActivity(h.conn, wire.EvtActivityNote{
+		Kind: kind, Title: title, Line: line,
+		Ref:    map[string]any{"session_id": sid, "row_key": h.key},
+		Intent: &wire.ActivityIntent{Kind: "resume", SessionID: sid, RowKey: h.key},
+	})
+}
+
+// noteActivity is the journal seam: the test that guards journal's lock
+// discipline captures notes here instead of needing a live connection.
+var noteActivity = func(c *sdk.Conn, n wire.EvtActivityNote) error { return c.Note(n) }
 
 // retire ends a session: off the roster, out of the registry, adapter
 // stopped. Safe to call twice.
+//
+// "Ends" means everything the session owns, in this order:
+//
+//  1. its pending questions — answered cancelled toward the agent while
+//     it can still hear, and off every rail that was showing them;
+//  2. the adapter, as a process group, so an `npx` wrapper's node child
+//     does not outlive the adapter it wrapped;
+//  3. the terminals it created, which have no agent left to release them.
+//
+// Killing only the adapter (what this did before) left the rail asking a
+// question for a dead session, "Always allow" writing a rule for it, and
+// any `sleep 600` the agent had started still running with its channel
+// mounted in a transcript nobody could act on.
 func (h *hosted) retire() {
 	hostedMu.Lock()
 	_, live := hostedAll[h.key]
@@ -200,9 +394,12 @@ func (h *hosted) retire() {
 	if !live {
 		return
 	}
-	if h.stop != nil {
-		h.stop()
+	h.closing.Store(true)
+	if workspaces != nil {
+		workspaces.retired(h)
 	}
+	h.journal("agent.end", "session ended")
+	h.releaseOwned(ReasonSessionEnded)
 	forgetTranscriptWatchers(h.key)
 	// Seal the history entry before the events are freed: the count comes
 	// from the in-memory transcript, which is about to go.
@@ -221,6 +418,161 @@ func (h *hosted) retire() {
 	log.Printf("agentd: acp session ended key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
 }
 
+// stderrTail is an io.Writer that keeps the last stderrTailBytes of what
+// the adapter wrote to stderr.
+func (h *hosted) stderrTail() *tailWriter { return &tailWriter{h: h} }
+
+type tailWriter struct{ h *hosted }
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.h.tailMu.Lock()
+	w.h.tail = append(w.h.tail, p...)
+	if over := len(w.h.tail) - stderrTailBytes; over > 0 {
+		w.h.tail = append([]byte(nil), w.h.tail[over:]...)
+	}
+	w.h.tailMu.Unlock()
+	return len(p), nil
+}
+
+// stderrText is the kept tail, trimmed for a transcript note.
+// stderrGrace bounds the wait for a dying adapter's last words. Short: an
+// adapter whose stderr is held open by a child it left behind must not
+// hold the exit — the row still turns red, only the reason is missing.
+var stderrGrace = 2 * time.Second
+
+// awaitStderr waits for the stderr reader to finish, so the tail read after
+// it holds the line that explains the exit. Without it agentd logged
+// stderr="" and the transcript note said only "the agent exited", while the
+// adapter's "fatal: token expired" arrived a moment later.
+func (h *hosted) awaitStderr() {
+	if h.stderrDone == nil {
+		return
+	}
+	t := time.NewTimer(stderrGrace)
+	defer t.Stop()
+	select {
+	case <-h.stderrDone:
+	case <-t.C:
+	}
+}
+
+func (h *hosted) stderrText() string {
+	h.tailMu.Lock()
+	defer h.tailMu.Unlock()
+	return strings.TrimSpace(string(h.tail))
+}
+
+// watchExit is the per-session goroutine that turns an adapter exit into
+// a fact the desktop can see. Nothing used to select on client.Done()
+// outside acpterm: a crashed adapter kept its roster row and its
+// idle-hold, its pending question outlived it, and the next prompt failed
+// with nothing on screen to say why.
+//
+// On exit — unless retire already claimed the session, in which case the
+// exit is ours — the row goes to failed/exited (it lingers on the roster
+// for the sweep's dropAfter, then goes), the transcript gets a note with
+// the reason and the adapter's last stderr lines, the pending asks are
+// cancelled and the terminals closed, and the session leaves the
+// registry. The HISTORY entry and the transcript file are kept as they
+// are, so the row in History remains something to resume.
+func (h *hosted) watchExit() {
+	if h.exited != nil {
+		defer close(h.exited)
+	}
+	if h.client == nil {
+		return
+	}
+	<-h.client.Done()
+	if h.closing.Load() {
+		return
+	}
+	hostedMu.Lock()
+	live := hostedAll[h.key] == h
+	if live {
+		delete(hostedAll, h.key)
+	}
+	hostedMu.Unlock()
+	if !live {
+		return
+	}
+	h.closing.Store(true)
+	err := h.client.Err()
+	h.awaitStderr()
+	tail := h.stderrText()
+	log.Printf("agentd: acp adapter exited key=%s agent=%s session=%s err=%v stderr=%q",
+		h.key, h.agent, h.sessionID, err, truncate([]byte(tail), 300))
+
+	// The row first, so the status line changes colour before the note
+	// lands; then the note, which is what explains the colour.
+	if workspaces != nil {
+		_ = workspaces.store.TurnEnded(h.sessionID, nil, true)
+		workspaces.signal()
+	}
+	h.endTurn("failed", "exited")
+	text := "The agent exited unexpectedly"
+	if err != nil && err != acp.ErrClosed {
+		text += " (" + err.Error() + ")"
+	}
+	text += "."
+	if tail != "" {
+		text += "\n\nIts last output:\n```\n" + tail + "\n```"
+	}
+	text += "\n\nThis session can be reopened from History."
+	h.note(text)
+
+	h.releaseOwned(ReasonAgentExited)
+	h.noteSession("exited", time.Now())
+	releaseTranscript(h.key)
+	// The history write happens INSIDE the state lock: this goroutine is
+	// not the bus goroutine, and the history slice and its dirty flag are
+	// otherwise only touched from there or under Mutate.
+	mutateState(func(s *State) {
+		s.Recent = publishHistory()
+		saveHistory()
+	})
+}
+
+// releaseOwned cancels the session's questions, stops its adapter and
+// closes its terminals — the part of ending a session that is the same
+// whether a human ended it or the adapter died under it.
+func (h *hosted) releaseOwned(why string) {
+	if n := cancelAsksFor(h.key, why); n > 0 {
+		log.Printf("agentd: acp session %s key=%s asks_cancelled=%d", why, h.key, n)
+	}
+	if h.stop != nil {
+		h.stop()
+	}
+	if n := closeTerminalsFor(h.key, why); n > 0 {
+		log.Printf("agentd: acp session %s key=%s terminals_closed=%d", why, h.key, n)
+	}
+}
+
+// stopAllHosted is the shutdown sweep, registered with sdk.OnTerminate:
+// when agentd itself goes down — the router's SIGTERM, or its connection
+// closing under us — every adapter it launched and every terminal those
+// adapters opened go with it. Without this they orphan to PID 1: the
+// adapter keeps its stdio to a dead process and its node children keep
+// running, which is the child-process leak class the audit already cost
+// us once (docs/CORE_AUDIT.md).
+func stopAllHosted() {
+	stopUsagePatches()
+	stopPreviewPatches()
+	hostedMu.Lock()
+	all := make([]*hosted, 0, len(hostedAll))
+	for _, h := range hostedAll {
+		all = append(all, h)
+	}
+	hostedMu.Unlock()
+	for _, h := range all {
+		h.closing.Store(true)
+		if h.stop != nil {
+			h.stop()
+		}
+		log.Printf("agentd: acp session stopped on shutdown key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
+	}
+	closeAllTerminals("agentd shutting down")
+}
+
 // setState upserts this session's roster row. Same four wire states the
 // terminal tier publishes, so the sidebar cannot tell the tiers apart —
 // which is the M3 acceptance criterion.
@@ -228,12 +580,20 @@ func (h *hosted) setState(state, reason string) {
 	now := time.Now()
 	var wantGit string
 	var changed bool
-	mutateState(func(s *State) {
+	mutateStateIf(func(s *State) bool {
 		r := rows[h.key]
 		if r == nil {
+			// A session being ended has had its row deleted by retire;
+			// the turn it killed then reports "failed" through endTurn
+			// and used to put the row straight back, where it lingered
+			// until the sweep. Ended is ended.
+			if h.closing.Load() {
+				return false
+			}
 			r = &row{}
 			rows[h.key] = r
 		}
+		before := r.Row
 		if r.State != state || r.Reason != reason {
 			r.stateSince = now
 			changed = true
@@ -246,25 +606,42 @@ func (h *hosted) setState(state, reason string) {
 		r.Reason = reason
 		r.SessionID = h.sessionID
 		r.Detached = h.detached
+		r.Queued = int(h.queued.Load())
 		r.Used, r.Size = h.used, h.size
-		r.Title = h.title
+		r.Title = h.shownTitle()
 		r.Mode, r.Modes = h.mode, publicModes(h.modes)
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
+		// Copied, not aliased: a snapshot outlives this callback, and a
+		// later append to h.extraRoots would otherwise rewrite a
+		// published row from under its readers (the shallow-snapshot
+		// footgun the race gate caught once already).
+		r.Roots = append([]string(nil), h.extraRoots...)
+
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
 			r.Branch, r.Dirty = "", false
+			wantGit = h.cwd
 		}
-		if r.Cwd != "" {
-			wantGit = r.Cwd
-		}
-		if rememberSession(h.agent, h.sessionID, h.cwd, h.title, now) {
+		remembered := rememberSession(h.record(), h.sessionID, h.cwd, h.title, now)
+		if remembered {
 			historyDirty = true
 		}
-		s.Rows = publish(now)
-		s.Recent = publishHistory()
+		// Publish only what moved. Narration re-asserts an unchanged row
+		// several times a second during a turn; rebuilding the roster and
+		// the whole session history for each of those, and then putting
+		// it on the wire, is the Interactive flood this guards.
+		moved := !sameRow(before, r.Row)
+		if moved {
+			s.Rows = publish(now)
+		}
+		if remembered {
+			s.Recent = publishHistory()
+		}
+		changed = moved
+		return moved || remembered
 	})
 	if changed {
 		log.Printf("agentd: acp row key=%s agent=%s state=%s session=%s dir=%s",
@@ -308,21 +685,58 @@ func (h *hosted) applyConfigs(in []acp.ConfigOption) {
 // state — used when only the detached flag moved.
 func (h *hosted) republish() {
 	now := time.Now()
-	mutateState(func(s *State) {
-		if r := rows[h.key]; r != nil {
-			r.Detached = h.detached
-			r.Used, r.Size = h.used, h.size
-			r.Title = h.title
-			r.Mode, r.Modes = h.mode, publicModes(h.modes)
-			r.Yolo = h.yolo
-			r.Configs = publicConfigs(h.configs)
-			r.Commands = publicCommands(h.commands)
-			r.Configs = publicConfigs(h.configs)
-			r.Commands = publicCommands(h.commands)
-			r.lastSeen = now
+	mutateStateIf(func(s *State) bool {
+		r := rows[h.key]
+		if r == nil {
+			return false
+		}
+		before := r.Row
+		r.Detached = h.detached
+		r.Queued = int(h.queued.Load())
+		r.Used, r.Size = h.used, h.size
+		r.Title = h.shownTitle()
+		r.Mode, r.Modes = h.mode, publicModes(h.modes)
+		r.Yolo = h.yolo
+		r.Configs = publicConfigs(h.configs)
+		r.Commands = publicCommands(h.commands)
+		// Copied, not aliased, for the reason setState gives above.
+		// Republished HERE as well as there: allowing a folder changes no
+		// state, so setState never runs for it, and a row that only
+		// learned its roots on the next state change is a widening the
+		// person cannot see they made.
+		r.Roots = append([]string(nil), h.extraRoots...)
+		r.lastSeen = now
+		if sameRow(before, r.Row) {
+			return false
 		}
 		s.Rows = publish(now)
+		return true
 	})
+}
+
+// shownTitle is the title every surface renders: the person's name for
+// the session when they gave one, else the agent's own. Reads under
+// hostedMu — setState and republish run inside mutateStateIf, which is a
+// different lock, so the read here is the one that guards the fields.
+func (h *hosted) shownTitle() string {
+	hostedMu.Lock()
+	defer hostedMu.Unlock()
+	if h.userTitle != "" {
+		return h.userTitle
+	}
+	return h.title
+}
+
+// sameRow reports whether two published rows say the same thing.
+//
+// SinceMS is excluded deliberately: it is derived from the clock at
+// publish time, so two otherwise identical rows always differ by a few
+// milliseconds. Comparing it would defeat every dedupe — which is also
+// why the elapsed clock is refreshed by the 10s sweep rather than by
+// whatever happens to touch a row next.
+func sameRow(a, b Row) bool {
+	a.SinceMS, b.SinceMS = 0, 0
+	return reflect.DeepEqual(a, b)
 }
 
 // ---- acp.SessionHandler ----
@@ -331,28 +745,36 @@ func (h *hosted) republish() {
 // consumes the same notifications in M4; this milestone renders none of
 // them, which is what makes it testable without a frontend.
 func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
+	h.observeWorkspaceActivity(n.Update)
 	// The transcript first: it is what the app renders, and it must record
 	// what the agent said even for variants the roster ignores.
 	if h.conn != nil {
 		for _, e := range appendUpdate(h.key, n.Update, time.Now()) {
 			pushEvent(h.conn, h.key, e)
 		}
+		if n.Update.SessionUpdate == acp.UpdateAgentMessageChunk {
+			queuePreviewPatch(h.key)
+		}
 	}
 
 	switch n.Update.SessionUpdate {
-	case acp.UpdateAgentMessageChunk, acp.UpdateAgentThoughtChunk,
-		acp.UpdateToolCall, acp.UpdateToolCallUpdate, acp.UpdatePlan:
+	case acp.UpdateAgentMessageChunk, acp.UpdateAgentThoughtChunk, acp.UpdatePlan:
 		// Anything the agent says or does means it is working — but only
 		// while a turn is open. A response can overtake the tail of its
 		// own notification stream, so an unconditional write here left
 		// finished sessions stuck on "working…" (see turnMu).
 		h.narrated()
+	case acp.UpdateToolCall, acp.UpdateToolCallUpdate:
+		h.narrated()
+		if h.toolMayChangeCheckout(n.Update) {
+			refreshGitAfterTool(h.cwd)
+		}
+		if n.Update.Title != "" && (n.Update.Status == acp.ToolStatusCompleted || n.Update.Status == acp.ToolStatusFailed) {
+			h.journal("agent.tool", n.Update.Title+" — "+string(n.Update.Status))
+		}
 	case acp.UpdateUsage:
 		if n.Update.Size > 0 || n.Update.Used > 0 {
-			hostedMu.Lock()
-			h.used, h.size = n.Update.Used, n.Update.Size
-			hostedMu.Unlock()
-			h.republish()
+			h.setUsage(n.Update.Used, n.Update.Size)
 		}
 
 	case acp.UpdateCurrentMode:
@@ -399,7 +821,7 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 			// history when the session ended would be missing from
 			// exactly the sessions you most want to find again.
 			mutateState(func(s *State) {
-				if rememberSession(h.agent, h.sessionID, h.cwd, h.title, time.Now()) {
+				if rememberSession(h.record(), h.sessionID, h.cwd, h.title, time.Now()) {
 					historyDirty = true
 				}
 				s.Recent = publishHistory()
@@ -415,6 +837,38 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 	}
 }
 
+func (h *hosted) toolMayChangeCheckout(u acp.SessionUpdate) bool {
+	kind := u.Kind
+	hostedMu.Lock()
+	if h.toolKinds == nil {
+		h.toolKinds = map[string]string{}
+	}
+	if u.ToolCallID != "" {
+		if kind != "" {
+			h.toolKinds[u.ToolCallID] = kind
+		} else {
+			kind = h.toolKinds[u.ToolCallID]
+		}
+	}
+	terminal := u.Status == acp.ToolStatusCompleted || u.Status == acp.ToolStatusFailed
+	if terminal && u.ToolCallID != "" {
+		delete(h.toolKinds, u.ToolCallID)
+	}
+	hostedMu.Unlock()
+
+	if !terminal {
+		return false
+	}
+	switch kind {
+	case acp.ToolKindRead, acp.ToolKindSearch, acp.ToolKindFetch, acp.ToolKindThink:
+		return false
+	default:
+		// A completion with no known opening event is conservatively treated
+		// like execute/edit: failed tools can still leave partial changes.
+		return true
+	}
+}
+
 // RequestPermission is the reason this file exists.
 //
 // Order: policy first (an allow/deny rule answers without troubling
@@ -423,15 +877,53 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
 	pol := hostedPolicy()
 	preq := toolRequest(req.ToolCall, h.cwd)
-	res := agentpolicy.Evaluate(pol, preq)
+	_, _, wpol := workspaceApprovalPolicy(h.sessionID)
+	res, scope := decideWithWorkspace(pol, wpol, preq)
+	// Leaving plan mode is the orchestrator's decision, not the member's:
+	// under auto-approval wash would otherwise pick the adapter's first
+	// "allow", which on claude-agent-acp 0.81.1 can clear the member's
+	// context and switch it to auto or bypass mode. Checked before every
+	// rule and before yolo, so neither can grant it.
+	//
+	// claude-agent-acp answers that refusal with deny+interrupt, which ends
+	// the turn; it offers no refusal that lets the turn go on. So the stop is
+	// marked as one wash asked for (the member stays available and its mail
+	// counts as delivered, rather than paused and "uncertain"), and wash
+	// hands the plan in the request to the orchestrator itself.
+	if h.workspaceMember && req.ToolCall.Kind == acp.ToolKindSwitchMode {
+		log.Printf("agentd: acp decide key=%s tool=%s decision=deny reason=plan-exit-is-orchestrators", h.key, preq.ToolName)
+		h.decision(DecisionDeny, "leaving plan mode is the orchestrator's call; wash sent it your plan", preq.ToolName, "")
+		h.interrupted.Store(true)
+		var in struct {
+			Plan string `json:"plan"`
+		}
+		_ = json.Unmarshal(req.ToolCall.RawInput, &in)
+		if workspaces != nil {
+			go workspaces.planExitDenied(h, in.Plan)
+		}
+		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
+	if h.capability == "reviewer" {
+		if res.Decision == agentpolicy.DecisionDeny || !h.reviewerPermission(req.ToolCall) {
+			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+		}
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+	}
 
 	switch res.Decision {
 	case agentpolicy.DecisionAllow:
-		log.Printf("agentd: acp decide key=%s tool=%s decision=allow rule=%q", h.key, preq.ToolName, res.Rule)
+		log.Printf("agentd: acp decide key=%s tool=%s decision=allow rule=%q scope=%s", h.key, preq.ToolName, res.Rule, scope)
 		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	case agentpolicy.DecisionDeny:
-		log.Printf("agentd: acp decide key=%s tool=%s decision=deny rule=%q", h.key, preq.ToolName, res.Rule)
+		log.Printf("agentd: acp decide key=%s tool=%s decision=deny rule=%q scope=%s", h.key, preq.ToolName, res.Rule, scope)
 		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
+
+	// Wash's own coordination bridge. After the policy, so an explicit deny
+	// still wins; before yolo, so it is quiet rather than narrated.
+	if coordinationPermission(req.ToolCall) {
+		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=coordination", h.key, preq.ToolName)
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	}
 
 	// Host-side yolo: the user asked wash to stop asking. Checked AFTER the
@@ -446,7 +938,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=yolo subject=%q",
 			h.key, preq.ToolName, subject)
-		h.note("Auto-approved (yolo): " + preq.ToolName + " " + subject)
+		h.decision(DecisionAllow, "yolo", preq.ToolName, subject)
 		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	}
 
@@ -470,20 +962,48 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		return acp.Cancelled(), nil
 	}
 
+	subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
+	v := h.askHuman(ctx, preq.ToolName, subject)
+	switch v.decision {
+	case DecisionAllow:
+		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
+	case DecisionDeny:
+		return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
+	}
+	if v.why == ReasonAgentExited {
+		// The adapter is gone; there is nobody left to explain it to.
+		return acp.Cancelled(), nil
+	}
+	h.narrateUnanswered(v.why, preq.ToolName, subject)
+	return acp.Cancelled(), nil
+}
+
+// askHuman puts one question in the desktop queue and waits for it.
+//
+// The shared half of every path that needs a person: the tool-call
+// approval above, and "this path is outside every folder you gave me"
+// (roots.go). Returns the verdict rather than an ACP response, because
+// the two callers answer their agents in different protocols.
+func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
+	h.turnMu.Lock()
+	h.activityAsks++
+	h.turnMu.Unlock()
+	defer func() { h.turnMu.Lock(); h.activityAsks--; h.turnMu.Unlock() }()
 	h.setState("needs-input", "permission")
 	// Back to working once answered — but through the turn gate, so an
 	// answer that lands after the turn already ended cannot resurrect it.
 	defer h.narrated()
 
 	answer := make(chan verdict, 1)
+	workspaceID, workspaceName, _ := workspaceApprovalPolicy(h.sessionID)
 	queued := enqueueAsk(askSpec{
-		Agent:          h.agent,
-		Tool:           preq.ToolName,
-		Subject:        agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput),
-		Cwd:            h.cwd,
-		RowKey:         h.key,
-		SourceApp:      AppID,
-		SourceInstance: "",
+		Agent:         h.agent,
+		Tool:          tool,
+		Subject:       subject,
+		Cwd:           h.cwd,
+		RowKey:        h.key,
+		WorkspaceID:   workspaceID,
+		WorkspaceName: workspaceName,
 	}, func(decision, why string) error {
 		select {
 		case answer <- verdict{decision: decision, why: why}:
@@ -491,7 +1011,6 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		}
 		return nil
 	})
-	subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 	if !queued {
 		// enqueueAsk already answered with defer, and the buffered channel
 		// is holding *which* defer. Read it so the refusal can say which
@@ -501,31 +1020,55 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 		case v = <-answer:
 		default:
 		}
-		h.narrateUnanswered(v.why, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return v
 	}
 
 	select {
 	case <-ctx.Done():
-		// The turn was cancelled out from under the question. That is a
-		// real cancel, so it needs no explaining — the human did it.
-		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, preq.ToolName, "turn ended")
-		return acp.Cancelled(), nil
+		// The adapter went away under the question (ctx is the ACP
+		// conn's, cancelled when its read loop ends). The question must
+		// go with it — nothing else will delete it for up to 30 minutes.
+		log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q", h.key, tool, ReasonAgentExited)
+		cancelAsksFor(h.key, ReasonAgentExited)
+		return verdict{decision: DecisionDefer, why: ReasonAgentExited}
 	case v := <-answer:
-		switch v.decision {
-		case DecisionAllow:
-			return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
-		case DecisionDeny:
-			return pick(req.Options, acp.OptionRejectOnce, acp.OptionRejectAlways), nil
-		}
-		h.narrateUnanswered(v.why, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return v
 	case <-time.After(hostedAskTTL):
 		// Backstop only: the queue owns expiry and should always have
 		// answered by now. Reaching here means the queue lost the ask.
-		h.narrateUnanswered(ReasonTimeout, preq.ToolName, subject)
-		return acp.Cancelled(), nil
+		return verdict{decision: DecisionDefer, why: ReasonTimeout}
 	}
+}
+
+// askOutside is the question a path outside every root raises. Same
+// queue, same row, same buttons — the person is being asked about a
+// FOLDER rather than a command, and nothing else about it differs.
+//
+// A yes allows that path for that call. It does not widen the session:
+// widening is addRoot, a deliberate act with a visible result, and an
+// approval buried in a stream of tool calls must not perform one.
+func (h *hosted) askOutside(ctx context.Context, tool, path string) bool {
+	pol := hostedPolicy()
+	if pol.Enabled && !pol.AskDesktopOrDefault() {
+		h.narrateUnanswered(reasonAskOff, tool, path)
+		return false
+	}
+	hostedMu.Lock()
+	yolo := h.yolo
+	hostedMu.Unlock()
+	if yolo {
+		h.decision(DecisionAllow, "yolo, outside this session's folders", tool, path)
+		return true
+	}
+	v := h.askHuman(ctx, tool, path+" (outside this session's folders)")
+	if v.decision == DecisionAllow {
+		h.decision(DecisionAllow, "allowed once, outside this session's folders", tool, path)
+		return true
+	}
+	if v.decision != DecisionDeny && v.why != ReasonAgentExited {
+		h.narrateUnanswered(v.why, tool, path)
+	}
+	return false
 }
 
 // verdict is an answer plus why it is that answer. The `why` is the whole
@@ -550,6 +1093,12 @@ func unansweredReason(why string) string {
 		return "too many questions already waiting on this agent"
 	case reasonAskOff:
 		return "asking is switched off in agents.json"
+	case ReasonSessionEnded:
+		return "the session was ended"
+	case ReasonTurnCancelled:
+		return "the turn was stopped"
+	case ReasonAgentExited:
+		return "the agent exited"
 	}
 	if why == "" {
 		return "no answer"
@@ -567,10 +1116,10 @@ func unansweredReason(why string) string {
 // differently. appendEvent's own doc comment names that trap; these were
 // the callers still in it.
 func (h *hosted) note(text string) {
-	if h.conn == nil {
-		return
+	e := appendEvent(h.key, Event{Kind: EventMessage, Text: text}, time.Now())
+	if h.conn != nil {
+		pushEvent(h.conn, h.key, e)
 	}
-	pushEvent(h.conn, h.key, appendEvent(h.key, Event{Kind: EventMessage, Text: text}, time.Now()))
 }
 
 // narrateUnanswered puts a refusal nobody chose into the transcript.
@@ -583,11 +1132,7 @@ func (h *hosted) note(text string) {
 func (h *hosted) narrateUnanswered(why, tool, subject string) {
 	log.Printf("agentd: acp decide key=%s tool=%s decision=cancelled reason=%q subject=%q",
 		h.key, tool, why, subject)
-	text := "Not approved — " + unansweredReason(why) + ": " + tool
-	if subject != "" {
-		text += " " + subject
-	}
-	h.note(text)
+	h.decision("cancelled", unansweredReason(why), tool, subject)
 }
 
 // pick chooses the option to select for a decision, preferring the
@@ -638,6 +1183,14 @@ func toolRequest(tc acp.ToolCall, cwd string) agentpolicy.Request {
 		// Unmapped kind: a tool name no rule can match, so a new ACP
 		// kind falls through to asking rather than to allowing.
 		name = "Acp:" + tc.Kind
+		// Except an MCP call, which the adapter names exactly. As
+		// "Acp:other" every MCP tool of every server looked the same: the
+		// prompt could not say what it was asking about, and "always"
+		// wrote a rule that allowed all of them. Only the mcp__ namespace
+		// is taken, so a call cannot borrow a built-in's rules this way.
+		if meta, ok := claudeToolMeta(tc); ok && strings.HasPrefix(meta.Tool, "mcp__") {
+			name = meta.Tool
+		}
 	}
 
 	// The subject is what a rule's pattern matches. rawInput is the real
@@ -690,11 +1243,47 @@ func truncate(b []byte, n int) string {
 // the *backend* works — a Codex permission request reaching the sidebar
 // with no frontend change at all.
 func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
+	// agent_default prompt: read the stored default prompt. Answered to the
+	// asker rather than pushed on the roster's state, for the same reason
+	// agent_history is: it is one window's question, and a page of text
+	// on every roster push would reach every subscriber — including the
+	// desktop rail — several times a second during a turn.
+	sdk.HandleFromVoid(bus, "agent_default_prompt", func(conn *sdk.Conn, _ string, _ struct{}, from wire.Sender) error {
+		if from.InstanceID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+			"kind": "default_prompt",
+			"text": loadDefaultPrompt(),
+		})
+	})
+
+	// agent_set_default prompt: store it. Empty removes the file.
+	sdk.HandleFromVoid(bus, "agent_set_default_prompt", func(conn *sdk.Conn, _ string, req defaultPromptReq, from wire.Sender) error {
+		if err := saveDefaultPrompt(req.Text); err != nil {
+			log.Printf("agentd: save default prompt: %v", err)
+			conn.Fail("Could not save the default prompt", err)
+			return nil
+		}
+		stored := loadDefaultPrompt()
+		log.Printf("agentd: default prompt saved bytes=%d", len(stored))
+		// Republish so every window's launcher agrees about whether one
+		// is set — including the window that did not make the change.
+		mutateState(func(s *State) { s.HasDefaultPrompt = stored != "" })
+		if from.InstanceID == "" {
+			return nil
+		}
+		return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
+			"kind": "default_prompt",
+			"text": stored,
+		})
+	})
+
 	// agent_start: launch an adapter and open a session.
 	sdk.HandleFromVoid(bus, "agent_start", func(conn *sdk.Conn, _ string, req startReq, from wire.Sender) error {
-		h, err := startHosted(req.Agent, req.Cwd, svcConn)
+		h, err := startSession(req, svcConn)
 		if err != nil {
-			log.Printf("agentd: acp start agent=%s cwd=%s: %v", req.Agent, req.Cwd, err)
+			log.Printf("agentd: acp start stack=%s tier=%s agent=%s cwd=%s: %v", req.Stack, req.Tier, req.Agent, req.Cwd, err)
 			if from.InstanceID != "" {
 				return conn.SendAppMsgTo(wire.Recipient{InstanceID: from.InstanceID}, map[string]any{
 					"kind":   "agent_started",
@@ -704,8 +1293,20 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			}
 			return nil
 		}
-		if req.Prompt != "" {
-			go promptHosted(h, req.Prompt)
+		// The stored default prompt goes first, ahead of whatever the
+		// launcher was given (default prompt.go). Applied HERE rather than in
+		// the FE so it holds however a session was started — the
+		// launcher, `wash ai --agent`, or anything else that lands on
+		// agent_start — and so the one place that reads the file is the
+		// one process that owns sessions.
+		first := withDefaultPrompt(loadDefaultPrompt(), req.Prompt)
+		if first != "" {
+			h.submitPrompt(turn{text: first})
+		}
+		if req.Open {
+			openHosted(conn, h.key)
+		} else if from.AppID == aiAppID {
+			claimController(h.key, from.InstanceID)
 		}
 		if from.InstanceID == "" {
 			return nil
@@ -719,13 +1320,20 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	})
 
 	// agent_prompt: another turn on a live session.
-	sdk.HandleFromVoid(bus, "agent_prompt", func(_ *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
+	sdk.HandleFromVoid(bus, "agent_prompt", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
+			// A window still pointed at a session whose adapter exited (or
+			// that was ended elsewhere). Say so where the person is,
+			// rather than in a log they never see.
 			log.Printf("agentd: acp prompt for unknown session key=%s", req.Key)
+			conn.Warn("That session has ended", "Its agent is no longer running. Reopen it from History to continue.")
 			return nil
 		}
-		go promptHosted(h, req.Text)
+		// Queued inside a turn, run otherwise — never a second concurrent
+		// session/prompt, which the protocol does not allow and which
+		// flipped beginTurn/endTurn out of order.
+		h.submitPrompt(turn{text: req.Text, blocks: h.attachmentBlocks(req.Blocks)})
 		return nil
 	})
 
@@ -742,9 +1350,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		log.Printf("agentd: acp detached key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
 		h.republish()
 		// A detach requested from the desktop rail must also close the window.
-		// Transcript subscribers are the authoritative set of Agent windows
-		// currently rendering this hosted session.
-		for _, instanceID := range transcriptWatchers(h.key) {
+		// Only the controller owns this window. Transcript watchers may be
+		// editor tabs and must not be closed with it.
+		if instanceID := controllerFor(h.key); instanceID != "" {
 			_ = conn.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, map[string]any{
 				"kind": "detach",
 				"key":  h.key,
@@ -755,76 +1363,32 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 
 	// agent_reattach: open a window onto a session that is still running.
 	sdk.HandleFromVoid(bus, "agent_reattach", func(conn *sdk.Conn, _ string, req promptReq, _ wire.Sender) error {
-		h := claimDetached(req.Key)
-		if h == nil {
-			return nil
-		}
-		pendingAttachMu.Lock()
-		pendingAttach = append(pendingAttach, h.key)
-		pendingAttachMu.Unlock()
-		if err := conn.SpawnRequest(aiAppID); err != nil {
-			log.Printf("agentd: reattach spawn key=%s: %v", h.key, err)
-			popAttach()
-			restoreDetached(h.key)
-			return nil
-		}
-		h.republish()
-		return nil
-	})
-
-	// agent_pty_spike: SPIKE ONLY (docs/AGENT_TERMINAL.md §4). Opens a pty
-	// from this background service — no window, WindowID()==0 — and logs
-	// the channel id, so a test can mount that channel from the page and
-	// prove a windowless app's pty reaches the shell. If it does, agentd
-	// can own ACP terminals; if not, the design changes. Delete once M2
-	// replaces it with the real CreateTerminal.
-	sdk.HandleVoid(bus, "agent_pty_spike", func(c *sdk.Conn, _ string, _ struct{}) error {
-		go func() {
-			sess, err := pty.Open(context.Background(), c, 0, 80, 24,
-				[]string{"sh", "-c", "echo wash-spike-ok; sleep 5"}, nil,
-				func(_ *pty.Session, reason string) {
-					log.Printf("agentd: pty spike closed reason=%s", reason)
-				})
-			if err != nil {
-				log.Printf("agentd: pty spike FAILED: %v", err)
-				return
-			}
-			log.Printf("agentd: pty spike channel=%d", sess.ID())
-		}()
-		return nil
-	})
-
-	// agent_set_yolo: turn HOST-side auto-approval on or off for one
-	// session. Not persisted and not global — it dies with the session, so
-	// "yolo for this one job" cannot silently become how the desktop
-	// behaves tomorrow. The transition itself is announced in the
-	// transcript, so the record shows when the guard came off.
-	sdk.HandleFromVoid(bus, "agent_set_yolo", func(_ *sdk.Conn, _ string, req yoloReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
 		if h == nil {
 			return nil
 		}
-		hostedMu.Lock()
-		changed := h.yolo != req.On
-		h.yolo = req.On
-		hostedMu.Unlock()
-		if !changed {
-			return nil
-		}
-		log.Printf("agentd: acp yolo key=%s on=%v", h.key, req.On)
-		msg := "Auto-approval (yolo) is OFF — wash will ask before tools run."
-		if req.On {
-			msg = "Auto-approval (yolo) is ON — wash will approve tool requests without asking."
-		}
-		h.note(msg)
+		openHosted(conn, h.key)
 		h.republish()
+		return nil
+	})
+
+	// agent_set_yolo: turn HOST-side auto-approval on or off for one
+	// session. Not global and not in agents.json — it dies with the job, so
+	// "yolo for this one job" cannot silently become how the desktop
+	// behaves tomorrow. For an ordinary session the job is the session; for
+	// a workspace member it is the workspace (see below). The transition
+	// itself is announced in the transcript.
+	sdk.HandleFromVoid(bus, "agent_set_yolo", func(_ *sdk.Conn, _ string, req yoloReq, _ wire.Sender) error {
+		if h := lookupHosted(req.Key); h != nil {
+			h.toggleYolo(req.On)
+		}
 		return nil
 	})
 
 	// agent_set_mode: switch the session's approval preset.
 	sdk.HandleFromVoid(bus, "agent_set_mode", func(_ *sdk.Conn, _ string, req modeReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
-		if h == nil || req.Mode == "" {
+		if h == nil || req.Mode == "" || h.capability == "reviewer" {
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -847,7 +1411,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	// reasoning effort, plan mode, …).
 	sdk.HandleFromVoid(bus, "agent_set_config", func(_ *sdk.Conn, _ string, req configReq, _ wire.Sender) error {
 		h := lookupHosted(req.Key)
-		if h == nil || req.ID == "" {
+		if h == nil || req.ID == "" || h.capability == "reviewer" && req.ID == "mode" {
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -872,8 +1436,51 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		if h == nil {
 			return nil
 		}
+		// Recorded here as well as when the turn ends, for an adapter that
+		// ends a cancelled turn as end_turn. Only with a turn running: Stop
+		// racing a turn that just ended paused an idle member and told the
+		// orchestrator it had failed.
+		h.turnMu.Lock()
+		live := h.turnLive
+		h.turnMu.Unlock()
+		if workspaces != nil && live {
+			_ = workspaces.store.TurnStopped(h.sessionID, nil)
+		}
 		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
+		// A question the turn was blocked on goes with the turn: the
+		// agent hears cancelled on it and then ends the turn, and the
+		// rail stops asking about a turn that is over.
+		cancelAsksFor(h.key, ReasonTurnCancelled)
 		return h.client.Cancel(h.sessionID)
+	})
+
+	// agent_add_root / agent_remove_root: widen or narrow which folders a
+	// session may reach (roots.go). Deliberate and visible — the row
+	// publishes the set, so every surface showing the session can say how
+	// wide it is — rather than something a stream of tool approvals can
+	// quietly accumulate.
+	sdk.HandleFromVoid(bus, "agent_add_root", func(_ *sdk.Conn, _ string, req rootReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil || req.Path == "" {
+			return nil
+		}
+		if h.addRoot(req.Path) {
+			h.note("Also allowed: " + req.Path)
+			h.republish()
+		}
+		return nil
+	})
+
+	sdk.HandleFromVoid(bus, "agent_remove_root", func(_ *sdk.Conn, _ string, req rootReq, _ wire.Sender) error {
+		h := lookupHosted(req.Key)
+		if h == nil || req.Path == "" {
+			return nil
+		}
+		if h.removeRoot(req.Path) {
+			h.note("No longer allowed: " + req.Path)
+			h.republish()
+		}
+		return nil
 	})
 
 	// agent_stop: end a session and its adapter.
@@ -885,10 +1492,23 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	})
 }
 
+// defaultPromptReq carries the default prompt on its way to disk. Empty text
+// is a deletion, not a validation failure.
+type defaultPromptReq struct {
+	Text string `json:"text"`
+}
+
 type startReq struct {
-	Agent  string `json:"agent"`
+	// Stack and Tier choose the settings (stacks.go); Tier defaults to
+	// frontier. Agent and Model are the launcher's Advanced overrides, and
+	// Agent alone, with no stack, is how `wash ai --agent` starts.
+	Stack  string `json:"stack,omitempty"`
+	Tier   string `json:"tier,omitempty"`
+	Agent  string `json:"agent,omitempty"`
+	Model  string `json:"model,omitempty"`
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt,omitempty"`
+	Open   bool   `json:"open,omitempty"`
 	// ReqID is opaque to agentd and echoed back on agent_started, success
 	// or failure. A host with ONE session per process (wash-ai) never needs
 	// it — the reply can only be about the one thing it asked for. A host
@@ -973,9 +1593,34 @@ func publicModes(in []acp.SessionMode) []Mode {
 	return out
 }
 
+// rootReq addresses one folder on one session.
+type rootReq struct {
+	Key  string `json:"key"`
+	Path string `json:"path"`
+}
+
 type promptReq struct {
 	Key  string `json:"key"`
 	Text string `json:"text,omitempty"`
+	// Blocks are attachments sent with the text: a pasted image, a file
+	// the composer's Attach button picked. Kept as a wash-shaped struct
+	// rather than acp.ContentBlock so the app→service wire is ours to
+	// validate — the router carries this from a window, and a window is
+	// not trusted to name a mime type or a path.
+	Blocks []promptAttachment `json:"blocks,omitempty"`
+}
+
+// promptAttachment is one attachment on its way to an ACP content block.
+// Type is "image" or "file"; anything else is dropped.
+type promptAttachment struct {
+	Type string `json:"type"`
+	// Image: base64 bytes and their mime type.
+	Mime string `json:"mime,omitempty"`
+	Data string `json:"data,omitempty"`
+	// File: an absolute path, confined against the session cwd before it
+	// becomes a resource_link.
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // modelName is the agent's current model, read out of its generic
@@ -1017,7 +1662,7 @@ func configLabel(c acp.ConfigOption) string {
 // summary, so a session killed with the router still carries its model.
 func (h *hosted) noteSession(endReason string, now time.Time) {
 	hostedMu.Lock()
-	agent, sid, cwd, title := h.agent, h.sessionID, h.cwd, h.title
+	agent, sid, cwd, title, userTitle := h.agent, h.sessionID, h.cwd, h.title, h.userTitle
 	hostedMu.Unlock()
 	if sid == "" {
 		return
@@ -1025,6 +1670,10 @@ func (h *hosted) noteSession(endReason string, now time.Time) {
 	s := transcriptSummary{
 		Agent: agent, Model: h.modelName(), Cwd: cwd, Dir: dirLabel(cwd),
 		Title: title, AtMS: now.UnixMilli(),
+		// Restated on every summary so the final record — the one the
+		// index reads first — carries the name; a clear is its own record
+		// (renameSession) and must not be undone by a later blank.
+		UserTitle: userTitle, UserTitleSet: userTitle != "",
 	}
 	if endReason != "" {
 		s.EndReason = endReason
@@ -1032,4 +1681,70 @@ func (h *hosted) noteSession(endReason string, now time.Time) {
 		s.Events = transcriptLen(h.key)
 	}
 	writeSummary(sid, s)
+}
+
+// setYolo turns host-side auto-approval on or off and says so in the
+// transcript, so the record shows when the guard came off. why, when set,
+// names who turned it on for a session nobody toggled by hand. Reports
+// whether anything changed.
+func (h *hosted) setYolo(on bool, why string) bool {
+	hostedMu.Lock()
+	changed := h.yolo != on
+	h.yolo = on
+	hostedMu.Unlock()
+	if !changed {
+		return false
+	}
+	log.Printf("agentd: acp yolo key=%s on=%v why=%q", h.key, on, why)
+	msg := "Auto-approval (yolo) is OFF — wash will ask before tools run."
+	if on {
+		msg = "Auto-approval (yolo) is ON — wash will approve tool requests without asking."
+	}
+	if why != "" {
+		msg += " (" + why + ")"
+	}
+	h.note(msg)
+	h.republish()
+	return true
+}
+
+// toggleYolo is the human's switch. A workspace member's answer is also
+// remembered on its member record, where a restart (which pauses a member,
+// not ends it) finds it again, and which ends with the workspace.
+func (h *hosted) toggleYolo(on bool) {
+	if !h.setYolo(on, "") || workspaces == nil {
+		return
+	}
+	_ = workspaces.store.Mutate(h.sessionID, false, func(_ *swarm.Workspace, m *swarm.Member) error {
+		m.AutoApprove = on
+		return nil
+	})
+}
+
+// noteSubject is a tool subject as a transcript note shows it: the first line,
+// at most noteSubjectMax runes. The note sits directly under the tool call's
+// own row, which already shows the whole command; pasting it again made one
+// multi-line heredoc into two screens of transcript. The log keeps it whole.
+func noteSubject(s string) string {
+	line, rest, multi := strings.Cut(strings.TrimSpace(s), "\n")
+	line = strings.TrimSpace(line)
+	cut := multi && strings.TrimSpace(rest) != ""
+	if r := []rune(line); len(r) > noteSubjectMax {
+		line, cut = strings.TrimSpace(string(r[:noteSubjectMax])), true
+	}
+	if cut {
+		line += " …"
+	}
+	return line
+}
+
+const noteSubjectMax = 80
+
+// decision puts wash's approval verdict in the transcript as its own event,
+// which the Agent window renders as a coloured row.
+func (h *hosted) decision(status, reason, tool, subject string) {
+	e := appendEvent(h.key, Event{Kind: EventDecision, Status: status, Title: tool, Detail: noteSubject(subject), Reason: reason}, time.Now())
+	if h.conn != nil {
+		pushEvent(h.conn, h.key, e)
+	}
 }

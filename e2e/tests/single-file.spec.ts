@@ -54,7 +54,11 @@ const APPS: AppBundle[] = [
   // process table/registered-apps/browser sections + sortable table.
   // +~0.1 KB from the shared createAppBus saveState()/flushState() persist
   // helper (in every app's @wash/ui). Headroom still brakes further growth.
-  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 32_000 },
+  // +~2.6 KB (32.0k → 34.6k): the per-app traffic table in the Link
+  // section (docs/QOS.md §12.1) — the trafficRows kernel, the derived
+  // router-overhead row and the class-by-app table itself. Bumped to 40k
+  // to restore the headroom the cap is here to defend.
+  { name: 'about',   dir: 'apps/about/fe/dist',   maxBytes: 40_000 },
   { name: 'test',    dir: 'apps/test/fe/dist',    maxBytes: 30_000 },
   // term: +~1 KB for the agent status surface (docs/AGENT_TERM.md M1) — the
   // per-tab agent side map, the tab-chip state dot and the status-line clause
@@ -64,12 +68,18 @@ const APPS: AppBundle[] = [
   // 68k: split panes (docs/TERM_LAYOUT.md) — the layout kernel (~6k
   // minified), a strip and control set per group (M1), then divider drag,
   // zoom and the pane context menu (M2).
-  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 68_000 },
+  { name: 'term',    dir: 'apps/term/fe/dist',    maxBytes: 92_000 },
   // fm grew with the image pipeline: folder-grid preview + VirtualGrid +
   // file-client, the ~360-extension lucide icon map (~20 new glyphs), the
   // uid-aware display-hint colours/badges, and the cross-origin DnD guard.
   // ~14 KB raw (only ~28 KB gzipped on the wire); headroom still brakes bloat.
-  { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 120_000 },
+  //
+  // Then the everyday workflows the 2026-09-08 sweep found missing: the
+  // filter bar and subtree search, the Open-with chooser, Open terminal
+  // here, Duplicate, archive extract and compress, and the keyboard row
+  // navigation kernel. ~13 KB raw for eight verbs a file manager is
+  // expected to have; 145 K keeps roughly the same brake on the next one.
+  { name: 'fm',      dir: 'apps/fm/fe/dist',      maxBytes: 145_000 },
   // vscode is the install/launch state machine + IngressFrame; the
   // workbench is code-server (external), so this stays small. (The old
   // apps/vscode/fe bundle was removed — its FE folded into the workbench
@@ -91,6 +101,9 @@ const ALLOWED_EXTERNALS = new Set([
   'solid-js/store',
   '@xterm/xterm',
   '@xterm/addon-fit',
+  '@xterm/addon-search',
+  '@xterm/addon-web-links',
+  '@xterm/addon-unicode11',
   '@wash/ui',
 ]);
 

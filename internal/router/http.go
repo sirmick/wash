@@ -245,6 +245,9 @@ func (s *HTTPServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Before the upgrade hijacks the conn: bound what the kernel may queue
+	// ahead of a control frame (shell_sndbuf.go).
+	boundShellSendBuf(r, s.router.log)
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// Same-origin by default. AllowCrossOrigin opts out so a remote
 		// router can accept a shell connection from another origin (the
@@ -276,6 +279,7 @@ func (s *HTTPServer) Run(ctx context.Context) error {
 		Addr:              s.router.cfg.Listen,
 		Handler:           s,
 		ReadHeaderTimeout: 5 * time.Second,
+		ConnContext:       connContext,
 		// HTTP/1.1 only: WS upgrades and ingress proxying hijack the
 		// conn, which h2 streams can't do ("hijacker not supported").
 		Protocols: tlsutil.HTTP1Only(),

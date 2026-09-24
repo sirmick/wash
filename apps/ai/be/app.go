@@ -1,33 +1,34 @@
-// Package ai is wash-ai (com.wash.ai) — a window onto one managed agent
-// session (docs/AGENT_APP.md §9).
+// Package ai provides two deliberately separate surfaces over agentd:
+// com.wash.agents is the singleton roster/history/launcher manager, while
+// each com.wash.ai process controls exactly one hosted session.
 //
 // It is a thin host. agentd owns the session, the transcript, the roster
 // and the approval queue; this app owns a window, a subscription and a
 // composer. Everything it does is a message to com.wash.agentd:
 //
-//	FE → ai   start    {agent, cwd, prompt?}   → ai → agentd  agent_start
-//	FE → ai   prompt   {text}                  → ai → agentd  agent_prompt
+//	FE → ai   start    {stack?, tier?, agent?, model?, cwd, prompt?} → agentd agent_start
+//	FE → ai   prompt   {text, blocks?}         → ai → agentd  agent_prompt
 //	FE → ai   answer   {id, decision, rule?}   → ai → agentd  agent_answer
-//	          agentd → ai  transcript_snapshot / transcript_event / state
-//	          ai → FE      snapshot / event / status / adapters
+//	FE → ai   open_path {path}                 → router open routing
+//	FE → ai   open_terminal/open_file_manager/open_text_editor {cwd} → spawn the app in that folder
 //
-// The empty window is the launcher: an app with no session yet renders the
-// form. That is why there is no separate "new session" dialog anywhere.
+// And ONE message this app accepts from an app that is not agentd:
 //
-// InstancingMulti on purpose — one window per session, and the taskbar is
-// still the window switcher.
+//	any app → ai   {kind: "agent_draft", text}
 //
-// Since docs/SIDEBAR.md M2 the window also carries a ROSTER pane: every
-// session agentd knows about, not just this window's. That is where the
-// per-session verbs live, because this is where they can be correct — an
-// app talking to its own host's agentd carries a router-attested sender,
-// so it may act, whereas the desktop rail had to gateway through the
-// session BE and could only ever reach the LOCAL host. The rail keeps the
-// counts and deep-links here (§3.1).
+// which inserts `text` into this window's composer. It is a DRAFT, never
+// a prompt: it lands at the caret and waits, because what a person does
+// with a selection someone sent them — frame it with a question, trim it,
+// think better of it — is the whole reason it goes to a composer rather
+// than to the agent. wash-edit's "send selection to agent" uses exactly
+// this shape; keep the kind stable, other apps will grow the same verb.
 //
-// Master-detail: picking a roster row re-points THIS window's detail pane
-// at that session (`select`). agentd supports several transcript watchers
-// per session by design, so two windows on one session is fine.
+//	agentd → ai  transcript_snapshot / transcript_event / state
+//	ai → FE      snapshot / event / status / adapters
+//
+// Only the manager subscribes to agentd's global roster. A controller gets a
+// keyed row/ask view plus its keyed transcript, avoiding N copies of the
+// complete backend data structure on every active window.
 package ai
 
 import (
@@ -43,6 +44,7 @@ import (
 	"time"
 
 	agentd "github.com/sirmick/wash/apps/agentd/be"
+	"github.com/sirmick/wash/internal/agentpolicy"
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/pkg/apps/registry"
@@ -58,6 +60,11 @@ const aiIcon = "bot"
 
 const agentdAppID = agentd.AppID
 
+// draftKind is the app message any app may send this one to put text in
+// its composer. Stable on purpose: wash-edit's "send selection to agent"
+// is written against this exact shape, and so will the next app's be.
+const draftKind = "agent_draft"
+
 // aiDebug traces the roster subscription, which is what drives the status
 // line and the working spinner. Off unless WASH_AGENT_DEBUG is set.
 var aiDebug = os.Getenv("WASH_AGENT_DEBUG") != ""
@@ -70,6 +77,8 @@ const maxTranscriptBytes = 32 << 20
 var aiFS *wfs.FS
 
 var def *sdk.AppDef
+var managerDef *sdk.AppDef
+var managerMode bool
 
 func init() {
 	sub, err := fs.Sub(assetsFS, "assets")
@@ -87,8 +96,14 @@ func init() {
 			Icon:            aiIcon,
 			Accent:          "violet",
 			Instancing:      sdk.InstancingMulti,
-			Capabilities:    []string{},
-			Window:          &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 720},
+			Hidden:          true,
+			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
+			// 600, not 720: the composer grew a row (Attach…) and the
+			// status bar grew root chips, and a window as tall as a
+			// 720-line screen left both under the 40px taskbar. Sized so
+			// the whole window, status bar included, fits above it on the
+			// smallest screen this desktop targets.
+			Window: &sdk.WindowHints{DefaultWidth: 620, DefaultHeight: 600},
 		},
 		Assets:           sub,
 		OnReady:          onReady,
@@ -109,10 +124,33 @@ func init() {
 		Assets: def.Assets,
 		Run:    run,
 	})
+	managerDef = &sdk.AppDef{
+		Manifest: sdk.Manifest{
+			ID: "com.wash.agents", Name: "Agents", Version: version.Version,
+			ProtocolVersion: sdk.ProtocolVersion, Element: "wash-app-agents",
+			Surface: sdk.SurfaceWindow, Icon: aiIcon, Accent: "violet",
+			Instancing:   sdk.InstancingSingleton,
+			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
+			Window:       &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 600},
+		},
+		Assets: sub,
+		OnReady: func(c *sdk.Conn, instanceID string, windowID uint32) {
+			managerMode = true
+			onReady(c, instanceID, windowID)
+		},
+		OnAppMsg: onAppMsg, OnAppMsgFrom: onAppMsgFrom,
+		OnCloseRequested: onCloseRequested,
+	}
+	registry.Register(&registry.App{Name: "wash-agents", Manifest: managerDef.Manifest, Assets: managerDef.Assets, Run: func(ctx context.Context) error { return sdk.Run(ctx, managerDef) }})
 }
 
 // Def is the AppDef for the standalone shim's sdk.Main call.
 func Def() *sdk.AppDef { return def }
+
+// AgentsDef is the singleton manager surface. It deliberately shares the FE
+// bundle with the session window; agentd sends the role at startup and the
+// bundle renders only the manager half.
+func AgentsDef() *sdk.AppDef { return managerDef }
 
 func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 
@@ -136,7 +174,7 @@ var (
 // nothing in the router's — resolving them later cost a bug already.
 func parseFlags() {
 	flags := flag.NewFlagSet("wash-ai", flag.ContinueOnError)
-	agent := flags.String("agent", "", "which agent to start (claude, codex, gemini)")
+	agent := flags.String("agent", "", "which agent to start, on its own defaults (claude, codex, gemini, opencode)")
 	cwd := flags.String("cwd", "", "working directory for the session (default: $HOME)")
 	flags.SetOutput(io.Discard)
 	_ = flags.Parse(os.Args[1:])
@@ -170,7 +208,7 @@ func parseFlags() {
 // firstAvailableAgent is the adapter probe's first usable row, so
 // `wash ai ~/wash` starts something rather than asking.
 func firstAvailableAgent() string {
-	for _, a := range agentd.Probe() {
+	for _, a := range agentd.Probe(agentpolicy.Load(agentpolicy.Path())) {
 		if a.Available {
 			return a.ID
 		}
@@ -184,12 +222,6 @@ var session struct {
 	key   string
 	agent string
 	title string
-	// splitPct is the sessions-pane width this window was left at. FE
-	// view-state, backend-owned like the session key beside it, so the
-	// two cannot be saved separately and clobber each other. Zero means
-	// "never set" — the FE keeps its own default rather than being told
-	// to be 0% wide.
-	splitPct int
 	// attention mirrors what we last told the router, so a roster push
 	// every second doesn't become a wire frame every second (docs/
 	// AGENT_UX.md N6).
@@ -202,9 +234,6 @@ var session struct {
 // returns it as wash:state whenever the browser remounts this instance.
 func persistSessionView(c *sdk.Conn) {
 	view := map[string]any{"session_key": session.key}
-	if session.splitPct > 0 {
-		view["split_pct"] = session.splitPct
-	}
 	if err := c.SaveState(view); err != nil {
 		log.Printf("wash-ai: persist session key=%s: %v", session.key, err)
 	}
@@ -263,8 +292,11 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// DISPATCHER's argv. `wash list-apps` was being read as
 	// `wash-ai list-apps` — which then ran an adapter probe, shelling out
 	// and logging, on every multicall invocation of every app.
-	parseFlags()
-	log.Printf("wash-ai ready instance=%s", instanceID)
+	if !managerMode {
+		parseFlags()
+	}
+	log.Printf("wash-ai ready instance=%s manager=%v", instanceID, managerMode)
+	c.SendAppMsg(map[string]any{"kind": "role", "role": map[bool]string{true: "manager", false: "session"}[managerMode]})
 	// The launcher picks a working directory with the shared
 	// <FilePicker mode="directory">, which talks to its own BE rather than
 	// a service. Typing a path into a text field was the placeholder, and
@@ -275,7 +307,18 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	aiFS = wfs.New(c.Session().Root)
 	// Subscribe to the roster so the window can show adapters in the
 	// launcher and its own row's state in the status line.
-	_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": sdk.StateServiceKindSubscribe})
+	if managerMode {
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "manager_subscribe"})
+	}
+	// ONE transcript keepalive per window, from the start, whatever later
+	// sets the key. It used to be started by agent_started and attach only,
+	// so a window that reached its session through `select` (the roster
+	// row, the way the start menu's fresh window gets anywhere) never
+	// re-affirmed and went quiet after watcherTTL — and each of those two
+	// paths started another goroutine on the same conn.
+	if !managerMode {
+		go keepWatching(c)
+	}
 	if flagAgent == "" {
 		return
 	}
@@ -312,6 +355,9 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		// return over the agentd connection immediately, and started clears the
 		// old event list by design.
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+		// Re-claiming is idempotent for the owner and answers with the
+		// session's row and asks, which the remounted FE has never seen.
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "session_claim", "key": session.key})
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":   "transcript_subscribe",
 			"key":    session.key,
@@ -327,6 +373,21 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 	// Acting on the session this window happens to be showing needs no
 	// special case: agentd tells every transcript watcher when a session
 	// detaches, and onAppMsgFrom already exits on that for our own key.
+	case "row_add_root", "row_remove_root":
+		// Widen (or narrow) which folders a session may reach. Row-
+		// addressed like the verbs below: the row that opened the picker
+		// is not necessarily the session this window is showing.
+		if str(m["key"]) == "" || str(m["path"]) == "" {
+			log.Printf("wash-ai: %s ignored key=%q path=%q", str(m["kind"]), str(m["key"]), str(m["path"]))
+			return
+		}
+		log.Printf("wash-ai: %s key=%s path=%s", str(m["kind"]), str(m["key"]), str(m["path"]))
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_" + strings.TrimPrefix(str(m["kind"]), "row_"),
+			"key":  str(m["key"]),
+			"path": str(m["path"]),
+		})
+
 	case "row_detach", "row_cancel", "row_stop", "row_reattach":
 		rowKey := str(m["key"])
 		if rowKey == "" {
@@ -338,18 +399,6 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"kind": "agent_" + verb,
 			"key":  rowKey,
 		})
-
-	case "set_split":
-		// The sessions pane was dragged to a new width. Persisted with
-		// the session key rather than beside it, because SaveState
-		// replaces the whole blob — two writers with two halves of the
-		// view would each erase the other's.
-		pct, _ := m["pct"].(float64)
-		if pct <= 0 || pct >= 100 {
-			return
-		}
-		session.splitPct = int(pct)
-		persistSessionView(c)
 
 	case "row_focus":
 		// History picked a session that is live and already has a window
@@ -368,22 +417,31 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		})
 
 	case "select":
-		// Master-detail: point this window at another of agentd's sessions.
-		// Same three steps as the agentd-initiated `attach` below — set the
-		// key, tell the FE (which clears the old transcript), then subscribe
-		// with replay so the pane fills with where that session actually is.
-		//
-		// Re-selecting the session we already show would clear the
-		// transcript and re-fetch it for nothing.
-		key := str(m["key"])
-		if key == "" || key == session.key {
+		// A roster row picked in the manager goes to that session's own
+		// controller (agentd focuses it, or opens one). A controller never
+		// re-points itself: that was master-detail, and a window showing a
+		// session it holds no lease on is exactly the second controller the
+		// lease exists to prevent.
+		if !managerMode {
 			return
 		}
-		log.Printf("wash-ai: select key=%s (was %s)", key, session.key)
-		session.key = key
-		session.title = ""
-		persistSessionView(c)
-		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+		if key := str(m["key"]); key != "" {
+			_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": agentd.FocusKind, "key": key})
+		}
+
+	case "workspace_refresh":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "workspace_refresh", "key": session.key})
+	case "workspace_action":
+		if session.key == "" {
+			return
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "workspace_action", "key": session.key, "name": m["name"], "arguments": m["arguments"]})
+	case "resync":
+		// The FE holds a transcript it can no longer append deltas to (it
+		// missed a base). Replay the history; deltas resume from it.
+		if session.key == "" {
+			return
+		}
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":   "transcript_subscribe",
 			"key":    session.key,
@@ -391,21 +449,58 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 		})
 
 	case "start":
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+		// stack/tier choose the settings; agent/model are the launcher's
+		// Advanced overrides. agentd resolves them (its stacks.go).
+		msg := map[string]any{
 			"kind":   "agent_start",
-			"agent":  str(m["agent"]),
 			"cwd":    str(m["cwd"]),
 			"prompt": str(m["prompt"]),
-		})
+		}
+		for _, k := range []string{"stack", "tier", "agent", "model"} {
+			if v := str(m[k]); v != "" {
+				msg[k] = v
+			}
+		}
+		if managerMode {
+			msg["open"] = true
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, msg)
+	case "manager_refresh":
+		// A remounted manager FE asks for the roster again. Re-subscribing
+		// is idempotent in agentd and answers with the current view.
+		if managerMode {
+			_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "manager_subscribe"})
+		}
+	case "open_agents":
+		_ = c.SpawnRequest("com.wash.agents")
+	case "set_key", "test_key":
+		// A connection key on its way to agentd's key store, or to be
+		// checked. Passed through, never logged or kept here; agentd
+		// accepts it only from the manager, which has the launcher.
+		if managerMode {
+			_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+				"kind":  "agent_" + str(m["kind"]),
+				"name":  str(m["name"]),
+				"value": str(m["value"]),
+			})
+		}
 	case "prompt":
 		if session.key == "" {
 			return
 		}
-		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+		// blocks are attachments the composer collected — a pasted image,
+		// a picked file. Passed through as-is: agentd validates them (mime,
+		// size, and the path against the session's own confinement), and
+		// it is the only party that knows what the session's roots are.
+		msg := map[string]any{
 			"kind": "agent_prompt",
 			"key":  session.key,
 			"text": str(m["text"]),
-		})
+		}
+		if blocks, ok := m["blocks"].([]any); ok && len(blocks) > 0 {
+			msg["blocks"] = blocks
+		}
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, msg)
 	case "detach":
 		// Leave the session running. agentd keeps its roster row, which
 		// is where the user gets back to it.
@@ -449,12 +544,51 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 
 	// history: the panel's query. agentd answers this window directly
 	// (see agent_history), and the reply is forwarded below.
+	// default prompt: the stored default prompt (agentd owns the file). Both
+	// directions are pure passthrough — this window is a host, and a
+	// setting that applies to every new session on this machine is not
+	// its state to keep.
+	case "default_prompt":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "agent_default_prompt"})
+
+	case "set_default_prompt":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind": "agent_set_default_prompt",
+			"text": str(m["text"]),
+		})
+
 	case "history":
 		req := map[string]any{"kind": "agent_history", "query": str(m["query"])}
 		if n, ok := m["limit"].(float64); ok {
 			req["limit"] = int(n)
 		}
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, req)
+
+	// Session admin (agentd/session_admin.go): a person's name for a
+	// session, and deleting what ran. Key-or-id addressed like the row
+	// verbs, so they act on any session agentd holds, not only this
+	// window's; the replies to delete/prune come back below so the
+	// History panel can refresh.
+	case "rename":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_rename",
+			"key":        str(m["key"]),
+			"session_id": str(m["session_id"]),
+			"title":      str(m["title"]),
+		})
+
+	case "delete_session":
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_delete",
+			"session_id": str(m["session_id"]),
+		})
+
+	case "prune_history":
+		age, _ := m["max_age_ms"].(float64)
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
+			"kind":       "agent_prune",
+			"max_age_ms": int64(age),
+		})
 
 	case "set_yolo":
 		if session.key == "" {
@@ -487,13 +621,57 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			"key":  session.key,
 		})
 
+	case "open_terminal", "open_file_manager", "open_text_editor":
+		// Project shortcuts use fixed app IDs and a confined directory. Never
+		// let a frontend supply an arbitrary application or launch argument.
+		target := map[string]string{"open_terminal": "term", "open_file_manager": "fm", "open_text_editor": "edit"}[str(m["kind"])]
+		label := map[string]string{"term": "terminal", "fm": "file manager", "edit": "text editor"}[target]
+		dir := str(m["cwd"])
+		if dir == "" {
+			return
+		}
+		abs, err := aiFS.Confine(dir)
+		if err != nil {
+			log.Printf("wash-ai: open %s %q: %v", label, dir, err)
+			return
+		}
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			log.Printf("wash-ai: open %s: not a directory: %s", label, abs)
+			return
+		}
+		log.Printf("wash-ai: open %s cwd=%s", label, abs)
+		if err := c.SpawnRequestOpen("com.wash."+target, abs); err != nil {
+			log.Printf("wash-ai: spawn %s %s: %v", target, abs, err)
+		}
+
+	case "open_path":
+		// A tool row was clicked. The path is the agent's own report of
+		// what it touched, so it is confined to this app's root before
+		// the router is asked for anything, and the router — not this
+		// app — decides which app handles the type (CapOpen). Without
+		// this the standalone Agent window had no way to act on a row at
+		// all; only wash-edit's agent tab did.
+		raw := str(m["path"])
+		abs, err := aiFS.Confine(raw)
+		if err != nil {
+			log.Printf("wash-ai: open %q: %v", raw, err)
+			return
+		}
+		if err := c.OpenPath(abs); err != nil {
+			log.Printf("wash-ai: open %s: %v", abs, err)
+		}
+
 	case "answer":
+		// scope names WHICH table a remembered answer goes in, never which
+		// workspace: agentd resolves that from the question it asked.
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind":     "agent_answer",
 			"id":       str(m["id"]),
 			"decision": str(m["decision"]),
 			"remember": str(m["rule"]) != "",
 			"rule":     str(m["rule"]),
+			"scope":    str(m["scope"]),
 		})
 	}
 }
@@ -501,11 +679,25 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 // onAppMsgFrom handles messages from agentd. The sender is router-attested,
 // so a message claiming to be the roster service actually is one.
 func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
-	if from.AppID != agentdAppID {
-		return
-	}
 	m, _ := data.(map[string]any)
 	if m == nil {
+		return
+	}
+	// agent_draft is the one message this app takes from an app that is
+	// not agentd — anything with a selection worth handing to an agent
+	// (wash-edit today). Checked BEFORE the sender gate, which exists to
+	// stop another app impersonating the roster service, not to stop
+	// another app typing into a composer the person is looking at.
+	if str(m["kind"]) == draftKind {
+		text := str(m["text"])
+		if text == "" {
+			return
+		}
+		log.Printf("wash-ai: draft from=%s bytes=%d", from.AppID, len(text))
+		c.SendAppMsg(map[string]any{"kind": "draft", "text": text})
+		return
+	}
+	if from.AppID != agentdAppID {
 		return
 	}
 	switch str(m["kind"]) {
@@ -525,11 +717,11 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		session.key = str(m["key"])
 		persistSessionView(c)
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key})
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "session_claim", "key": session.key})
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind": "transcript_subscribe",
 			"key":  session.key,
 		})
-		go keepWatching(c)
 
 	case agentd.FocusKind:
 		// The human activated a notification about this session and agentd
@@ -547,9 +739,17 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			log.Printf("wash-ai: raise key=%s: %v", session.key, err)
 		}
 
+	case "claim_denied":
+		log.Printf("wash-ai: controller already exists for key=%s; closing duplicate", str(m["key"]))
+		os.Exit(0)
+
 	case "agent_started":
 		if e := str(m["error"]); e != "" {
 			c.SendAppMsg(map[string]any{"kind": "start_failed", "error": e})
+			return
+		}
+		if managerMode {
+			c.SendAppMsg(map[string]any{"kind": "session_opened", "key": m["key"], "session_id": m["session_id"]})
 			return
 		}
 		session.key = str(m["key"])
@@ -558,13 +758,13 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			log.Printf("wash-ai: session started key=%s", session.key)
 		}
 		c.SendAppMsg(map[string]any{"kind": "started", "key": session.key, "session_id": str(m["session_id"])})
+		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{"kind": "session_claim", "key": session.key})
 		// Watch this session's transcript — a separate subscription from
 		// the roster, deliberately (see agentd/transcript.go).
 		_ = c.SendAppMsgTo(wire.Recipient{AppID: agentdAppID}, map[string]any{
 			"kind": "transcript_subscribe",
 			"key":  session.key,
 		})
-		go keepWatching(c)
 
 	// history: agentd's answer to a panel query, forwarded verbatim. No
 	// session key involved — history is about sessions this window is
@@ -575,6 +775,18 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 			"query":    m["query"],
 			"sessions": m["sessions"],
 		})
+
+	case "default_prompt":
+		c.SendAppMsg(map[string]any{"kind": "default_prompt", "text": m["text"]})
+
+	// A key's save or test outcome, for the Connections section.
+	case "key_saved", "key_test":
+		c.SendAppMsg(map[string]any{"kind": m["kind"], "name": m["name"], "ok": m["ok"], "detail": m["detail"], "error": m["error"]})
+
+	case "history_deleted", "history_pruned":
+		// agentd's answer to a delete or prune this window asked for;
+		// forwarded whole so the panel can re-query.
+		c.SendAppMsg(m)
 
 	// The transcript hops to the FE on the Bulk class — this is the one
 	// hop that shares the browser's single socket with every other app's
@@ -599,7 +811,17 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		}
 		c.SendAppMsgBulk(map[string]any{"kind": "event", "key": session.key, "event": m["event"]})
 
-	case sdk.StateServiceKindState:
+	// Usage is a coalesced, latest-wins patch from agentd. Forward it as
+	// Bulk: a token counter must never sit ahead of typing, window movement,
+	// or a permission question on the browser's single socket.
+	case "workspace_state", "workspace_patch", "workspace_result":
+		if str(m["key"]) == session.key {
+			c.SendAppMsgBulk(m)
+		}
+	case "usage_patch":
+		c.SendAppMsgBulk(m)
+
+	case "manager_state", "session_state", sdk.StateServiceKindState:
 		// The window title follows the agent's own name for the session.
 		// A taskbar full of "Agent" is unreadable the moment there are
 		// three of them; "Fix the reconnect banner race" is not.
@@ -633,6 +855,9 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 //
 // With no session there is nothing to ask about, so the close is allowed.
 func onCloseRequested(c *sdk.Conn, win uint32) bool {
+	if managerMode {
+		return true
+	}
 	if session.key == "" {
 		return true
 	}
@@ -644,7 +869,9 @@ func onCloseRequested(c *sdk.Conn, win uint32) bool {
 //
 // agentd removes watchers on router instance.gone, and also expires one it
 // has not heard from as a backstop. Same TTL+keepalive shape the roster's
-// own rows use.
+// own rows use. Started exactly once, from onReady; it re-affirms whatever
+// key the window holds at each tick, so it does not matter which path
+// (start, attach, select, restore) set it.
 func keepWatching(c *sdk.Conn) {
 	t := time.NewTicker(agentd.WatcherRefresh)
 	defer t.Stop()

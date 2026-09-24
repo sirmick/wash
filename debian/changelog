@@ -1,3 +1,174 @@
+wash (0.16.0-1) unstable; urgency=low
+
+  * An optional AI provider service (com.wash.inference) holds the
+    connection to whatever model a person chooses — an OpenAI-compatible
+    endpoint, the Codex CLI or the Claude Code CLI — behind one contract.
+    Credentials stay in the service (0600 on disk, never echoed back to a
+    window), only apps shipped for the feature may spend provider quota or
+    read which providers exist, and every request carries the service's own
+    instruction to treat captured material as data rather than as
+    directions. The service logs who asked, what for and which host it went
+    to, and never the content itself. Configure it in Settings.
+  * Session Summary (experimental) answers "what am I doing?" across the
+    open windows: each window is reduced on its own, then the summaries are
+    reduced into one briefing. Nothing is captured or sent until Summarize
+    session is clicked, and what leaves is bounded — 64 windows, 64 KiB
+    each, 1 MiB in total. Apps can offer a richer snapshot of themselves
+    through a new Content API; the windows that do not fall back to the view
+    state they already persist.
+  * Agent sessions resume idempotently: clicking Resume on a conversation
+    that is already open now goes to it instead of asking the agent to load
+    the same session twice, and repeated clicks while it is starting share
+    one load. npx-launched adapters no longer race each other through a
+    shared install cache, and codex-acp uses the Codex already installed.
+  * An adapter that dies now says why: agentd waits for its last stderr
+    line before reporting the exit, so the transcript carries the reason
+    ("token expired") rather than only the fact.
+
+ -- sirmick <sirmick@gmail.com>  Wed, 16 Sep 2026 00:20:00 -0700
+
+wash (0.15.0-1) unstable; urgency=low
+
+  * Agents are a manager and one window per session. The Agents app (new,
+    com.wash.agents) is a single window holding New session, an always-
+    visible History with transcript previews, and the Running roster; each
+    live session gets exactly one Agent window, which agentd opens and leases,
+    so focusing, reattaching or resuming a session can never produce a second
+    copy. Windows are sent only their own session's view, token usage and
+    previews travel as coalesced low-priority patches, and git refresh is
+    decoupled from narration: a chatty agent no longer floods every Agent
+    window with the whole roster (one session measured 1.25 GB sent).
+  * The start menu's Recent is one row per app — Files, Edit, Agent, Radio —
+    each popping out its last few items: the folder the file manager was
+    showing when it closed, recently edited files, agent sessions (resumed,
+    reattached or brought forward as appropriate) and stations Radio played
+    (relaunching Radio tuned to one). Any other app with recent files gets a
+    row of its own. The pop-outs follow a diagonal pointer and work from the
+    keyboard.
+  * Radio, Washamp and Music bind their stream and file sockets in a private
+    directory. Two wash routers on one machine used to share one path per
+    instance number, so one session's Radio could stream into another's and a
+    second user's media apps failed to start.
+  * Fixes found on the way: a remote host's Agents door could raise the wrong
+    window; the roster's action menu closed under the cursor after each turn
+    and End session raised the window mid-confirm; a reloaded Agents window
+    came back blank; Radio no longer relays an upstream error page as audio.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 14 Sep 2026 21:30:00 -0700
+
+wash (0.14.5-1) unstable; urgency=low
+
+  * The apps sweep, part two: the everyday workflows each surface was still
+    missing (docs/Review-findings.md P2). The file manager gets keyboard row
+    navigation, type-to-filter and recursive subtree search, Duplicate, a
+    Keep-both conflict action, Extract here / Compress, Open with… and Open
+    terminal here. The editor gets Ctrl+P quick open with a recent-files list,
+    Ctrl+F / Ctrl+H, Ctrl+G, Save All / Close All / Close Others / Revert, tab
+    cycling, drag-to-reorder and middle-click close, per-tab wrap and syntax,
+    detected indentation and a status bar that reports it. The terminal gets
+    find in scrollback, per-tab cwd that New Tab inherits, tab rename, window
+    title, restart shell, file drop, bell and activity indicators, clickable
+    URLs and paths, and desktop-wide preferences including zoom. The agent gets
+    session rename and delete, Esc to stop and Ctrl+Enter to send, up-arrow
+    recall, readable diffs, per-session roots beyond the cwd, file attachments
+    and pasted images, and configurable adapter launch and MCP servers.
+  * The desktop shell learns the keys a desktop is expected to have:
+    Ctrl+Alt+Tab window switching, show desktop, middle-click close, pinned
+    apps and a filtered, keyboard-driven start menu, recent files in the start
+    menu and the palette, and Ctrl+W / Ctrl+N / Ctrl+T swallowed on the
+    wallpaper instead of acting on the browser. `wash open <path>` and an
+    xdg-open shim route a file from a terminal to the app that handles it.
+  * The taskbar icon no longer flickers. A window event (a focus change, a
+    move, a retitle) rebuilt every taskbar pill rather than restyling it, and
+    each rebuilt pill re-created an external-document <use> reference that does
+    not paint on its first frame — measured as a blank icon on 7 frames of a
+    25fps capture of 24 focus switches, now zero.
+  * wash-display frames Wayland clients that ask for server-side decorations,
+    so a window that expects a titlebar from the compositor has one, and drops
+    a video frame when the link would block instead of flashing the window
+    clear. A backgrounded terminal tab is revealed at settled metrics, and an
+    overflowing tab strip scrolls without a scrollbar.
+  * wash-login scopes its session registry to an explicitly-passed --run-root,
+    so a test front no longer enumerates the host's real desktop session.
+    Production is unchanged: one run root per host, still unscoped.
+
+ -- sirmick <sirmick@gmail.com>  Fri, 11 Sep 2026 18:10:00 -0700
+
+wash (0.14.4-1) unstable; urgency=low
+
+  * The apps sweep. A full read of the editor, file manager, terminal and
+    agent surfaces against the workflows a desktop user reaches for first
+    (docs/Review-findings.md). Seven ways to lose data are closed: a save in
+    the editor keeps a file's identity (symlink target, mode bits, owner,
+    hard links), a binary, oversized or non-UTF-8 file opens as a
+    placeholder that refuses to save instead of writing back garbage, CRLF
+    files stay CRLF, a failed save says so, and closing unsaved work asks.
+    In the file manager a paste into the folder an item is already in, or
+    into itself, is refused instead of deleting the source.
+  * Some thirty mid-use breakages fixed with them: agent transcripts no
+    longer freeze after a minute for a second viewer, ending a session ends
+    its terminals and questions, a crashed adapter becomes a fact on screen,
+    a prompt sent mid-turn is queued; fm's Reload refreshes the folder you
+    are looking at, the selection survives rename and delete, listings stay
+    mounted across refreshes, Backspace goes up; a terminal that fails fast
+    holds its tab with the exit code, new tabs open at their pane's size,
+    tab labels come from the path tail, COLORTERM is set, and Alt tab keys
+    sit beside the Ctrl+Shift ones the browser reserves; the editor opens
+    files dropped on it, follows renames, reveals a file in Files at its
+    folder, and the desktop no longer navigates away when an OS file lands
+    on the wallpaper.
+  * QoS lanes: interactive, bulk and background traffic no longer share
+    one FIFO, so a window drag stays smooth under a talking agent.
+  * The terminal-intercept agent tier's remains are gone; agent sessions
+    run through the Agent app over ACP.
+
+ -- sirmick <sirmick@gmail.com>  Tue, 09 Sep 2026 06:30:00 -0700
+
+wash (0.14.3-1) unstable; urgency=low
+
+  * agent: a talking agent no longer floods the interactive traffic class.
+    Every chunk an agent narrated — every message fragment, thought, tool call
+    and plan update — republished the WHOLE roster: every row, every pending
+    question, the entire remembered session history and the adapter list, at
+    interactive priority, to every subscriber, and again on the hop to the
+    window. Measured at 200 full-state pushes for 200 chunks, which is enough
+    to fill the interactive queue on its own and stall the keystrokes and
+    window moves that class exists to protect. The roster now goes on the wire
+    when it has something new to say.
+  * about: the Link section splits FE-bound traffic by the app that produced
+    it, per class and busiest first, so "which app is using the link" has an
+    answer on screen. Router lifecycle traffic has no app to bill, so it is
+    shown as a derived remainder rather than invented — the rows always
+    reconcile with the class totals above them.
+
+ -- sirmick <sirmick@gmail.com>  Tue, 08 Sep 2026 12:05:00 -0700
+
+wash (0.14.2-1) unstable; urgency=low
+
+  * edit: Ctrl+S no longer throws away the buffer it just saved. Saving re-ran
+    the editor's tab-seeding path: with no captured state that reset the caret
+    to the top of the file and emptied the undo history, and on a tab you had
+    switched away from and back it restored the snapshot taken when you left,
+    so text that had just reached the disk vanished from the screen, the tab
+    showed clean, and the next save wrote the stale text back over the good
+    file.
+  * edit: Save As carries the live buffer across the rename instead of the
+    last snapshot, and retires the wysiwyg editor handle the rename orphaned.
+  * agent: a default prompt, stored once and sent ahead of every new session.
+    Set it from the launcher or the File menu; it is plain text in
+    ~/.config/wash/agent-default-prompt.txt, and the launcher re-reads the
+    file rather than remembering the last save, so editing it in an editor
+    agrees with what the UI says.
+  * desktop: a dragged window no longer snaps back for a round trip on a slow
+    link. Strict Control-before-Bulk ordering stopped at the kernel's 4 MB
+    send buffer, where a drag frame queued behind a talking agent's
+    transcript; the transcript now ships deltas rather than the whole
+    conversation each turn.
+  * build: a bare `make` builds the tree instead of printing the binary list
+    and exiting 0, which read as a successful build that had compiled nothing.
+
+ -- sirmick <sirmick@gmail.com>  Mon, 07 Sep 2026 22:10:00 -0700
+
 wash (0.14.1-1) unstable; urgency=low
 
   * agent: a failed session renders red instead of green. A turn that died on

@@ -154,6 +154,12 @@ func NewError(code, msg string) Error {
 const (
 	ChannelKindGeneric = ""
 	ChannelKindBundle  = "bundle"
+	// "pty" is a generic channel that carries a terminal's pty bytes. The
+	// router forwards it exactly as generic (the shell is told generic)
+	// and remembers the origin, so an observation (docs/COMMANDER.md
+	// §4.2) reads terminal scrollback and never a file upload or a
+	// thumbnail stream that happens to be a generic channel too.
+	ChannelKindPty = "pty"
 	// "asset" is a one-shot, router-originated, read-only channel
 	// streaming a single file from the router's embedded asset FS.
 	// Opened in response to ShellAssetRead. ChannelClose marks EOF.
@@ -392,6 +398,42 @@ func DecodeCtrl(data []byte) (any, error) {
 		return m, json.Unmarshal(data, &m)
 	case TShellAppCrashed:
 		var m ShellAppCrashed
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityQuery:
+		var m ShellActivityQuery
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityQueryOK:
+		var m ShellActivityQueryOK
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityQueryErr:
+		var m ShellActivityQueryErr
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityTail:
+		var m ShellActivityTail
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityEntry:
+		var m ShellActivityEntry
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityStats:
+		var m ShellActivityStats
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityStatsOK:
+		var m ShellActivityStatsOK
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityClear:
+		var m ShellActivityClear
+		return m, json.Unmarshal(data, &m)
+	case TShellActivityClearOK:
+		var m ShellActivityClearOK
+		return m, json.Unmarshal(data, &m)
+	case TShellObserve:
+		var m ShellObserve
+		return m, json.Unmarshal(data, &m)
+	case TShellObserveOK:
+		var m ShellObserveOK
+		return m, json.Unmarshal(data, &m)
+	case TShellObserveErr:
+		var m ShellObserveErr
 		return m, json.Unmarshal(data, &m)
 	case TShellAssetRead:
 		var m ShellAssetRead

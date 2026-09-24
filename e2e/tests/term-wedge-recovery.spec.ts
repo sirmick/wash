@@ -84,6 +84,20 @@ test.describe('terminal robustness soak', () => {
     // And the terminal is still fully interactive after the burst — same
     // split-marker trick, so this proves the shell RAN the command, not
     // merely that the keystrokes echoed.
+    // And the viewport is still FOLLOWING its own output. Every byte can be
+    // present and parsed while the terminal has stopped showing them: xterm
+    // only auto-scrolls while ydisp == ybase, and a replay split across
+    // frames breaks that at a chunk boundary, leaving the viewport parked
+    // thousands of lines behind a climbing buffer. toContainText reads
+    // rendered rows, so it catches that only when the marker happens to be
+    // off-screen — this asserts the property directly.
+    const follow = await page.evaluate(() => {
+      const host = Array.from(document.querySelectorAll('*')).find((n: any) => n.__washTerm) as any;
+      const b = host.__washTerm.buffer.active;
+      return { ybase: b.baseY, ydisp: b.viewportY };
+    });
+    expect(follow.ydisp, `viewport detached: ydisp ${follow.ydisp} vs ybase ${follow.ybase}`).toBe(follow.ybase);
+
     const after = `wash-after-burst-${Date.now()}`;
     await page.keyboard.type(`echo ${after}-O''K`);
     await page.keyboard.press('Enter');

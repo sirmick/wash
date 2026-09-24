@@ -61,14 +61,14 @@ SC      := $(OUT)/singlecall
 # apps): wash-router / wash-login embed the shell runtime; wash-launch /
 # wash-fswatchd / wash-sudo are cmd/-rooted CLIs; wash-display is the C++/CMake
 # compositor; the gated `test` app is woven in where TEST_APP applies.
-FE_APPS := session about connect imageview term fm edit vscode-workbench \
+FE_APPS := session session-summary about connect imageview term fm edit vscode-workbench \
            settings top disks journal syslogs services packages net \
            washamp music radio ai priv
-FE_PANEL_APPS := vscode netd remote
+FE_PANEL_APPS := vscode netd remote inference
 # priv left SVC_APPS in docs/SIDEBAR.md M4: it is still a service (autoboots,
 # no launcher entry) but now ships an FE for its session-modal approval queue,
 # so it needs the web/embed rules the FE apps get.
-SVC_APPS := bulk notify audio fswatch agentd hostgw
+SVC_APPS := bulk notify audio fswatch agentd hostgw commander
 
 # Every app that embeds an FE asset bundle (windowed + panel). Drives the
 # embed-stamp / vendor-sync / multicall-stamp derivations. The gated `test` app
@@ -83,6 +83,10 @@ BINS := wash-router wash-login \
         $(addprefix wash-,$(FE_PANEL_APPS)) \
         $(addprefix wash-,$(SVC_APPS)) \
         wash-launch wash-fswatchd
+
+# The singleton Agents manager shares wash-ai's frontend/backend package, but
+# remains a distinct applet and standalone binary.
+BINS += wash-agents
 
 # wash-sudo is the CLI face of wash-priv (terminal `sudo`-like
 # entrypoint that routes through the browser FE for unlock).
@@ -110,6 +114,14 @@ TARGETS := $(addprefix $(SC)/,$(SC_BINS)) $(addprefix $(OUT)/,$(filter $(OUT_ONL
 # BINS.) `make gen-pkg-binaries` regenerates the file; `make check-pkg-binaries`
 # fails if it's drifted from BINS (wired into CI so a new app can't silently
 # miss the packages — the drift that left net/media/vscode out of 0.9.0).
+# print-bins happens to be the first target in the file, which used to make
+# it the default goal: a bare `make` printed a list of binary names, built
+# nothing, and exited 0. That reads as a successful build — it is how a
+# stale FE bundle got tested against for a whole session. Name the real
+# default explicitly; `make wash` is the dev layout (multicall + symlinks),
+# which is also what ships.
+.DEFAULT_GOAL := wash
+
 .PHONY: print-bins gen-pkg-binaries check-pkg-binaries
 print-bins:
 	@printf '%s\n' $(BINS)
@@ -180,17 +192,14 @@ check-icons:
 check-design:
 	@./scripts/check-design-tokens.sh
 
-# check-names: the "green build, ReferenceError in the browser" guard. vite
-# does not typecheck, so an identifier that was never imported is not a build
-# error — esbuild emits a bare global reference and the bundle ships. It fails
-# only when that line runs, which in a desktop of lazily-mounted apps can be a
-# pane nobody happened to open while testing. Runs the real tsc and gates on
-# TS2304 alone; see the script header for why the scope is that tight, and for
-# why it must not resolve tsc through npx. Wired into unit-test beside
-# check-design.
-.PHONY: check-names
-check-names:
-	@./scripts/check-undefined-names.sh
+# check-interactive: the interaction-layer drift guard. Everything clickable
+# wears web/lib/src/hit.ts (hover / press / keyboard-focus feedback, keyed on
+# data-wash-hit). This fails if a clickable element appears without it, so the
+# sweep that added it to 220 sites can't rot back to what it replaced — :hover
+# in three files and :active in none. Wired into unit-test beside check-design.
+.PHONY: check-interactive
+check-interactive:
+	@python3 ./scripts/check-interactive.py
 
 # check-versions: the version single-source guard. The root VERSION file is the
 # master — the Makefile stamps it into every binary via -ldflags, and packaging
@@ -403,6 +412,9 @@ $(foreach a,$(FE_APPS) $(FE_PANEL_APPS) test,$(eval $(call web_embed_rule,$(a)))
 $(foreach a,$(FE_APPS) test,$(eval $(call fe_bin_rule,$(a))))
 $(foreach a,$(FE_PANEL_APPS),$(eval $(call panel_bin_rule,$(a))))
 $(foreach a,$(SVC_APPS),$(eval $(call svc_bin_rule,$(a))))
+
+$(SC)/wash-agents: apps/ai/be/assets/.stamp vendor-sync | $(SC)
+	$(call go_build,$@,apps/agents/be/cmd)
 
 # ----- shared-vendor coherence guard -----
 #
@@ -1067,7 +1079,7 @@ unit-test: test-app fe-unit component
 	$(MAKE) -s check-imports
 	$(MAKE) -s check-versions
 	$(MAKE) -s check-design
-	$(MAKE) -s check-names
+	$(MAKE) -s check-interactive
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)
 

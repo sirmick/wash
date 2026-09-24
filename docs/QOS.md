@@ -86,6 +86,26 @@ operator action, not silent starvation).
   app's `Write` on its fd blocks, no protocol involvement.
 - Selection is per-class, not per-app. Per-app fairness within Bulk is a
   Phase 7 concern.
+- **The kernel's send buffer is FIFO and outside the scheduler.** Strict
+  priority only orders frames still in the class queues; a frame handed
+  to the socket waits in the kernel's send buffer behind everything
+  already there, and Linux autotunes that buffer up to `tcp_wmem` max
+  (4 MB). On a link the router can outrun — a VPN, a far host — that is
+  where bytes actually queue, and a control frame submitted after a bulk
+  burst waits seconds behind it while the scheduler, never blocked,
+  thinks priority is being honoured. So the shell socket's send buffer
+  is pinned small (`SO_SNDBUF`, 256 KB by default, `WASH_SHELL_SNDBUF`
+  overrides; `internal/router/shell_sndbuf.go`): the writer blocks early,
+  the drain order applies, and a control frame's worst-case wait is one
+  buffer. The throughput ceiling is buffer/RTT, which is above what such
+  links carry. `drainLoop` logs a control write that blocks >250 ms with
+  the queue depths, so the condition is visible by mechanism.
+- **Bulk frames are kept small at their producers** for the same reason:
+  a control frame waits at least for the frame ahead of it on the wire.
+  Bundles chunk at 32 KB; agentd streams a reply as coalesced deltas
+  (the text added per ~50 ms, `apps/agentd/be/transcript_emit.go`)
+  rather than re-sending the accumulated message on every chunk, which
+  was quadratic bytes per reply.
 
 ## 5. Credit-based FE → router flow control
 
@@ -288,3 +308,100 @@ edit when conventions change.
 - **Frame fragmentation**: WIRE.md disallows fragmentation in v0.0
   (END=1 always). If we ever allow it, the class bits must be identical
   across fragments — document there, not here.
+
+## 12. Link-health counters, as built
+
+`internal/router/linkstats.go` accumulates one connection's counters —
+per-class tx bytes/frames, queue-full blocks, drops, queue high-water,
+credit stalls, rx totals — with atomics on seams the egress path already
+has. They ride `link.stats` (~1/s) and the About window's **Link** section
+renders them; each finished connection is folded into session-lifetime
+totals so the figures survive a reconnect.
+
+### 12.1 Per-app split
+
+The class table says how the link is being used; `LinkStatsSnapshot.Apps`
+says by whom. Attribution happens where the producing app is known, which
+is two places and only two:
+
+- the drain loop's raw-channel path — pty output, bundles, thumbnails,
+  video — where the channel binding names the app, and where a lookup was
+  already being done for the display counters;
+- the `app_msg` relay, for control-channel envelopes. This is the last
+  point that knows: by the time the frame reaches the wire, a control
+  frame carries no app identity at all.
+
+So the rows are a PARTIAL view of the class totals by construction.
+Router-originated lifecycle traffic — window create, session patches, the
+link push itself — has no app to bill and is deliberately not invented.
+The About panel renders the difference as one derived row (`router
+(lifecycle)`) rather than leaving a table that visibly does not add up.
+
+Two consequences worth knowing:
+
+- The two seams sample at slightly different moments (an app's bytes when
+  the envelope is relayed, the class total when the frame is written), so
+  a frame in flight at snapshot time can briefly make an app's share
+  exceed the total. The renderer clamps the remainder at zero.
+- App bytes are the app's own payload, not the framing around it, so an
+  app author reading the column sees the number they can act on.
+
+This is the panel to reach for when one app is suspected of crowding a
+class — it is how the roster-push flood was confirmed to be agentd's
+state pushes rather than the transcript stream (§10's Bulk suffixes had
+already moved the transcript).
+
+### 12.2 Frame size is part of the priority contract
+
+The scheduler is preemptive BETWEEN frames and not inside one: the drain
+loop commits a whole frame to the transport before it consults the queues
+again. So the largest frame a lane emits is the worst-case delay that lane
+can impose on every lane above it, and priority cannot undo it.
+
+`writeChunked` caps every router-side chunked emitter at `maxChunkBytes`
+(32 KB) for that reason. Before it, panel bundles emitted 256 KB — one
+whole clamped send buffer — and scrollback replay emitted the entire ring
+in a single frame, up to `ChannelScrollbackMaxBytes` (4 MiB). Both sat on
+the Interactive lane, so a reattach or a settings-panel load stalled
+pointer motion for as long as the transfer took.
+
+A new emitter that writes more than a few KB belongs behind
+`writeChunked`, whatever lane it uses. The sndbuf clamp (shell_sndbuf.go)
+is the companion rule and bounds a different thing: what the KERNEL may
+queue ahead of a control frame, not what one frame costs to write.
+
+### 12.3 Class is priority, not ordering
+
+Frames of the same class are FIFO, so it is tempting to use a shared
+class to keep a transaction ordered. Two flows did, and both paid for it
+by dragging bulk-sized data up into the latency lane.
+
+The rule instead: a transactional flow announces its byte count in its
+bind (`channel.bind` Size, `panel.read.ok` size) and the shell completes
+on that count, never on the Unbind. Then the data can ride whatever lane
+its size deserves and a control frame overtaking it cannot truncate
+anything. `assets.ts` and `panels.ts` both work this way.
+
+A flow that genuinely cannot announce its length must keep all of its
+frames in ONE lane — but it should be a low one.
+
+### 12.4 Moving traffic down a lane moves its dependencies too
+
+Two faults, one mistake, both caught by the browser suite and neither by
+unit tests. Recorded because the lane taxonomy invites exactly this.
+
+**A terminator must ride its data's lane.** Panel data moved to Bulk with
+its Unbind left on Interactive, so the Unbind overtook the bytes it
+terminates (§ docs/TEST_FLAKES.md already calls unbind-overtakes-payload
+expected behaviour) and the shell tore the transfer down before a byte
+arrived. Every settings panel stopped mounting. Byte-count completion
+removes the truncation hazard, not this one — the receiver must also not
+treat an early terminator as the end.
+
+**Credit keys on CLASS, not on the flow.** So moving the reattach replay
+to Bulk silently gave it a 64 KB window it had never had; it blocked in
+Reserve while holding shellMu and the whole reattach stalled. Recovery
+replays are creditless by nature — resyncChannel already knew this. Until
+credit is keyed on the binding instead, ANY write promoted into Bulk
+inherits a flow-control window, and that is a property to check before
+moving something down.

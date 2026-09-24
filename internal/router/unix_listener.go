@@ -268,6 +268,7 @@ func (r *Router) serveHandoffWS(ctx context.Context, w http.ResponseWriter, req 
 		req.Method, req.URL.Path,
 		req.Header.Get("Upgrade"), req.Header.Get("Connection"),
 		req.Header.Get("Sec-WebSocket-Key"), req.Header.Get("Sec-WebSocket-Version"))
+	boundShellSendBuf(req, r.log)
 	ws, err := websocket.Accept(w, req, &websocket.AcceptOptions{
 		// The peer is wash-login (or our test harness), not the
 		// browser directly. Same-origin is enforced by wash-login
@@ -315,6 +316,7 @@ func (r *Router) serveHandoffHTTP(ctx context.Context, conn net.Conn) {
 	srv := &http.Server{
 		Handler:           r.ingressMux(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ConnContext:       connContext,
 	}
 	go func() {
 		<-ctx.Done()

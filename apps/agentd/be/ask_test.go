@@ -18,7 +18,7 @@ func resetAsks() {
 
 func addAsk(id, rowKey, tool string, asked time.Time) *pending {
 	p := &pending{
-		Ask:   Ask{ID: id, RowKey: rowKey, Tool: tool, SourceApp: "com.wash.term", SourceInstance: "i-1"},
+		Ask:   Ask{ID: id, RowKey: rowKey, Tool: tool},
 		asked: asked,
 		reply: func(string, string) error { return nil },
 	}
@@ -33,16 +33,18 @@ func addAsk(id, rowKey, tool string, asked time.Time) *pending {
 // production never races on. Restores the real hooks on cleanup.
 func withState(t *testing.T, subs int) {
 	t.Helper()
-	oldSubs, oldMutate := stateSubscribers, mutateState
+	oldSubs, oldMutate := stateSubscribers, mutateStateIf
 	var st State
 	var mu sync.Mutex
 	stateSubscribers = func() int { return subs }
-	mutateState = func(fn func(*State)) {
+	// Stubbing the one seam covers mutateState too, which is defined in
+	// terms of it.
+	mutateStateIf = func(fn func(*State) bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		fn(&st)
 	}
-	t.Cleanup(func() { stateSubscribers, mutateState = oldSubs, oldMutate })
+	t.Cleanup(func() { stateSubscribers, mutateStateIf = oldSubs, oldMutate })
 }
 
 // Questions are a queue of things blocking humans, so the one that has
@@ -233,17 +235,17 @@ func TestAnsweredAskStopsItsTimer(t *testing.T) {
 // what stateSubscribers() reports.
 func withVaryingState(t *testing.T, subs int) func(int) {
 	t.Helper()
-	oldSubs, oldMutate := stateSubscribers, mutateState
+	oldSubs, oldMutate := stateSubscribers, mutateStateIf
 	var st State
 	var mu sync.Mutex
 	n := subs
 	stateSubscribers = func() int { mu.Lock(); defer mu.Unlock(); return n }
-	mutateState = func(fn func(*State)) {
+	mutateStateIf = func(fn func(*State) bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		fn(&st)
 	}
-	t.Cleanup(func() { stateSubscribers, mutateState = oldSubs, oldMutate })
+	t.Cleanup(func() { stateSubscribers, mutateStateIf = oldSubs, oldMutate })
 	return func(v int) { mu.Lock(); n = v; mu.Unlock() }
 }
 
@@ -389,5 +391,23 @@ func TestFirstRunGetsALongerWindow(t *testing.T) {
 	}
 	if askFirstRunTTL >= askHardTTL {
 		t.Error("the first-run window must still sit under the hard ceiling")
+	}
+}
+
+// A workspace member has no prompt of its own to fall back to, so its
+// question waits for the human rather than expiring into a cancel-and-re-ask
+// loop while they are answering a teammate.
+func TestWorkspaceMemberAskWaitsForTheHuman(t *testing.T) {
+	resetAsks()
+	withState(t, 1)
+	withRuleCount(t, 5)
+	if !enqueueAsk(askSpec{Agent: "claude", Tool: "Bash", RowKey: "row-w", WorkspaceID: "w1"}, func(string, string) error { return nil }) {
+		t.Fatal("enqueue refused with a subscriber present")
+	}
+	for _, p := range asks {
+		if p.softTTL != askHardTTL {
+			t.Errorf("softTTL = %s, want the hard ceiling %s", p.softTTL, askHardTTL)
+		}
+		p.timer.Stop()
 	}
 }

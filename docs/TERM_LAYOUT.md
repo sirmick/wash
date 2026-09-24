@@ -197,9 +197,11 @@ out and shortcut hints need no new component work:
 `false` so they never reach the pty. `Ctrl+Shift+<letter>` has no distinct
 control code, so nothing is stolen from the shell or from an agent.
 
-`Ctrl+Shift+W` **changes meaning**: it closes the pane, and closes the tab only
-when it is the last one in its group. This is a deliberate change to an
-existing binding; note it in the release notes.
+`Ctrl+Shift+W` (and `Alt+W`) closes the **tab**; the pane goes with its last
+tab and the tree hands the space back. (An earlier draft had it close the
+pane first; as built the tab is the unit, and the menus say so.) Because
+Chromium reserves Ctrl+Shift+T/W and Ctrl+Tab for itself, every tab verb
+also has an Alt binding — Alt+T, Alt+W, Alt+PageUp/PageDown, Alt+1…9.
 
 **Pane context menu** (M2): Shift+right-click is owned by `<Terminal>`
 (`terminal.tsx:914`) and renders a fixed Copy/Paste menu; plain right-click is

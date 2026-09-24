@@ -296,6 +296,16 @@ func Run(args []string) int {
 			runRootPath = defaultRunRoot()
 		}
 		sessions := login.NewProcRegistry()
+		// An EXPLICIT --run-root means "only the sessions under this root".
+		// Production passes no flag and stays unscoped on purpose: a real host
+		// has one run root, and an unscoped registry adopts the session it
+		// finds wherever it listens. Tests and the e2e suite are the opposite
+		// case — /proc is host-global, so a login front pointed at a tmp
+		// run-root would otherwise enumerate the developer's own live desktop
+		// session and report it as one of its own (see ProcRegistry.SockRoot).
+		if setFlags["run-root"] {
+			sessions.SockRoot = runRootPath
+		}
 		cfg.Sessions = sessions
 		cfg.Spawner = &login.Spawner{
 			RouterBinary:             routerBin,

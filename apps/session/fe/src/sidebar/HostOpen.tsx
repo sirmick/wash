@@ -19,7 +19,7 @@
 
 import { For, Show } from 'solid-js';
 import type { Component } from 'solid-js';
-import { WASH_BTN_CLASS, tokens } from '@wash/ui';
+import { tokens } from '@wash/ui';
 import { LOCAL_ORIGIN } from './awareness';
 import { hostHue } from './host-hue';
 
@@ -54,19 +54,21 @@ export const HostOpen: Component<HostOpenProps> = (props) => (
         const hue = () => (isLocal ? tokens.accentTeal : hostHue(d.origin));
         return (
           <button
+            data-wash-hit
             type="button"
             data-testid={`${props.testid}-${d.origin}`}
             data-origin={d.origin}
             data-badge={String(d.badge ?? 0)}
             title={`Open the ${props.what} on ${isLocal ? 'this machine' : d.origin}`}
             onClick={() => props.onOpen(d.origin)}
-            class={WASH_BTN_CLASS}
             style={{
-              // The 3px left rule is the host's identity colour, so it
-              // sits on top of the class's border rather than deriving
-              // with it.
+              background: tokens.bgMenu,
+              color: tokens.fg,
+              border: `1px solid ${tokens.borderMenu}`,
               'border-left': `3px solid ${hue()}`,
+              'border-radius': tokens.radiusSm,
               padding: '4px 8px',
+              cursor: 'pointer',
               'font-size': '11px',
               'text-align': 'left',
               display: 'flex',

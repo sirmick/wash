@@ -210,6 +210,11 @@ func (r *Router) handleAttach(ctx context.Context, conn net.Conn, rd *bufio.Read
 	// lifecycle from here (declare to attached shells, broadcast
 	// the window patch, start the loop).
 	go r.startFreshAttach(ctx, inst)
+	// A terminal-launched `wash-edit --open <path>` is an open the router
+	// never routed but the recent-files list still wants (open_routed.go).
+	if p := procOpenPath(ident.PID); p != "" {
+		r.noteOpenRouted(p, inst.AppID, "attach")
+	}
 }
 
 // acceptIdentity assigns instance/window ids and writes the

@@ -88,6 +88,14 @@ type Conn struct {
 	done    chan struct{}
 	err     error
 
+	// ctx is handed to every inbound handler and cancelled when the peer
+	// ends. A handler that blocks on something outside the wire — a
+	// permission question waiting on a human — selects on it, so an
+	// adapter that exits mid-question releases the handler instead of
+	// leaving it to wait out its own backstop for an agent that is gone.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	// notes serializes inbound notifications.
 	//
 	// Requests are answered on their own goroutines — a permission
@@ -114,6 +122,7 @@ func NewConn(r io.Reader, w io.Writer, h Handler) *Conn {
 		done:    make(chan struct{}),
 		notes:   make(chan noteMsg, 256),
 	}
+	c.ctx, c.cancel = context.WithCancel(context.Background())
 	go c.readLoop(r)
 	go c.noteLoop()
 	return c
@@ -195,6 +204,7 @@ func (c *Conn) finish(err error) {
 		}
 		c.mu.Unlock()
 		close(c.done)
+		c.cancel()
 	})
 }
 
@@ -228,7 +238,7 @@ func (c *Conn) noteLoop() {
 		case <-c.done:
 			return
 		case n := <-c.notes:
-			c.h.Notify(context.Background(), n.method, n.params)
+			c.h.Notify(c.ctx, n.method, n.params)
 		}
 	}
 }
@@ -306,7 +316,7 @@ func (c *Conn) dispatch(m *message) {
 		if c.h == nil {
 			err = ErrMethodNotFound
 		} else {
-			res, err = c.h.Handle(context.Background(), method, params)
+			res, err = c.h.Handle(c.ctx, method, params)
 		}
 		reply := &message{JSONRPC: "2.0", ID: &id}
 		switch {

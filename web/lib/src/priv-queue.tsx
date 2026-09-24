@@ -21,7 +21,6 @@
 import type { Component } from 'solid-js';
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import { tokens } from './tokens';
-import { Button } from './button';
 import { washAssetUrl } from './assets';
 
 export type PrivStatus = 'queued' | 'running' | 'done' | 'rejected' | 'error';
@@ -143,15 +142,24 @@ export const PrivWidget: Component<PrivWidgetProps> = (props) => {
         )}
       </For>
       <Show when={hiddenCount() > 0}>
-        <Button
-          variant="ghost"
-          size="sm"
+        <button
+          data-wash-hit
+          type="button"
           data-testid="priv-more"
           onClick={() => setExpanded((v) => !v)}
-          style={{ padding: '3px 8px', font: tokens.type.textSm, opacity: 0.8 }}
+          style={{
+            background: 'transparent',
+            color: tokens.fg,
+            border: `1px solid ${tokens.borderMenu}`,
+            'border-radius': tokens.radiusSm,
+            padding: '3px 8px',
+            cursor: 'pointer',
+            font: tokens.type.textSm,
+            opacity: 0.8,
+          }}
         >
           {expanded() ? 'show less' : `show ${hiddenCount()} more`}
-        </Button>
+        </button>
       </Show>
     </div>
   );
@@ -180,18 +188,23 @@ const LockBar: Component<{ locked: () => boolean; onLock: () => void }> = (props
         {props.locked() ? 'locked' : 'unlocked'}
       </span>
       <Show when={!props.locked()}>
-        <Button
-          variant="ghost"
-          size="sm"
+        <button
+          data-wash-hit
+          type="button"
           data-testid="priv-lock"
           onClick={props.onLock}
-          // Outlined in danger rather than filled: it's a safety action,
-          // not a destructive one. The hover/press still derive off the
-          // transparent ghost fill.
-          style={{ '--wash-btn-border': tokens.borderDanger, padding: '1px 6px', font: tokens.type.textSm }}
+          style={{
+            background: 'transparent',
+            color: tokens.fg,
+            border: `1px solid ${tokens.borderDanger}`,
+            'border-radius': tokens.radiusSm,
+            padding: '1px 6px',
+            cursor: 'pointer',
+            font: tokens.type.textSm,
+          }}
         >
           lock now
-        </Button>
+        </button>
       </Show>
     </div>
   );
@@ -217,22 +230,25 @@ const GrantChip: Component<{ appID: string; onRevoke: () => void }> = (props) =>
       }}
     >
       auto: {shortApp(props.appID)}
-      <Button
-        variant="icon"
+      <button
+        data-wash-hit
+        type="button"
         data-testid={`priv-revoke-${props.appID}`}
         onClick={props.onRevoke}
         title="Stop auto-approving"
         style={{
+          background: 'transparent',
+          color: tokens.fg,
+          border: 'none',
           padding: '0 2px',
-          width: 'auto',
-          height: 'auto',
+          cursor: 'pointer',
           'line-height': 1,
           'font-size': '12px',
           opacity: 0.7,
         }}
       >
         ✕
-      </Button>
+      </button>
     </span>
   );
 };
@@ -317,46 +333,61 @@ const PrivRow: Component<{
       </Show>
       <Show when={isPending()}>
         <div style={{ display: 'flex', gap: '6px', 'margin-top': '4px', 'flex-wrap': 'wrap' }}>
-          <Button
-            size="sm"
+          <button
+            data-wash-hit
+            type="button"
             data-testid={`priv-approve-${props.req.req_id}`}
             onClick={props.onApprove}
             style={{
-              '--wash-btn-bg': tokens.bgSuccess,
-              '--wash-btn-border': tokens.fgSuccess,
-              '--wash-btn-fg': '#fff',
+              background: tokens.bgSuccess,
+              color: '#fff',
+              border: `1px solid ${tokens.fgSuccess}`,
+              'border-radius': tokens.radiusSm,
               padding: '2px 8px',
+              cursor: 'pointer',
               font: tokens.type.textSm,
               'font-weight': 600,
             }}
           >
             approve
-          </Button>
+          </button>
           <Show when={canGrantApp() && props.onApproveApp}>
-            <Button
-              variant="ghost"
-              size="sm"
+            <button
+              data-wash-hit
+              type="button"
               data-testid={`priv-approve-app-${props.req.req_id}`}
               onClick={props.onApproveApp}
               title={`Approve, and auto-approve future requests from ${sourceLabel(props.req)} this session`}
               style={{
-                '--wash-btn-border': tokens.fgSuccess,
+                background: 'transparent',
+                color: tokens.fg,
+                border: `1px solid ${tokens.fgSuccess}`,
+                'border-radius': tokens.radiusSm,
                 padding: '2px 8px',
+                cursor: 'pointer',
                 font: tokens.type.textSm,
               }}
             >
               approve app
-            </Button>
+            </button>
           </Show>
-          <Button
-            variant="ghost"
-            size="sm"
+          <button
+            data-wash-hit
+            type="button"
             data-testid={`priv-reject-${props.req.req_id}`}
             onClick={props.onReject}
-            style={{ padding: '2px 8px', font: tokens.type.textSm }}
+            style={{
+              background: 'transparent',
+              color: tokens.fg,
+              border: `1px solid ${tokens.borderMenu}`,
+              'border-radius': tokens.radiusSm,
+              padding: '2px 8px',
+              cursor: 'pointer',
+              font: tokens.type.textSm,
+            }}
           >
             reject
-          </Button>
+          </button>
         </div>
       </Show>
       <Show when={isTerminal() && props.req.exit_code != null && props.req.exit_code !== 0}>

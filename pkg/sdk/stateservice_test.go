@@ -302,3 +302,107 @@ func TestStateServiceDoubleSubscribeIsIdempotent(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 }
+
+// MutateIf is the seam a hot-path service uses to keep its own state
+// current without paying for the wire: returning false writes the state
+// and sends nothing. This is what stops a narrating agent from pushing a
+// full roster snapshot to every subscriber several times a second.
+func TestStateServiceMutateIfSkipsUnchanged(t *testing.T) {
+	bus, router, cleanup := busTestConn(t)
+	defer cleanup()
+
+	svc := NewStateService(bus, jobsState{Count: 0})
+	go func() { _ = bus.conn.Run(context.Background()) }()
+
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{InstanceID: "i-sub"}))
+	_ = readStateMsgToInstance(t, router, "i-sub")
+
+	// A reported change still pushes.
+	svc.MutateIf(func(s *jobsState) bool {
+		s.Count = 41
+		return true
+	})
+	if got, _ := readStateMsgToInstance(t, router, "i-sub")["count"].(float64); got != 41 {
+		t.Fatalf("count=%v, want 41", got)
+	}
+
+	// Silence last: the reader below stays parked, so anything asserted
+	// after it would race that goroutine for the next frame.
+	svc.MutateIf(func(s *jobsState) bool {
+		s.Count = 42
+		return false
+	})
+	// The write still lands — this is a dedupe of the PUSH, not of the
+	// state, so the value a later real change builds on is the new one.
+	if got := svc.Snapshot().Count; got != 42 {
+		t.Fatalf("MutateIf did not apply the write: count=%d, want 42", got)
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = router.ReadFrame()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("MutateIf(false) still produced a frame")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestStateServicePublishBulkUsesBulkClass(t *testing.T) {
+	bus, router, cleanup := busTestConn(t)
+	defer cleanup()
+
+	svc := NewStateService(bus, jobsState{})
+	go func() { _ = bus.conn.Run(context.Background()) }()
+
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{InstanceID: "i-sub"}))
+	_ = readStateMsgToInstance(t, router, "i-sub")
+
+	svc.PublishBulk(map[string]any{"kind": "usage_patch", "used": 42})
+	f, err := router.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Class(); got != wire.ClassBulk {
+		t.Fatalf("class=%s, want bulk", got)
+	}
+	evt, err := wire.DecodeEvt(f.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := evt.(wire.EvtAppMsg)
+	if !ok || m.To == nil || m.To.InstanceID != "i-sub" {
+		t.Fatalf("message=%#v, want recipient i-sub", evt)
+	}
+}
+
+// A service whose state says where prompts and credentials go must not
+// answer every app that asks: the subscriber roster follows the same gate
+// as the callers it would serve.
+func TestStateServiceSubscribeGateRefusesOtherApps(t *testing.T) {
+	bus, router, cleanup := busTestConn(t)
+	defer cleanup()
+
+	NewStateService(bus, jobsState{}, WithSubscribeGate(func(from wire.Sender) bool {
+		return from.AppID == "com.wash.allowed"
+	}))
+	go func() { _ = bus.conn.Run(context.Background()) }()
+
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{AppID: "com.wash.nosy", InstanceID: "i-nosy"}))
+	writeEvt(t, router, wire.NewEvtAppMsgFrom(0, map[string]any{
+		"kind": StateServiceKindSubscribe,
+	}, wire.Sender{AppID: "com.wash.allowed", InstanceID: "i-ok"}))
+
+	// The allowed subscriber's snapshot is the FIRST state message on the
+	// wire: a refused subscribe answers nothing at all.
+	if got := readStateMsgToInstance(t, router, "i-ok"); got == nil {
+		t.Fatal("allowed subscriber got no snapshot")
+	}
+}

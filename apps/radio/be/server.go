@@ -5,17 +5,17 @@ import (
 	"context"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sirmick/wash/internal/audiorelay"
+	"github.com/sirmick/wash/internal/unixsock"
 	"github.com/sirmick/wash/pkg/sdk"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 // station is one entry. URL is the upstream stream (kept BE-side; the FE
@@ -61,6 +61,9 @@ type svc struct {
 	custom []station // user-pasted; replaced wholesale by set_custom
 	base   string
 	ready  chan struct{}
+	// tuner and notes are the start menu's two hooks (recents.go).
+	tuner tuner
+	notes *noteGate
 }
 
 // all returns the full station list (index space the FE addresses via
@@ -82,7 +85,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	bus := sdk.NewBus(c)
 	audiorelay.Register(bus)
 
-	s := &svc{ready: make(chan struct{})}
+	s := &svc{ready: make(chan struct{}), notes: newNoteGate()}
 	// Env test stations first, then the disk-backed user-configurable list.
 	s.fixed = append(envStations(), configuredStations()...)
 
@@ -100,7 +103,12 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 				Description: st.Description,
 			}
 		}
-		_ = conn.SendAppMsg(map[string]any{"kind": "stations_ok", "id": id, "base": base, "stations": pub})
+		msg := map[string]any{"kind": "stations_ok", "id": id, "base": base, "stations": pub}
+		if name := s.tuner.loaded(); name != "" {
+			msg["tune"] = name
+			log.Printf("wash-radio: tune name=%q delivered with station list", name)
+		}
+		_ = conn.SendAppMsg(msg)
 	}
 
 	// FE → BE: hand back the station list + ingress base.
@@ -129,6 +137,20 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		go reply(conn, id)
 		return nil
 	})
+	// com.wash.session → BE: the start menu's Radio flyout picked a
+	// station. Only the desktop may ask; anything else could otherwise
+	// start audio playing from the background.
+	sdk.HandleFromVoid(bus, "play_station", func(conn *sdk.Conn, _ string, req playStationReq, from wire.Sender) error {
+		if from.AppID != sessionAppID || req.Name == "" {
+			return nil
+		}
+		if s.tuner.request(req.Name) {
+			log.Printf("wash-radio: tune name=%q forwarded", req.Name)
+			return conn.SendAppMsg(map[string]any{"kind": "tune", "name": req.Name})
+		}
+		log.Printf("wash-radio: tune name=%q held until the station list loads", req.Name)
+		return nil
+	})
 	// Persist the FE's small state blob (favorites + pasted stations +
 	// last-tuned), redelivered as wash:state on the next mount.
 	sdk.HandlePersist(bus)
@@ -139,11 +161,9 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // serveAndPublish stands up the /stream proxy on a per-instance unix
 // socket and publishes it through the ingress proxy.
 func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
-	sock := filepath.Join(os.TempDir(), "wash-radio-"+instanceID+".sock")
-	_ = os.Remove(sock)
-	ln, err := net.Listen("unix", sock)
+	ln, sock, closeSock, err := unixsock.Listen("wash-radio-")
 	if err != nil {
-		log.Printf("wash-radio: listen %s: %v", sock, err)
+		log.Printf("wash-radio: listen: %v", err)
 		return
 	}
 	// ICY metadata arrives on the stream path; keep it tagged by BE index so
@@ -165,7 +185,16 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 			http.NotFound(w, r)
 			return
 		}
-		proxyStream(w, r, all[i].URL, func(title string) { onTitle(i, title) }, func(info streamInfo) { onInfo(i, info) })
+		name := all[i].Name
+		proxyStream(w, r, all[i].URL, func(title string) { onTitle(i, title) }, func(info streamInfo) {
+			// The upstream started a stream (a 2xx), so this station really
+			// played: tell the start menu. A failed connect or an error
+			// status never reaches here (proxyStream).
+			if s.notes.allow(name, time.Now()) {
+				noteStation(c, name)
+			}
+			onInfo(i, info)
+		})
 	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
@@ -176,7 +205,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 	if err != nil {
 		log.Printf("wash-radio: publish ingress: %v", err)
 		_ = srv.Close()
-		_ = os.Remove(sock)
+		closeSock()
 		return
 	}
 	s.mu.Lock()
@@ -189,7 +218,7 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 		<-c.Done()
 		_ = c.UnpublishIngress(base)
 		_ = srv.Close()
-		_ = os.Remove(sock)
+		closeSock()
 	}()
 }
 
@@ -199,6 +228,11 @@ func serveAndPublish(c *sdk.Conn, instanceID string, s *svc) {
 // (the browser's <audio> can't parse them) and push each new StreamTitle
 // to the FE via onTitle. The browser cancelling (pause / station switch)
 // closes r.Context() → the copy unwinds.
+//
+// onInfo fires only once the upstream has answered with a 2xx — the one
+// point where a stream is really starting. A dead station's 404 or 5xx is
+// answered 502, like an unreachable one: relaying it as a 200 would hand
+// <audio> an error page to play and tell the start menu the station played.
 func proxyStream(w http.ResponseWriter, r *http.Request, upstream string, onTitle func(string), onInfo func(streamInfo)) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream, nil)
 	if err != nil {
@@ -213,6 +247,11 @@ func proxyStream(w http.ResponseWriter, r *http.Request, upstream string, onTitl
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		log.Printf("wash-radio: upstream status=%d", resp.StatusCode)
+		http.Error(w, "upstream status "+strconv.Itoa(resp.StatusCode), http.StatusBadGateway)
+		return
+	}
 	metaint, _ := strconv.Atoi(resp.Header.Get("Icy-Metaint"))
 	onInfo(headerStreamInfo(resp, metaint))
 	if ct := resp.Header.Get("Content-Type"); ct != "" {

@@ -1,6 +1,5 @@
 import type { Component, JSX, ParentComponent } from 'solid-js';
 import { tokens } from './tokens';
-import { WASH_BTN_CLASS } from './controls';
 
 // Overlay is the centered-modal scaffold: animated full-bleed
 // backdrop + animated centered box. Clicking the backdrop calls
@@ -25,6 +24,9 @@ export interface OverlayProps {
 export const Overlay: ParentComponent<OverlayProps> = (props) => {
   return (
     <div
+      // Dismiss backdrop — clicking the scrim closes the overlay, but the
+      // scrim itself is not something you point AT.
+      data-wash-no-hit
       data-testid={props['data-testid']}
       onClick={(ev) => {
         if (ev.target === ev.currentTarget) props.onDismiss();
@@ -80,6 +82,13 @@ export interface ConfirmDialogProps {
   danger?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  // Optional third action between Cancel and Confirm — the "Don't save"
+  // of a Save / Don't save / Cancel close prompt. Rendered only when
+  // altLabel is set; altDanger styles it like a destructive confirm.
+  altLabel?: string;
+  altDanger?: boolean;
+  onAlt?: () => void;
+  altTestid?: string;
   'data-testid'?: string;
   confirmTestid?: string;
   cancelTestid?: string;
@@ -93,19 +102,30 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
       {props.children}
       <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end', 'margin-top': '14px' }}>
         <button
+          data-wash-hit
           type="button"
           data-testid={props.cancelTestid}
           onClick={props.onCancel}
-          class={WASH_BTN_CLASS}
           style={confirmBtnStyle(false)}
         >
           {props.cancelLabel ?? 'Cancel'}
         </button>
+        {props.altLabel ? (
+          <button
+            data-wash-hit
+            type="button"
+            data-testid={props.altTestid}
+            onClick={props.onAlt}
+            style={confirmBtnStyle(props.altDanger ?? false)}
+          >
+            {props.altLabel}
+          </button>
+        ) : null}
         <button
+          data-wash-hit
           type="button"
           data-testid={props.confirmTestid}
           onClick={props.onConfirm}
-          class={WASH_BTN_CLASS}
           style={confirmBtnStyle(props.danger ?? false)}
         >
           {props.confirmLabel}
@@ -119,14 +139,14 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 // inline because the dialog uses 5px / 12px padding for the
 // extra visual weight modal actions deserve. Could fold into
 // Button as a size="lg" later if it shows up elsewhere.
-//
-// The palette and every interaction state come from WASH_BTN_CLASS; what
-// stays here is the padding and the danger fill, set as a custom
-// property so hover and press derive off it (controls.ts).
 function confirmBtnStyle(danger: boolean): JSX.CSSProperties {
   return {
-    '--wash-btn-bg': danger ? tokens.bgDanger : 'transparent',
-    '--wash-btn-border': danger ? tokens.borderDanger : tokens.borderMenu,
+    background: danger ? tokens.bgDanger : 'transparent',
+    color: tokens.fg,
+    border: `1px solid ${danger ? tokens.borderDanger : tokens.borderMenu}`,
+    'border-radius': `${tokens.radiusSm}`,
     padding: '5px 12px',
+    cursor: 'pointer',
+    font: tokens.type.textMd,
   };
 }
