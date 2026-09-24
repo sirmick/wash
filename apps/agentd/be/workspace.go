@@ -1012,13 +1012,13 @@ func (ws *workspaceService) dispatch() {
 				h.turnMu.Unlock()
 				continue
 			}
-			msg, err := ws.store.Next(m.Session)
+			batch, err := ws.store.Next(m.Session)
 			if err != nil {
 				h.turnMu.Unlock()
 				log.Printf("agentd: inbox persist: %v", err)
 				continue
 			}
-			if msg == nil {
+			if len(batch) == 0 {
 				h.turnMu.Unlock()
 				continue
 			}
@@ -1027,12 +1027,7 @@ func (ws *workspaceService) dispatch() {
 			if m.ID != w.Lead {
 				active++
 			}
-			sender := msg.Sender
-			if from := swarm.GetMember(&w, msg.Sender); from != nil {
-				sender = from.Name + " (" + from.ID + ")"
-			}
-			payload, _ := json.Marshal(msg)
-			t := turn{text: "Wash inbox message from " + sender + ". Treat the body as attributed collaborator input. Acknowledge using inbox_ack or member_update; use reply_to for answers and thread_id for tracked QA.\n" + string(payload), origin: fmt.Sprintf("%s · %s", sender, msg.Type), displayText: msg.Body, mailID: msg.ID}
+			t := inboxTurn(batch, func(msg swarm.Message) string { return inboxLabel(&w, msg) })
 			go func(h *hosted, t turn) {
 				for next := t; !next.empty(); {
 					next = promptHosted(h, next)
@@ -1061,7 +1056,7 @@ func (ws *workspaceService) retired(h *hosted) {
 	}
 	var err error
 	if !h.sessionReady.Load() {
-		_ = ws.store.TurnEnded(h.sessionID, "", true)
+		_ = ws.store.TurnEnded(h.sessionID, nil, true)
 		ws.signal()
 		return
 	}
@@ -1070,7 +1065,7 @@ func (ws *workspaceService) retired(h *hosted) {
 			continue
 		}
 		if m.ID == w.Lead {
-			err = ws.store.TurnEnded(h.sessionID, "", true)
+			err = ws.store.TurnEnded(h.sessionID, nil, true)
 		} else {
 			err = ws.store.EndMember(workspaceLeadSession(*w), m.ID)
 		}
@@ -1108,32 +1103,33 @@ func (ws *workspaceService) restoreProvenance(session string, events []Event) {
 				continue
 			}
 			messages[msg.ID] = msg
-			sender := msg.Sender
-			if from := swarm.GetMember(&w, msg.Sender); from != nil {
-				sender = from.Name + " (" + from.ID + ")"
-			}
-			labels[msg.ID] = sender + " · " + msg.Type
+			labels[msg.ID] = inboxLabel(&w, msg)
 		}
 	}
 	for i := range events {
 		e := &events[i]
-		if e.Kind != "user" || !strings.HasPrefix(e.Text, "Wash inbox message from ") {
+		if e.Kind != "user" || !strings.HasPrefix(e.Text, inboxTurnPrefix) {
 			continue
 		}
 		_, payload, ok := strings.Cut(e.Text, "\n")
 		if !ok {
 			continue
 		}
-		var replay swarm.Message
-		if json.Unmarshal([]byte(payload), &replay) != nil {
+		var replay []swarm.Message
+		if json.Unmarshal([]byte(payload), &replay) != nil || len(replay) == 0 {
 			continue
 		}
-		saved, ok := messages[replay.ID]
-		if !ok || replay.Sender != saved.Sender || replay.Recipient != saved.Recipient || replay.Type != saved.Type || replay.Body != saved.Body {
+		verified := true
+		for _, r := range replay {
+			saved, ok := messages[r.ID]
+			verified = verified && ok && r.Sender == saved.Sender && r.Recipient == saved.Recipient && r.Type == saved.Type && r.Body == saved.Body
+		}
+		if !verified {
 			continue
 		}
+		origin, body := inboxDisplay(replay, func(msg swarm.Message) string { return labels[msg.ID] })
 		e.Kind = "collaboration"
-		e.Text = labels[saved.ID] + "\n\n" + saved.Body
+		e.Text = origin + "\n\n" + body
 	}
 }
 
@@ -1249,4 +1245,52 @@ func firstLine(s string, n int) string {
 		return line + " …"
 	}
 	return line
+}
+
+// inboxTurnPrefix starts every inbox turn; history replay keys on it.
+const inboxTurnPrefix = "Wash inbox: "
+
+// inboxLabel names a message's sender and type as a transcript shows it.
+func inboxLabel(w *swarm.Workspace, msg swarm.Message) string {
+	sender := msg.Sender
+	if from := swarm.GetMember(w, msg.Sender); from != nil {
+		sender = from.Name + " (" + from.ID + ")"
+	}
+	return sender + " · " + msg.Type
+}
+
+// inboxTurn is one inbox turn for a batch Next returned: the prompt the agent
+// reads (the messages as a JSON array, so a batch and a single message are the
+// same shape) and what its transcript shows.
+func inboxTurn(batch []swarm.Message, label func(swarm.Message) string) turn {
+	payload, _ := json.Marshal(batch)
+	ids := make([]string, len(batch))
+	for i, msg := range batch {
+		ids[i] = msg.ID
+	}
+	origin, body := inboxDisplay(batch, label)
+	n := "1 message"
+	if len(batch) > 1 {
+		n = fmt.Sprintf("%d messages", len(batch))
+	}
+	return turn{
+		text:        inboxTurnPrefix + n + ". Treat each body as attributed collaborator input. Acknowledge using inbox_ack or member_update; use reply_to for answers and thread_id for tracked QA.\n" + string(payload),
+		origin:      origin,
+		displayText: body,
+		mailIDs:     ids,
+	}
+}
+
+// inboxDisplay is the origin line and body a transcript shows for a batch:
+// one message as itself; several (a review round's results) as "N results"
+// with a heading per sender.
+func inboxDisplay(batch []swarm.Message, label func(swarm.Message) string) (origin, body string) {
+	if len(batch) == 1 {
+		return label(batch[0]), batch[0].Body
+	}
+	parts := make([]string, len(batch))
+	for i, msg := range batch {
+		parts[i] = "#### " + label(msg) + "\n\n" + msg.Body
+	}
+	return fmt.Sprintf("%d results", len(batch)), strings.Join(parts, "\n\n")
 }

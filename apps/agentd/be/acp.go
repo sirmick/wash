@@ -187,7 +187,7 @@ type hosted struct {
 type turn struct {
 	origin      string
 	displayText string
-	mailID      string
+	mailIDs     []string
 	text        string
 	blocks      []acp.ContentBlock
 }
@@ -499,7 +499,7 @@ func (h *hosted) watchExit() {
 	// The row first, so the status line changes colour before the note
 	// lands; then the note, which is what explains the colour.
 	if workspaces != nil {
-		_ = workspaces.store.TurnEnded(h.sessionID, "", true)
+		_ = workspaces.store.TurnEnded(h.sessionID, nil, true)
 		workspaces.signal()
 	}
 	h.endTurn("failed", "exited")
@@ -1431,7 +1431,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			return nil
 		}
 		if workspaces != nil {
-			_ = workspaces.store.TurnStopped(h.sessionID, "")
+			_ = workspaces.store.TurnStopped(h.sessionID, nil)
 		}
 		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
 		// A question the turn was blocked on goes with the turn: the

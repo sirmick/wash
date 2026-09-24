@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -18,6 +19,10 @@ type assignmentChange struct {
 	Text    string `json:"text,omitempty"`
 	Body    string `json:"body,omitempty"`
 	Request string `json:"request_id,omitempty"`
+	// CC copies a complete/fail result, as progress (which wakes nobody), to
+	// these members: a reviewer's findings reach the implementer they concern
+	// without the orchestrator retyping them into the fix assignment.
+	CC []string `json:"cc,omitempty"`
 }
 type messageChange struct {
 	Recipient  string          `json:"recipient"`
@@ -59,8 +64,20 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 			}
 			results = append(results, a)
 		case "complete", "fail":
+			if len(u.CC) > 8 {
+				return nil, errors.New("cc: at most 8 members")
+			}
 			if err := s.Complete(h.sessionID, u.ID, u.Body, u.Action == "fail"); err != nil {
 				return nil, err
+			}
+			for _, ref := range u.CC {
+				member, err := resolveMember(s, h.sessionID, ref)
+				if err != nil {
+					return nil, fmt.Errorf("cc %s: %w", ref, err)
+				}
+				if _, err := s.Send(h.sessionID, member, "progress", u.Body, "", u.ID, ""); err != nil {
+					return nil, fmt.Errorf("cc %s: %w", ref, err)
+				}
 			}
 			results = append(results, map[string]string{"id": u.ID, "action": u.Action})
 		default:
@@ -200,8 +217,9 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			Status  *string `json:"status,omitempty"`
 			Emoji   *string `json:"emoji,omitempty"`
 			Waiting *struct {
-				Reason string `json:"reason"`
-				Reply  string `json:"reply_to,omitempty"`
+				Reason string   `json:"reason"`
+				Reply  string   `json:"reply_to,omitempty"`
+				Until  []string `json:"until_assignments,omitempty"`
 			} `json:"waiting,omitempty"`
 			Acknowledge []string           `json:"acknowledge,omitempty"`
 			Results     []assignmentChange `json:"assignment_results,omitempty"`
@@ -276,6 +294,17 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 							return errors.New("unknown waiting correlation")
 						}
 					}
+					// A set of your own assignments to wait for as a whole: their
+					// results arrive together, in one turn, when the last resolves.
+					if len(p.Waiting.Until) > 64 {
+						return errors.New("until_assignments: at most 64")
+					}
+					for _, id := range p.Waiting.Until {
+						if !slices.ContainsFunc(w.Assignments, func(a swarm.Assignment) bool { return a.ID == id && a.Assigner == m.ID }) {
+							return fmt.Errorf("until_assignments: %s is not an assignment you created", id)
+						}
+					}
+					m.WaitingOn = slices.Clone(p.Waiting.Until)
 					m.WaitingFor, m.Waiting = p.Waiting.Reply, p.Waiting.Reason
 					for i := range w.Assignments {
 						if w.Assignments[i].Member == m.ID && w.Assignments[i].State == "active" {

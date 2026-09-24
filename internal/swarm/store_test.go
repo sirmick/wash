@@ -34,7 +34,7 @@ func TestInboxAcrossIdleAndRecovery(t *testing.T) {
 		t.Fatal(e)
 	}
 	first, e := s.Next("worker-session")
-	if e != nil || first == nil {
+	if e != nil || len(first) != 1 {
 		t.Fatalf("dispatch: %v %v", first, e)
 	}
 	q, e := s.Send("worker-session", w.Lead, "question", "Which timer?", "", a.ID, "")
@@ -46,11 +46,11 @@ func TestInboxAcrossIdleAndRecovery(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = s.TurnEnded("worker-session", first.ID, false); e != nil {
+	if e = s.TurnEnded("worker-session", []string{first[0].ID}, false); e != nil {
 		t.Fatal(e)
 	}
 	next, e := s.Next("worker-session")
-	if e != nil || next == nil || next.ID != answer.ID {
+	if e != nil || len(next) != 1 || next[0].ID != answer.ID {
 		t.Fatalf("lost early reply: %v %v", next, e)
 	}
 	if e = s.Complete("worker-session", a.ID, "Timer tests pass", false); e != nil {
@@ -74,7 +74,7 @@ func TestInboxAcrossIdleAndRecovery(t *testing.T) {
 			t.Fatalf("delivery = %s", m.State)
 		}
 	}
-	if next, e = restored.Next("worker-session"); e != nil || next != nil {
+	if next, e = restored.Next("worker-session"); e != nil || len(next) != 0 {
 		t.Fatal("replayed uncertain work")
 	}
 }
@@ -132,8 +132,8 @@ func TestStopRetainsMailAndEphemeralCompletionIsExplicit(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	_ = s.TurnEnded("worker-session", "", true)
-	if next, _ := s.Next("worker-session"); next != nil {
+	_ = s.TurnEnded("worker-session", nil, true)
+	if next, _ := s.Next("worker-session"); len(next) != 0 {
 		t.Fatal("paused member woke")
 	}
 	if messages := s.View("worker-session").Messages; len(messages) != 2 || messages[0].Assignment != a.ID || messages[0].State != "queued" || messages[1].Type != "lifecycle" {
@@ -141,7 +141,7 @@ func TestStopRetainsMailAndEphemeralCompletionIsExplicit(t *testing.T) {
 	}
 	_ = s.Mutate("worker-session", false, func(_ *Workspace, m *Member) error { m.State = "available"; return nil })
 	msg, _ := s.Next("worker-session")
-	_ = s.TurnEnded("worker-session", msg.ID, false)
+	_ = s.TurnEnded("worker-session", []string{msg[0].ID}, false)
 	if GetMember(s.View("worker-session"), "worker").Retire {
 		t.Fatal("turn end retired worker")
 	}
@@ -162,19 +162,19 @@ func TestLeadFailurePausesSwarmAndDeliveredMessageCanBeAcknowledged(t *testing.T
 	if _, err = s.Next("worker-session"); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.TurnEnded("worker-session", msg.ID, false); err != nil {
+	if err = s.TurnEnded("worker-session", []string{msg.ID}, false); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Acknowledge("worker-session", msg.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.TurnEnded("lead-session", "", true); err != nil {
+	if err = s.TurnEnded("lead-session", nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if s.View("worker-session").State != "paused" {
 		t.Fatal("orchestrator failure left swarm active")
 	}
-	if next, err := s.Next("worker-session"); err != nil || next != nil {
+	if next, err := s.Next("worker-session"); err != nil || len(next) != 0 {
 		t.Fatal("dispatch continued while paused")
 	}
 }
@@ -214,7 +214,7 @@ func TestDelegateEndingCancelsItsDecisionsAndRoutesChildResultToLead(t *testing.
 // pauses, as before.
 func TestStoppingTheLeadDoesNotPauseTheTeam(t *testing.T) {
 	s, _ := fixture(t)
-	if err := s.TurnStopped("lead-session", ""); err != nil {
+	if err := s.TurnStopped("lead-session", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.View("worker-session").State; got != "active" {
@@ -223,10 +223,10 @@ func TestStoppingTheLeadDoesNotPauseTheTeam(t *testing.T) {
 	if _, err := s.Send("lead-session", "worker", "instruction", "Work", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if next, err := s.Next("worker-session"); err != nil || next == nil {
+	if next, err := s.Next("worker-session"); err != nil || len(next) == 0 {
 		t.Fatal("dispatch stopped after the lead was interrupted", err)
 	}
-	if err := s.TurnStopped("worker-session", ""); err != nil {
+	if err := s.TurnStopped("worker-session", nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range s.View("worker-session").Members {

@@ -404,9 +404,9 @@ func promptHosted(h *hosted, t turn) (next turn) {
 		workspaces.captureUsage(h)
 		var end error
 		if err == nil && res.StopReason == acp.StopCancelled {
-			end = workspaces.store.TurnStopped(h.sessionID, t.mailID)
+			end = workspaces.store.TurnStopped(h.sessionID, t.mailIDs)
 		} else {
-			end = workspaces.store.TurnEnded(h.sessionID, t.mailID, err != nil)
+			end = workspaces.store.TurnEnded(h.sessionID, t.mailIDs, err != nil)
 		}
 		if e := end; e != nil {
 			log.Printf("agentd: workspace turn outcome: %v", e)

@@ -135,7 +135,7 @@ func TestSuccessfulConversationTurnPreservesConfigurationRevision(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.TurnEnded("lead", "", false); err != nil {
+	if err = s.TurnEnded("lead", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if s.View("lead").Revision != w.Revision {

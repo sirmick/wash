@@ -78,7 +78,13 @@ assignment and turn finish. Explicit `member_control` ends package residents at 
 or abandonment. Limits count idle residents; they do not consume model turns while waiting.
 
 `member_update` can acknowledge messages, complete assignments, update status and set
-`waiting:{reason,...}` together. Waiting returns immediately with an instruction to end
+`waiting:{reason,...}` together. `waiting.until_assignments` lists assignments the caller
+created: their results are held and delivered together, in one turn, once the last one
+completes or fails, so a review round wakes the orchestrator once rather than once per
+reviewer. A complete/fail result may `cc` members, who get a non-waking progress copy; a
+reviewer cc's the implementer so findings need not be retyped. Every inbox turn carries its
+messages as one JSON array. A queued assignment instruction whose assignment the assignee
+already resolved (it read the task early with inbox_read) is dropped, not re-delivered. Waiting returns immediately with an instruction to end
 the turn; actionable messages wake the member in a later turn. Never poll. Acknowledgment
 is not completion. question/answer/instruction wake; progress records without waking.
 

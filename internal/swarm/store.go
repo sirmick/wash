@@ -74,9 +74,14 @@ type Member struct {
 	Emoji       string `json:"emoji,omitempty"`
 	Waiting     string `json:"waiting,omitempty"`
 	WaitingFor  string `json:"waiting_for,omitempty"`
-	UpdatedAt   int64  `json:"status_updated_at,omitempty"`
-	CanSpawn    bool   `json:"can_spawn"`
-	Retire      bool   `json:"retire,omitempty"`
+	// WaitingOn is a set of assignments this member created and is waiting
+	// for as a whole: their results are held and delivered together in one
+	// turn once every one has completed or failed. One wake-up per review
+	// round instead of one per reviewer.
+	WaitingOn []string `json:"waiting_on,omitempty"`
+	UpdatedAt int64    `json:"status_updated_at,omitempty"`
+	CanSpawn  bool     `json:"can_spawn"`
+	Retire    bool     `json:"retire,omitempty"`
 }
 type Assignment struct {
 	ID       string `json:"id"`
@@ -512,54 +517,115 @@ func (s *Store) Complete(session, id, body string, failed bool) error {
 	})
 }
 
-// Next persists dispatch before ACP submission. Caller must reserve the session's
-// turn first. Crash between those operations is deliberately an uncertain delivery.
-func (s *Store) Next(session string) (*Message, error) {
-	var out *Message
+// Next persists dispatch before ACP submission and returns the batch one turn
+// delivers: normally one message, or every held result of a waiting set once
+// the whole set has resolved. Caller must reserve the session's turn first. A
+// crash between those operations is deliberately an uncertain delivery.
+func (s *Store) Next(session string) ([]Message, error) {
 	st := s.Snapshot()
 	w, m := find(&st, session)
 	if w == nil || w.State != "active" || m.State != "available" || m.Retire {
 		return nil, nil
 	}
-	has := false
-	for _, msg := range w.Messages {
-		if msg.Recipient == m.ID && msg.State == "queued" {
-			has = true
-			break
-		}
-	}
-	if !has {
+	// Decide on the snapshot first: Mutate bumps the workspace revision, and
+	// most calls here find nothing to deliver.
+	if batch, stale := pickDelivery(w, m); len(batch) == 0 && len(stale) == 0 {
 		return nil, nil
 	}
+	var out []Message
 	err := s.Mutate(session, false, func(w *Workspace, m *Member) error {
 		if w.State != "active" || m.State != "available" || m.Retire {
 			return nil
 		}
-		for i := range w.Messages {
-			msg := &w.Messages[i]
-			if msg.Recipient == m.ID && msg.State == "queued" {
-				msg.State = "dispatched"
-				m.Waiting = ""
-				m.WaitingFor = ""
-				for j := range w.Assignments {
-					if w.Assignments[j].Member == m.ID && w.Assignments[j].State == "blocked" {
-						w.Assignments[j].State = "active"
-					}
-				}
-				v := *msg
-				out = &v
-				for j := range w.Assignments {
-					if w.Assignments[j].ID == msg.Assignment && w.Assignments[j].State == "assigned" {
-						w.Assignments[j].State = "active"
-					}
-				}
-				break
+		batch, stale := pickDelivery(w, m)
+		for _, i := range stale {
+			w.Messages[i].State = "acknowledged"
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		m.Waiting = ""
+		m.WaitingFor = ""
+		if first := w.Messages[batch[0]]; first.Type == "result" && slices.Contains(m.WaitingOn, first.Assignment) {
+			m.WaitingOn = nil
+		}
+		for j := range w.Assignments {
+			if w.Assignments[j].Member == m.ID && w.Assignments[j].State == "blocked" {
+				w.Assignments[j].State = "active"
 			}
+		}
+		for _, i := range batch {
+			msg := &w.Messages[i]
+			msg.State = "dispatched"
+			for j := range w.Assignments {
+				if w.Assignments[j].ID == msg.Assignment && w.Assignments[j].Member == m.ID && w.Assignments[j].State == "assigned" {
+					w.Assignments[j].State = "active"
+				}
+			}
+			out = append(out, *msg)
 		}
 		return nil
 	})
 	return out, err
 }
+
+// pickDelivery chooses what m's next turn delivers, as indexes into
+// w.Messages, and which queued messages are stale.
+//
+// Stale: an assignment's instruction still queued after the assignee already
+// completed or failed that assignment. A member that reads its inbox in the
+// turn that delivers its role finds the queued task there and does it; wash
+// then used to dispatch the same task again ("late duplicate delivery"), one
+// wasted turn per member.
+//
+// Held: results for a WaitingOn set that has not fully resolved. When it has,
+// all of that set's queued results go out together.
+func pickDelivery(w *Workspace, m *Member) (batch, stale []int) {
+	resolved := func(id string) bool {
+		for _, a := range w.Assignments {
+			if a.ID == id {
+				return a.State == "completed" || a.State == "failed"
+			}
+		}
+		return true
+	}
+	setDone := len(m.WaitingOn) > 0
+	for _, id := range m.WaitingOn {
+		setDone = setDone && resolved(id)
+	}
+	first := -1
+	for i, msg := range w.Messages {
+		if msg.Recipient != m.ID || msg.State != "queued" {
+			continue
+		}
+		if msg.Type == "instruction" && msg.Assignment != "" && resolved(msg.Assignment) {
+			for _, a := range w.Assignments {
+				if a.ID == msg.Assignment && a.Member == m.ID {
+					stale = append(stale, i)
+				}
+			}
+			continue
+		}
+		inSet := msg.Type == "result" && slices.Contains(m.WaitingOn, msg.Assignment)
+		if inSet {
+			if setDone {
+				batch = append(batch, i)
+			}
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+	}
+	if len(batch) > 0 {
+		return batch, stale
+	}
+	if first >= 0 {
+		return []int{first}, stale
+	}
+	return nil, stale
+}
+
 func (s *Store) Acknowledge(session, id string) error {
 	return s.Mutate(session, false, func(w *Workspace, m *Member) error {
 		for i := range w.Messages {
@@ -568,7 +634,9 @@ func (s *Store) Acknowledge(session, id string) error {
 				if v.Recipient != m.ID {
 					return errors.New("message belongs to another member")
 				}
-				if v.State != "delivered" && v.State != "dispatched" && v.State != "acknowledged" && v.State != "recorded" {
+				// A queued message counts: a member may read it with inbox_read
+				// before wash dispatches it, act on it, and say so.
+				if v.State != "queued" && v.State != "delivered" && v.State != "dispatched" && v.State != "acknowledged" && v.State != "recorded" {
 					return errors.New("message not delivered")
 				}
 				v.State = "acknowledged"
@@ -578,8 +646,8 @@ func (s *Store) Acknowledge(session, id string) error {
 		return errors.New("unknown message")
 	})
 }
-func (s *Store) TurnEnded(session, messageID string, failed bool) error {
-	return s.turnEnded(session, messageID, failed, false)
+func (s *Store) TurnEnded(session string, messageIDs []string, failed bool) error {
+	return s.turnEnded(session, messageIDs, failed, false)
 }
 
 // TurnStopped is a turn the human stopped. For a member that is the same as
@@ -588,15 +656,15 @@ func (s *Store) TurnEnded(session, messageID string, failed bool) error {
 // halt the team. AGENT_SWARM.md pauses dispatch on orchestrator FAILURE;
 // observed live, treating a stop as one made eight member launches fail
 // "workspace paused" after the human interrupted to type a sentence.
-func (s *Store) TurnStopped(session, messageID string) error {
-	return s.turnEnded(session, messageID, true, true)
+func (s *Store) TurnStopped(session string, messageIDs []string) error {
+	return s.turnEnded(session, messageIDs, true, true)
 }
 
-func (s *Store) turnEnded(session, messageID string, failed, stopped bool) error {
+func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped bool) error {
 	// An ordinary successful turn changes no durable workspace state. In
 	// particular, reading workspace_get must not invalidate its own revision
 	// when that conversation turn ends.
-	if !failed && messageID == "" {
+	if !failed && len(messageIDs) == 0 {
 		return nil
 	}
 	if s.View(session) == nil {
@@ -616,7 +684,7 @@ func (s *Store) turnEnded(session, messageID string, failed, stopped bool) error
 		}
 		for i := range w.Messages {
 			v := &w.Messages[i]
-			if v.ID == messageID && v.State == "dispatched" {
+			if slices.Contains(messageIDs, v.ID) && v.State == "dispatched" {
 				if failed {
 					v.State = "uncertain"
 				} else {
