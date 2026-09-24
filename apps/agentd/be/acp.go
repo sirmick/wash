@@ -32,6 +32,7 @@ import (
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
 	"github.com/sirmick/wash/internal/pty"
+	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -1370,29 +1371,15 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	})
 
 	// agent_set_yolo: turn HOST-side auto-approval on or off for one
-	// session. Not persisted and not global — it dies with the session, so
+	// session. Not global and not in agents.json — it dies with the job, so
 	// "yolo for this one job" cannot silently become how the desktop
-	// behaves tomorrow. The transition itself is announced in the
-	// transcript, so the record shows when the guard came off.
+	// behaves tomorrow. For an ordinary session the job is the session; for
+	// a workspace member it is the workspace (see below). The transition
+	// itself is announced in the transcript.
 	sdk.HandleFromVoid(bus, "agent_set_yolo", func(_ *sdk.Conn, _ string, req yoloReq, _ wire.Sender) error {
-		h := lookupHosted(req.Key)
-		if h == nil {
-			return nil
+		if h := lookupHosted(req.Key); h != nil {
+			h.toggleYolo(req.On)
 		}
-		hostedMu.Lock()
-		changed := h.yolo != req.On
-		h.yolo = req.On
-		hostedMu.Unlock()
-		if !changed {
-			return nil
-		}
-		log.Printf("agentd: acp yolo key=%s on=%v", h.key, req.On)
-		msg := "Auto-approval (yolo) is OFF — wash will ask before tools run."
-		if req.On {
-			msg = "Auto-approval (yolo) is ON — wash will approve tool requests without asking."
-		}
-		h.note(msg)
-		h.republish()
 		return nil
 	})
 
@@ -1679,4 +1666,42 @@ func (h *hosted) noteSession(endReason string, now time.Time) {
 		s.Events = transcriptLen(h.key)
 	}
 	writeSummary(sid, s)
+}
+
+// setYolo turns host-side auto-approval on or off and says so in the
+// transcript, so the record shows when the guard came off. why, when set,
+// names who turned it on for a session nobody toggled by hand. Reports
+// whether anything changed.
+func (h *hosted) setYolo(on bool, why string) bool {
+	hostedMu.Lock()
+	changed := h.yolo != on
+	h.yolo = on
+	hostedMu.Unlock()
+	if !changed {
+		return false
+	}
+	log.Printf("agentd: acp yolo key=%s on=%v why=%q", h.key, on, why)
+	msg := "Auto-approval (yolo) is OFF — wash will ask before tools run."
+	if on {
+		msg = "Auto-approval (yolo) is ON — wash will approve tool requests without asking."
+	}
+	if why != "" {
+		msg += " (" + why + ")"
+	}
+	h.note(msg)
+	h.republish()
+	return true
+}
+
+// toggleYolo is the human's switch. A workspace member's answer is also
+// remembered on its member record, where a restart (which pauses a member,
+// not ends it) finds it again, and which ends with the workspace.
+func (h *hosted) toggleYolo(on bool) {
+	if !h.setYolo(on, "") || workspaces == nil {
+		return
+	}
+	_ = workspaces.store.Mutate(h.sessionID, false, func(_ *swarm.Workspace, m *swarm.Member) error {
+		m.AutoApprove = on
+		return nil
+	})
 }

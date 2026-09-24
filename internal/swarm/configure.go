@@ -32,6 +32,12 @@ func ValidateProfile(p AgentProfile) error {
 	if p.Capability != "" && p.Capability != "reviewer" {
 		return errors.New("unknown capability profile")
 	}
+	if p.Approval != "" && p.Approval != "ask" && p.Approval != "auto" {
+		return errors.New(`approval must be "ask" or "auto"`)
+	}
+	if p.Capability == "reviewer" && p.Approval == "auto" {
+		return errors.New("reviewer capability cannot be auto-approved")
+	}
 	if p.Capability == "reviewer" {
 		for id := range p.Configs {
 			if id == "mode" || id == "permission_mode" || id == "sandbox" {
@@ -145,6 +151,9 @@ func ResolveProfile(w *Workspace, name string, explicit AgentProfile, parentProv
 	}
 	if explicit.Capability != "" {
 		result.Capability = explicit.Capability
+	}
+	if explicit.Approval != "" {
+		result.Approval = explicit.Approval
 	}
 	if explicit.Model != "" {
 		result.Model = explicit.Model

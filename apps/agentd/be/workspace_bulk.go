@@ -27,6 +27,7 @@ func decodeWorkspace(raw json.RawMessage, out any) error {
 
 type memberSpec struct {
 	Capability   string            `json:"capability,omitempty"`
+	Approval     string            `json:"approval,omitempty"`
 	Name         string            `json:"name"`
 	Profile      string            `json:"profile,omitempty"`
 	Provider     string            `json:"provider,omitempty"`
@@ -76,6 +77,9 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	if len(p.Members) > 64 {
 		return nil, errors.New("maximum 64 member entries")
 	}
+	hostedMu.Lock()
+	callerAuto := h.yolo
+	hostedMu.Unlock()
 	// Validate paths before committing. No process starts during validation/preview.
 	root := h.cwd
 	approvedRoot := ""
@@ -345,7 +349,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					}
 					// Profile edits affect future launches; explicit launch overrides must still match.
 					old := prior.LaunchSettings
-					if old == nil || spec.Capability != "" && old.Capability != spec.Capability || spec.Provider != "" && old.Provider != spec.Provider || spec.Model != "" && old.Model != spec.Model || spec.Thinking != "" && old.Thinking != spec.Thinking {
+					if old == nil || spec.Capability != "" && old.Capability != spec.Capability || spec.Approval != "" && old.Approval != spec.Approval || spec.Provider != "" && old.Provider != spec.Provider || spec.Model != "" && old.Model != spec.Model || spec.Thinking != "" && old.Thinking != spec.Thinking {
 						return errors.New("existing member launch settings differ")
 					}
 					for id, val := range spec.Configs {
@@ -367,9 +371,15 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if live >= w.MaxMembers {
 					return errors.New("workspace member limit reached")
 				}
-				profile, settings, err := swarm.ResolveProfile(w, spec.Profile, swarm.AgentProfile{Capability: spec.Capability, Provider: spec.Provider, Model: spec.Model, Thinking: spec.Thinking, Configs: spec.Configs}, h.agent)
+				profile, settings, err := swarm.ResolveProfile(w, spec.Profile, swarm.AgentProfile{Capability: spec.Capability, Approval: spec.Approval, Provider: spec.Provider, Model: spec.Model, Thinking: spec.Thinking, Configs: spec.Configs}, h.agent)
 				if err != nil {
 					return err
+				}
+				// Children stay within the launcher's authority: only a session
+				// that is itself auto-approved can launch one that is, so no agent
+				// grants a teammate what the human has not granted it.
+				if settings.Approval == "auto" && !callerAuto {
+					return errors.New(`approval "auto" requires the configuring session to be auto-approved itself`)
 				}
 				if settings.Capability == "reviewer" && spec.CanSpawn {
 					return errors.New("reviewer capability cannot spawn agents")

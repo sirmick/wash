@@ -176,6 +176,19 @@ These are provider tool restrictions, not an OS sandbox or a claim about trusted
 hooks. Restrictions are immutable for a session and reapplied on resume; model/thinking
 remain configurable. No broad auto-approval or role-prompt enforcement is substituted.
 
+Wash's own `wash_workspace` coordination calls never ask the human, for any member: the
+bridge derives the caller from session credentials and enforces every role limit itself.
+Explicit host policy denies still win. Anything else a member does follows the host policy,
+then workspace-scoped rules, then the member's auto-approval, then the human.
+
+`approval:"auto"` on a profile or member definition launches that member with host
+auto-approval on (every approval narrated in its transcript; host policy denies still
+win). It is a grant, so only a session that is itself auto-approved can configure one:
+children stay within the launcher's authority. It cannot be combined with
+`capability:"reviewer"`. A member's auto-approval, set at launch or by the human's toggle
+on its tab, is kept on the member record, restored when a restart's paused member is
+resumed, and ends with the workspace.
+
 The sidebar's Needs you section shows pending approvals across all members, owner
 questions and QA save errors before plan/team navigation. Approval links open the correct
 member tab, where existing human controls answer the request.

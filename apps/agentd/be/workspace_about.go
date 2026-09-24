@@ -45,6 +45,13 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 		"filesystem_enforcement":       "unknown: provider-specific; not verified by Wash workspace discovery",
 		"reviewer_capability_profiles": map[string]any{"reviewer": map[string]any{"provider": "claude", "adapter": "@agentclientprotocol/claude-agent-acp", "verified_versions": []string{"0.79.0"}, "tools": []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "enforcement": "provider tool allowlist plus host write/terminal denial; not an OS sandbox"}, "codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported"},
 		"active_capability":            h.capability,
+		"approval_profiles": map[string]any{
+			"values":   []string{"ask", "auto"},
+			"auto":     "host auto-approval from launch; host policy denies still win; every approval is narrated in the member's transcript",
+			"granting": "only a session that is itself auto-approved can configure an auto member (children stay within the launcher's authority)",
+			"lifetime": "kept on the member across a wash restart and restored on resume; ends with the workspace",
+			"reviewer": "capability reviewer cannot be combined with auto",
+		},
 	}
 	// Workspace-scoped approvals, reported because an agent reasoning about
 	// what it may do should not have to infer it from which prompts it

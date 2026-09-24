@@ -145,3 +145,27 @@ func TestSuccessfulConversationTurnPreservesConfigurationRevision(t *testing.T) 
 		t.Fatal(err)
 	}
 }
+
+func TestApprovalProfileValidatesAndResolves(t *testing.T) {
+	for _, c := range []struct {
+		p  AgentProfile
+		ok bool
+	}{
+		{AgentProfile{Provider: "claude"}, true},
+		{AgentProfile{Provider: "claude", Approval: "ask"}, true},
+		{AgentProfile{Provider: "claude", Approval: "auto"}, true},
+		{AgentProfile{Provider: "claude", Approval: "yolo"}, false},
+		{AgentProfile{Provider: "claude", Approval: "auto", Capability: "reviewer"}, false},
+	} {
+		if err := ValidateProfile(c.p); (err == nil) != c.ok {
+			t.Errorf("%+v: err=%v, want ok=%v", c.p, err, c.ok)
+		}
+	}
+	w := &Workspace{Profiles: map[string]AgentProfile{"pleb": {Provider: "claude", Approval: "auto"}}}
+	if _, got, err := ResolveProfile(w, "pleb", AgentProfile{}, "claude"); err != nil || got.Approval != "auto" {
+		t.Fatalf("profile approval lost: %+v %v", got, err)
+	}
+	if _, got, err := ResolveProfile(w, "pleb", AgentProfile{Approval: "ask"}, "claude"); err != nil || got.Approval != "ask" {
+		t.Fatalf("member override ignored: %+v %v", got, err)
+	}
+}

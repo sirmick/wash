@@ -28,11 +28,14 @@ type Item struct {
 
 // AgentProfile describes launch settings and an optional enforced capability profile.
 type AgentProfile struct {
-	Capability string            `json:"capability,omitempty"`
-	Provider   string            `json:"provider"`
-	Model      string            `json:"model,omitempty"`
-	Thinking   string            `json:"thinking,omitempty"`
-	Configs    map[string]string `json:"configs,omitempty"`
+	Capability string `json:"capability,omitempty"`
+	// Approval "auto" launches the member with host auto-approval on; ""
+	// and "ask" leave every unmatched tool call to the human.
+	Approval string            `json:"approval,omitempty"`
+	Provider string            `json:"provider"`
+	Model    string            `json:"model,omitempty"`
+	Thinking string            `json:"thinking,omitempty"`
+	Configs  map[string]string `json:"configs,omitempty"`
 }
 type Usage struct {
 	Used int64 `json:"used"`
@@ -48,21 +51,27 @@ type Member struct {
 	Profile        string            `json:"profile,omitempty"`
 	LaunchSettings *AgentProfile     `json:"launch_settings,omitempty"`
 	InitialConfigs map[string]string `json:"initial_configs,omitempty"`
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Provider       string            `json:"provider"`
-	Cwd            string            `json:"cwd"`
-	Session        string            `json:"session_id"`
-	Creator        string            `json:"creator"`
-	Lifetime       string            `json:"lifetime"`
-	State          string            `json:"state"`
-	Status         string            `json:"status,omitempty"`
-	Emoji          string            `json:"emoji,omitempty"`
-	Waiting        string            `json:"waiting,omitempty"`
-	WaitingFor     string            `json:"waiting_for,omitempty"`
-	UpdatedAt      int64             `json:"status_updated_at,omitempty"`
-	CanSpawn       bool              `json:"can_spawn"`
-	Retire         bool              `json:"retire,omitempty"`
+	// AutoApprove is whether host auto-approval is on for this member now:
+	// set from Approval at launch, and by the human's toggle afterwards.
+	// Kept here, not on the session, so a restart (which pauses rather
+	// than ends a member) does not silently switch it off; it ends with
+	// the workspace, never outliving the job it was granted for.
+	AutoApprove bool   `json:"auto_approve,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Provider    string `json:"provider"`
+	Cwd         string `json:"cwd"`
+	Session     string `json:"session_id"`
+	Creator     string `json:"creator"`
+	Lifetime    string `json:"lifetime"`
+	State       string `json:"state"`
+	Status      string `json:"status,omitempty"`
+	Emoji       string `json:"emoji,omitempty"`
+	Waiting     string `json:"waiting,omitempty"`
+	WaitingFor  string `json:"waiting_for,omitempty"`
+	UpdatedAt   int64  `json:"status_updated_at,omitempty"`
+	CanSpawn    bool   `json:"can_spawn"`
+	Retire      bool   `json:"retire,omitempty"`
 }
 type Assignment struct {
 	ID       string `json:"id"`
@@ -91,12 +100,12 @@ type Document struct {
 	Title string `json:"title"`
 }
 type Workspace struct {
-	QAOriginalHash string                  `json:"qa_original_hash,omitempty"`
-	QADocumentID   string                  `json:"qa_document_id,omitempty"`
-	QAPreamble     string                  `json:"qa_preamble,omitempty"`
-	QAAuthors      map[string]string       `json:"qa_authors,omitempty"`
-	QADocument     *Document               `json:"qa_document,omitempty"`
-	QA             []QAThread              `json:"qa"`
+	QAOriginalHash string            `json:"qa_original_hash,omitempty"`
+	QADocumentID   string            `json:"qa_document_id,omitempty"`
+	QAPreamble     string            `json:"qa_preamble,omitempty"`
+	QAAuthors      map[string]string `json:"qa_authors,omitempty"`
+	QADocument     *Document         `json:"qa_document,omitempty"`
+	QA             []QAThread        `json:"qa"`
 	// Approvals apply to every member of this workspace, whatever its cwd.
 	// Members work in worktrees the orchestrator chooses, and those are as
 	// often siblings of project_root as children of it, so a path-scoped

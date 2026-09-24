@@ -347,3 +347,59 @@ func TestLeadResumesItselfAfterRestart(t *testing.T) {
 		}
 	}
 }
+
+// approval "auto" is a grant, so only a launcher that holds it may give it,
+// and a member's auto-approval (launched or toggled) survives a restart.
+func TestAutoApprovalIsBoundedByTheLauncherAndSurvivesRestart(t *testing.T) {
+	withState(t, 1)
+	path := filepath.Join(t.TempDir(), "state.json")
+	s, err := swarm.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	w, err := s.Setup("lead", "claude", root, "Team", root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := workspaces
+	workspaces = &workspaceService{store: s}
+	defer func() { workspaces = old }()
+	h := &hosted{key: "workspace-auto-test", sessionID: "lead", agent: "claude", cwd: root}
+	h.sessionReady.Store(true)
+	hostedMu.Lock()
+	hostedAll[h.key] = h
+	hostedMu.Unlock()
+	defer func() { hostedMu.Lock(); delete(hostedAll, h.key); hostedMu.Unlock() }()
+	configure := func() error {
+		raw, _ := json.Marshal(map[string]any{"preview": true, "members": map[string]any{"impl": map[string]any{"name": "Impl", "lifetime": "resident", "instructions": "Implement", "approval": "auto"}}})
+		_, err := workspaces.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: raw})
+		return err
+	}
+	if err := configure(); err == nil {
+		t.Fatal("a session that asks its human granted a member auto-approval")
+	}
+	h.toggleYolo(true)
+	if err := configure(); err != nil {
+		t.Fatalf("auto-approved launcher refused: %v", err)
+	}
+	if !swarm.GetMember(s.View("lead"), w.Lead).AutoApprove {
+		t.Fatal("the human's toggle was not remembered on the member")
+	}
+	// Restart: the process forgets, the store does not.
+	if s, err = swarm.Open(path); err != nil {
+		t.Fatal(err)
+	}
+	workspaces.store = s
+	h.setYolo(false, "")
+	raw, _ := json.Marshal(map[string]any{"action": "resume", "member_ids": []string{w.Lead}})
+	if _, err := workspaces.call(context.Background(), h, workspacemcp.Call{Name: "member_control", Arguments: raw}); err != nil {
+		t.Fatal(err)
+	}
+	hostedMu.Lock()
+	yolo := h.yolo
+	hostedMu.Unlock()
+	if !yolo {
+		t.Fatal("auto-approval was not restored when the member resumed")
+	}
+}

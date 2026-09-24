@@ -8,13 +8,13 @@ func Tools() []Tool {
 	array := func(items any) any { return map[string]any{"type": "array", "items": items, "maxItems": 100} }
 	enum := func(values ...string) any { return map[string]any{"type": "string", "enum": values} }
 	configs := map[string]any{"type": "object", "additionalProperties": str}
-	profile := schema(map[string]any{"capability": enum("reviewer"), "provider": str, "model": str, "thinking": str, "configs": configs}, "provider")
+	profile := schema(map[string]any{"capability": enum("reviewer"), "approval": enum("ask", "auto"), "provider": str, "model": str, "thinking": str, "configs": configs}, "provider")
 	nullable := func(s any) any { return map[string]any{"anyOf": []any{s, field("null")}} }
 	qa := schema(map[string]any{"id": str, "action": enum("open", "reply", "assign", "block", "resolve", "reopen"), "package": str, "title": str, "assignee": str, "body": str, "blocking": boolean, "expected_revision": integer, "decision_refs": strings, "evidence": str}, "id", "action")
 	msgProps := map[string]any{"recipient": str, "type": enum("instruction", "question", "answer", "progress"), "body": str, "reply_to": str, "assignment_id": str, "request_id": str, "thread_id": str, "qa": qa}
 	msg := schema(msgProps, "recipient", "type", "body")
 	assignment := schema(map[string]any{"action": enum("create", "complete", "fail"), "id": str, "member_id": str, "text": str, "body": str, "request_id": str}, "action")
-	member := schema(map[string]any{"name": str, "profile": str, "capability": enum("reviewer"), "provider": str, "model": str, "thinking": str, "configs": configs, "cwd": str, "instructions": str, "lifetime": enum("resident", "ephemeral"), "task": str, "can_spawn": boolean, "package": str, "role": enum("architect", "implementer", "reviewer")}, "name", "instructions", "lifetime")
+	member := schema(map[string]any{"name": str, "profile": str, "capability": enum("reviewer"), "approval": enum("ask", "auto"), "provider": str, "model": str, "thinking": str, "configs": configs, "cwd": str, "instructions": str, "lifetime": enum("resident", "ephemeral"), "task": str, "can_spawn": boolean, "package": str, "role": enum("architect", "implementer", "reviewer")}, "name", "instructions", "lifetime")
 	item := schema(map[string]any{"text": str, "emoji": str, "state": enum("pending", "active", "blocked", "done")})
 	messageInput := map[string]any{"messages": array(msg), "request_id": str}
 	// One message and a batch share the same tool.

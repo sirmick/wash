@@ -558,6 +558,11 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		})
 		return nil, err
 	}
+	// Before the member is available, so its first turn is already covered.
+	autoApprove := settings.Approval == "auto"
+	if autoApprove {
+		child.setYolo(true, "launched with approval \"auto\"")
+	}
 	var initialAssignment *swarm.Assignment
 	err = ws.store.Mutate(parent.sessionID, false, func(w *swarm.Workspace, _ *swarm.Member) error {
 		if w.State != "active" || w.ID != workspaceID {
@@ -570,6 +575,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		v.Session = child.sessionID
 		v.LaunchSettings = &settings
 		v.InitialConfigs = initialConfigs
+		v.AutoApprove = autoApprove
 		v.State = "available"
 		member = *v
 		// Queue the role before assignments, using the same durable dispatch and
@@ -634,6 +640,10 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 		}
 		defer finishResume(m.Session)
 	}
+	const restored = "restored: this workspace member was auto-approved before the restart"
+	if action == "member_resume" && target != nil && m.AutoApprove {
+		target.setYolo(true, restored)
+	}
 	err := ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, self *swarm.Member) error {
 		if self.ID != w.Lead && self.ID != id {
 			return errors.New("only self or orchestrator may pause/resume")
@@ -693,6 +703,9 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 			}); cerr != nil {
 				log.Printf("agentd: workspace resume member=%s: launch settings not reapplied: %v", id, cerr)
 			}
+		}
+		if err == nil && m.AutoApprove {
+			target.setYolo(true, restored)
 		}
 		loadErr := err
 		err = ws.store.Mutate(h.sessionID, false, func(current *swarm.Workspace, _ *swarm.Member) error {
