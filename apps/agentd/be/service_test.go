@@ -13,7 +13,7 @@ func reset() {
 	rows = map[string]*row{}
 }
 
-// put is what the agent_status handler does to the roster, minus the SDK.
+// put installs a roster row with explicit clocks.
 func put(key string, r Row, lastSeen, stateSince time.Time) {
 	rows[key] = &row{Row: r, lastSeen: lastSeen, stateSince: stateSince}
 }
@@ -106,37 +106,6 @@ func TestSweepAges(t *testing.T) {
 				t.Errorf("stale = %v, want %v after %v", r.Stale, c.wantStale, c.age)
 			}
 		})
-	}
-}
-
-// A keepalive for an unchanged state must not restart the elapsed clock —
-// otherwise "waiting 5 minutes" would read as "waiting 15 seconds"
-// forever, which is exactly the number the roster exists to show.
-func TestKeepaliveKeepsTheClock(t *testing.T) {
-	reset()
-	put("a:1", Row{Key: "a:1", Agent: "claude", State: "needs-input"}, t0, t0)
-
-	// Simulate the handler's decision for a same-state re-statement.
-	now := t0.Add(2 * time.Minute)
-	r := rows["a:1"]
-	if r.State == "needs-input" && r.Reason == "" {
-		// unchanged → stateSince untouched, lastSeen refreshed
-		r.lastSeen = now
-	}
-	if got := publish(now)[0].SinceMS; got != 120_000 {
-		t.Errorf("since_ms = %d, want 120000 (the clock restarted)", got)
-	}
-}
-
-func TestRowKeyIsPerTab(t *testing.T) {
-	if rowKey("i-7", 3) == rowKey("i-7", 4) {
-		t.Error("two tabs of one terminal share a key")
-	}
-	if rowKey("i-7", 3) == rowKey("i-8", 3) {
-		t.Error("two terminals' tabs share a key")
-	}
-	if got := rowKey("i-7", 42); got != "i-7:42" {
-		t.Errorf("rowKey = %q", got)
 	}
 }
 

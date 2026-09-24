@@ -26,12 +26,11 @@ import (
 	"strings"
 )
 
+// Request is one tool call the host policy decides.
 type Request struct {
-	SessionID      string         `json:"session_id"`
-	ToolName       string         `json:"tool_name"`
-	ToolInput      map[string]any `json:"tool_input"`
-	Cwd            string         `json:"cwd"`
-	PermissionMode string         `json:"permission_mode"`
+	ToolName  string
+	ToolInput map[string]any
+	Cwd       string
 }
 
 // Response is wash's answer. Rule is the matched rule's text, for

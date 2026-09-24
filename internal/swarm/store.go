@@ -182,15 +182,6 @@ func Open(path string) (*Store, error) {
 	err = s.change(func(st *State) error {
 		for i := range st.Workspaces {
 			w := &st.Workspaces[i]
-			if w.Profiles == nil {
-				w.Profiles = map[string]AgentProfile{}
-			}
-			if w.MaxActive == 0 {
-				w.MaxActive = 4
-			}
-			if w.MaxMembers == 0 {
-				w.MaxMembers = 16
-			}
 			if w.State == "ended" {
 				continue
 			}

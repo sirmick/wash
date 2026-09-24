@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -205,38 +204,6 @@ func publishHistory() []Session {
 	return out
 }
 
-// resumeArgv is the command a Resume/Fork click runs. Pure, so what gets
-// executed is a table in the tests rather than a string built at a call
-// site.
-//
-// The agent is exec'd from a login shell so it inherits the user's real
-// PATH, and the shell is given the session's directory — resuming into
-// the wrong tree would be worse than not resuming at all. Single quotes
-// are escaped the POSIX way ('\”) because a path or session id is
-// attacker-adjacent data (it came off a hook payload).
-func resumeArgv(shell, agent, sessionID, cwd string, fork bool) []string {
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	if agent == "" {
-		agent = "claude"
-	}
-	cmd := shQuote(agent) + " --resume " + shQuote(sessionID)
-	if fork {
-		cmd += " --fork-session"
-	}
-	if cwd != "" {
-		cmd = "cd " + shQuote(cwd) + " && exec " + cmd
-	} else {
-		cmd = "exec " + cmd
-	}
-	return []string{shell, "-c", cmd}
-}
-
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 var (
 	resumeMu      sync.Mutex
 	resumeFlights = map[string]bool{}
@@ -323,19 +290,6 @@ func resolveResumeTarget(sessionID string) (Session, bool) {
 	for i := range history {
 		if history[i].SessionID == sessionID {
 			s := history[i]
-			// The transcript header is authoritative for launch identity.
-			// Fill holes left by an older or partially recovered history
-			// index instead of sending an empty agent to resumeHosted.
-			if s.Agent == "" || s.Cwd == "" {
-				if m, ok := readSessionMeta(transcriptPath(sessionID)); ok {
-					if s.Agent == "" {
-						s.Agent = m.Agent
-					}
-					if s.Cwd == "" {
-						s.Cwd = m.Cwd
-					}
-				}
-			}
 			return s, s.Agent != ""
 		}
 	}

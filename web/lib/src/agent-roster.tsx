@@ -41,9 +41,6 @@ export interface RosterRow {
   dir?: string;
   branch?: string;
   dirty?: boolean;
-  term_instance: string;
-  window_id: number;
-  channel_id: number;
   /** elapsed in this state as of the push; anchored locally by the App */
   since_ms: number;
   // The rest of what agentd publishes per row (apps/agentd/be/app.go).
@@ -142,9 +139,6 @@ export interface RosterAsk {
    *  the workspace-scoped "always" answer covers */
   workspace_name?: string;
   row_key: string;
-  /** who asked — attribution only; the answer routes by `id` in agentd */
-  source_app?: string;
-  source_instance?: string;
   age_ms: number;
 }
 

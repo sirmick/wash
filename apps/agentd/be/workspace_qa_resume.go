@@ -122,8 +122,7 @@ func readQAArchive(path string) (*qaArchive, error) {
 	if bytes.Contains(b, []byte("<!-- wash-qa-checkpoint")) {
 		return nil, errors.New("unsupported or damaged QA checkpoint; original file preserved")
 	}
-	// Ordinary Markdown and older exports remain visible verbatim. Old exports
-	// with a matching durable store are upgraded from that store by configure.
+	// Ordinary Markdown is preserved verbatim as the preamble.
 	return &qaArchive{OriginalHash: fmt.Sprintf("%x", sha256.Sum256(b)), Preamble: string(b), Authors: map[string]string{}}, nil
 }
 func restoreQA(w *swarm.Workspace, a *qaArchive) error {

@@ -404,3 +404,18 @@ Logs: `/data/wash-agent-swarm/test-results/review-{race,components,e2e,build,vet
 Root filesystem usage stayed unchanged (6.4 GiB free); `/data` had 11 GiB free after
 build/test. The running desktop was not restarted or installed over. Redoubt PROJECT
 and SWARM guidance now describes reopening and capability limits; Claims remains intact.
+
+## API 3; remaining compatibility removed (2026-09-24)
+
+API 3.0.0 advertises eleven tools: `inbox_ack` and `member_update.acknowledge` are gone, since a
+message is delivered when the turn carrying it ends cleanly and nothing read the extra label.
+Results and a member's messages to the orchestrator are capped at 2000 bytes. Unit tests and
+the five `agent-workspace` e2e specs pass; the e2e fake now reads batched inbox turns (it had
+silently handled none since the batch format landed).
+
+Also removed, with nothing on disk depending on them: the terminal-tier roster and ask verbs
+(`agent_status`, `agent_gone`, `agent_ask`) and the row/ask fields only they set; the
+`claude --resume` argv builder; the `agent_pty_spike` verb and spec; `transcript_unsubscribe`;
+store-open defaults for profiles and member limits; the spawn guard for members reserved without
+launch settings; history repair from transcript headers; unused hook fields on
+`agentpolicy.Request`. Not live-verified against the running Redoubt workspace.

@@ -1,22 +1,19 @@
 // Interactive approval (docs/AGENT_TERM.md §12, M6).
 //
-// M3 let a terminal answer a permission request from a static rule table.
-// The table is the hard part — nobody writes one up front, and the
-// questions arrive while you are somewhere else in the desktop. So when
-// the policy has no answer, the terminal asks agentd, agentd puts the
-// question in the roster the sidebar is already rendering, and whatever
-// the human clicks travels back down the same path.
+// When the host policy has no answer for a hosted session's tool call, the
+// question joins the roster the desktop is already rendering, and whatever
+// the human clicks goes back to the waiting call.
 //
 // Three properties this file exists to guarantee:
 //
 //   - **Nobody home ⇒ no stall.** With no subscribers (headless box, no
-//     browser attached) the answer is an immediate `defer`, which is
-//     exactly M3's behaviour: the agent's own prompt appears.
-//   - **Every path ends in an answer.** Answered, timed out, terminal
+//     browser attached) the answer is an immediate `defer`: the agent's
+//     own handling applies.
+//   - **Every path ends in an answer.** Answered, timed out, session
 //     gone, service restarted — the requester always hears something, or
 //     its own deadline fires. Nothing is left hanging.
 //   - **Deny is the only thing cheaper than allow.** Everything unknown
-//     resolves to `defer` (ask the human in the terminal), never to allow.
+//     resolves to `defer`, never to allow.
 package agentd
 
 import (
@@ -127,12 +124,6 @@ type Ask struct {
 	// alongside the global "always". The ID is deliberately NOT sent: the
 	// answer names a scope, never a target (see the answer path).
 	WorkspaceName string `json:"workspace_name,omitempty"`
-	// SourceApp / SourceInstance name the producer, for display and
-	// attribution only. The reply route is the closure on `pending`, never
-	// these — a question from a session agentd hosts itself has no
-	// instance to message.
-	SourceApp      string `json:"source_app,omitempty"`
-	SourceInstance string `json:"source_instance,omitempty"`
 	// AgeMS is how long it has been waiting, as of the push.
 	AgeMS int64 `json:"age_ms"`
 }
@@ -166,7 +157,6 @@ type pending struct {
 type askSpec struct {
 	Agent, Tool, Subject, Cwd string
 	RowKey                    string
-	SourceApp, SourceInstance string
 	// Workspace is resolved when the question is ASKED, not when it is
 	// answered: the member that asked may have been ended or replaced by
 	// then, and the answer must still land on the right table.
@@ -256,23 +246,6 @@ var askSeq uint64
 
 // registerAskHandlers installs the M6 verbs on the service bus.
 func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
-	// agent_ask: a terminal has a request its policy can't answer.
-	sdk.HandleFromVoid(bus, "agent_ask", func(conn *sdk.Conn, _ string, req askReq, from wire.Sender) error {
-		if from.InstanceID == "" || req.ReqID == "" {
-			return nil
-		}
-		enqueueAsk(askSpec{
-			Agent:          req.Agent,
-			Tool:           req.Tool,
-			Subject:        req.Subject,
-			Cwd:            req.Cwd,
-			RowKey:         rowKey(from.InstanceID, req.ChannelID),
-			SourceApp:      "com.wash.term",
-			SourceInstance: from.InstanceID,
-		}, replyToInstance(conn, from.InstanceID, req.ReqID))
-		return nil
-	})
-
 	// agent_answer: the human clicked. Comes from the session BE gateway,
 	// which is the desktop speaking for the person in front of it.
 	sdk.HandleFromVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req answerReq, _ wire.Sender) error {
@@ -365,18 +338,16 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 		id := "ask-" + itoa(askSeq)
 		p := &pending{
 			Ask: Ask{
-				ID:             id,
-				Agent:          spec.Agent,
-				Tool:           spec.Tool,
-				Subject:        spec.Subject,
-				Cwd:            spec.Cwd,
-				Dir:            dirLabel(spec.Cwd),
-				SuggestedRule:  agentpolicy.SuggestRule(spec.Tool, spec.Subject, spec.Cwd),
-				RuleCwd:        agentpolicy.RuleScope(spec.Tool, spec.Cwd),
-				WorkspaceName:  spec.WorkspaceName,
-				RowKey:         spec.RowKey,
-				SourceApp:      spec.SourceApp,
-				SourceInstance: spec.SourceInstance,
+				ID:            id,
+				Agent:         spec.Agent,
+				Tool:          spec.Tool,
+				Subject:       spec.Subject,
+				Cwd:           spec.Cwd,
+				Dir:           dirLabel(spec.Cwd),
+				SuggestedRule: agentpolicy.SuggestRule(spec.Tool, spec.Subject, spec.Cwd),
+				RuleCwd:       agentpolicy.RuleScope(spec.Tool, spec.Cwd),
+				WorkspaceName: spec.WorkspaceName,
+				RowKey:        spec.RowKey,
 			},
 			workspaceID:  spec.WorkspaceID,
 			asked:        now,
@@ -504,21 +475,6 @@ func cancelAsksFor(rowKey, why string) int {
 	return len(dropped)
 }
 
-// replyToInstance is the reply route for a question that arrived over the
-// router: an ask_result app_msg back to the instance that asked. The
-// terminal tier's route today; any future app that asks on someone's
-// behalf uses the same one.
-func replyToInstance(conn *sdk.Conn, instance, reqID string) replyFn {
-	return func(decision, why string) error {
-		return conn.SendAppMsgTo(wire.Recipient{InstanceID: instance}, map[string]any{
-			"kind":     "ask_result",
-			"req_id":   reqID,
-			"decision": decision,
-			"rule":     why,
-		})
-	}
-}
-
 // publishAsks renders the pending list for the sidebar, oldest first —
 // the person waiting longest is the one to answer first. Called inside
 // Mutate; builds a fresh slice (copy-on-write, per the race gate).
@@ -567,15 +523,6 @@ func normalizeAnswer(d string) string {
 		return DecisionDeny
 	}
 	return DecisionDefer
-}
-
-type askReq struct {
-	ReqID     string `json:"req_id"`
-	ChannelID uint64 `json:"channel_id"`
-	Agent     string `json:"agent"`
-	Tool      string `json:"tool"`
-	Subject   string `json:"subject"`
-	Cwd       string `json:"cwd"`
 }
 
 type answerReq struct {

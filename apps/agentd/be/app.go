@@ -1,34 +1,12 @@
-// Package agentd is wash-agentd (com.wash.agentd) — the coding-agent
-// roster (docs/AGENT_TERM.md §7). It is a singleton background service
-// holding one row per agent wash can see, across every terminal window on
-// the box, so the desktop can answer "what are my agents doing?" in one
-// place instead of one tab chip at a time.
+// Package agentd is wash-agentd (com.wash.agentd): the singleton service
+// that hosts coding agents over ACP, and the roster of them the desktop
+// shows. One row per hosted session, so "what are my agents doing?" has one
+// answer across every Agent window.
 //
-// It owns no agents and talks to none: wash-term is the producer (it is
-// the process that owns the pty and therefore the only thing that knows),
-// and the session sidebar is the consumer. That is what earns this a
-// service rather than a library — N terminal processes producing, the
-// sidebar (and later the policy audit) consuming, with no way for the
-// producers to see each other otherwise.
-//
-// Wire shape — inbound from a terminal (cross-app, From router-attested):
-//
-//	{kind:"agent_status", channel_id, window_id, agent, state, reason,
-//	                      session_id, cwd, since_ms}
-//	{kind:"agent_gone",   channel_id}
-//
-// Wire shape — inbound from a subscriber (the session gateway):
-//
-//	{kind:"subscribe"} / {kind:"unsubscribe"}
-//
-// Wire shape — state pushed to subscribers (sdk.StateService):
-//
-//	{kind:"state", state:{ rows:[…] }}
-//
-// Liveness is the service's own job: a terminal that crashes never says
-// goodbye, so rows carry a last-seen stamp, go stale after
-// staleAfter, and are dropped after dropAfter. A dead window can leave a
-// grey row for a minute; it can never leave a ghost.
+// Subscribers (the session gateway, Agent windows) send {kind:"subscribe"}
+// / {kind:"unsubscribe"} and receive {kind:"state", state:{rows:[…], …}}
+// through sdk.StateService. A session that has exited keeps its row, greyed,
+// until the sweep drops it.
 package agentd
 
 import (
@@ -89,11 +67,6 @@ type Row struct {
 	// cached — never from the agent's hooks (§7).
 	Branch string `json:"branch,omitempty"`
 	Dirty  bool   `json:"dirty,omitempty"`
-	// TermInstance + WindowID address the owning terminal window, so a
-	// click on the row can focus it.
-	TermInstance string `json:"term_instance"`
-	WindowID     uint64 `json:"window_id"`
-	ChannelID    uint64 `json:"channel_id"`
 	// SinceMS is how long the row has been in this state, as of the push.
 	// The FE anchors its own clock to it (no cross-clock comparison).
 	SinceMS int64 `json:"since_ms"`

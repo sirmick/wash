@@ -560,21 +560,6 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 		// unbounded server-side, so replay is chunked into bounded frames.
 		return sendTranscriptSnapshot(conn, from.InstanceID, req.Key)
 	})
-
-	sdk.HandleFromVoid(bus, "transcript_unsubscribe", func(_ *sdk.Conn, _ string, req transReq, from wire.Sender) error {
-		if from.InstanceID == "" {
-			return nil
-		}
-		transMu.Lock()
-		if subs := transSubs[req.Key]; subs != nil {
-			delete(subs, from.InstanceID)
-			if len(subs) == 0 {
-				delete(transSubs, req.Key)
-			}
-		}
-		transMu.Unlock()
-		return nil
-	})
 }
 
 // affirmWatcher records that instance is watching key as of now, and

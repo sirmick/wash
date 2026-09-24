@@ -296,9 +296,9 @@ func TestWorkspaceReplayPreservesVerifiedProvenance(t *testing.T) {
 }
 
 func TestRemovedWorkspaceToolCannotBypassMCPBridge(t *testing.T) {
-	// Even a direct backend caller cannot reach a hidden compatibility path.
+	// A direct backend caller gets the same catalogue as the bridge.
 	ws := &workspaceService{}
-	for _, name := range []string{"setup_workspace", "member_spawn", "plan_set", "member_wait", "teardown_workspace"} {
+	for _, name := range []string{"inbox_ack", "no_such_tool"} {
 		if _, err := ws.call(context.Background(), &hosted{}, workspacemcp.Call{Name: name, Arguments: json.RawMessage(`{}`)}); err == nil || !strings.Contains(err.Error(), "unknown workspace tool") {
 			t.Fatalf("%s: %v", name, err)
 		}

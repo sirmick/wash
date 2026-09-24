@@ -15,9 +15,6 @@ const row = (over: Partial<RosterRow> = {}): RosterRow => ({
   key: 'i-1:5',
   agent: 'claude',
   state: 'working',
-  term_instance: 'i-1',
-  window_id: 1,
-  channel_id: 5,
   since_ms: 0,
   ...over,
 });
@@ -85,14 +82,14 @@ test('running preview is bounded to two transcript lines', () => {
   expect(preview.style.getPropertyValue('-webkit-line-clamp')).toBe('2');
 });
 
-test('clicking a row asks to focus that agent’s terminal', () => {
-  const rows = [row({ key: 'a' }), row({ key: 'b', term_instance: 'i-2' })];
+test('clicking a row activates that session', () => {
+  const rows = [row({ key: 'a' }), row({ key: 'b' })];
   const seen: string[] = [];
   const { getByTestId } = render(() => (
-    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={(r) => seen.push(r.term_instance)} />
+    <AgentRoster rows={() => rows} startedAt={at} now={() => 0} onActivate={(r) => seen.push(r.key)} />
   ));
   fireEvent.click(getByTestId('agents-row-b'));
-  expect(seen).toEqual(['i-2']);
+  expect(seen).toEqual(['b']);
 });
 
 test('state language matches the terminal’s own tab dot', () => {
@@ -128,7 +125,6 @@ const ask = (over: Partial<RosterAsk> = {}): RosterAsk => ({
   dir: 'wash',
   suggested_rule: 'Bash(git push*)',
   row_key: 'i-1:5',
-  term_instance: 'i-1',
   age_ms: 0,
   ...over,
 });

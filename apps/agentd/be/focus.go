@@ -14,10 +14,7 @@
 //     one else's).
 //   - nothing is showing it → open one, the same spawn+attach path the
 //     roster's reattach verb takes.
-//   - it isn't a hosted session at all (a terminal-tier row) → nothing.
-//     Those asks are toasted WITHOUT a key precisely so the desktop keeps
-//     its generic fallback instead of a click that does nothing here; see
-//     askKey.
+//   - its session is no longer hosted → nothing; see askKey.
 
 package agentd
 
@@ -40,12 +37,9 @@ type focusReq struct {
 // askKey is the subject key a question's toast carries, or "" for a
 // question the click could not be honoured for.
 //
-// Only hosted (ACP) sessions get one: this service can open or raise an
-// Agent window for those. A terminal-tier row's window belongs to
-// wash-term, which has no handler for FocusKind yet — keying those toasts
-// would buy a dead click, where an unkeyed one still opens the Agent app
-// with the question visible in its roster pane. Key them here the day
-// wash-term learns to raise the right tab (docs/AGENT_TERM.md).
+// Only a session still hosted gets one: a key for one that has gone would
+// buy a dead click, where an unkeyed toast still opens the Agent app with
+// the question visible in its roster pane.
 func askKey(a Ask) string {
 	if lookupHosted(a.RowKey) == nil {
 		return ""
@@ -70,9 +64,8 @@ func installAskToasts(c *sdk.Conn) {
 		if a.Agent != "" {
 			title = a.Agent + " needs you"
 		}
-		// NotifyAbout is fire-and-forget on its own goroutine — required,
-		// because this runs on the ask queue's path, which is itself on
-		// the SDK dispatch path for terminal-tier asks.
+		// NotifyAbout is fire-and-forget on its own goroutine: this runs
+		// on the ask queue's path, which must not block.
 		c.NotifyAbout(askKey(a), title, askToastBody(a), wire.NotifyLevelWarn)
 	})
 }

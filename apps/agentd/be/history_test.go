@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -86,66 +85,6 @@ func TestPublishHistoryMarksLiveSessions(t *testing.T) {
 	}
 	if byID["dead-1"].Live {
 		t.Error("an ended session was marked live")
-	}
-}
-
-// What Resume actually runs. The quoting matters: a path or a session id
-// arrived from a hook payload.
-func TestResumeArgv(t *testing.T) {
-	cases := []struct {
-		name                          string
-		shell, agent, session, cwd    string
-		fork                          bool
-		wantShell                     string
-		wantContains, wantNotContains []string
-	}{
-		{
-			name: "resume in a directory", shell: "/bin/bash", agent: "claude",
-			session: "abc-123", cwd: "/home/mick/wash", wantShell: "/bin/bash",
-			wantContains:    []string{"cd '/home/mick/wash'", "exec 'claude' --resume 'abc-123'"},
-			wantNotContains: []string{"--fork-session"},
-		},
-		{
-			name: "fork", shell: "/bin/bash", agent: "claude", session: "abc", cwd: "/w", fork: true,
-			wantShell: "/bin/bash", wantContains: []string{"--fork-session"},
-		},
-		{
-			name: "no cwd known", shell: "/bin/zsh", agent: "codex", session: "z", wantShell: "/bin/zsh",
-			wantContains: []string{"exec 'codex' --resume 'z'"}, wantNotContains: []string{"cd "},
-		},
-		{
-			name: "no shell in the environment", agent: "claude", session: "s", wantShell: "/bin/sh",
-			wantContains: []string{"--resume 's'"},
-		},
-		{
-			name: "quotes in the data are escaped, not executed", shell: "/bin/bash", agent: "claude",
-			session: "s'; rm -rf /; echo '", cwd: "/w",
-			wantShell:       "/bin/bash",
-			wantNotContains: []string{"; rm -rf /; echo ;"},
-			wantContains:    []string{`'\''`},
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			argv := resumeArgv(c.shell, c.agent, c.session, c.cwd, c.fork)
-			if len(argv) != 3 || argv[0] != c.wantShell || argv[1] != "-c" {
-				t.Fatalf("argv = %q", argv)
-			}
-			for _, want := range c.wantContains {
-				if !strings.Contains(argv[2], want) {
-					t.Errorf("command %q missing %q", argv[2], want)
-				}
-			}
-			for _, no := range c.wantNotContains {
-				if strings.Contains(argv[2], no) {
-					t.Errorf("command %q contains %q", argv[2], no)
-				}
-			}
-		})
-	}
-	// The agent defaults rather than producing a command with a hole in it.
-	if argv := resumeArgv("/bin/sh", "", "s", "", false); !strings.Contains(argv[2], "'claude'") {
-		t.Errorf("empty agent → %q", argv[2])
 	}
 }
 
@@ -352,13 +291,6 @@ func TestResumeResolvesFromTheStoreWhenHistoryMisses(t *testing.T) {
 		t.Errorf("history entry did not take precedence: %+v", got)
 	}
 
-	// An index damaged by an older rewrite can still be repaired from the
-	// transcript instead of attempting to launch an unnamed agent.
-	history = []Session{{SessionID: "old-sess"}}
-	got, ok = resolveResumeTarget("old-sess")
-	if !ok || got.Agent != "claude" || got.Cwd != proj {
-		t.Errorf("transcript did not fill incomplete history: ok=%v got=%+v", ok, got)
-	}
 }
 
 func TestResumeFlightsCoalesceBySession(t *testing.T) {

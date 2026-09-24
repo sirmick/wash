@@ -12,11 +12,9 @@ import (
 	"github.com/sirmick/wash/pkg/wire"
 )
 
-// Liveness (docs/AGENT_TERM.md §7). A terminal re-states each of its
-// agents periodically, so silence means the producer is gone: the row
-// greys out, then disappears. Generous enough to ride out a busy box,
-// short enough that a killed window doesn't leave a roster full of
-// history.
+// Liveness for rows whose session is no longer hosted: an exited session's
+// row greys out, then disappears, so the roster does not fill with history
+// (which the History panel shows instead).
 const (
 	staleAfter = 60 * time.Second
 	dropAfter  = 2 * time.Minute
@@ -40,7 +38,7 @@ type row struct {
 	stateSince time.Time
 }
 
-// rows is the live roster, keyed by "<term instance>:<channel id>".
+// rows is the live roster, keyed by hosted session key.
 var rows = map[string]*row{}
 
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
@@ -49,86 +47,6 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	loadHistory()
 	svc = sdk.NewStateService(bus, State{Recent: publishHistory(), Adapters: Probe(), HasDefaultPrompt: loadDefaultPrompt() != ""})
 	controllerConn = c
-
-	// agent_status: a terminal states (or re-states) one tab's agent. The
-	// sender is router-attested, so the key can't be forged and a
-	// terminal can only ever describe its own tabs.
-	sdk.HandleFromVoid(bus, "agent_status", func(_ *sdk.Conn, _ string, req statusReq, from wire.Sender) error {
-		if from.InstanceID == "" || req.ChannelID == 0 {
-			return nil
-		}
-		now := time.Now()
-		key := rowKey(from.InstanceID, req.ChannelID)
-		var wantGit string
-		var changedState bool
-		mutateState(func(s *State) {
-			r := rows[key]
-			if r == nil {
-				r = &row{}
-				rows[key] = r
-			}
-			// A state change restarts the elapsed clock; a keepalive for
-			// the same state must not.
-			if r.State != req.State || r.Reason != req.Reason {
-				r.stateSince = now.Add(-time.Duration(req.SinceMS) * time.Millisecond)
-				changedState = true
-			}
-			r.lastSeen = now
-			r.Stale = false
-			r.Key = key
-			r.Agent = req.Agent
-			r.State = req.State
-			r.Reason = req.Reason
-			r.SessionID = req.SessionID
-			r.TermInstance = from.InstanceID
-			r.WindowID = req.WindowID
-			r.ChannelID = req.ChannelID
-			if req.Cwd != "" && req.Cwd != r.Cwd {
-				// New directory: show it immediately, resolve git after.
-				r.Cwd = req.Cwd
-				r.Dir = dirLabel(req.Cwd)
-				r.Branch, r.Dirty = "", false
-				wantGit = req.Cwd
-			}
-			// Remember it too: the roster is "now", the history is "what
-			// I lost" (§13).
-			if rememberSession(req.Agent, req.SessionID, req.Cwd, "", now) {
-				historyDirty = true
-			}
-			s.Rows = publish(now)
-			s.Recent = publishHistory()
-		})
-		if changedState {
-			// One line per roster transition: the roster is also the audit
-			// surface for "what were my agents doing at 3am".
-			log.Printf("agentd: row key=%s agent=%s state=%s session=%s dir=%s",
-				key, req.Agent, req.State, req.SessionID, dirLabel(req.Cwd))
-		}
-		if wantGit != "" {
-			// Off the dispatch path: shelling git must never delay the
-			// next inbound message.
-			go resolveGit(wantGit)
-		}
-		return nil
-	})
-
-	// agent_gone: the tab closed (or its agent ended). An explicit
-	// goodbye is the fast path; the sweep is the safety net.
-	sdk.HandleFromVoid(bus, "agent_gone", func(_ *sdk.Conn, _ string, req goneReq, from wire.Sender) error {
-		if from.InstanceID == "" {
-			return nil
-		}
-		key := rowKey(from.InstanceID, req.ChannelID)
-		mutateState(func(s *State) {
-			delete(rows, key)
-			s.Rows = publish(time.Now())
-			// The row is gone but the session is now exactly what the
-			// Recent list is for.
-			s.Recent = publishHistory()
-		})
-		saveHistory()
-		return nil
-	})
 
 	// agent_resume: a Resume/Fork click in the sidebar (§13).
 	sdk.HandleFromVoid(bus, "agent_resume", func(conn *sdk.Conn, _ string, req resumeReq, _ wire.Sender) error {
@@ -203,8 +121,8 @@ func onInstanceGone(_ *sdk.Conn, _ string, instanceID string) {
 	}
 }
 
-// sweepLoop ages rows out: a terminal that died without saying goodbye
-// leaves a row that greys and then goes. Runs until the conn closes.
+// sweepLoop ages out rows whose session is no longer hosted: they grey,
+// then go. Runs until the conn closes.
 func sweepLoop(c *sdk.Conn) {
 	t := time.NewTicker(sweepEvery)
 	defer t.Stop()
@@ -222,14 +140,9 @@ func sweepLoop(c *sdk.Conn) {
 					if r.Cwd != "" {
 						gitDirs[r.Cwd] = struct{}{}
 					}
-					// A session this process HOSTS cannot go silent: we
-					// own the adapter, so its exit is a fact (retire()
-					// removes the row) rather than something to infer from
-					// silence. Ageing it out expired live agents that were
-					// simply idle — observed: `row dropped key=acp:1
-					// agent=claude age=2m0s` while the session was still
-					// running. The sweep exists for the terminal tier,
-					// which reports and can therefore stop reporting.
+					// A live hosted session is never aged out, however
+					// idle: observed, `row dropped key=acp:1 agent=claude
+					// age=2m0s` while the session was still running.
 					if lookupHosted(key) != nil {
 						continue
 					}
@@ -321,11 +234,7 @@ func statePriority(state string) int {
 	case "done":
 		return 4
 	}
-	return 5 // stale, and anything a newer terminal invents
-}
-
-func rowKey(instance string, channelID uint64) string {
-	return instance + ":" + itoa(channelID)
+	return 5 // stale, and anything else
 }
 
 func itoa(v uint64) string {
@@ -361,21 +270,6 @@ func elapsedMS(since, now time.Time) int64 {
 		return 0
 	}
 	return ms
-}
-
-type statusReq struct {
-	ChannelID uint64 `json:"channel_id"`
-	WindowID  uint64 `json:"window_id"`
-	Agent     string `json:"agent"`
-	State     string `json:"state"`
-	Reason    string `json:"reason"`
-	SessionID string `json:"session_id"`
-	Cwd       string `json:"cwd"`
-	SinceMS   int64  `json:"since_ms"`
-}
-
-type goneReq struct {
-	ChannelID uint64 `json:"channel_id"`
 }
 
 type resumeReq struct {

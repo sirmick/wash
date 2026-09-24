@@ -93,9 +93,6 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		if w.MaxMembers < live {
 			return errors.New("max_members cannot be below current membership")
 		}
-		if w.Profiles == nil {
-			w.Profiles = map[string]AgentProfile{}
-		}
 		for name, profile := range p.Profiles {
 			if !ValidProfileName(name) {
 				return errors.New("profile name must be 1–80 ASCII letters, digits, underscores or hyphens")
