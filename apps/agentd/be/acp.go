@@ -1435,7 +1435,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			return nil
 		}
 		if workspaces != nil {
-			_ = workspaces.store.TurnEnded(h.sessionID, "", true)
+			_ = workspaces.store.TurnStopped(h.sessionID, "")
 		}
 		log.Printf("agentd: acp cancel key=%s session=%s", h.key, h.sessionID)
 		// A question the turn was blocked on goes with the turn: the

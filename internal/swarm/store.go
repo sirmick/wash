@@ -570,6 +570,20 @@ func (s *Store) Acknowledge(session, id string) error {
 	})
 }
 func (s *Store) TurnEnded(session, messageID string, failed bool) error {
+	return s.turnEnded(session, messageID, failed, false)
+}
+
+// TurnStopped is a turn the human stopped. For a member that is the same as
+// a failure (paused, resume explicitly). For the lead it is not: the lead is
+// the human's own conversation, and stopping it to redirect it must not
+// halt the team. AGENT_SWARM.md pauses dispatch on orchestrator FAILURE;
+// observed live, treating a stop as one made eight member launches fail
+// "workspace paused" after the human interrupted to type a sentence.
+func (s *Store) TurnStopped(session, messageID string) error {
+	return s.turnEnded(session, messageID, true, true)
+}
+
+func (s *Store) turnEnded(session, messageID string, failed, stopped bool) error {
 	// An ordinary successful turn changes no durable workspace state. In
 	// particular, reading workspace_get must not invalidate its own revision
 	// when that conversation turn ends.
@@ -580,7 +594,7 @@ func (s *Store) TurnEnded(session, messageID string, failed bool) error {
 		return nil
 	}
 	return s.Mutate(session, false, func(w *Workspace, m *Member) error {
-		if failed {
+		if failed && !(stopped && m.ID == w.Lead) {
 			if m.State != "paused" && m.ID != w.Lead {
 				// Notification failure must never prevent pausing the member.
 				_, _ = AddMessage(w, m.ID, w.Lead, "lifecycle", m.Name+" stopped or failed; inspect and resume explicitly.", "", "", "")

@@ -402,7 +402,13 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
 	if workspaces != nil {
 		workspaces.captureUsage(h)
-		if e := workspaces.store.TurnEnded(h.sessionID, t.mailID, err != nil || res.StopReason == acp.StopCancelled); e != nil {
+		var end error
+		if err == nil && res.StopReason == acp.StopCancelled {
+			end = workspaces.store.TurnStopped(h.sessionID, t.mailID)
+		} else {
+			end = workspaces.store.TurnEnded(h.sessionID, t.mailID, err != nil)
+		}
+		if e := end; e != nil {
 			log.Printf("agentd: workspace turn outcome: %v", e)
 		}
 		defer workspaces.signal()

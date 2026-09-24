@@ -208,3 +208,30 @@ func TestDelegateEndingCancelsItsDecisionsAndRoutesChildResultToLead(t *testing.
 		t.Fatal(result)
 	}
 }
+
+// A human stopping the lead's turn redirects their own conversation; it is
+// not the orchestrator failure that pauses the team. A stopped member still
+// pauses, as before.
+func TestStoppingTheLeadDoesNotPauseTheTeam(t *testing.T) {
+	s, _ := fixture(t)
+	if err := s.TurnStopped("lead-session", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.View("worker-session").State; got != "active" {
+		t.Fatalf("workspace %q after the human stopped the lead, want active", got)
+	}
+	if _, err := s.Send("lead-session", "worker", "instruction", "Work", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if next, err := s.Next("worker-session"); err != nil || next == nil {
+		t.Fatal("dispatch stopped after the lead was interrupted", err)
+	}
+	if err := s.TurnStopped("worker-session", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range s.View("worker-session").Members {
+		if m.ID == "worker" && m.State != "paused" {
+			t.Fatalf("stopped member %q, want paused", m.State)
+		}
+	}
+}
