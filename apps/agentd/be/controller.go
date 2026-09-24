@@ -169,7 +169,7 @@ func rowWorkspaces() map[string]*agentproto.RowWorkspace {
 	return out
 }
 
-func publishManagerPreviews(p previewPatch) {
+func publishManagerPreviews(p agentproto.PreviewPatch) {
 	if controllerConn == nil {
 		return
 	}
@@ -180,7 +180,7 @@ func publishManagerPreviews(p previewPatch) {
 	}
 	controllerState.Unlock()
 	for _, instance := range managers {
-		_ = controllerConn.SendAppMsgToBulk(wire.Recipient{InstanceID: instance}, p)
+		_ = agentproto.Send(controllerConn, wire.Recipient{InstanceID: instance}, p)
 	}
 }
 
@@ -297,7 +297,7 @@ func publishControllerViews() {
 	}
 }
 
-func publishControllerUsage(p usagePatch) {
+func publishControllerUsage(p agentproto.UsagePatch) {
 	if controllerConn == nil {
 		return
 	}
@@ -308,13 +308,11 @@ func publishControllerUsage(p usagePatch) {
 	}
 	controllerState.Unlock()
 	for _, instance := range managers {
-		_ = controllerConn.SendAppMsgToBulk(wire.Recipient{InstanceID: instance}, p)
+		_ = agentproto.Send(controllerConn, wire.Recipient{InstanceID: instance}, p)
 	}
 	for _, row := range p.Rows {
 		if instance := controllerFor(row.Key); instance != "" {
-			_ = controllerConn.SendAppMsgToBulk(wire.Recipient{InstanceID: instance}, usagePatch{
-				Kind: p.Kind, Rows: []usagePatchRow{row},
-			})
+			_ = agentproto.Send(controllerConn, wire.Recipient{InstanceID: instance}, agentproto.UsagePatch{Rows: []agentproto.UsageRow{row}})
 		}
 	}
 }

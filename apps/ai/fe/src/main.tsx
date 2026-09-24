@@ -31,11 +31,6 @@ interface PersistedState {
   session_key?: string;
 }
 
-interface PreviewPatchRow {
-  key: string;
-  preview?: string;
-}
-
 const mergeEvents = mergeAgentEvents;
 
 
@@ -335,10 +330,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
 
       case 'usage_patch':
-        setRoster((prev) => applyUsagePatch(prev, m.rows));
+        setRoster((prev) => applyUsagePatch(prev, m as unknown as agentproto.UsagePatch));
         break;
       case 'preview_patch': {
-        const patches = new Map(((m.rows as PreviewPatchRow[] | undefined) ?? []).map((r) => [r.key, r.preview ?? '']));
+        const patches = new Map(((m as unknown as agentproto.PreviewPatch).rows ?? []).map((r) => [r.key, r.preview ?? '']));
         setRoster((prev) => ({
           ...prev,
           rows: (prev.rows ?? []).map((r) => patches.has(r.key) ? { ...r, preview: patches.get(r.key) } : r),

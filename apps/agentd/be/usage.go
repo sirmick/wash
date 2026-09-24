@@ -15,29 +15,20 @@ const usagePatchInterval = 500 * time.Millisecond
 
 var (
 	usageMu      sync.Mutex
-	usagePending = map[string]usagePatchRow{}
+	usagePending = map[string]agentproto.UsageRow{}
 	usageTimer   *time.Timer
 	usageSending bool
 	usageDelay   = usagePatchInterval // test seam
 
-	usagePublish = func(p usagePatch) {
+	usagePublish = func(p agentproto.UsagePatch) {
 		if svc != nil {
-			svc.PublishBulk(p)
+			if raw, _, err := agentproto.Encode(p); err == nil {
+				svc.PublishBulk(raw)
+			}
 		}
 		publishControllerUsage(p)
 	}
 )
-
-type usagePatch struct {
-	Kind string          `json:"kind"`
-	Rows []usagePatchRow `json:"rows"`
-}
-
-type usagePatchRow struct {
-	Key  string `json:"key"`
-	Used int64  `json:"used"`
-	Size int64  `json:"size"`
-}
 
 // setUsage keeps the authoritative snapshot current without publishing it.
 // A later structural roster push therefore includes the newest counters even
@@ -59,10 +50,10 @@ func (h *hosted) setUsage(used, size int64) {
 		return false
 	})
 
-	queueUsagePatch(usagePatchRow{Key: h.key, Used: used, Size: size})
+	queueUsagePatch(agentproto.UsageRow{Key: h.key, Used: used, Size: size})
 }
 
-func queueUsagePatch(row usagePatchRow) {
+func queueUsagePatch(row agentproto.UsageRow) {
 	usageMu.Lock()
 	usagePending[row.Key] = row // latest wins for this roster row
 	if usageTimer == nil && !usageSending {
@@ -81,17 +72,17 @@ func flushUsagePatches() {
 	if usageTimer != nil {
 		usageTimer.Stop()
 	}
-	rows := make([]usagePatchRow, 0, len(usagePending))
+	rows := make([]agentproto.UsageRow, 0, len(usagePending))
 	for _, row := range usagePending {
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
-	usagePending = map[string]usagePatchRow{}
+	usagePending = map[string]agentproto.UsageRow{}
 	usageTimer = nil
 	usageSending = true
 	usageMu.Unlock()
 
-	usagePublish(usagePatch{Kind: "usage_patch", Rows: rows})
+	usagePublish(agentproto.UsagePatch{Rows: rows})
 
 	usageMu.Lock()
 	usageSending = false
@@ -107,6 +98,6 @@ func stopUsagePatches() {
 		usageTimer.Stop()
 	}
 	usageTimer = nil
-	usagePending = map[string]usagePatchRow{}
+	usagePending = map[string]agentproto.UsageRow{}
 	usageMu.Unlock()
 }

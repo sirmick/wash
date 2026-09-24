@@ -449,6 +449,21 @@ export interface Mode {
 }
 
 /**
+ * PreviewPatch updates rows' transcript previews (Row.Preview) in the
+ * manager's view.
+ */
+export interface PreviewPatch {
+  kind: 'preview_patch';
+  rows: PreviewRow[] | null;
+}
+
+/** PreviewRow is one row's preview. */
+export interface PreviewRow {
+  key: string;
+  preview?: string;
+}
+
+/**
  * PromptAttachment is one attachment on its way to an ACP content block.
  * Type is "image" or "file"; anything else is dropped.
  */
@@ -848,6 +863,22 @@ export interface Unsubscribe {
   kind: 'unsubscribe';
 }
 
+/**
+ * UsagePatch updates rows' context accounting (Row.Used, Row.Size),
+ * coalesced to at most one send per 500ms.
+ */
+export interface UsagePatch {
+  kind: 'usage_patch';
+  rows: UsageRow[] | null;
+}
+
+/** UsageRow is one row's counters. */
+export interface UsageRow {
+  key: string;
+  used: number;
+  size: number;
+}
+
 /** WorkspaceAction is a human's action in the workspace sidebar. */
 export interface WorkspaceAction {
   kind: 'workspace_action';
@@ -903,6 +934,8 @@ export type AgentdPush =
   | HistoryPruned
   | KeySaved
   | KeyTest
+  | UsagePatch
+  | PreviewPatch
   | RosterState
   | ManagerState
   | SessionState

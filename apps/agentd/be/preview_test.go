@@ -27,8 +27,8 @@ func TestPreviewPatchCoalescesToLatestBoundedValue(t *testing.T) {
 	controllerState.Unlock()
 	oldDelay, oldPublish := previewDelay, previewPublish
 	previewDelay = 5 * time.Millisecond
-	result := make(chan previewPatch, 1)
-	previewPublish = func(p previewPatch) { result <- p }
+	result := make(chan agentproto.PreviewPatch, 1)
+	previewPublish = func(p agentproto.PreviewPatch) { result <- p }
 	t.Cleanup(func() {
 		stopPreviewPatches()
 		resetControllersForTest()

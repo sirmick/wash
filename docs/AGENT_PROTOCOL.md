@@ -94,6 +94,8 @@ edit by hand.
 | `history_pruned` | [`HistoryPruned`](#historypruned) | the asker | interactive | The outcome of a prune. |
 | `key_saved` | [`KeySaved`](#keysaved) | the asker | interactive | The outcome of storing a key. |
 | `key_test` | [`KeyTest`](#keytest) | the asker | interactive | What the provider said about a key. |
+| `usage_patch` | [`UsagePatch`](#usagepatch) | roster subscribers, managers, and each row's controller | bulk | New context counters for some rows. |
+| `preview_patch` | [`PreviewPatch`](#previewpatch) | managers | bulk | New transcript previews for some rows. |
 | `state` | [`RosterState`](#rosterstate) | every subscriber | interactive | The whole roster. Sent by the SDK StateService, which owns this message's encoding. |
 | `manager_state` | [`ManagerState`](#managerstate) | every manager (manager_subscribe) | interactive | The manager's roster view, sent on subscribe and whenever it changes. |
 | `session_state` | [`SessionState`](#sessionstate) | a session's controller | interactive, keyed | One session's row and questions, sent on claim and whenever they change. |
@@ -481,6 +483,23 @@ Mode is one approval/sandbox preset an agent offers.
 | `name` | `string` |  |
 | `description?` | `string` |  |
 
+#### PreviewPatch
+
+PreviewPatch updates rows' transcript previews (Row.Preview) in the manager's view.
+
+| Field | Type | |
+|---|---|---|
+| `rows` | `PreviewRow[] \| null` |  |
+
+#### PreviewRow
+
+PreviewRow is one row's preview.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `preview?` | `string` |  |
+
 #### PromptAttachment
 
 PromptAttachment is one attachment on its way to an ACP content block.
@@ -685,6 +704,24 @@ TranscriptSubscribe watches a session's transcript, and re-affirms the watch: a 
 Unsubscribe stops a Subscribe.
 
 No fields.
+
+#### UsagePatch
+
+UsagePatch updates rows' context accounting (Row.Used, Row.Size), coalesced to at most one send per 500ms.
+
+| Field | Type | |
+|---|---|---|
+| `rows` | `UsageRow[] \| null` |  |
+
+#### UsageRow
+
+UsageRow is one row's counters.
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `used` | `number` |  |
+| `size` | `number` |  |
 
 #### WorkspaceAction
 

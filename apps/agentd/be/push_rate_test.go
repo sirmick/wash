@@ -95,8 +95,8 @@ func TestUsageCoalescesLatestWithoutRosterPush(t *testing.T) {
 	stopUsagePatches()
 	oldDelay, oldPublish := usageDelay, usagePublish
 	usageDelay = time.Hour
-	var patches []usagePatch
-	usagePublish = func(p usagePatch) { patches = append(patches, p) }
+	var patches []agentproto.UsagePatch
+	usagePublish = func(p agentproto.UsagePatch) { patches = append(patches, p) }
 	t.Cleanup(func() {
 		stopUsagePatches()
 		rows = oldRows
@@ -132,10 +132,10 @@ func TestUsagePublisherIsSingleFlightAndLatestWins(t *testing.T) {
 	stopUsagePatches()
 	oldDelay, oldPublish := usageDelay, usagePublish
 	usageDelay = 5 * time.Millisecond
-	entered := make(chan usagePatch, 2)
+	entered := make(chan agentproto.UsagePatch, 2)
 	release := make(chan struct{})
 	done := make(chan struct{}, 2)
-	usagePublish = func(p usagePatch) {
+	usagePublish = func(p agentproto.UsagePatch) {
 		entered <- p
 		<-release
 		done <- struct{}{}
@@ -145,13 +145,13 @@ func TestUsagePublisherIsSingleFlightAndLatestWins(t *testing.T) {
 		usageDelay, usagePublish = oldDelay, oldPublish
 	})
 
-	queueUsagePatch(usagePatchRow{Key: "acp:1", Used: 1, Size: 100})
+	queueUsagePatch(agentproto.UsageRow{Key: "acp:1", Used: 1, Size: 100})
 	first := <-entered
 	if first.Rows[0].Used != 1 {
 		t.Fatalf("first patch=%+v, want used=1", first)
 	}
 	for i := int64(2); i <= 100; i++ {
-		queueUsagePatch(usagePatchRow{Key: "acp:1", Used: i, Size: 100})
+		queueUsagePatch(agentproto.UsageRow{Key: "acp:1", Used: i, Size: 100})
 	}
 
 	select {

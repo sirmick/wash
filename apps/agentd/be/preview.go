@@ -13,16 +13,6 @@ import (
 // one-backing-store-per-controller rule and avoiding full-state fanout.
 const previewPatchInterval = 500 * time.Millisecond
 
-type previewPatch struct {
-	Kind string            `json:"kind"`
-	Rows []previewPatchRow `json:"rows"`
-}
-
-type previewPatchRow struct {
-	Key     string `json:"key"`
-	Preview string `json:"preview,omitempty"`
-}
-
 var (
 	previewMu      sync.Mutex
 	previewPending = map[string]struct{}{}
@@ -89,11 +79,11 @@ func flushPreviewPatches() {
 	previewMu.Unlock()
 
 	sort.Strings(keys)
-	rows := make([]previewPatchRow, 0, len(keys))
+	rows := make([]agentproto.PreviewRow, 0, len(keys))
 	for _, key := range keys {
-		rows = append(rows, previewPatchRow{Key: key, Preview: liveTranscriptPreview(key, 2)})
+		rows = append(rows, agentproto.PreviewRow{Key: key, Preview: liveTranscriptPreview(key, 2)})
 	}
-	previewPublish(previewPatch{Kind: "preview_patch", Rows: rows})
+	previewPublish(agentproto.PreviewPatch{Rows: rows})
 
 	previewMu.Lock()
 	previewSending = false
