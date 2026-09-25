@@ -18,7 +18,6 @@ package agentd
 
 import (
 	"encoding/json"
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"strings"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentclient"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )

@@ -84,18 +84,22 @@ func Lookup(dir Dir, kind string) (Spec, bool) {
 	return Spec{}, false
 }
 
-// kindOf is the push kind registered for a payload's type.
+// AppID is agentd's app id: where requests are sent.
+const AppID = "com.wash.agentd"
+
+// kindOf is the message registered for a payload's type. Payload types are
+// unique across the registry, so a value names its own kind.
 func kindOf(m any) (Spec, error) {
 	t := reflect.TypeOf(m)
 	for _, s := range Messages {
-		if s.Dir == Push && reflect.TypeOf(s.Payload) == t {
+		if reflect.TypeOf(s.Payload) == t {
 			return s, nil
 		}
 	}
-	return Spec{}, fmt.Errorf("agentproto: %s is not a registered push", t)
+	return Spec{}, fmt.Errorf("agentproto: %s is not a registered message", t)
 }
 
-// Encode renders a push as it goes on the wire: its fields plus "kind".
+// Encode renders a message as it goes on the wire: its fields plus "kind".
 func Encode(m any) (json.RawMessage, Spec, error) {
 	spec, err := kindOf(m)
 	if err != nil {
@@ -118,7 +122,8 @@ func Encode(m any) (json.RawMessage, Spec, error) {
 	return out.Bytes(), spec, nil
 }
 
-// Send delivers one push to one recipient, in its registered class.
+// Send delivers one message to one recipient, in its registered class: a
+// push from agentd to a frontend, or (with SendAgentd) a request to agentd.
 func Send(c *sdk.Conn, to wire.Recipient, m any) error {
 	raw, spec, err := Encode(m)
 	if err != nil {
@@ -128,6 +133,11 @@ func Send(c *sdk.Conn, to wire.Recipient, m any) error {
 		return c.SendAppMsgToBulk(to, raw)
 	}
 	return c.SendAppMsgTo(to, raw)
+}
+
+// SendAgentd sends a request to agentd.
+func SendAgentd(c *sdk.Conn, m any) error {
+	return Send(c, wire.Recipient{AppID: AppID}, m)
 }
 
 // Decode reads a message's payload into out, for a Go frontend that

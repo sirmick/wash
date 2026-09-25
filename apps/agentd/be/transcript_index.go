@@ -44,7 +44,6 @@ package agentd
 import (
 	"bufio"
 	"encoding/json"
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"path/filepath"
@@ -52,6 +51,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // indexFileName is the on-disk cache, a sibling of the transcripts it

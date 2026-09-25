@@ -2,13 +2,13 @@ package agentd
 
 import (
 	"encoding/json"
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
 )
 

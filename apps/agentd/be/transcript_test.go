@@ -1,11 +1,11 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"testing"
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 func resetTranscripts() {

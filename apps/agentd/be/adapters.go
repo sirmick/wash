@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/sirmick/wash/internal/agentproto"
 	"io"
 	"log"
 	"os"
@@ -34,6 +33,7 @@ import (
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/pkg/sdk"
 )

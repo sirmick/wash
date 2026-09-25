@@ -32,7 +32,7 @@ async function startOn(r: RouterHandle, prompt: string): Promise<string> {
   const win = await r.controlRequest({ t: 'launch', app_id: 'com.wash.ai' });
   await r.controlRequest({
     t: 'msg', instance_id: String(win.instance_id),
-    data: { kind: 'start', agent: 'codex', cwd: '', prompt },
+    data: { kind: 'agent_start', claim: true, agent: 'codex', cwd: '', prompt },
   });
   const line = await r.waitForLog(/agentd: acp session started key=acp:\d+/, 20_000, from);
   return line.replace('agentd: acp session started key=', '');

@@ -3,10 +3,10 @@ package agentd
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"time"
 
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"

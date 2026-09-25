@@ -15,7 +15,6 @@ package agentd
 
 import (
 	"encoding/json"
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"path/filepath"
@@ -23,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )

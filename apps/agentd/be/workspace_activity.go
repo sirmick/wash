@@ -1,11 +1,12 @@
 package agentd
 
 import (
+	"log"
+	"slices"
+
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
-	"log"
-	"slices"
 )
 
 func (h *hosted) observeWorkspaceActivity(u acp.SessionUpdate) {

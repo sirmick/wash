@@ -2,13 +2,13 @@ package agentd
 
 import (
 	"fmt"
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"path"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )

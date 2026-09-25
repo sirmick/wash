@@ -21,8 +21,8 @@ func TestEncodeAddsTheKind(t *testing.T) {
 	if err := json.Unmarshal(raw, &back); err != nil || back.Key != "acp:1" || back.State.Version != Version {
 		t.Fatalf("round trip = %+v, %v", back, err)
 	}
-	if raw, _, err := Encode(Subscribe{}); err == nil {
-		t.Fatalf("a request type was encoded as a push: %s", raw)
+	if raw, _, err := Encode(Subscribe{}); err != nil || string(raw) != `{"kind":"subscribe"}` {
+		t.Fatalf("an empty request encoded as %s, %v", raw, err)
 	}
 	if _, _, err := Encode(struct{ X int }{}); err == nil {
 		t.Fatal("an unregistered type was encoded")
@@ -30,10 +30,10 @@ func TestEncodeAddsTheKind(t *testing.T) {
 }
 
 // Every registered message has a kind, a struct payload and a description,
-// and a push's payload type belongs to exactly one kind (Encode looks the
+// and each payload type belongs to exactly one message (Encode looks the
 // kind up by type).
 func TestRegistryIsWellFormed(t *testing.T) {
-	pushTypes := map[reflect.Type]string{}
+	types := map[reflect.Type]string{}
 	for _, m := range Messages {
 		if m.Kind == "" || m.Doc == "" || m.From == "" {
 			t.Errorf("%+v lacks a kind, a description or a sender", m)
@@ -42,14 +42,12 @@ func TestRegistryIsWellFormed(t *testing.T) {
 		if pt.Kind() != reflect.Struct {
 			t.Errorf("%s payload is %s, want a struct", m.Kind, pt)
 		}
-		if m.Dir == Push {
-			if other, dup := pushTypes[pt]; dup {
-				t.Errorf("%s and %s share the payload type %s", other, m.Kind, pt)
-			}
-			pushTypes[pt] = m.Kind
-			if _, has := pt.FieldByName("Kind"); has {
-				t.Errorf("%s payload has its own Kind field; Encode adds kind", m.Kind)
-			}
+		if other, dup := types[pt]; dup {
+			t.Errorf("%s and %s share the payload type %s", other, m.Kind, pt)
+		}
+		types[pt] = m.Kind
+		if _, has := pt.FieldByName("Kind"); has {
+			t.Errorf("%s payload has its own Kind field; Encode adds kind", m.Kind)
 		}
 		if _, err := json.Marshal(m.Payload); err != nil {
 			t.Errorf("%s payload does not encode: %v", m.Kind, err)

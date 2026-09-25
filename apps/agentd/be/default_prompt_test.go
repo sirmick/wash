@@ -1,11 +1,12 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // withConfigDir points the default prompt at a throwaway XDG_CONFIG_HOME so a

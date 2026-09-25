@@ -38,7 +38,7 @@ const stacks: agentproto.StackView[] = [
 
 const mount = (initial: Partial<LaunchForm> = {}, over: { stacks?: agentproto.StackView[] } = {}) => {
   const [form, setForm] = createSignal<LaunchForm>({ stack: 'anthropic', tier: 'frontier', agent: '', model: '', cwd: '', ...initial });
-  const started: Record<string, string>[] = [];
+  const started: agentproto.AgentStart[] = [];
   const r = render(() => (
     <Launcher
       stacks={over.stacks ?? stacks}
@@ -98,14 +98,14 @@ test('Start sends the stack and tier, and only the overrides chosen', () => {
   const { getByTestId, started } = mount({ stack: 'openrouter', cwd: '/w' });
   fireEvent.input(getByTestId('ai-tier-select'), { target: { value: 'small' } });
   fireEvent.click(getByTestId('ai-start'));
-  expect(started).toEqual([{ kind: 'start', cwd: '/w', stack: 'openrouter', tier: 'small' }]);
+  expect(started).toEqual([{ kind: 'agent_start', cwd: '/w', open: true, stack: 'openrouter', tier: 'small' }]);
 });
 
 test('Advanced overrides go with the start', () => {
   const { getByTestId, started } = mount({ stack: 'anthropic' });
   fireEvent.input(getByTestId('ai-model-input'), { target: { value: 'opus[1m]' } });
   fireEvent.click(getByTestId('ai-start'));
-  expect(started[0]).toEqual({ kind: 'start', cwd: '', stack: 'anthropic', tier: 'frontier', model: 'opus[1m]' });
+  expect(started[0]).toEqual({ kind: 'agent_start', cwd: '', open: true, stack: 'anthropic', tier: 'frontier', model: 'opus[1m]' });
 });
 
 test('an unavailable stack cannot be started, and says why', () => {

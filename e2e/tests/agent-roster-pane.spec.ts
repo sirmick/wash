@@ -251,9 +251,9 @@ test('a roster verb acts on the row it was picked from, and leaves other control
   await expect(menu).toBeVisible();
   await menu.locator('[data-testid="agents-menu-detach"]').click();
 
-  // agentd acted on the key it was given, which is the row's.
+  // agentd acted on the key it was given, which is the row's. The window
+  // relays agent_detach as it is, so agentd's line is the one to read.
   const esc = targetKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  await router.waitForLog(new RegExp(`wash-ai: roster detach key=${esc}`), 10_000, cursor);
   await router.waitForLog(new RegExp(`agentd: acp detached key=${esc}`), 10_000, cursor);
 
   // And the row says so. Asserting the row is still VISIBLE would prove

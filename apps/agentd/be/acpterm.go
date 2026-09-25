@@ -20,7 +20,6 @@ package agentd
 import (
 	"context"
 	"fmt"
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"strconv"
 	"strings"
@@ -28,6 +27,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/pty"
 )
 

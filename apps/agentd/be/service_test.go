@@ -1,9 +1,10 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 var t0 = time.Date(2026, 7, 29, 9, 0, 0, 0, time.UTC)

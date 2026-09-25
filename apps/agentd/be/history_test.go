@@ -2,11 +2,12 @@ package agentd
 
 import (
 	"encoding/json"
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 func resetHistory() {

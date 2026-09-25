@@ -1,10 +1,11 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // countingState installs a mutateState that records how many times the

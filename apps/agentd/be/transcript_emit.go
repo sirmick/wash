@@ -1,10 +1,10 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"time"
 
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )

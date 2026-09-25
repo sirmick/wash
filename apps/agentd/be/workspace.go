@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/sirmick/wash/internal/agentproto"
 	"io"
 	"log"
 	"maps"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/internal/workspacemcp"
 	"github.com/sirmick/wash/pkg/sdk"

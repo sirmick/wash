@@ -34,7 +34,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"os"
 	"path/filepath"
@@ -45,6 +44,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // storeQueue is deep enough that overflow means the disk has genuinely

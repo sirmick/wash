@@ -1,12 +1,13 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // The index is a cache in front of a scan, so the property that matters

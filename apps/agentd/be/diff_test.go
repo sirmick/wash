@@ -2,11 +2,11 @@ package agentd
 
 import (
 	"encoding/json"
-	"github.com/sirmick/wash/internal/agentproto"
 	"strings"
 	"testing"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 func strp(s string) *string { return &s }

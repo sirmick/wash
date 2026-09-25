@@ -12,7 +12,7 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await page.goto(router.url);
  await expect(page.locator('wash-app-session')).toBeVisible();
  const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
- await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'start',agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'agent_start',claim:true,agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
  const app=page.locator('wash-app-ai');
  const composer=app.locator('[data-testid="agent-composer"]').first();
  await expect(composer).toBeEnabled();
@@ -104,7 +104,7 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  await page.goto(router.url);
  await expect(page.locator('wash-app-session')).toBeVisible();
  const started = await router.controlRequest({ t: 'launch', app_id: 'com.wash.ai' });
- await router.controlRequest({ t: 'msg', instance_id: String(started.instance_id), data: { kind: 'start', agent: 'codex', cwd: router.xdgConfigHome, prompt: '' } });
+ await router.controlRequest({ t: 'msg', instance_id: String(started.instance_id), data: { kind: 'agent_start', claim: true, agent: 'codex', cwd: router.xdgConfigHome, prompt: '' } });
  const app = page.locator('wash-app-ai');
  const composer = app.locator('[data-testid="agent-composer"]').first();
  const transcript = app.locator('[data-testid="agent-transcript"]').first();
@@ -178,7 +178,7 @@ test('sidebar shows live context and activity, and human messages remain distinc
  await page.goto(router.url);
  await expect(page.locator('wash-app-session')).toBeVisible();
  const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
- await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'start',agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'agent_start',claim:true,agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
  const app=page.locator('wash-app-ai');
  const composer=app.locator('[data-testid="agent-composer"]').first();
  await expect(composer).toBeEnabled();
@@ -220,7 +220,7 @@ test('workspace tabs preserve drafts and the sidebar resizes without overflowing
  await page.goto(router.url);
  await expect(page.locator('wash-app-session')).toBeVisible();
  const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
- await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'start',agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'agent_start',claim:true,agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
  const app=page.locator('wash-app-ai');
  const main=app.getByTestId('workspace-main');
  const sidebar=app.getByTestId('workspace-sidebar');
@@ -286,7 +286,7 @@ test('bulk workspace setup keeps package workers resident and QA survives refres
  test.setTimeout(90_000);
  await page.goto(router.url);await expect(page.locator('wash-app-session')).toBeVisible();
  const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
- await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'start',agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'agent_start',claim:true,agent:'codex',cwd:router.xdgConfigHome,prompt:''}});
  const app=page.locator('wash-app-ai'),sidebar=app.getByTestId('workspace-sidebar');
  const composer=app.getByTestId('agent-composer').first(),outputs=app.getByTestId('agent-transcript').first().getByText(/^WORKSPACE_(RESULT|ERROR) /);
  const tool=async(name:string,args:object={},error=false)=>{
@@ -366,7 +366,7 @@ test('a member launched by tier inherits the orchestrator\'s stack', async ({pag
  await expect(page.locator('wash-app-session')).toBeVisible();
  const cursor=router.logCursor();
  const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
- await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'start',stack:'fake',tier:'frontier',cwd:router.xdgConfigHome,prompt:''}});
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'agent_start',claim:true,stack:'fake',tier:'frontier',cwd:router.xdgConfigHome,prompt:''}});
  await router.waitForLog(/agentd: session settings key=\S+ stack=fake tier=frontier connection= adapter=codex effective=map\[model:smart reasoning_effort:high\]/,25_000,cursor);
  const app=page.locator('wash-app-ai');
  const composer=app.locator('[data-testid="agent-composer"]').first();

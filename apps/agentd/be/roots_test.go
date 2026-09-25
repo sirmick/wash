@@ -2,7 +2,6 @@ package agentd
 
 import (
 	"context"
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // The cwd is the default scope, not the limit: a change in one package of

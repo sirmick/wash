@@ -1,10 +1,11 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // A person's name for a session wins everywhere the title is shown — the

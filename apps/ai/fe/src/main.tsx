@@ -23,6 +23,28 @@ import type {
   AgentStatus,
 } from '@wash/ui';
 
+/** What this window's backend sends besides agentd's pushes, which it
+ *  relays as they are (apps/ai/be/app.go). */
+type WindowMessage =
+  | { kind: 'role'; role: 'manager' | 'session' }
+  | { kind: 'autostart'; agent: string; cwd: string }
+  | { kind: 'started'; key: string }
+  | { kind: 'restore_failed' }
+  | { kind: 'draft'; text: string }
+  | { kind: 'confirm_close' };
+type Incoming = agentproto.AgentdPush | WindowMessage;
+
+/** What only this window's backend handles; everything else is an agentd
+ *  request it relays. */
+type WindowRequest =
+  | { kind: 'restore'; key: string }
+  | { kind: 'detach' }
+  | { kind: 'terminate' }
+  | { kind: 'save_transcript'; path: string; text: string }
+  | { kind: 'open_terminal' | 'open_file_manager' | 'open_text_editor'; cwd: string }
+  | { kind: 'open_path'; path: string }
+  | { kind: 'open_agents' };
+
 /** The roster as this window holds it: empty until agentd's first push. */
 type RosterView = Partial<agentproto.State>;
 
@@ -124,7 +146,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   let historyTimer: ReturnType<typeof setTimeout> | undefined;
   const askHistory = (q: string) => {
     setHistoryLoading(true);
-    send({ kind: 'history', query: q });
+    sendAgentd({ kind: 'agent_history', query: q });
   };
   // Debounced: every keystroke would otherwise grep every transcript on
   // the machine.
@@ -151,7 +173,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const t = renameFor();
     if (!t) return;
     setRenameFor(null);
-    send({ kind: 'rename', key: t.key ?? '', session_id: t.session_id ?? '', title: renameDraft().trim() });
+    sendAgentd({ kind: 'agent_rename', key: t.key ?? '', session_id: t.session_id ?? '', title: renameDraft().trim() });
   };
   const [deleteFor, setDeleteFor] = createSignal<agentproto.SessionMeta | null>(null);
   const [pruning, setPruning] = createSignal(false);
@@ -169,43 +191,49 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // Why a transcript frame can now be for the wrong session: see
   // transcript-guard.ts.
-  const staleTranscript = (m: Record<string, unknown>) => isStaleTranscript(m.key, sessionKey());
+  const staleTranscript = (m: { key: string }) => isStaleTranscript(m.key, sessionKey());
 
-  const handleBE = (m: Record<string, unknown>) => {
+  const handleBE = (m: Incoming) => {
     switch (m.kind) {
       case 'workspace_state':
-        if (!staleTranscript(m)) setWorkspaceFrame(m as unknown as agentproto.WorkspaceState);
+        if (!staleTranscript(m)) setWorkspaceFrame(m);
         break;
       case 'workspace_patch':
         if (!staleTranscript(m)) {
-          const next = applyWorkspacePatch(workspaceFrame(), m as unknown as agentproto.WorkspacePatch);
+          const next = applyWorkspacePatch(workspaceFrame(), m);
           if (next) setWorkspaceFrame(next);
-          else send({ kind: 'workspace_refresh' });
+          else sendAgentd({ kind: 'workspace_refresh', key: sessionKey() });
         }
         break;
       case 'workspace_result':
-        if (!staleTranscript(m)) setWorkspaceResult(m as unknown as agentproto.WorkspaceResult);
+        if (!staleTranscript(m)) setWorkspaceResult(m);
         break;
       case 'role':
         setRole(m.role === 'manager' ? 'manager' : 'session');
         break;
       case 'autostart':
-        setAutostart({ agent: String(m.agent ?? ''), cwd: String(m.cwd ?? '') });
-        patchForm({ agent: String(m.agent ?? ''), cwd: String(m.cwd ?? '') });
+        setAutostart({ agent: m.agent, cwd: m.cwd });
+        patchForm({ agent: m.agent, cwd: m.cwd });
         setStarting(true);
         break;
       case 'started':
-        setSessionKey(String(m.key ?? ''));
+        setSessionKey(m.key);
         setEvents([]);
         setStarting(false);
         setError('');
         break;
-      case 'session_opened':
-        setStarting(false);
-        setError('');
-        break;
-      case 'claim_denied':
-        setError('This session is already controlled by another window.');
+      case 'agent_started':
+        // A failed start, from any launcher; or the manager's start, whose
+        // session opens in a window of its own. A window's own start binds
+        // it through its backend ('started').
+        if (m.error) {
+          setAutostart(null);
+          setStarting(false);
+          setError(m.error);
+        } else if (role() === 'manager') {
+          setStarting(false);
+          setError('');
+        }
         break;
       case 'restore_failed':
         setSessionKey('');
@@ -217,25 +245,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // a question above it, trim it, think better of it — is the whole
         // reason it goes to the composer at all.
         draftSeq += 1;
-        setDraftIn({ text: String(m.text ?? ''), seq: draftSeq });
+        setDraftIn({ text: m.text, seq: draftSeq });
         break;
-      case 'start_failed':
-        setAutostart(null);
-        setStarting(false);
-        setError(String(m.error ?? 'could not start'));
-        break;
-      case 'snapshot':
+      case 'transcript_snapshot':
         if (staleTranscript(m)) break;
         resyncPending = false;
-        if (typeof m.reset === 'boolean') {
-          setEvents((prev) => mergeEvents(prev, (m.events as agentproto.Event[]) ?? []));
-        } else {
-          setEvents(mergeEvents([], (m.events as agentproto.Event[]) ?? []));
-        }
+        setEvents((prev) => mergeEvents(prev, m.events ?? []));
         break;
-      case 'event': {
-        const e = m.event as agentproto.Event | undefined;
-        if (!e || staleTranscript(m)) break;
+      case 'transcript_event': {
+        const e = m.event;
+        if (staleTranscript(m)) break;
         // Whole rows replace by seq (agentd mutates a tool row in place);
         // a streamed reply's later chunks arrive as deltas and append. A
         // delta we cannot apply means our base is wrong — a reload landed
@@ -244,7 +263,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setEvents(r.events);
         if (r.gap && !resyncPending) {
           resyncPending = true;
-          send({ kind: 'resync' });
+          sendAgentd({ kind: 'transcript_subscribe', key: sessionKey(), replay: true });
         }
         break;
       }
@@ -254,8 +273,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'history':
         // Ignore an answer to a query we have already moved past, or the
         // list flickers back to stale results as you type.
-        if (String(m.query ?? '') === historyQuery()) {
-          setHistorySessions((m.sessions as agentproto.SessionMeta[]) ?? []);
+        if (m.query === historyQuery()) {
+          setHistorySessions(m.sessions ?? []);
           setHistoryLoading(false);
         }
         break;
@@ -275,21 +294,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // dialog the user just dismissed.
         if (promptPending()) {
           setPromptPending(false);
-          setPromptDraft(String(m.text ?? ''));
+          setPromptDraft(m.text);
           setPromptOpen(true);
         }
         break;
 
-      case 'roster': {
+      case 'state':
+      case 'manager_state':
+      case 'session_state': {
         // A protocol this window does not know is refused, visibly, rather
         // than rendered half-right (docs/AGENT_PROTOCOL.md, Version).
-        const state = m.state as agentproto.State | undefined;
-        if (state && state.version !== agentproto.AGENT_PROTOCOL_VERSION) {
+        const state = m.state;
+        if (state.version !== agentproto.AGENT_PROTOCOL_VERSION) {
           setProtocolError(`The agent service speaks protocol version ${state.version}; this window knows version ${agentproto.AGENT_PROTOCOL_VERSION}. Update Wash on both ends and reopen this window.`);
           break;
         }
         setProtocolError('');
-        setRoster(state ?? {});
+        setRoster(state);
         // History is always on screen in the manager, so it must follow
         // the sessions agentd remembers: one started, ended, renamed or
         // detached changes what a row says and which verb it offers.
@@ -322,17 +343,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       }
 
       case 'key_saved':
-        setKeyResult(String(m.name ?? ''), m.error ? { ok: false, detail: String(m.error) } : { ok: true, detail: 'Saved.' });
+        setKeyResult(m.name, m.error ? { ok: false, detail: m.error } : { ok: true, detail: 'Saved.' });
         break;
       case 'key_test':
-        setKeyResult(String(m.name ?? ''), { ok: m.ok === true, detail: String(m.detail ?? '') });
+        setKeyResult(m.name, { ok: m.ok, detail: m.detail });
         break;
 
       case 'usage_patch':
-        setRoster((prev) => applyUsagePatch(prev, m as unknown as agentproto.UsagePatch));
+        setRoster((prev) => applyUsagePatch(prev, m));
         break;
       case 'preview_patch': {
-        const patches = new Map(((m as unknown as agentproto.PreviewPatch).rows ?? []).map((r) => [r.key, r.preview ?? '']));
+        const patches = new Map((m.rows ?? []).map((r) => [r.key, r.preview ?? '']));
         setRoster((prev) => ({
           ...prev,
           rows: (prev.rows ?? []).map((r) => patches.has(r.key) ? { ...r, preview: patches.get(r.key) } : r),
@@ -342,7 +363,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
   };
 
-  const { send } = createAppBus(props, {
+  const { send } = createAppBus<Incoming>(props, {
     onMsg: handleBE,
     onState: (state) => {
       const saved = state as PersistedState | null;
@@ -352,9 +373,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // Restore the view immediately, then ask the still-running backend
       // for an authoritative transcript snapshot.
       setSessionKey(key);
-      send({ kind: 'restore', key });
+      sendLocal({ kind: 'restore', key });
     },
   });
+
+  // Two kinds of message leave this window: agentd's own requests, which
+  // its backend relays verbatim, and the few that are the window's business
+  // (closing, saving, opening an app in the session's folder).
+  const sendAgentd = (msg: agentproto.AgentdRequest) => send(msg);
+  const sendLocal = (msg: WindowRequest) => send(msg);
+  // An answer remembers a rule when it names one.
+  const answer = (id: string, decision: string, rule?: string, scope?: string) =>
+    sendAgentd({ kind: 'agent_answer', id, decision, remember: !!rule, rule: rule ?? '', ...(scope ? { scope } : {}) });
 
   // History is a permanent manager pane now, so populate it as soon as
   // agentd assigns this window the manager role. Session controllers do
@@ -366,7 +396,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       askHistory(historyQuery());
       // Every mount, not just the first: after a reload the BE has long
       // since sent its one manager_state, and this FE never saw it.
-      send({ kind: 'manager_refresh' });
+      sendAgentd({ kind: 'manager_subscribe' });
     }
   });
 
@@ -493,13 +523,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const openPrompt = () => {
     setPromptPending(true);
-    send({ kind: 'default_prompt' });
+    sendAgentd({ kind: 'agent_default_prompt' });
   };
 
   const start = () => {
     setStarting(true);
     setError('');
-    send(startMessage(form()));
+    sendAgentd(startMessage(form()));
   };
 
   const booting = (
@@ -537,8 +567,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <Connections
           keys={roster().keys ?? []}
           results={keyResults()}
-          onSave={(name, value) => { setKeyResult(name, {}); send({ kind: 'set_key', name, value }); }}
-          onTest={(name, value) => { setKeyResult(name, { busy: true }); send({ kind: 'test_key', name, value }); }}
+          onSave={(name, value) => { setKeyResult(name, {}); sendAgentd({ kind: 'agent_set_key', name, value }); }}
+          onTest={(name, value) => { setKeyResult(name, { busy: true }); sendAgentd({ kind: 'agent_test_key', name, value }); }}
         />
       </Launcher>
 
@@ -550,7 +580,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         defaultName={(row()?.title || 'transcript').replace(/[^\w.-]+/g, '-').slice(0, 60) + '.md'}
         onConfirm={(p) => {
           setSaving(false);
-          send({ kind: 'save_transcript', path: p, text: transcriptText() });
+          sendLocal({ kind: 'save_transcript', path: p, text: transcriptText() });
         }}
         onCancel={() => setSaving(false)}
         data-testid="ai-save-picker"
@@ -591,9 +621,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onClick={() => { close(); setSaving(true); }} data-testid="ai-menu-save" />
               <MenuSeparator />
               <MenuItem label="Detach" disabled={!sessionKey()}
-                onClick={() => { close(); send({ kind: 'detach' }); }} data-testid="ai-menu-detach" />
+                onClick={() => { close(); sendLocal({ kind: 'detach' }); }} data-testid="ai-menu-detach" />
               <MenuItem label="Terminate" disabled={!sessionKey()}
-                onClick={() => { close(); send({ kind: 'terminate' }); }} data-testid="ai-menu-terminate" />
+                onClick={() => { close(); sendLocal({ kind: 'terminate' }); }} data-testid="ai-menu-terminate" />
 
             </Menu>
           ),
@@ -624,7 +654,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               <MenuItem
                 label={status().yolo ? 'Stop auto-approving (yolo)' : 'Auto-approve everything (yolo)'}
                 disabled={!sessionKey()}
-                onClick={() => { close(); send({ kind: 'set_yolo', on: !status().yolo }); }}
+                onClick={() => { close(); sendAgentd({ kind: 'agent_set_yolo', key: sessionKey(), on: !status().yolo }); }}
                 data-testid="ai-menu-yolo"
               />
               <MenuItem
@@ -640,19 +670,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               <MenuItem
                 label="Open terminal in project folder"
                 disabled={!row()?.cwd}
-                onClick={() => { close(); send({ kind: 'open_terminal', cwd: row()?.cwd ?? '' }); }}
+                onClick={() => { close(); sendLocal({ kind: 'open_terminal', cwd: row()?.cwd ?? '' }); }}
                 data-testid="ai-menu-open-terminal"
               />
               <MenuItem
                 label="Open file manager in project folder"
                 disabled={!row()?.cwd}
-                onClick={() => { close(); send({ kind: 'open_file_manager', cwd: row()?.cwd ?? '' }); }}
+                onClick={() => { close(); sendLocal({ kind: 'open_file_manager', cwd: row()?.cwd ?? '' }); }}
                 data-testid="ai-menu-open-file-manager"
               />
               <MenuItem
                 label="Open text editor in project folder"
                 disabled={!row()?.cwd}
-                onClick={() => { close(); send({ kind: 'open_text_editor', cwd: row()?.cwd ?? '' }); }}
+                onClick={() => { close(); sendLocal({ kind: 'open_text_editor', cwd: row()?.cwd ?? '' }); }}
                 data-testid="ai-menu-open-text-editor"
               />
               <MenuSeparator />
@@ -672,7 +702,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                         <MenuItem
                           label={'   ' + v.name}
                           trailing={v.value === cfg.current ? <span>✓</span> : undefined}
-                          onClick={() => { close(); send({ kind: 'set_config', id: cfg.id, value: v.value }); }}
+                          onClick={() => { close(); sendAgentd({ kind: 'agent_set_config', key: sessionKey(), id: cfg.id, value: v.value }); }}
                           data-testid={`ai-menu-config-${cfg.id}-${v.value}`}
                         />
                       )}
@@ -715,23 +745,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           startedAt={(key) => startedAt.get(key) ?? Date.now()}
           now={now}
           activeKey={sessionKey}
-          onActivate={(r) => send({ kind: 'select', key: r.key })}
-          onReattach={(r) => send({ kind: 'row_reattach', key: r.key })}
-          onDetach={(r) => send({ kind: 'row_detach', key: r.key })}
-          onCancel={(r) => send({ kind: 'row_cancel', key: r.key })}
-          onStop={(r) => send({ kind: 'row_stop', key: r.key })}
+          onActivate={(r) => sendAgentd({ kind: 'wash.focus', key: r.key })}
+          onReattach={(r) => sendAgentd({ kind: 'agent_reattach', key: r.key })}
+          onDetach={(r) => sendAgentd({ kind: 'agent_detach', key: r.key })}
+          onCancel={(r) => sendAgentd({ kind: 'agent_cancel', key: r.key })}
+          onStop={(r) => sendAgentd({ kind: 'agent_stop', key: r.key })}
           onRename={(r) => openRename({ key: r.key, session_id: r.session_id, title: r.title })}
           onAddRoot={(r) => openAddRoot(r.key, r.cwd ?? '')}
-          onOpenTerminal={(r) => send({ kind: 'open_terminal', cwd: r.cwd ?? '' })}
-          onOpenFileManager={(r) => send({ kind: 'open_file_manager', cwd: r.cwd ?? '' })}
-          onOpenTextEditor={(r) => send({ kind: 'open_text_editor', cwd: r.cwd ?? '' })}
-          onAnswer={(a, decision, remember, scope) => send({
-            kind: 'answer',
-            id: a.id,
-            decision,
-            rule: remember ? (a.suggested_rule ?? '') : '',
-            ...(scope ? { scope } : {}),
-          })}
+          onOpenTerminal={(r) => sendLocal({ kind: 'open_terminal', cwd: r.cwd ?? '' })}
+          onOpenFileManager={(r) => sendLocal({ kind: 'open_file_manager', cwd: r.cwd ?? '' })}
+          onOpenTextEditor={(r) => sendLocal({ kind: 'open_text_editor', cwd: r.cwd ?? '' })}
+          onAnswer={(a, decision, remember, scope) => answer(a.id, decision, remember ? (a.suggested_rule ?? '') : '', scope)}
         />
     </div>
   );
@@ -751,15 +775,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // session started without one, its adapter.
         setStarting(true);
         setError('');
-        send(s.stack
+        sendAgentd(s.stack
           ? startMessage({ stack: s.stack, tier: s.tier ?? DEFAULT_TIER, agent: '', model: '', cwd: s.cwd ?? '' })
           : startMessage({ stack: '', tier: '', agent: s.agent ?? '', model: '', cwd: s.cwd ?? '' }));
       }}
       onResume={(s) => {
         const act = historyAction(s);
-        if (act === 'reattach') send({ kind: 'row_reattach', key: s.row_key });
-        else if (act === 'focus') send({ kind: 'row_focus', key: s.row_key });
-        else send({ kind: 'resume', session_id: s.session_id });
+        if (act === 'reattach') sendAgentd({ kind: 'agent_reattach', key: s.row_key ?? '' });
+        else if (act === 'focus') sendAgentd({ kind: 'wash.focus', key: s.row_key ?? '' });
+        else sendAgentd({ kind: 'agent_resume', session_id: s.session_id });
       }}
     />
   );
@@ -806,7 +830,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             variant="primary"
             data-testid="ai-prompt-save"
             onClick={() => {
-              send({ kind: 'set_default_prompt', text: promptDraft() });
+              sendAgentd({ kind: 'agent_set_default_prompt', text: promptDraft() });
               setPromptOpen(false);
             }}
           >
@@ -858,7 +882,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onConfirm={() => {
             const id = s().session_id;
             setDeleteFor(null);
-            send({ kind: 'delete_session', session_id: id });
+            sendAgentd({ kind: 'agent_delete', session_id: id });
           }}
         >
           <div style={{ font: tokens.type.textMd, opacity: 0.75, 'max-width': '46ch' }}>
@@ -882,7 +906,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         onCancel={() => setPruning(false)}
         onConfirm={() => {
           setPruning(false);
-          send({ kind: 'prune_history', max_age_ms: Number(pruneAge()) });
+          sendAgentd({ kind: 'agent_prune', max_age_ms: Number(pruneAge()) });
         }}
       >
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceMd}px`, 'max-width': '46ch' }}>
@@ -928,7 +952,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             // key and the widening silently did nothing.
             const key = r().key;
             setRootFor(null);
-            send({ kind: 'row_add_root', key, path: p });
+            sendAgentd({ kind: 'agent_add_root', key, path: p });
           }}
           onCancel={() => setRootFor(null)}
           data-testid="ai-root-picker"
@@ -956,7 +980,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             variant="danger"
             onClick={() => {
               setConfirmClose(false);
-              send({ kind: 'terminate' });
+              sendLocal({ kind: 'terminate' });
             }}
           >
             Terminate
@@ -966,7 +990,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             variant="primary"
             onClick={() => {
               setConfirmClose(false);
-              send({ kind: 'detach' });
+              sendLocal({ kind: 'detach' });
             }}
           >
             Detach
@@ -1074,8 +1098,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           overflow: 'hidden',
         }}
       >
-        <WorkspaceLayout onAnswer={(id, decision, rule, scope) => send({kind:'answer', id, decision, rule: rule ?? '', ...(scope ? { scope } : {})})} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
-          onAction={(name, args) => send({ kind: 'workspace_action', name, arguments: args })}>
+        <WorkspaceLayout onAnswer={answer} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
+          onAction={(name, args) => sendAgentd({ kind: 'workspace_action', key: sessionKey(), name, arguments: args })}>
           <Show
             when={sessionKey()}
             fallback={
@@ -1085,7 +1109,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   fallback={
                     <>
                       <div style={{ 'margin-bottom': `${tokens.spaceMd}px` }}>This window is not attached to a session.</div>
-                      <Button onClick={() => send({ kind: 'open_agents' })}>Open Agents</Button>
+                      <Button onClick={() => sendLocal({ kind: 'open_agents' })}>Open Agents</Button>
                     </>
                   }
                 >
@@ -1098,8 +1122,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               events={events}
               asks={asks}
               status={status}
-              onSend={(text, blocks) => send({ kind: 'prompt', text, blocks })}
-              onRemoveRoot={(path) => send({ kind: 'row_remove_root', key: sessionKey(), path })}
+              onSend={(text, blocks) => sendAgentd({ kind: 'agent_prompt', key: sessionKey(), text, blocks })}
+              onRemoveRoot={(path) => sendAgentd({ kind: 'agent_remove_root', key: sessionKey(), path })}
               insertDraft={draftIn}
               onPickFiles={() =>
                 new Promise<string[]>((resolve) => {
@@ -1109,10 +1133,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   setAttaching(true);
                 })
               }
-              onAnswer={(id, decision, rule, scope) => send({ kind: 'answer', id, decision, rule: rule ?? '', ...(scope ? { scope } : {}) })}
-              onCancel={() => send({ kind: 'cancel' })}
-              onSetMode={(mode) => send({ kind: 'set_mode', mode })}
-              onSetConfig={(id, value) => send({ kind: 'set_config', id, value })}
+              onAnswer={answer}
+              onCancel={() => sendAgentd({ kind: 'agent_cancel', key: sessionKey() })}
+              onSetMode={(mode) => sendAgentd({ kind: 'agent_set_mode', key: sessionKey(), mode })}
+              onSetConfig={(id, value) => sendAgentd({ kind: 'agent_set_config', key: sessionKey(), id, value })}
               onOpenTool={(e) => {
                 // A tool row names a file; clicking it opens that file in
                 // whatever app registered for the type (the router's own
@@ -1121,7 +1145,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 // Agent had no onOpenTool at all, so every row was inert —
                 // only wash-edit's agent tab could act on one.
                 const path = e.path || (e.title ?? '').trim();
-                if (path) send({ kind: 'open_path', path });
+                if (path) sendLocal({ kind: 'open_path', path });
               }}
             />
           </Show>

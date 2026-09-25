@@ -1,7 +1,6 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // withStateDir points the store at a throwaway XDG_STATE_HOME and clears

@@ -22,7 +22,6 @@ package agentd
 import (
 	"context"
 	"encoding/json"
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"reflect"
 	"strings"
@@ -32,6 +31,7 @@ import (
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"

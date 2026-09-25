@@ -28,10 +28,11 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // defaultPromptFileName is the file, beside agents.json in the wash config dir.

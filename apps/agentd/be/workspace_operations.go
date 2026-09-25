@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/sirmick/wash/internal/agentproto"
-	"github.com/sirmick/wash/pkg/wire"
 	"slices"
 	"time"
 
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/internal/workspacemcp"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 type assignmentChange struct {

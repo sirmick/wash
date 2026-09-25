@@ -1,10 +1,11 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // The router's idea of idle is "no browser attached". For a desktop that

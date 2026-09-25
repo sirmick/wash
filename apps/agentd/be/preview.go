@@ -1,11 +1,12 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // Running previews are manager context, not roster state. Streamed replies

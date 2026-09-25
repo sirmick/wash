@@ -23,7 +23,6 @@ package agentd
 
 import (
 	"encoding/base64"
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"net/url"
 	"os"
@@ -32,6 +31,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // maxAttachImageBytes bounds ONE pasted image, measured after decoding.

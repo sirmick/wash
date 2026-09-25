@@ -1,10 +1,11 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // The desktop toast for a question (docs/AGENT_UX.md N2). The rule the

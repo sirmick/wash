@@ -19,9 +19,9 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )

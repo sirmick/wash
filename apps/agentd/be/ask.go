@@ -17,13 +17,13 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"log"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )

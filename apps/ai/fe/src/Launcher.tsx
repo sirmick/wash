@@ -23,10 +23,11 @@ export interface LaunchForm {
 
 export const DEFAULT_TIER = 'frontier';
 
-/** What Start sends: empty overrides are left out, so agentd sees only what
- *  the person actually chose. */
-export function startMessage(f: LaunchForm): Record<string, string> {
-  const msg: Record<string, string> = { kind: 'start', cwd: f.cwd };
+/** What Start sends agentd: empty overrides are left out, so agentd sees
+ *  only what the person actually chose. The launcher lives in the manager,
+ *  which hands each session to a window of its own (open). */
+export function startMessage(f: LaunchForm): agentproto.AgentStart {
+  const msg: agentproto.AgentStart = { kind: 'agent_start', cwd: f.cwd, open: true };
   if (f.stack) {
     msg.stack = f.stack;
     msg.tier = f.tier || DEFAULT_TIER;

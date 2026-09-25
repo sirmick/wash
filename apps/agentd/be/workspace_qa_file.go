@@ -6,15 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/sirmick/wash/internal/agentproto"
-	"github.com/sirmick/wash/pkg/wire"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
+	"github.com/sirmick/wash/pkg/wire"
 )
 
 type qaFileState struct {

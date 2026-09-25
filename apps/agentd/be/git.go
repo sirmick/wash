@@ -11,11 +11,12 @@ package agentd
 
 import (
 	"context"
-	"github.com/sirmick/wash/internal/agentproto"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // gitTimeout bounds one lookup. A repo on a stalled network mount must

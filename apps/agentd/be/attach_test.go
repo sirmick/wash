@@ -2,11 +2,12 @@ package agentd
 
 import (
 	"encoding/base64"
-	"github.com/sirmick/wash/internal/agentproto"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // b64 of n bytes, which is what an image attachment is on the wire.

@@ -1,10 +1,11 @@
 package agentd
 
 import (
-	"github.com/sirmick/wash/internal/agentproto"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // Usage is telemetry, not a roster transition. Agents may report it for every
