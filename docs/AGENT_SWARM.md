@@ -6,7 +6,9 @@ interface, resident package workflow and first-class QA are specified in
 
 See the [validation notes](AGENT_SWARM_VALIDATION.md) for what was run while
 building this, and the [Redoubt project example](examples/redoubt-workspace.md)
-for the worked setup it was designed against.
+for the worked setup it was designed against. Open work, the comparison with
+other multi-agent tools and the refactor options are in the
+[backlog](AGENT_SWARM_BACKLOG.md).
 
 ## 1. First use case
 
