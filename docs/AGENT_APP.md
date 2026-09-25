@@ -376,9 +376,11 @@ Three rules that must be designed in, not discovered:
   behind it replace the pending value for that row. Permission, lifecycle and
   other structural roster changes remain full Interactive snapshots.
 - **N renderers, one controller.** Permission asks remain pure state and may
-  be answered from any authorized renderer, but a hosted session has exactly
-  zero or one controlling `com.wash.ai` window. Transcript-only consumers do
-  not acquire that lease.
+  be answered from any renderer, but a hosted session has exactly zero or
+  one controller: the instance holding its lease. The lease is claimed by
+  role, not granted by app id (docs/AGENT_PROTOCOL.md, Trust and roles), so
+  any frontend may be a session's window; transcript-only consumers such as
+  wash-edit's tabs simply never claim it.
 
 - **N renderers for approvals.** With three surfaces plus the sidebar, a
   pending ask is pure state in agentd with no per-view ownership. Answering
@@ -396,6 +398,17 @@ Three rules that must be designed in, not discovered:
 
 Naming: `com.wash.agent` remains claimed by `docs/AGENT.md`; the manager is
 `com.wash.agents` and individual controllers remain `com.wash.ai`.
+
+**The protocol** between agentd and every one of these surfaces is written
+down in [AGENT_PROTOCOL.md](AGENT_PROTOCOL.md): each request and push, who
+may send it, what it answers, its queueing class. The messages are Go
+structs in `internal/agentproto`; the TypeScript the frontends use
+(`agentproto` in `@wash/ui`) and the document's reference are generated from
+them, and CI fails when either is stale. `com.wash.ai`'s backend relays that
+protocol rather than translating it, `internal/agentclient` (wash-edit's
+tabs) and the session gateway (the rail) send the same typed requests, and
+what agentd asks of the desktop — open a window, post a notification — goes
+through one handler as typed events.
 
 ## 10. Removal — and the migration obligation
 

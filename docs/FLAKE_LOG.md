@@ -939,3 +939,30 @@ well as the transcript text — do that before touching the timeout.
 
 **Owner:** the spec came with the per-session-roots work (a9355717,
 c250a140), not with the push it went red on.
+
+## 2026-09-24 — agent specs on a loaded run: inotify instances exhausted, ROOT-CAUSED
+
+Seen three times during the stacks and protocol work, each in a full
+`playwright test agent-` run at the default worker count, each passing
+alone and 3/3 on repeat:
+
+- `agent-adapter-config` "no agents.json … offers the built-in workspace
+  MCP": waited for `session started … mcp=1`, got `mcp=0`;
+- `agent-workspace` "MCP configures a live workspace …": the workspace
+  sidebar never appeared;
+- `interaction` "releasing a click cross-fades" (217ms against a 200ms bound)
+  is a separate timing sensitivity under the same load.
+
+**Cause, from the failing run's own router log:** `agentd: workspace service
+unavailable: couldn't initialize inotify: too many open files`. The
+workspace service watches plan documents with inotify; each test router
+runs its own agentd, and `fs.inotify.max_user_instances` is 128 per user,
+shared with the developer's live desktop. With enough routers at once the
+last agentd to start gets none, runs without a workspace service, and its
+sessions come up without the workspace MCP bridge.
+
+**Workaround:** run the agent specs with `--workers=4`, which held for every
+later run (78/78, many times). **Fix options:** raise the limit on test
+machines, or make agentd's workspace service share one watcher per process
+rather than failing outright when inotify is exhausted — its failure is
+currently logged once and otherwise silent.
