@@ -13,16 +13,24 @@ import (
 
 // This is a provider tool capability, not an OS sandbox. Pin the adapter contract:
 // unknown versions must be reviewed before we claim their launch metadata works.
-// Observed in claude-agent-acp 0.79.0 createSession: _meta.claudeCode.options is
-// passed to the SDK on both new and load. Codex's read-only mode is workspaceWrite.
+// createSession passes _meta.claudeCode.options to the SDK on both session/new
+// and session/load. Codex's read-only mode is workspaceWrite.
 //
-// 0.81.1 re-verified against its dist/acp-agent.js: tools comes from options;
+// 0.81.1 verified against its dist/acp-agent.js: tools comes from options;
 // disallowedTools is merged with the adapter's own; settingSources and
 // strictMcpConfig reach the SDK through the options spread, after the
 // adapter's defaults; settings (disableAllHooks) survives the provider merge;
 // allowDangerouslySkipPermissions:false turns allowBypass off; permission
 // requests for MCP tools carry _meta.claudeCode.mcpServer {name, source}.
-var reviewerVerifiedVersions = []string{"0.79.0", "0.81.1"}
+//
+// 0.81.2 re-verified, same file, each point unchanged: tools (options first,
+// else the claude_code preset) and the disallowedTools merge sit after the
+// spread; nothing after the spread re-sets settingSources or strictMcpConfig;
+// the provider merge copies settings and adds only apiKeyHelper and env;
+// allowBypass also needs settings.permissions.disableBypassPermissionsMode
+// unset; load reaches createSession through getOrCreateSession with the
+// request's _meta, and re-creates the session when its fingerprint changed.
+var reviewerVerifiedVersions = []string{"0.81.1", "0.81.2"}
 
 func reviewerMetadata(provider string, info acp.Implementation) (map[string]any, error) {
 	if provider != "claude" || info.Name != "@agentclientprotocol/claude-agent-acp" || !slices.Contains(reviewerVerifiedVersions, info.Version) {

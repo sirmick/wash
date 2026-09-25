@@ -10,8 +10,11 @@ import (
 	"github.com/sirmick/wash/internal/swarm"
 )
 
-// Apply model first: adapters can change thinking choices when the model changes.
-// Every subsequent step uses the full, authoritative option list returned by ACP.
+// Order matters: the mode first, then the model, then the effort. Claude
+// Code re-picks the model when its mode changes and narrows the effort
+// choices when the model changes, so each is set only once the setting it
+// depends on is in place. Every step uses the full, authoritative option
+// list returned by ACP.
 func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.ConfigOption, set func(string, string) ([]acp.ConfigOption, error)) (map[string]string, error) {
 	pending := map[string]string{}
 	for id, value := range settings.Configs {
@@ -72,16 +75,27 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 		}
 		return apply(id, value)
 	}
-	if settings.Model != "" {
-		if err := semantic("model", settings.Model); err != nil {
-			return nil, err
-		}
-	}
 	ids := make([]string, 0, len(pending))
 	for id := range pending {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
+	// The mode first: Claude Code re-picks the model when its mode changes
+	// (a member launched on haiku with configs {mode: plan} reported sonnet
+	// a moment after this check had passed — the shakedown's finding 3),
+	// while a model set after the mode stays. Verified live 2026-09-25.
+	for _, id := range ids {
+		if option := find(id); option != nil && option.Category == "mode" {
+			if err := apply(id, pending[id]); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if settings.Model != "" {
+		if err := semantic("model", settings.Model); err != nil {
+			return nil, err
+		}
+	}
 	// A caller may use the raw model option instead of the semantic shortcut.
 	for _, id := range ids {
 		if option := find(id); option != nil && option.Category == "model" {
@@ -90,8 +104,8 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 			}
 		}
 	}
-	if settings.Thinking != "" {
-		if err := semantic("thought_level", settings.Thinking); err != nil {
+	if settings.Effort != "" {
+		if err := semantic("thought_level", settings.Effort); err != nil {
 			return nil, err
 		}
 	}
@@ -107,7 +121,7 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 		effective[option.ID] = option.CurrentValue
 	}
 	// An adapter may reject/coerce a value without reporting an RPC error. Never
-	// start work under a silently substituted model or thinking level.
+	// start work under a silently substituted model or effort level.
 	for id, value := range requested {
 		if effective[id] != value {
 			return nil, fmt.Errorf("adapter did not retain %s=%q (reported %q)", id, value, effective[id])
@@ -121,7 +135,7 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 // the loaded session does not offer: session/load keeps the model, but the
 // adapter may name it differently afterwards (observed: a session launched
 // on "claude-fable-5-1[1m]" loads with 1M context as "claude-fable-5-1", from
-// a list then reading only "default, opus"), while the thinking level really
+// a list then reading only "default, opus"), while the effort level really
 // is lost. So a setting the session does not offer is skipped and reported,
 // and everything it does offer is still applied — dropping effort because
 // the model's label moved is the bug this exists to fix.
@@ -139,9 +153,9 @@ func restoreWorkspaceSession(settings swarm.AgentProfile, options []acp.ConfigOp
 		skipped = append(skipped, "model="+settings.Model)
 		settings.Model = ""
 	}
-	if settings.Thinking != "" && !offered("thought_level", settings.Thinking) {
-		skipped = append(skipped, "thinking="+settings.Thinking)
-		settings.Thinking = ""
+	if settings.Effort != "" && !offered("thought_level", settings.Effort) {
+		skipped = append(skipped, "effort="+settings.Effort)
+		settings.Effort = ""
 	}
 	settings.Configs = maps.Clone(settings.Configs)
 	for id, value := range settings.Configs {

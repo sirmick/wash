@@ -60,11 +60,11 @@ type transcriptMeta struct {
 	Version   int    `json:"v"`
 	SessionID string `json:"session_id"`
 	Agent     string `json:"agent,omitempty"`
-	// Connection, Stack and Tier are the launchRecord: written once, in the
-	// head, where a resume finds them however long the transcript grew.
+	// Connection, Catalog and Model are the launchRecord: written once, in
+	// the head, where a resume finds them however long the transcript grew.
 	Connection string `json:"connection,omitempty"`
-	Stack      string `json:"stack,omitempty"`
-	Tier       string `json:"tier,omitempty"`
+	Catalog    string `json:"catalog,omitempty"`
+	Model      string `json:"model,omitempty"`
 	Cwd        string `json:"cwd,omitempty"`
 	StartedMS  int64  `json:"started_ms"`
 }
@@ -181,7 +181,7 @@ func bindTranscript(key, sessionID string, launch launchRecord, cwd string, now 
 	}
 	line, err := json.Marshal(transcriptMeta{
 		Kind: metaKind, Version: transcriptVer, SessionID: sessionID,
-		Agent: launch.Agent, Connection: launch.Connection, Stack: launch.Stack, Tier: launch.Tier,
+		Agent: launch.Agent, Connection: launch.Connection, Catalog: launch.Catalog, Model: launch.Model,
 		Cwd: cwd, StartedMS: now.UnixMilli(),
 	})
 	if err != nil {
@@ -676,7 +676,7 @@ func readSessionMeta(path string) (agentproto.SessionMeta, bool) {
 		if err := json.Unmarshal(head.Bytes(), &m); err == nil && m.Kind == metaKind {
 			out.SessionID = m.SessionID
 			out.Agent = m.Agent
-			out.Connection, out.Stack, out.Tier = m.Connection, m.Stack, m.Tier
+			out.Connection, out.Catalog, out.LaunchModel = m.Connection, m.Catalog, m.Model
 			out.Cwd = m.Cwd
 			out.Dir = dirLabel(m.Cwd)
 			out.StartedMS = m.StartedMS

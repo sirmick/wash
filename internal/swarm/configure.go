@@ -6,19 +6,17 @@ import (
 	"strings"
 )
 
-// ConfigurePatch merges profile entries by name. Each supplied profile replaces
-// that entry; null deletes it. Other omitted fields are preserved.
+// ConfigurePatch changes a workspace's settings. Omitted fields are
+// preserved; a null package deletes it.
 type ConfigurePatch struct {
-	Name       *string                  `json:"name"`
-	MaxActive  *int                     `json:"max_active"`
-	MaxMembers *int                     `json:"max_members"`
-	Profiles   map[string]*AgentProfile `json:"profiles"`
-	Packages   map[string]*Package      `json:"packages"`
-	// Stack names the stack members' tiers come from. agentd checks that it
-	// exists; the store only keeps the name.
-	Stack          *string `json:"stack"`
-	DefaultProfile *string `json:"default_profile"`
-	Expected       *int64  `json:"expected_revision"`
+	Name       *string             `json:"name"`
+	MaxActive  *int                `json:"max_active"`
+	MaxMembers *int                `json:"max_members"`
+	Packages   map[string]*Package `json:"packages"`
+	// Catalog names the catalog members' models come from. agentd checks
+	// that it exists; the store only keeps the name.
+	Catalog  *string `json:"catalog"`
+	Expected *int64  `json:"expected_revision"`
 }
 
 func ValidProfileName(s string) bool {
@@ -58,8 +56,8 @@ func ValidateProfile(p AgentProfile) error {
 	if p.Connection != "" && (!ValidText(p.Connection, 80) || strings.TrimSpace(p.Connection) != p.Connection) {
 		return errors.New("invalid connection")
 	}
-	if p.Model != "" && !ValidText(p.Model, 256) || p.Thinking != "" && !ValidText(p.Thinking, 80) {
-		return errors.New("invalid model or thinking value")
+	if p.Model != "" && !ValidText(p.Model, 256) || p.Effort != "" && !ValidText(p.Effort, 80) {
+		return errors.New("invalid model or effort value")
 	}
 	if len(p.Configs) > 32 {
 		return errors.New("maximum 32 adapter settings")
@@ -102,22 +100,6 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		if w.MaxMembers < live {
 			return errors.New("max_members cannot be below current membership")
 		}
-		for name, profile := range p.Profiles {
-			if !ValidProfileName(name) {
-				return errors.New("profile name must be 1–80 ASCII letters, digits, underscores or hyphens")
-			}
-			if profile == nil {
-				delete(w.Profiles, name)
-				continue
-			}
-			if err := ValidateProfile(*profile); err != nil {
-				return fmt.Errorf("profile %q: %w", name, err)
-			}
-			w.Profiles[name] = clone(*profile)
-		}
-		if len(w.Profiles) > 64 {
-			return errors.New("maximum 64 profiles")
-		}
 		for code, pkg := range p.Packages {
 			if !ValidProfileName(code) {
 				return errors.New("package code must be 1–80 ASCII letters, digits, underscores or hyphens")
@@ -137,16 +119,8 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		if len(w.Packages) > 64 {
 			return errors.New("maximum 64 packages")
 		}
-		if p.DefaultProfile != nil {
-			w.DefaultProfile = *p.DefaultProfile
-		}
-		if p.Stack != nil {
-			w.Stack = *p.Stack
-		}
-		if w.DefaultProfile != "" {
-			if _, ok := w.Profiles[w.DefaultProfile]; !ok {
-				return errors.New("default_profile must name a registered profile or be empty")
-			}
+		if p.Catalog != nil {
+			w.Catalog = *p.Catalog
 		}
 		// The revision counts configuration changes only: bumped by every
 		// mutation, an expected_revision read moments earlier went stale
@@ -158,43 +132,14 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 	return revision, err
 }
 
-// ResolveProfile captures a launch configuration while membership is reserved:
-// the named profile, else the default one, with explicit settings on top.
-// With neither, a member launches like its parent: the parent's provider and,
-// when it runs on that same provider, the parent's connection, so a team led
-// through OpenRouter is not quietly launched direct.
-func ResolveProfile(w *Workspace, name string, explicit, parent AgentProfile) (string, AgentProfile, error) {
-	if name == "" {
-		name = w.DefaultProfile
-	}
-	var base AgentProfile
-	if name != "" {
-		p, ok := w.Profiles[name]
-		if !ok {
-			return "", AgentProfile{}, fmt.Errorf("unknown profile %q", name)
-		}
-		base = p
-	} else {
-		base.Provider = explicit.Provider
-		if base.Provider == "" {
-			base.Provider = parent.Provider
-		}
-		if base.Provider == parent.Provider {
-			base.Connection = parent.Connection
-		}
-	}
-	settings, err := Overlay(base, explicit)
-	return name, settings, err
-}
-
-// Overlay puts explicit settings over a base profile: a named profile or a
-// stack's tier. Explicit settings win field by field; configs merge by option
-// ID. A provider override must match the base's: raw adapter option IDs and
+// Overlay puts a member's explicit settings over its base, the catalog
+// slot or model it resolved to. Explicit settings win field by field; configs
+// merge by option ID. A provider override must match the base's: raw adapter option IDs and
 // a connection must never cross provider boundaries.
 func Overlay(base, explicit AgentProfile) (AgentProfile, error) {
 	result := clone(base)
 	if explicit.Provider != "" && result.Provider != "" && explicit.Provider != result.Provider {
-		return result, errors.New("provider conflicts with selected profile")
+		return result, errors.New("provider conflicts with the catalog's adapter")
 	}
 	if explicit.Provider != "" {
 		result.Provider = explicit.Provider
@@ -208,8 +153,8 @@ func Overlay(base, explicit AgentProfile) (AgentProfile, error) {
 	if explicit.Model != "" {
 		result.Model = explicit.Model
 	}
-	if explicit.Thinking != "" {
-		result.Thinking = explicit.Thinking
+	if explicit.Effort != "" {
+		result.Effort = explicit.Effort
 	}
 	if explicit.Subagents != "" {
 		result.Subagents = explicit.Subagents

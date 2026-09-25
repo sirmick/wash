@@ -12,6 +12,7 @@ package agentpolicy
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -56,13 +57,37 @@ type Policy struct {
 	// Connections add named ways to reach an adapter ("claude@openrouter"),
 	// replacing a built-in connection of the same name (see Connection).
 	Connections map[string]Connection `json:"connections,omitempty"`
-	// Stacks override the built-in stacks by key, tier by tier. Kept as raw
-	// JSON here: a stack's tiers are swarm.AgentProfile values, swarm
-	// imports this package, and agentd, which reads them, owns the check.
-	// Keeping them at all matters: Save rewrites the whole file, and a
-	// field this struct did not know would be dropped by the next "always
-	// allow" click.
-	Stacks map[string]json.RawMessage `json:"stacks,omitempty"`
+	// Catalogs override the built-in catalogs by id, or add the user's own.
+	// Kept as raw JSON here: a catalog's slots are swarm.AgentProfile
+	// values, swarm imports this package, and agentd, which reads them,
+	// owns the check. Keeping them at all matters: Save rewrites the whole
+	// file, and a field this struct did not know would be dropped by the
+	// next "always allow" click.
+	Catalogs map[string]json.RawMessage `json:"catalogs,omitempty"`
+	// Launch is what the Agents window's launcher starts a session with
+	// unless changed for that one start (LaunchPrefs). Written by the
+	// launcher's Permissions row; a change made on a RUNNING session is
+	// that session's and never lands here.
+	Launch *LaunchPrefs `json:"launch,omitempty"`
+}
+
+// LaunchPrefs is the remembered default for the two permission settings a
+// launch has: the adapter's own approval preset and wash's auto-approval.
+type LaunchPrefs struct {
+	// Mode is the adapter's session mode to start in, by adapter id: the
+	// names are the adapter's own ("acceptEdits" on Claude Code, "read-only"
+	// on Codex), so one remembered value cannot serve two adapters.
+	Mode map[string]string `json:"mode,omitempty"`
+	// Yolo starts every session with host-side auto-approval on.
+	Yolo bool `json:"yolo,omitempty"`
+}
+
+// ModeFor is the remembered mode for one adapter, or "" for its default.
+func (l *LaunchPrefs) ModeFor(adapter string) string {
+	if l == nil {
+		return ""
+	}
+	return l.Mode[adapter]
 }
 
 // Rule is one line of the table.
@@ -141,6 +166,27 @@ func Append(path, match, decision, cwd string) error {
 	p.Rules = append(p.Rules, Rule{Match: match, Decision: decision, Cwd: cwd})
 	// Appending a rule implies the table is meant to be consulted.
 	p.Enabled = true
+	return Save(path, p)
+}
+
+// Update changes the policy file in place: read, change, write. Unlike
+// Load, a file that exists but does not parse is an error here rather than
+// a zero policy — a read-modify-write on a zero policy would replace the
+// whole file, rules and all, with only what fn set.
+func Update(path string, fn func(*Policy) error) error {
+	var p Policy
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &p); err != nil {
+			return fmt.Errorf("%s does not parse, not rewriting it: %w", path, err)
+		}
+	case !os.IsNotExist(err):
+		return err
+	}
+	if err := fn(&p); err != nil {
+		return err
+	}
 	return Save(path, p)
 }
 

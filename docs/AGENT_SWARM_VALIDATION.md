@@ -130,7 +130,7 @@ Command logs are retained under `/data/wash-agent-swarm/test-results/`, includin
 ## Workspace JSON and named profiles follow-up (2026-09-22)
 
 The follow-up adds `workspace_get`, atomic `workspace_configure`, named launch
-profiles, provider/model/thinking/config overrides, durable launch snapshots and
+profiles, provider/model/effort/config overrides, durable launch snapshots and
 sidebar launch details. Ordinary successful conversation turns no longer change
 the workspace revision when no durable state changed, so a read/modify/write
 sequence can cross that turn boundary. Profile settings are applied and verified
@@ -141,7 +141,7 @@ Final checks for this change, in the same isolated `/data` checkout:
 - Race-enabled Go tests passed for `internal/swarm`, `internal/workspacemcp`,
   `apps/agentd/be`, and `e2e/fixtures/acp-fake`. Coverage includes atomic rollback,
   authorization, profile persistence/replacement/deletion, concurrent revision
-  guards, launch snapshot isolation, model-before-thinking dependencies,
+  guards, launch snapshot isolation, model-before-effort dependencies,
   unsupported settings, provider errors/coercion, JSON option metadata and bounded
   history pagination.
 - **15 browser tests passed** across `agent-workspace.spec.ts`,
@@ -379,9 +379,9 @@ retry after store reopening and transfer of newer unsaved history to a new run.
 QA export attempts its final save on end and continues retrying failures afterward.
 
 Reviewer capability is explicit on launch profiles/member definitions. The provider
-contract was inspected in locally installed claude-agent-acp 0.79.0: session/new and
-session/load forward `_meta.claudeCode.options` to the SDK, including its tool allowlist.
-Only this adapter/version is enabled. Codex's read-only mode was confirmed to use
+contract was inspected in locally installed claude-agent-acp 0.81.1 and 0.81.2: session/new
+and session/load forward `_meta.claudeCode.options` to the SDK, including its tool allowlist.
+Only this adapter and these versions are enabled. Codex's read-only mode was confirmed to use
 workspaceWrite; unsupported providers/versions fail closed. Tests cover metadata on
 both ACP requests, host write/terminal denial even with yolo or an allow policy,
 scoped coordination approvals, explicit policy denial and retained resume settings.

@@ -53,37 +53,46 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 		return nil, errors.New("maximum 100 assignment changes")
 	}
 	results := []any{}
-	for _, u := range updates {
+	// The batch is atomic (the transaction rolls it back), so a bare store
+	// error left the caller guessing which update failed, and three creates
+	// for one member read as a conflict with some assignment it could not see.
+	created := map[string]int{}
+	fail := func(i int, err error) ([]any, error) { return nil, fmt.Errorf("update %d: %w", i, err) }
+	for i, u := range updates {
 		switch u.Action {
 		case "create":
 			member, err := resolveMember(s, h.sessionID, u.Member)
 			if err != nil {
-				return nil, err
+				return fail(i, fmt.Errorf("member %q: %w", u.Member, err))
 			}
 			a, err := s.Assign(h.sessionID, member, u.Text, u.Request)
 			if err != nil {
-				return nil, err
+				if j, ok := created[member]; ok && errors.Is(err, swarm.ErrActiveAssignment) {
+					err = fmt.Errorf("%w: update %d of this batch created it", err, j)
+				}
+				return fail(i, fmt.Errorf("member %q: %w", u.Member, err))
 			}
+			created[member] = i
 			results = append(results, a)
 		case "complete", "fail":
 			if len(u.CC) > 8 {
-				return nil, errors.New("cc: at most 8 members")
+				return fail(i, errors.New("cc: at most 8 members"))
 			}
 			if err := s.Complete(h.sessionID, u.ID, u.Body, u.Action == "fail"); err != nil {
-				return nil, err
+				return fail(i, err)
 			}
 			for _, ref := range u.CC {
 				member, err := resolveMember(s, h.sessionID, ref)
 				if err != nil {
-					return nil, fmt.Errorf("cc %s: %w", ref, err)
+					return fail(i, fmt.Errorf("cc %s: %w", ref, err))
 				}
 				if _, err := s.Send(h.sessionID, member, "progress", u.Body, "", u.ID, ""); err != nil {
-					return nil, fmt.Errorf("cc %s: %w", ref, err)
+					return fail(i, fmt.Errorf("cc %s: %w", ref, err))
 				}
 			}
 			results = append(results, map[string]string{"id": u.ID, "action": u.Action})
 		default:
-			return nil, errors.New("assignment action must be create, complete or fail")
+			return fail(i, errors.New("assignment action must be create, complete or fail"))
 		}
 	}
 	return results, nil

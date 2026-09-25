@@ -84,6 +84,9 @@ func TestAMemberCannotApproveItsOwnExitFromPlanMode(t *testing.T) {
 func TestARefusedPlanExitHandsTheOrchestratorThePlan(t *testing.T) {
 	withStateDir(t)
 	s, ws := planWorkspace(t)
+	if _, err := s.Assign("lead", "impl", "Plan K5a", ""); err != nil {
+		t.Fatal(err)
+	}
 	plan := "# K5a plan v3\n\n1. Loader stub at a fixed address.\n" + strings.Repeat("Detail line.\n", 400)
 	ws.planExitDenied(&hosted{sessionID: "impl-s"}, plan)
 	v := s.View("lead")
@@ -98,6 +101,35 @@ func TestARefusedPlanExitHandsTheOrchestratorThePlan(t *testing.T) {
 	path, _, _ = strings.Cut(path, "\n")
 	if b, err := os.ReadFile(path); err != nil || strings.TrimSpace(string(b)) != strings.TrimSpace(plan) {
 		t.Fatalf("full plan not saved at %q: %v", path, err)
+	}
+}
+
+// An idle plan-mode member wrote an empty plan and asked to leave plan mode;
+// the orchestrator was woken to approve nothing. Without an open assignment
+// there is no plan to hand over: no question, no plan file.
+func TestARefusedPlanExitWithoutAnAssignmentWakesNobody(t *testing.T) {
+	withStateDir(t)
+	s, ws := planWorkspace(t)
+	before := len(s.View("lead").Messages)
+	ws.planExitDenied(&hosted{sessionID: "impl-s"}, "# Plan\n\nNothing assigned yet.")
+	if got := s.View("lead").Messages; len(got) != before {
+		t.Fatalf("orchestrator woken for an unassigned member's plan: %+v", got[len(got)-1])
+	}
+	if entries, err := os.ReadDir(filepath.Join(filepath.Dir(transcriptDir()), "workspace-plans")); err == nil && len(entries) != 0 {
+		t.Fatalf("plan file written for an unassigned member: %v", entries)
+	}
+	// A completed assignment is not an open one either.
+	a, err := s.Assign("lead", "impl", "Plan K5a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Complete("impl-s", a.ID, "Done", false); err != nil {
+		t.Fatal(err)
+	}
+	before = len(s.View("lead").Messages)
+	ws.planExitDenied(&hosted{sessionID: "impl-s"}, "# Plan\n\nAfterthought.")
+	if got := s.View("lead").Messages; len(got) != before {
+		t.Fatalf("orchestrator woken after the assignment closed: %+v", got[len(got)-1])
 	}
 }
 

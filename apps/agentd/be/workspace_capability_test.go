@@ -14,7 +14,7 @@ import (
 )
 
 func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
-	info := acp.Implementation{Name: "@agentclientprotocol/claude-agent-acp", Version: "0.79.0"}
+	info := acp.Implementation{Name: "@agentclientprotocol/claude-agent-acp", Version: "0.81.1"}
 	meta, err := reviewerMetadata("claude", info)
 	if err != nil {
 		t.Fatal(err)
@@ -23,11 +23,12 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 	if !reflect.DeepEqual(options["tools"], []string{"Read", "Glob", "Grep"}) || options["strictMcpConfig"] != true || options["allowDangerouslySkipPermissions"] != false {
 		t.Fatal(options)
 	}
-	info.Version = "0.81.1"
+	info.Version = "0.81.2"
 	if _, err = reviewerMetadata("claude", info); err != nil {
 		t.Fatal("re-verified adapter refused:", err)
 	}
-	for _, version := range []string{"", "0.64.2", "0.80.0", "0.82.0"} {
+	// 0.79.0 was verified once and is no longer installed anywhere: dropped.
+	for _, version := range []string{"", "0.64.2", "0.79.0", "0.80.0", "0.82.0"} {
 		info.Version = version
 		if _, err = reviewerMetadata("claude", info); err == nil {
 			t.Fatal("unverified adapter accepted", version)

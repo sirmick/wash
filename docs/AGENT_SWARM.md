@@ -44,10 +44,10 @@ project root, initial progress items, and optional concurrency/member limits.
 `workspace_configure.document` registers the optional Markdown document separately. Source-file
 references remain in project instructions and explicit member role messages;
 Wash does not interpret their format. `workspace_get` returns the compact team view by default; `view:"state"` returns the workspace as JSON, including configuration, revisions,
-profiles, members, launch snapshots, plan, assignments, pending decisions, delivery
+the catalog, members, launch snapshots, plan, assignments, pending decisions, delivery
 counts, and live sessions' adapter options. `workspace_configure` changes the
-name, concurrency/member limits, named launch profiles, and optional default
-profile atomically. Further MCP calls populate members and assignments.
+name, concurrency/member limits and catalog atomically. Further MCP calls
+populate members and assignments.
 Reading a project file alone does not activate workspace UI.
 
 `workspace_end` reverses setup: end the workspace's child sessions, retain
@@ -222,49 +222,42 @@ members that need it. Bound membership/concurrency through explicit swarm
 settings; children stay within the authority of the launching session. Human
 permissions remain human permissions; an orchestrator cannot fabricate approvals.
 
-### Named launch profiles and state readback
+### Catalogs and state readback
 
-Profiles are project/workspace-scoped aliases such as `god` and `pleb`. Each has
-an explicit provider, optional model and thinking value, and an optional `configs`
-map for arbitrary adapter setting IDs. These are launch settings, not executable
-commands, credentials, sandbox permissions, or a separate model catalog. Read the
-actual IDs and allowed values from `workspace_get({"view":"state"}).sessions[member_id].config_options`
-for a live session of that provider. Model IDs are opaque provider values; Wash
-never translates a marketing name into a guessed ID. Providers without a live
-session expose their choices after a default member is started. Invalid choices
-also report the adapter's allowed values at launch.
+A member's model comes from a catalog (AGENT_APP.md, "Catalogs, connections
+and keys"): the workspace's, which is the orchestrator's own unless
+`workspace_configure.catalog` names another, or one the member names itself
+with `catalog`. `members[key].model` is a slot of a curated catalog
+(`frontier`, `coding`, `small`; frontier when omitted) or a model id the
+catalog's adapter offers. Model IDs are opaque provider values; Wash never
+translates a marketing name into a guessed ID. Read the actual IDs and
+allowed values from `workspace_get({"view":"state"}).sessions[member_id].config_options`
+for a live session of that provider, or prefer a slot. Invalid choices report
+the adapter's allowed values at launch. The per-workspace `profiles` map and
+`default_profile` are gone (2026-09-25): a curated catalog on the Catalog
+tab does that job globally.
 
-`workspace_configure.profiles` merges by alias: supplying an object replaces that
-one profile; `null` deletes it. Other aliases and omitted configuration fields
-are preserved. `default_profile: ""` clears the default. Deleting the default
-requires clearing or changing it in the same transaction. Configuration is
-orchestrator-only and persists with the workspace. `expected_revision` refers to
-`workspace.revision` (not the plan revision); a stale write fails atomically.
-Reducing `max_active` allows running turns to finish and limits new dispatches.
-`max_members` cannot be reduced below current membership. At most 64 named
-profiles and 32 raw settings per profile are accepted.
+`workspace_configure` is orchestrator-only and persists with the workspace.
+`expected_revision` refers to `workspace.revision` (not the plan revision); a
+stale write fails atomically. Reducing `max_active` allows running turns to
+finish and limits new dispatches. `max_members` cannot be reduced below
+current membership. A catalog change affects later launches only.
 
-`workspace_configure.members[key].profile` selects an alias, otherwise the configured default applies.
-Explicit `model` and `thinking` replace those profile fields; explicit `configs`
-merges by option ID. Conflicting semantic and raw values for the same setting
-are rejected. A provider override must match the selected profile. A member may
-instead name a stack `tier` (AGENT_SWARM_BULK.md, API 3.3), which works like a
-profile drawn from the workspace's stack. With no profile or tier,
-same-provider children inherit the parent's selected model and connection
-unless an explicit model is provided. Profiles use the provider's defaults for unspecified
-settings; they do not inherit the caller's model.
+Explicit `effort` and `configs` sit on top of the slot's; `configs` merge by
+option ID. Conflicting semantic and raw values for the same setting are
+rejected. A `provider` override must match the catalog's adapter.
 
-Wash resolves the profile atomically while reserving membership, applies the
-model first, then validates thinking against the refreshed adapter choices.
-Unknown settings, invalid choices, RPC failures and silently substituted values
-fail the launch before role instructions or tasks are delivered. Model and
-thinking use ACP categories (`model`, `thought_level`); other settings use exact
-IDs.
+Wash resolves the slot atomically while reserving membership, applies the
+mode first, then the model, then validates effort against the refreshed
+adapter choices. Unknown settings, invalid choices, RPC failures and silently
+substituted values fail the launch before role instructions or tasks are
+delivered. Model and effort use ACP categories (`model`, `thought_level`);
+other settings use exact IDs.
 
-Each child retains its alias, resolved `launch_settings` snapshot and
-`initial_configs` returned by the adapter. Editing/deleting a profile changes
-future launches, never existing sessions. Member details show the launch profile,
-provider, requested model and thinking level. `workspace_get.sessions` reports
+Each child retains its catalog and model as asked, its resolved
+`launch_settings` snapshot and the `initial_configs` returned by the adapter.
+Editing a catalog changes future launches, never existing sessions. Member
+details show the catalog, slot, provider, resolved model and effort. `workspace_get.sessions` reports
 current options for live sessions, which can differ after GUI setting changes;
 initial settings are deliberately retained as history. Paused/unloaded/ended
 sessions can have no live entry. State and live provider options are separate
@@ -537,8 +530,8 @@ The first implementation uses these defaults:
 - Child context: fresh sessions with explicit role instructions, assignments, and
   file references. Resident sessions retain their own conversations across turns.
   Do not copy the orchestrator's whole conversation into every child.
-- Child provider/model: allow named profiles and explicit provider/model/thinking
-  settings at spawn. Without a profile, default to the parent's provider/model when supported; report an
+- Child provider/model: a catalog slot or model id, with explicit effort and
+  settings at spawn. Without a model, the catalog's default slot; report an
   unsupported explicit selection rather than silently substituting. Verify how
   role instructions interact with the existing global default prompt.
 - Human intervention: allow the user to inspect and message any member, using
@@ -584,7 +577,7 @@ declarative workflow engine are outside the initial slice.
   decisions, member preview and human message controls. Previewing retains the
   current controller and shows the latest 300 transcript events. Plan changes
   travel as keyed upserts/removals; a missing sequence triggers resynchronization.
-- `workspace_get` adds JSON configuration, profile snapshots and live adapter settings;
+- `workspace_get` adds JSON configuration, launch snapshots and live adapter settings;
   `workspace_configure` persists atomic configuration patches. `workspace_get` reports
   members, plan, assignments, pending decisions and delivery
   counts. It avoids replaying the whole inbox. `inbox_read` accepts `after` and

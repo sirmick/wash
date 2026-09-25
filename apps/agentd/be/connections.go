@@ -8,17 +8,18 @@ import (
 	"sort"
 
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // Connections: named ways to reach an adapter (agentpolicy.Connection). The
-// built-in ones are data in stacks.json, beside the stacks that use them;
+// built-in ones are data in catalogs.json, beside the catalogs that use them;
 // agents.json's `connections` replaces one by name or adds more. An
 // adapter's own id is its direct connection and is never an entry.
 
-//go:embed stacks.json
+//go:embed catalogs.json
 var launchDataJSON []byte
 
-// launchData is stacks.json.
+// launchData is catalogs.json.
 type launchData struct {
 	Keys        map[string]keySpec                `json:"keys"`
 	Connections map[string]agentpolicy.Connection `json:"connections"`
@@ -34,7 +35,7 @@ type keySpec struct {
 var builtinLaunch = func() launchData {
 	var d launchData
 	if err := json.Unmarshal(launchDataJSON, &d); err != nil {
-		panic("agentd: stacks.json: " + err.Error())
+		panic("agentd: catalogs.json: " + err.Error())
 	}
 	return d
 }()
@@ -49,6 +50,18 @@ var keyStore = func() map[string]string {
 func connections(pol agentpolicy.Policy) map[string]agentpolicy.Connection {
 	out := maps.Clone(builtinLaunch.Connections)
 	maps.Copy(out, pol.Connections)
+	return out
+}
+
+// publishConnections is every connection, sorted by id, for the Catalog tab
+// to offer a slot.
+func publishConnections(pol agentpolicy.Policy) []agentproto.ConnectionView {
+	all := connections(pol)
+	out := make([]agentproto.ConnectionView, 0, len(all))
+	for id, c := range all {
+		out = append(out, agentproto.ConnectionView{ID: id, Adapter: c.Adapter, Key: c.Key})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 

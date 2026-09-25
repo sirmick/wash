@@ -142,7 +142,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 				return nil, errors.New("QA awaits a human decision")
 			}
 			if m.ID != w.Lead && !(m.Role == "reviewer" && m.Package == q.Package) {
-				return nil, errors.New("QA resolution requires orchestrator or package reviewer")
+				return nil, errors.New("QA resolution requires the orchestrator, or the reviewer whose package is the thread's")
 			}
 			if !ValidText(u.Evidence, 32768) {
 				return nil, errors.New("QA resolution requires evidence")

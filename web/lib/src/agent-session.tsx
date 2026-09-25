@@ -395,6 +395,10 @@ export const DecisionRow: Component<{ e: agentproto.Event }> = (p) => {
       data-status={p.e.status}
       style={{
         display: 'flex', 'align-items': 'baseline', gap: `${tokens.spaceSm}px`, 'min-width': 0, overflow: 'hidden',
+        // The transcript is a flex column. overflow:hidden (for the
+        // ellipses) also lets the row shrink, and it did: to 4px, a green
+        // stub with the verdict inside it. The terminal row needs the same.
+        'flex-shrink': 0,
         font: tokens.type.textSm, padding: `2px ${tokens.spaceSm}px`,
         'border-left': `3px solid ${allowed() ? tokens.fgSuccess : tokens.borderDanger}`,
         background: allowed() ? 'transparent' : tokens.bgDenied,

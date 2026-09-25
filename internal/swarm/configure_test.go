@@ -16,7 +16,7 @@ func configPatch(t *testing.T, raw string) ConfigurePatch {
 	}
 	return p
 }
-func TestConfigureProfilesAtomicPersistenceAndAccess(t *testing.T) {
+func TestConfigureAtomicPersistenceAndAccess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "workspace.json")
 	s, err := Open(path)
 	if err != nil {
@@ -25,18 +25,14 @@ func TestConfigureProfilesAtomicPersistenceAndAccess(t *testing.T) {
 	if _, err = s.Setup("lead", "codex", t.TempDir(), "Team", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	revision, err := s.Configure("lead", configPatch(t, `{"profiles":{"god":{"provider":"codex","model":"smart","thinking":"high"},"pleb":{"provider":"codex","model":"fast"}},"default_profile":"pleb","expected_revision":1}`))
+	revision, err := s.Configure("lead", configPatch(t, `{"catalog":"openai-budget","expected_revision":1}`))
 	if err != nil || revision != 2 {
 		t.Fatal(revision, err)
 	}
 	for _, raw := range []string{
-		`{"name":"changed","profiles":{"god":{"provider":""}}}`,
-		`{"profiles":{"pleb":null}}`,
-		`{"profiles":{"bad name":{"provider":"codex"}}}`,
-		`{"default_profile":"missing"}`,
+		`{"name":""}`,
 		`{"max_active":0}`, `{"max_active":17}`, `{"max_members":0}`,
 		`{"expected_revision":1,"name":"stale"}`,
-		`{"profiles":{"god":{"provider":"codex","configs":{"model":""}}}}`,
 	} {
 		before := s.Snapshot()
 		if _, err := s.Configure("lead", configPatch(t, raw)); err == nil {
@@ -60,25 +56,19 @@ func TestConfigureProfilesAtomicPersistenceAndAccess(t *testing.T) {
 	if _, err := s.Configure("lead", configPatch(t, `{"max_active":1,"max_members":1}`)); err == nil {
 		t.Fatal("lowered below live membership")
 	}
-	if _, err := s.Configure("lead", configPatch(t, `{"profiles":{"god":{"provider":"claude","model":"other"}}}`)); err != nil {
+	if _, err := s.Configure("lead", configPatch(t, `{"catalog":"openai-pro","name":"Renamed"}`)); err != nil {
 		t.Fatal(err)
 	}
 	w := s.View("lead")
-	if len(w.Profiles) != 2 || w.Profiles["pleb"].Model != "fast" || w.Profiles["god"].Thinking != "" {
-		t.Fatal("profile merge/replacement semantics", w)
+	if w.Catalog != "openai-pro" || w.Name != "Renamed" {
+		t.Fatal("catalog change not applied", w)
 	}
 	recovered, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := recovered.View("lead"); !reflect.DeepEqual(got.Profiles, w.Profiles) || got.DefaultProfile != "pleb" {
+	if got := recovered.View("lead"); got.Catalog != "openai-pro" || !reflect.DeepEqual(got.Packages, w.Packages) {
 		t.Fatal("configuration not persisted", got)
-	}
-	if _, err := s.Configure("lead", configPatch(t, `{"default_profile":"","profiles":{"pleb":null}}`)); err != nil {
-		t.Fatal(err)
-	}
-	if len(s.View("lead").Profiles) != 1 {
-		t.Fatal("profile deletion failed")
 	}
 }
 func TestConfigureConcurrentRevision(t *testing.T) {
@@ -105,30 +95,6 @@ func TestConfigureConcurrentRevision(t *testing.T) {
 		t.Fatal("lost update", successes)
 	}
 }
-func TestResolveProfileSnapshotAndOverrides(t *testing.T) {
-	w := &Workspace{DefaultProfile: "god", Profiles: map[string]AgentProfile{"god": {Provider: "codex", Model: "smart", Thinking: "high", Configs: map[string]string{"speed": "slow"}}}}
-	name, settings, err := ResolveProfile(w, "", AgentProfile{Thinking: "low", Configs: map[string]string{"speed": "fast"}}, AgentProfile{Provider: "claude"})
-	if err != nil || name != "god" || settings.Provider != "codex" || settings.Model != "smart" || settings.Thinking != "low" || settings.Configs["speed"] != "fast" {
-		t.Fatal(name, settings, err)
-	}
-	settings.Configs["speed"] = "changed"
-	if w.Profiles["god"].Configs["speed"] != "slow" {
-		t.Fatal("mutable profile alias")
-	}
-	for _, tc := range []struct {
-		name     string
-		explicit AgentProfile
-	}{{"missing", AgentProfile{}}, {"god", AgentProfile{Provider: "claude"}}} {
-		if _, _, err := ResolveProfile(w, tc.name, tc.explicit, AgentProfile{Provider: "codex"}); err == nil {
-			t.Fatal("invalid selection accepted")
-		}
-	}
-	w.DefaultProfile = ""
-	if _, settings, err := ResolveProfile(w, "", AgentProfile{}, AgentProfile{Provider: "claude"}); err != nil || settings.Provider != "claude" {
-		t.Fatal(settings, err)
-	}
-}
-
 func TestSuccessfulConversationTurnPreservesConfigurationRevision(t *testing.T) {
 	s, _ := Open(filepath.Join(t.TempDir(), "workspace.json"))
 	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
@@ -161,11 +127,11 @@ func TestApprovalProfileValidatesAndResolves(t *testing.T) {
 			t.Errorf("%+v: err=%v, want ok=%v", c.p, err, c.ok)
 		}
 	}
-	w := &Workspace{Profiles: map[string]AgentProfile{"pleb": {Provider: "claude", Approval: "auto"}}}
-	if _, got, err := ResolveProfile(w, "pleb", AgentProfile{}, AgentProfile{Provider: "claude"}); err != nil || got.Approval != "auto" {
-		t.Fatalf("profile approval lost: %+v %v", got, err)
+	base := AgentProfile{Provider: "claude", Approval: "auto"}
+	if got, err := Overlay(base, AgentProfile{}); err != nil || got.Approval != "auto" {
+		t.Fatalf("base approval lost: %+v %v", got, err)
 	}
-	if _, got, err := ResolveProfile(w, "pleb", AgentProfile{Approval: "ask"}, AgentProfile{Provider: "claude"}); err != nil || got.Approval != "ask" {
+	if got, err := Overlay(base, AgentProfile{Approval: "ask"}); err != nil || got.Approval != "ask" {
 		t.Fatalf("member override ignored: %+v %v", got, err)
 	}
 }
@@ -192,25 +158,7 @@ func TestPackagesNameCodesAndPatchByKey(t *testing.T) {
 	}
 }
 
-// A member with no profile launches like its parent, connection included,
-// unless it names another provider: a connection never crosses providers.
-func TestResolveProfileInheritsTheParentsConnection(t *testing.T) {
-	w := &Workspace{}
-	parent := AgentProfile{Provider: "opencode", Connection: "opencode@openrouter"}
-	if _, got, err := ResolveProfile(w, "", AgentProfile{}, parent); err != nil || got.Connection != "opencode@openrouter" {
-		t.Fatal(got, err)
-	}
-	if _, got, err := ResolveProfile(w, "", AgentProfile{Provider: "claude"}, parent); err != nil || got.Provider != "claude" || got.Connection != "" {
-		t.Fatal(got, err)
-	}
-	// A named profile says how it connects; the parent's is not added.
-	w.Profiles = map[string]AgentProfile{"direct": {Provider: "opencode"}}
-	if _, got, _ := ResolveProfile(w, "direct", AgentProfile{}, parent); got.Connection != "" {
-		t.Fatal(got)
-	}
-}
-
-// Overlay is how a stack tier and a profile take explicit settings alike.
+// Overlay is how a catalog slot takes a member's explicit settings.
 func TestOverlay(t *testing.T) {
 	base := AgentProfile{Provider: "claude", Connection: "claude@openrouter", Model: "sonnet", Capability: "reviewer", Configs: map[string]string{"a": "1"}}
 	got, err := Overlay(base, AgentProfile{Model: "haiku", Configs: map[string]string{"b": "2"}})

@@ -16,11 +16,13 @@ import (
 
 func isOpencode() bool { return filepath.Base(os.Args[0]) == "opencode" }
 
-// openrouterModels are the shipped OpenRouter stack's four models.
+// openrouterModels are the shipped OpenRouter stacks' models.
 var openrouterModels = []string{
-	"openrouter/~anthropic/claude-opus-latest",
-	"openrouter/deepseek/deepseek-v4-pro-0813",
+	"openrouter/deepseek/deepseek-v4.1-flash",
 	"openrouter/z-ai/glm-5.3",
+	"openrouter/qwen/qwen3.8-flash",
+	"openrouter/qwen/qwen3.8-27b",
+	"openrouter/deepseek/deepseek-v4-pro-0813",
 	"openrouter/~deepseek/deepseek-v4-flash-latest",
 }
 

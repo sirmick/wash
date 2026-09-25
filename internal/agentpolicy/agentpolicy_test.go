@@ -414,3 +414,40 @@ func TestAbsentAdapterConfigIsInert(t *testing.T) {
 		t.Errorf("merge = %+v", got)
 	}
 }
+
+// Update is read-modify-write for the Agents window's own sections
+// (stacks, launch). A missing file is an empty policy; a file that does not
+// parse is an error, because rewriting it from a zero policy would throw
+// away every rule in it.
+func TestUpdate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agents.json")
+	if err := Update(path, func(p *Policy) error {
+		p.Launch = &LaunchPrefs{Mode: map[string]string{"claude": "acceptEdits"}, Yolo: true}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if p := Load(path); p.Launch == nil || p.Launch.ModeFor("claude") != "acceptEdits" || !p.Launch.Yolo || p.Launch.ModeFor("codex") != "" {
+		t.Fatalf("after update: %+v", p.Launch)
+	}
+	// The rest of the file survives a later update.
+	if err := Append(path, "Read", DecisionAllow, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(path, func(p *Policy) error { p.Launch = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if p := Load(path); p.Launch != nil || len(p.Rules) != 1 || !p.Enabled {
+		t.Fatalf("update dropped the rest of the file: %+v", p)
+	}
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(path, func(p *Policy) error { return nil }); err == nil {
+		t.Fatal("a malformed file was rewritten")
+	}
+	if data, _ := os.ReadFile(path); string(data) != "{not json" {
+		t.Fatalf("a malformed file was changed: %q", data)
+	}
+}

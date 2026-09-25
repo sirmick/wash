@@ -57,11 +57,11 @@ func TestKeyHint(t *testing.T) {
 	}
 }
 
-// agents.json's stacks and connections survive Save, which rewrites the whole
-// file: an "always allow" click must not delete someone's stacks.
-func TestSaveKeepsStacksAndConnections(t *testing.T) {
+// agents.json's catalogs and connections survive Save, which rewrites the
+// whole file: an "always allow" click must not delete someone's catalogs.
+func TestSaveKeepsCatalogsAndConnections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agents.json")
-	in := `{"stacks":{"mine":{"name":"Mine","tiers":{"frontier":{"provider":"claude"}}}},"connections":{"claude@work":{"adapter":"claude","env":{"A":"1"}}}}`
+	in := `{"catalogs":{"mine":{"name":"Mine","slots":{"frontier":{"provider":"claude"}}}},"connections":{"claude@work":{"adapter":"claude","env":{"A":"1"}}}}`
 	if err := os.WriteFile(path, []byte(in), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +69,8 @@ func TestSaveKeepsStacksAndConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := Load(path)
-	if _, ok := p.Stacks["mine"]; !ok {
-		t.Errorf("stacks lost: %+v", p.Stacks)
+	if _, ok := p.Catalogs["mine"]; !ok {
+		t.Errorf("catalogs lost: %+v", p.Catalogs)
 	}
 	if p.Connections["claude@work"].Env["A"] != "1" {
 		t.Errorf("connections lost: %+v", p.Connections)

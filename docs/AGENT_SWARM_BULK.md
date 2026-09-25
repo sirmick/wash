@@ -19,7 +19,7 @@ always declined, before any policy rule or auto-approval. claude-agent-acp answe
 ending the turn, so wash treats the stop like `interrupt` (member available, mail delivered),
 saves the plan from the request under `$XDG_STATE_HOME/wash/workspace-plans/`, and wakes the
 orchestrator with a question carrying the plan's start, its path and the approving call. `interrupt` ends a member's current turn and leaves it
-available, with what the turn carried delivered; `pause` still also stops dispatch. A profile or
+available, with what the turn carried delivered; `pause` still also stops dispatch. A
 member `subagents:"deny"` removes Claude's own Agent/Task tool at launch and on resume; adapters
 wash cannot restrict fail to launch.
 
@@ -33,26 +33,27 @@ A member's role instructions and initial task are now one first message, with th
 Sent as two, the role went out alone and was taken as the go-ahead before the task's "plan first"
 arrived. A member launched without a task is told to wait for its assignment.
 
-API 3.3 adds stack tiers. A stack (apps/agentd/be/stacks.go) is a named, global set of four
-tiers, `frontier`, `coding`, `review` and `small`, each an adapter, connection, model and effort;
-the launcher starts sessions from them. A workspace takes its `stack` from the orchestrator's own
-session (the stack it was started from), and `workspace_configure.stack` changes it for later
-launches. A member definition may give `"tier":"coding"` instead of a profile or model names: the
-tier is resolved into the member's launch settings when its key is reserved, like a profile, so a
-later stack edit changes no running member. Explicit `model`, `thinking` and `configs` override
-the tier; a member gives a tier or a profile, not both. Members never need a model string, which
-matters because members run on cheap models. A member with neither inherits the orchestrator's
-provider and, on that provider, its connection, so a team led through OpenRouter launches through
-it too. A tier's read-only guarantee is the adapter's: only Claude Code enforces a `review` tier's
-`capability:"reviewer"`; elsewhere the review tier is read-only by instruction. Profiles gain an
-optional `connection` (for example `claude@openrouter`).
+API 3.3 adds catalogs (renamed from stacks and tiers on 2026-09-25). A catalog
+(apps/agentd/be/catalogs.go) is a named, global source of models: an adapter's own list, or
+three slots, `frontier`, `coding` and `small`, each an adapter, connection, model and effort,
+and nothing else; the launcher starts sessions from them. A workspace takes its `catalog` from
+the orchestrator's own session (the catalog it was started from, or its adapter's own list),
+and `workspace_configure.catalog` changes it for later launches. A member definition gives
+`"model":"coding"` (a slot) or a model id, never a marketing name: the slot is resolved into the
+member's launch settings when its key is reserved, so a later catalog edit changes no running
+member. A member may name another `catalog` of its own. Explicit `effort` and `configs` sit on
+top of the slot's; with no `model` the catalog's default slot (frontier) or the adapter's default
+applies. Members never need a model string, which matters because members run on cheap models.
+A slot is a model only: a reviewer that must not write says `capability:"reviewer"` beside its
+`model`, and only Claude Code enforces that (about.permissions); elsewhere a reviewer is
+read-only by instruction. The per-workspace `profiles` map and `default_profile` are gone.
 
 ## Eleven tools
 
 | Tool | Responsibility |
 | --- | --- |
 | `workspace_get` | Compact team view by default; `view:state` full JSON; `view:about` discovery; `view:qa` threads/generated Markdown |
-| `workspace_configure` | Atomic setup/patch: profiles, settings, keyed member reservations, plan, document |
+| `workspace_configure` | Atomic setup/patch: catalog, settings, keyed member reservations, plan, document |
 | `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history; `workspace_id` ends a stale workspace |
 | `member_control` | Orchestrator only: pause/resume/interrupt/end IDs, keys or a package; `configure` of live settings; per-member outcomes |
 | `member_update` | Atomic own status/emoji/waiting, results and QA updates |
@@ -75,20 +76,19 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
 {
   "request_id":"package-setup-1",
   "workspace":{"name":"Project","project_root":"/data/project"},
-  "profiles":{"worker":{"provider":"codex","model":"<advertised ID>","thinking":"high"}},
+  "catalog":"openai-pro",
   "members":{
-    "K5-impl":{"name":"K5 implementer","tier":"coding","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"implementer","instructions":"Implement K5. Wait for assignments."},
-    "K5-red":{"name":"K5 red","profile":"worker","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
+    "K5-impl":{"name":"K5 implementer","model":"coding","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"implementer","instructions":"Implement K5. Wait for assignments."},
+    "K5-red":{"name":"K5 red","model":"small","effort":"high","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
   "plan":{"items":{"K5":{"text":"Accept K5","state":"active"}}},
   "document":{"path":"/data/project/docs/BUILD-PLAN.md","title":"Build plan"},
   "qa_document":{"path":"/data/project/docs/WORKSPACE-QA.md","title":"Project QA"}
 }
 ```
 
-- Omitted fields stay. Profiles merge by alias; each object replaces the alias,
-  null deletes. Model IDs/thinking values must come from provider choices; a member's
-  `tier` takes them from the workspace stack instead.
-- Members use stable keys; an existing matching definition is reused. Profile edits
+- Omitted fields stay. A member's `model` names a slot of the workspace catalog, or a
+  model id that must come from provider choices.
+- Members use stable keys; an existing matching definition is reused. Catalog edits
   affect future launches. Changed member definitions or ended keys require explicit
   end/replacement with a new key. No implicit restart or termination.
 - Keyed plan objects patch individual fields, null removes; optional order must list
@@ -96,7 +96,10 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
 - `expected_revision` guards workspace edits (0 may guard initial setup). A conflict
   requires fresh state and reconciliation. QA has separate per-thread revisions.
 - `preview:true` validates/stages without writing or launching. It does not prove
-  provider availability or adapter support; launch validates model before thinking.
+  provider availability or adapter support; launch applies mode, then model, then effort
+  (Claude Code re-picks the model on a mode change and narrows effort by model).
+  A preview's workspace and member ids are not the commit's ids and cannot be
+  carried forward.
 - Configuration and member reservations commit atomically. Processes start afterward,
   with separate `launches` outcomes. Check each; launch failure does not undo config.
   Explicit member_control resume can retry a failed reserved launch.
@@ -172,11 +175,13 @@ author and timestamp. QA updates through `member_update.qa_updates` support:
 | reply | Body; append without revision guard |
 | assign | expected_revision, next assignee |
 | block | expected_revision; marks blocking |
-| resolve | expected_revision, evidence; only orchestrator or reviewer tagged to that package |
+| resolve | expected_revision, evidence; only the orchestrator, or the reviewer whose package is the thread's |
 | reopen | expected_revision, reason in body |
 
 Transitions also accept decision_refs and blocking where applicable. Only the creator,
-assignee, orchestrator or package reviewer may transition; resolution is stricter.
+assignee, orchestrator or the reviewer whose package is the thread's may transition;
+resolution is stricter: the orchestrator, or the reviewer whose package is the thread's.
+A reviewer assigned to review every package is not that reviewer for any of them.
 There is no delete/edit-history operation. A resolved thread must be reopened before replies.
 Thread transitions do not themselves wake an assignee: send a linked actionable message.
 
@@ -206,24 +211,24 @@ backend history, attempts the final QA save and returns qa_document_status. Fail
 Member transcript tabs expose pending approval controls through the existing human answer
 route. Bulk tools reduce permission round trips; they do not change permission authority.
 Reviewer role instructions and adapter mode names do not enforce a filesystem sandbox.
-Set `capability:"reviewer"` in a profile or member definition for the explicit restricted
-launch, for example:
+Set `capability:"reviewer"` in a member definition for the explicit restricted launch, for
+example:
 
 ```json
-{"profiles":{"review":{"provider":"claude","capability":"reviewer"}}}
+{"members":{"K5-red":{"name":"K5 red","model":"coding","capability":"reviewer","lifetime":"resident","instructions":"…"}}}
 ```
 
-This currently requires verified `@agentclientprotocol/claude-agent-acp` 0.79.0 or 0.81.1;
+This currently requires verified `@agentclientprotocol/claude-agent-acp` 0.81.1 or 0.81.2;
 Codex, Gemini and unverified versions fail launch with an actionable error. Inspect
 about.permissions.reviewer_capability_profiles before choosing a provider. Codex's
 `read-only` adapter mode uses workspaceWrite and cannot satisfy this contract.
 
-The Claude profile uses its provider tool allowlist (Read/Glob/Grep), disables ordinary
+The Claude reviewer uses its provider tool allowlist (Read/Glob/Grep), disables ordinary
 settings/hooks and unrelated MCP servers, and refuses write/terminal callbacks in Wash.
 Only scoped coordination tools are approved automatically; explicit host policy denies
 still win. Workspace configuration, lifecycle control and spawning are unavailable.
 These are provider tool restrictions, not an OS sandbox or a claim about trusted managed
-hooks. Restrictions are immutable for a session and reapplied on resume; model/thinking
+hooks. Restrictions are immutable for a session and reapplied on resume; model/effort
 remain configurable. No broad auto-approval or role-prompt enforcement is substituted.
 
 Wash's own `wash_workspace` coordination calls never ask the human, for any member: the
@@ -231,12 +236,15 @@ bridge derives the caller from session credentials and enforces every role limit
 Explicit host policy denies still win. Anything else a member does follows the host policy,
 then workspace-scoped rules, then the member's auto-approval, then the human.
 
-`approval:"auto"` on a profile or member definition launches that member with host
-auto-approval on (every approval narrated in its transcript; host policy denies still
-win). It is a grant, so only a session that is itself auto-approved can configure one:
-children stay within the launcher's authority. It cannot be combined with
-`capability:"reviewer"`. A member's auto-approval, set at launch or by the human's toggle
-on its tab, is kept on the member record, restored when a restart's paused member is
+A member's approval defaults to its launcher's (2026-09-25): a member with no
+`approval` of its own is launched auto-approved exactly when the session launching it is,
+and follows the orchestrator's later yolo toggles, each change narrated in the member's
+transcript. So yolo on the orchestrator is yolo for the workspace. `approval:"ask"` opts a
+member out; `approval:"auto"` launches it auto-approved regardless, which is a grant, so
+only a session that is itself auto-approved can configure one: children stay within the
+launcher's authority. Neither applies to `capability:"reviewer"`, which never inherits and
+cannot be combined with `auto`. A member's auto-approval, set at launch or by the human's
+toggle on its tab, is kept on the member record, restored when a restart's paused member is
 resumed, and ends with the workspace.
 
 The sidebar's Needs you section shows pending approvals across all members, owner

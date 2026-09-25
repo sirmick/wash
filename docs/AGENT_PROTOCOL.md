@@ -97,6 +97,9 @@ edit by hand.
 
 | Kind | Payload | From | Reply / class | What it does |
 |---|---|---|---|---|
+| `agent_set_catalog` | [`AgentSetCatalog`](#agentsetcatalog) | a manager (manager_subscribe) | catalog_saved | Store a catalog, whole, in agents.json. |
+| `agent_delete_catalog` | [`AgentDeleteCatalog`](#agentdeletecatalog) | a manager (manager_subscribe) | catalog_saved | Remove a catalog from agents.json: a built-in reverts, the user's own is deleted. |
+| `agent_set_launch` | [`AgentSetLaunch`](#agentsetlaunch) | a manager (manager_subscribe) |  | Store the launcher's remembered permission default. |
 | `manager_subscribe` | [`ManagerSubscribe`](#managersubscribe) | any frontend, which becomes a manager | manager_state, now and on every change | Subscribe to the manager's roster view. |
 | `session_claim` | [`SessionClaim`](#sessionclaim) | any frontend | session_claimed then session_state, or claim_denied | Take the controller lease on a session. |
 | `wash.focus` | [`Focus`](#focus) | the shell (a notification click, no sender) or any frontend |  | Bring a session's window forward, opening one if needed. |
@@ -109,7 +112,7 @@ edit by hand.
 | `agent_test_key` | [`AgentTestKey`](#agenttestkey) | a manager (manager_subscribe) | key_test | Check a key with its provider. |
 | `subscribe` | [`Subscribe`](#subscribe) | any app (the session gateway, hostgw) | state, now and on every change | Subscribe to the whole roster. |
 | `unsubscribe` | [`Unsubscribe`](#unsubscribe) | a subscriber |  | Stop receiving state. |
-| `agent_start` | [`AgentStart`](#agentstart) | a launcher (the Agents manager, an Agent window, wash-edit, wash ai --agent) | agent_started | Start a session from a stack tier, or an adapter on its defaults. |
+| `agent_start` | [`AgentStart`](#agentstart) | a launcher (the Agents manager, an Agent window, wash-edit, wash ai --agent) | agent_started | Start a session from a catalog and model, or an adapter on its defaults. |
 | `agent_prompt` | [`AgentPrompt`](#agentprompt) | a frontend showing the session |  | Send a prompt, with attachments; queued while a turn runs. |
 | `agent_cancel` | [`AgentCancel`](#agentcancel) | a frontend showing the session |  | Stop the running turn. |
 | `agent_detach` | [`AgentDetach`](#agentdetach) | a frontend showing the session | detach, to the session's controller | Keep the session running with no window. |
@@ -131,6 +134,7 @@ edit by hand.
 
 | Kind | Payload | To | Reply / class | What it does |
 |---|---|---|---|---|
+| `catalog_saved` | [`CatalogSaved`](#catalogsaved) | the asker | interactive | The outcome of storing or removing a catalog. |
 | `session_claimed` | [`SessionClaimed`](#sessionclaimed) | the claimant | interactive, keyed | The lease is yours. |
 | `claim_denied` | [`ClaimDenied`](#claimdenied) | the claimant | interactive, keyed | Another window holds the lease. |
 | `wash.focus` | [`Raise`](#raise) | the session's controller | interactive, keyed | Come to the front. |
@@ -177,6 +181,17 @@ Adapter is one way to reach an agent over ACP, as the launcher shows it: whether
 | `note?` | `string` | Note explains a greyed row: why this one cannot be used here. |
 | `available` | `boolean` | Available is whether it can be launched here. |
 
+#### AdapterOptions
+
+AdapterOptions is what one adapter offered the last time a session of it started here (agentd remembers it across restarts).
+
+| Field | Type | |
+|---|---|---|
+| `adapter` | `string` | Adapter is the adapter id ("claude", "codex", …). |
+| `version?` | `string` | Version is the adapter's own version string, as it introduced itself. |
+| `modes?` | `Mode[]` | Modes are its approval presets; Configs its settings, of which the ones in the "model" and "thought_level" categories are the model and effort lists. Current values are those of the session that reported them and mean nothing here. |
+| `configs?` | `Config[]` |  |
+
 #### AgentAddRoot
 
 AgentAddRoot widens which folders a session may reach beyond its cwd.
@@ -220,6 +235,14 @@ AgentDelete deletes a stored session that is not running.
 |---|---|---|
 | `session_id` | `string` |  |
 
+#### AgentDeleteCatalog
+
+AgentDeleteCatalog removes a catalog from agents.json: a built-in goes back to what wash ships, the user's own is gone.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+
 #### AgentDetach
 
 AgentDetach leaves a session running with no window: its roster row stays and offers Reattach, and its controller window is told to close.
@@ -248,7 +271,7 @@ AgentProfile describes launch settings and an optional enforced capability profi
 | `provider` | `string` |  |
 | `connection?` | `string` | Connection names how the provider is reached ("opencode@openrouter"); empty is the provider direct. agentd owns the list and checks it. |
 | `model?` | `string` |  |
-| `thinking?` | `string` |  |
+| `effort?` | `string` |  |
 | `configs?` | `Record<string, string>` |  |
 | `subagents?` | `string` | Subagents "deny" removes the provider's own subagent tool, so the member's work stays in its transcript and the workspace's accounting. "" and "allow" leave it available. |
 
@@ -305,6 +328,15 @@ AgentResume reopens a stored session: session/load replays it, and an Agent wind
 |---|---|---|
 | `session_id` | `string` |  |
 
+#### AgentSetCatalog
+
+AgentSetCatalog stores one catalog under agents.json `catalogs`, whole, as the Catalog tab holds it.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `catalog` | `CatalogSpec` |  |
+
 #### AgentSetConfig
 
 AgentSetConfig changes one of the agent's own settings (Row.Configs): model, reasoning effort, plan mode, …
@@ -332,6 +364,14 @@ AgentSetKey stores a connection key (State.Keys), or clears it with an empty val
 | `name` | `string` |  |
 | `value?` | `string` |  |
 
+#### AgentSetLaunch
+
+AgentSetLaunch stores the launcher's remembered permission default (State.Launch), whole.
+
+| Field | Type | |
+|---|---|---|
+| `launch` | `LaunchPrefs` |  |
+
 #### AgentSetMode
 
 AgentSetMode switches the agent's approval preset (Row.Modes).
@@ -356,10 +396,12 @@ AgentStart starts a session.
 
 | Field | Type | |
 |---|---|---|
-| `stack?` | `string` | Stack and Tier choose the settings (stacks.go); Tier defaults to frontier. Agent and Model are the launcher's Advanced overrides, and Agent alone, with no stack, is how `wash ai --agent` starts. |
-| `tier?` | `string` |  |
-| `agent?` | `string` |  |
+| `catalog?` | `string` | Catalog and Model choose the settings (catalogs.go): Model is a slot of a curated catalog (frontier, coding, small; frontier when empty) or a model id the catalog's adapter offers (empty is its default on an auto catalog). Agent alone, with no catalog, is how `wash ai --agent` starts: that adapter on its defaults. |
 | `model?` | `string` |  |
+| `agent?` | `string` |  |
+| `configs?` | `Record<string, string>` | Configs are the launcher's Advanced settings, by the adapter's own option ids (effort, fast mode, …), applied over the catalog's. |
+| `mode?` | `string` | Mode is the adapter session mode to start in (State.Launch's default unless the launcher's Permissions row was changed for this start); empty is the adapter's default. Yolo starts with host-side auto-approval on. |
+| `yolo?` | `boolean` |  |
 | `cwd` | `string` | Cwd is the folder the session works in; empty is the home folder. |
 | `prompt?` | `string` | Prompt is sent as the first turn, after the stored default prompt. |
 | `open?` | `boolean` | Open asks agentd to open (or focus) an Agent window on the new session, for a starter that is not itself that window (the manager). |
@@ -431,6 +473,42 @@ Attach hands a window agentd opened the session it is to show; the lease is alre
 |---|---|---|
 | `key` | `string` |  |
 
+#### CatalogSaved
+
+CatalogSaved answers AgentSetCatalog and AgentDeleteCatalog.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `error?` | `string` |  |
+
+#### CatalogSpec
+
+CatalogSpec is a catalog as written: a name and either an adapter (an auto catalog, listing what that adapter offers) or three slots.
+
+| Field | Type | |
+|---|---|---|
+| `name` | `string` |  |
+| `adapter?` | `string` |  |
+| `connection?` | `string` |  |
+| `slots?` | `Record<string, SlotSpec>` | Slots is keyed by slot name (frontier, coding, small); all three are required for a curated catalog, and none is given for an auto one. |
+
+#### CatalogView
+
+CatalogView is a catalog as the launcher and the Catalog tab show it.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `name` | `string` |  |
+| `adapter?` | `string` | Adapter and Connection are an auto catalog's: the adapter whose models it lists, reached direct or through the connection. |
+| `connection?` | `string` |  |
+| `available` | `boolean` | Available is every slot (or the adapter) startable here; Note says why not. |
+| `note?` | `string` |  |
+| `slots?` | `SlotView[]` |  |
+| `builtin?` | `boolean` | Builtin is a catalog wash ships (catalogs.json); Overridden says agents.json changes it. A catalog that is neither is the user's own. The Catalog tab offers "reset" for an overridden built-in and "delete" for the user's own. |
+| `overridden?` | `boolean` |  |
+
 #### ClaimDenied
 
 ClaimDenied refuses the lease: another instance holds it, and has been raised.
@@ -457,6 +535,7 @@ Config is one agent setting the session can change.
 | `id` | `string` |  |
 | `name` | `string` |  |
 | `description?` | `string` |  |
+| `category?` | `string` | Category is the ACP category ("model", "thought_level", …), which is how a setting is matched across adapters that name it differently. |
 | `current?` | `string` |  |
 | `values?` | `ConfigValue[]` |  |
 
@@ -467,6 +546,16 @@ Config is one agent setting the session can change.
 | `value` | `string` |  |
 | `name` | `string` |  |
 | `description?` | `string` |  |
+
+#### ConnectionView
+
+ConnectionView is one named connection: which adapter it launches, and the key it needs, if any.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `adapter` | `string` |  |
+| `key?` | `string` |  |
 
 #### DefaultPrompt
 
@@ -589,6 +678,15 @@ KeyView is a key as the launcher shows it.
 | `hint?` | `string` | Hint is the stored key's last four characters. |
 | `testable?` | `boolean` |  |
 
+#### LaunchPrefs
+
+LaunchPrefs is the remembered default for the two permission settings a launch has: the adapter's own approval preset and wash's auto-approval.
+
+| Field | Type | |
+|---|---|---|
+| `mode?` | `Record<string, string>` | Mode is the adapter's session mode to start in, by adapter id: the names are the adapter's own ("acceptEdits" on Claude Code, "read-only" on Codex), so one remembered value cannot serve two adapters. |
+| `yolo?` | `boolean` | Yolo starts every session with host-side auto-approval on. |
+
 #### ManagerState
 
 ManagerState is the Agents manager's view of the roster: every row with its transcript preview and workspace placement, without the per-session settings only a controller needs.
@@ -613,8 +711,8 @@ No fields.
 | `instructions?` | `string` |  |
 | `initial_task?` | `string` |  |
 | `usage?` | `Usage` |  |
-| `profile?` | `string` |  |
-| `tier?` | `string` | Tier is the stack tier the member was launched from, resolved into LaunchSettings at reservation like a profile. |
+| `catalog?` | `string` | Catalog and Model are what the member was asked to run on: the catalog (the workspace's unless the member named one) and the model as given, a slot name or an id. LaunchSettings is what that resolved to, with the member's own settings on top, fixed when its key was reserved: a later catalog change moves no running member. |
+| `model?` | `string` |  |
 | `launch_settings?` | `AgentProfile` |  |
 | `initial_configs?` | `Record<string, string>` |  |
 | `adjusted_configs?` | `Record<string, string>` | Adjusted are settings the orchestrator changed on the live member (member_control configure), applied over LaunchSettings on every resume. Kept apart so the keyed launch definition stays as declared. |
@@ -837,9 +935,9 @@ Session is one remembered agent session.
 |---|---|---|
 | `session_id` | `string` |  |
 | `agent` | `string` |  |
-| `connection?` | `string` | Connection is what a resume must launch through again; Stack and Tier are what the launcher defaults to next time (launchRecord). |
-| `stack?` | `string` |  |
-| `tier?` | `string` |  |
+| `connection?` | `string` | Connection is what a resume must launch through again; Catalog and Model are what the launcher defaults to next time (launchRecord). |
+| `catalog?` | `string` |  |
+| `model?` | `string` |  |
 | `cwd?` | `string` |  |
 | `dir?` | `string` |  |
 | `title?` | `string` | Title is what this session was ABOUT, in the agent's own words — it names its sessions on session_info_update once it works out what the work is. "codex · mick" tells you nothing a week later; "Fix the reconnect banner race" does. |
@@ -874,8 +972,8 @@ SessionMeta is what the history panel lists.
 | `session_id` | `string` |  |
 | `agent?` | `string` |  |
 | `connection?` | `string` |  |
-| `stack?` | `string` |  |
-| `tier?` | `string` |  |
+| `catalog?` | `string` | Catalog and LaunchModel are how the session was started (the model as asked: a slot name or an id), for starting another the same way; Model is what it actually ran, from its summary. |
+| `launch_model?` | `string` |  |
 | `model?` | `string` |  |
 | `cwd?` | `string` |  |
 | `dir?` | `string` |  |
@@ -901,17 +999,30 @@ SessionState is one Agent window's view: its own row and the questions waiting o
 | `key` | `string` |  |
 | `state` | `State` |  |
 
-#### StackView
+#### SlotSpec
 
-StackView is a stack as the launcher shows it.
+SlotSpec is one slot as written: a model on an adapter.
 
 | Field | Type | |
 |---|---|---|
-| `id` | `string` |  |
-| `name` | `string` |  |
-| `available` | `boolean` | Available is every tier startable here; Note says why not. |
+| `adapter` | `string` |  |
+| `connection?` | `string` |  |
+| `model?` | `string` |  |
+| `effort?` | `string` |  |
+
+#### SlotView
+
+SlotView is one slot of a curated catalog: a model on an adapter, with its effort.
+
+| Field | Type | |
+|---|---|---|
+| `slot` | `string` |  |
+| `adapter` | `string` |  |
+| `connection?` | `string` |  |
+| `model?` | `string` |  |
+| `effort?` | `string` |  |
+| `available` | `boolean` |  |
 | `note?` | `string` |  |
-| `tiers?` | `TierView[]` |  |
 
 #### State
 
@@ -922,8 +1033,11 @@ StackView is a stack as the launcher shows it.
 | `asks?` | `Ask[]` | Asks are permission questions waiting for a human (§12). They ride the roster's own push so the sidebar needs no second subscription. |
 | `recent?` | `Session[]` | Recent is the remembered session history (§13) — what a reboot or a closed window would otherwise have cost you. |
 | `adapters?` | `Adapter[]` | Adapters is which agents this box can actually launch over ACP (docs/AGENT_APP.md §6). The launcher renders unavailable ones greyed with their reason rather than hiding them, so "why can I not pick Claude here" has an answer on screen. |
-| `stacks?` | `StackView[]` | Stacks are what the launcher offers first (stacks.go): each with the availability of its tiers, greyed with a reason like an adapter. |
+| `catalogs?` | `CatalogView[]` | Catalogs are what the launcher offers first (catalogs.go): each with the availability of its slots, greyed with a reason like an adapter. |
 | `keys?` | `KeyView[]` | Keys are the connection keys the launcher can store: set or not, and a stored key's last four characters. Never a value. |
+| `connections?` | `ConnectionView[]` | Connections are the named ways to reach an adapter (built in, and agents.json's), which a tier may name instead of the adapter direct. |
+| `adapter_options?` | `AdapterOptions[]` | AdapterOptions is what each adapter last reported when a session of it started: its version, approval presets and settings (models, efforts). The Stacks tab and the launcher's Advanced and Permissions controls offer these instead of free text; an adapter that has never run here has no entry, and its fields are typed. |
+| `launch` | `LaunchPrefs` | Launch is the remembered permission default the launcher starts a session with (agents.json `launch`). |
 | `has_default_prompt?` | `boolean` | HasDefaultPrompt says whether a stored default prompt exists, so the launcher can say that a new session will not start empty. Only the FLAG rides the state push — the text itself is fetched on demand (agent_default prompt), because a page of prose on every roster push would reach every subscriber several times a second during a turn. |
 
 #### Subscribe
@@ -931,22 +1045,6 @@ StackView is a stack as the launcher shows it.
 Subscribe asks for the whole roster, now and on every change.
 
 No fields.
-
-#### TierView
-
-TierView is one tier as the launcher shows it.
-
-| Field | Type | |
-|---|---|---|
-| `tier` | `string` |  |
-| `adapter` | `string` |  |
-| `connection?` | `string` |  |
-| `model?` | `string` |  |
-| `thinking?` | `string` |  |
-| `capability?` | `string` |  |
-| `read_only?` | `string` | ReadOnly is set on the review tier: "enforced" where the adapter's tools are restricted (Claude Code's reviewer capability), otherwise "instruction" — the reviewer is asked not to write, and could. |
-| `available` | `boolean` |  |
-| `note?` | `string` |  |
 
 #### TranscriptEvent
 
@@ -1019,9 +1117,7 @@ UsageRow is one row's counters.
 | `qa` | `QAThread[] \| null` |  |
 | `approvals?` | `Rule[]` | Approvals apply to every member of this workspace, whatever its cwd. Members work in worktrees the orchestrator chooses, and those are as often siblings of project_root as children of it, so a path-scoped rule cannot cover a fleet. Membership is the scope instead: these rules carry no Cwd, and agentpolicy's matcher is reused verbatim. |
 | `packages?` | `Record<string, Package>` | Packages names each package code ("CT1") for people: the sidebar groups members and questions under "CT1 · Console input-flood test" instead of a bare code, and member names can shrink to their role. |
-| `profiles` | `Record<string, AgentProfile> \| null` |  |
-| `default_profile` | `string` |  |
-| `stack?` | `string` | Stack is where members' tiers come from: set from the orchestrator's own stack at setup, changeable with workspace_configure.stack. |
+| `catalog?` | `string` | Catalog is where members' models come from (a slot name in a member's `model` resolves against it): the orchestrator's own catalog at setup, changeable with workspace_configure.catalog for later launches. |
 | `id` | `string` |  |
 | `name` | `string` |  |
 | `project_root` | `string` |  |

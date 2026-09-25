@@ -24,9 +24,9 @@ func profileOptions(model, thinking string) []acp.ConfigOption {
 		{ID: "effort", Category: "thought_level", CurrentValue: thinking, Options: levels},
 	}
 }
-func TestProfileAppliesModelBeforeThinkingAndVerifiesSettings(t *testing.T) {
+func TestProfileAppliesModelBeforeEffortAndVerifiesSettings(t *testing.T) {
 	for _, raw := range []bool{false, true} {
-		settings := swarm.AgentProfile{Model: "smart", Thinking: "high"}
+		settings := swarm.AgentProfile{Model: "smart", Effort: "high"}
 		if raw {
 			settings = swarm.AgentProfile{Configs: map[string]string{"effort": "high", "provider_model": "smart"}}
 		}
@@ -50,9 +50,33 @@ func TestProfileAppliesModelBeforeThinkingAndVerifiesSettings(t *testing.T) {
 		}
 	}
 }
+
+// A member's mode goes before its model: Claude Code re-picks the model on
+// a mode change (haiku plus plan mode came back as sonnet), and a model set
+// after the mode stays.
+func TestProfileAppliesModeBeforeModel(t *testing.T) {
+	options := append(profileOptions("fast", "low"), acp.ConfigOption{ID: "mode", Category: "mode", CurrentValue: "default", Options: []acp.ConfigOptionValue{{Value: "default"}, {Value: "plan"}}})
+	order := []string{}
+	_, err := configureWorkspaceSession(swarm.AgentProfile{Model: "smart", Effort: "high", Configs: map[string]string{"mode": "plan"}}, options, func(id, value string) ([]acp.ConfigOption, error) {
+		order = append(order, id)
+		for i := range options {
+			if options[i].ID == id {
+				options[i].CurrentValue = value
+			}
+			if options[i].Category == "thought_level" && id == "provider_model" && value == "smart" {
+				options[i].Options = []acp.ConfigOptionValue{{Value: "low"}, {Value: "high"}}
+			}
+		}
+		return options, nil
+	})
+	if err != nil || !reflect.DeepEqual(order, []string{"mode", "provider_model", "effort"}) {
+		t.Fatal(order, err)
+	}
+}
+
 func TestProfileRejectsUnsupportedConflictingAndCoercedSettings(t *testing.T) {
 	for _, settings := range []swarm.AgentProfile{
-		{Model: "unknown"}, {Thinking: "high"}, {Configs: map[string]string{"unknown": "value"}},
+		{Model: "unknown"}, {Effort: "high"}, {Configs: map[string]string{"unknown": "value"}},
 		{Model: "smart", Configs: map[string]string{"provider_model": "fast"}},
 	} {
 		if _, err := configureWorkspaceSession(settings, profileOptions("fast", "low"), func(string, string) ([]acp.ConfigOption, error) {
@@ -73,7 +97,7 @@ func TestProfileRejectsUnsupportedConflictingAndCoercedSettings(t *testing.T) {
 			t.Fatal("ignored provider failure/coercion")
 		}
 	}
-	if _, err := configureWorkspaceSession(swarm.AgentProfile{Thinking: "high"}, nil, func(string, string) ([]acp.ConfigOption, error) { return nil, nil }); err == nil {
+	if _, err := configureWorkspaceSession(swarm.AgentProfile{Effort: "high"}, nil, func(string, string) ([]acp.ConfigOption, error) { return nil, nil }); err == nil {
 		t.Fatal("missing thinking accepted")
 	}
 }
@@ -96,10 +120,10 @@ func TestWorkspaceGetAndConfigure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = call("workspace_configure", `{"profiles":{"god":{"provider":"codex","model":"smart","thinking":"high"}},"expected_revision":1}`); err != nil {
+	if _, err = call("workspace_configure", `{"catalog":"openai-pro","expected_revision":1}`); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range []string{`{"profiles":{"bad":{"provider":"not-a-provider"}}}`, `{"profiles":{"bad":{"provider":"codex","secret":"ignored"}}}`, `{"max_active":null}`, `{"profiles":null}`} {
+	for _, args := range []string{`{"catalog":"not-a-catalog"}`, `{"packages":{"bad":{"title":"x","secret":"ignored"}}}`, `{"max_active":null}`, `{"catalog":null}`} {
 		before := s.Snapshot()
 		if _, err := call("workspace_configure", args); err == nil {
 			t.Fatal("invalid config", args)
@@ -119,7 +143,7 @@ func TestWorkspaceGetAndConfigure(t *testing.T) {
 		}
 		state := got.(map[string]any)
 		view := state["workspace"].(*swarm.Workspace)
-		if (len(view.Messages) > 0) != include || state["message_history_included"] != include || view.Profiles["god"].Model != "smart" {
+		if (len(view.Messages) > 0) != include || state["message_history_included"] != include || view.Catalog != "openai-pro" {
 			t.Fatal(state)
 		}
 		sessions := state["sessions"].(map[string]any)
@@ -226,7 +250,7 @@ func TestRestoreSkipsWhatTheLoadedSessionDoesNotOfferAndAppliesTheRest(t *testin
 		{ID: "effort", Category: "thought_level", CurrentValue: "default", Options: values("default", "low", "medium", "high")},
 	}
 	var set []string
-	skipped, err := restoreWorkspaceSession(swarm.AgentProfile{Provider: "claude", Model: "claude-fable-5-1[1m]", Thinking: "high"}, options, func(id, value string) ([]acp.ConfigOption, error) {
+	skipped, err := restoreWorkspaceSession(swarm.AgentProfile{Provider: "claude", Model: "claude-fable-5-1[1m]", Effort: "high"}, options, func(id, value string) ([]acp.ConfigOption, error) {
 		set = append(set, id+"="+value)
 		next := append([]acp.ConfigOption(nil), options...)
 		for i := range next {

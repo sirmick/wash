@@ -28,14 +28,16 @@ func decodeWorkspace(raw json.RawMessage, out any) error {
 }
 
 type memberSpec struct {
-	Capability   string            `json:"capability,omitempty"`
-	Approval     string            `json:"approval,omitempty"`
-	Name         string            `json:"name"`
-	Profile      string            `json:"profile,omitempty"`
-	Tier         string            `json:"tier,omitempty"`
+	Capability string `json:"capability,omitempty"`
+	Approval   string `json:"approval,omitempty"`
+	Name       string `json:"name"`
+	// Catalog names another catalog than the workspace's for this member;
+	// Model is a slot of that catalog (frontier, coding, small) or a model
+	// id its adapter offers. Empty is the catalog's default.
+	Catalog      string            `json:"catalog,omitempty"`
 	Provider     string            `json:"provider,omitempty"`
 	Model        string            `json:"model,omitempty"`
-	Thinking     string            `json:"thinking,omitempty"`
+	Effort       string            `json:"effort,omitempty"`
 	Configs      map[string]string `json:"configs,omitempty"`
 	Subagents    string            `json:"subagents,omitempty"`
 	Cwd          string            `json:"cwd,omitempty"`
@@ -205,25 +207,15 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	// Stacks and connections are read once per call: a tier resolves against
-	// what agents.json says now, and is then a snapshot like a profile.
+	// Catalogs and connections are read once per call: a member's model
+	// resolves against what agents.json says now, and is then a snapshot.
 	pol := hostedPolicy()
-	for _, profile := range p.Profiles {
-		if profile != nil {
-			if err := knownProvider(profile.Provider); err != nil {
-				return nil, err
-			}
-			if err := knownConnection(pol, profile.Provider, profile.Connection); err != nil {
-				return nil, err
-			}
+	catalogs, badCatalogs := loadCatalogs(pol)
+	if p.Catalog != nil && *p.Catalog != "" {
+		if _, ok := catalogs[*p.Catalog]; !ok {
+			return nil, fmt.Errorf("unknown catalog %q", *p.Catalog)
 		}
-	}
-	stacks, badStacks := loadStacks(pol)
-	if p.Stack != nil && *p.Stack != "" {
-		if _, ok := stacks[*p.Stack]; !ok {
-			return nil, fmt.Errorf("unknown stack %q", *p.Stack)
-		}
-		if err := badStacks[*p.Stack]; err != nil {
+		if err := badCatalogs[*p.Catalog]; err != nil {
 			return nil, err
 		}
 	}
@@ -252,11 +244,15 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			}
 			// Resuming the orchestrator reads its launch settings like any
 			// member's, and must come back through the connection it runs on.
-			// Members' tiers come from the orchestrator's own stack unless the
-			// call names another.
+			// Members' models come from the orchestrator's own catalog unless
+			// the call names another.
 			if err := s.Mutate(h.sessionID, true, func(w *swarm.Workspace, lead *swarm.Member) error {
 				lead.LaunchSettings = &swarm.AgentProfile{Provider: h.agent, Connection: h.connection}
-				w.Stack = h.stack
+				lead.Catalog, lead.Model = h.catalog, h.model
+				w.Catalog = h.catalog
+				if w.Catalog == "" {
+					w.Catalog = autoCatalogFor(catalogs, h.agent, h.connection)
+				}
 				return nil
 			}); err != nil {
 				return nil, err
@@ -381,12 +377,12 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					if prior.State == "ended" {
 						return fmt.Errorf("member %s is ended; use a new key for replacement", key)
 					}
-					if prior.Name != spec.Name || spec.Profile != "" && prior.Profile != spec.Profile || spec.Tier != "" && prior.Tier != spec.Tier || prior.Cwd != spec.Cwd || prior.Instructions != spec.Instructions || prior.Lifetime != spec.Lifetime || prior.CanSpawn != spec.CanSpawn || prior.Package != spec.Package || prior.Role != spec.Role || prior.InitialTask != spec.Task {
+					if prior.Name != spec.Name || spec.Catalog != "" && prior.Catalog != spec.Catalog || spec.Model != "" && prior.Model != spec.Model || prior.Cwd != spec.Cwd || prior.Instructions != spec.Instructions || prior.Lifetime != spec.Lifetime || prior.CanSpawn != spec.CanSpawn || prior.Package != spec.Package || prior.Role != spec.Role || prior.InitialTask != spec.Task {
 						return fmt.Errorf("member %s already exists with different settings; end and replace explicitly", key)
 					}
-					// Profile edits affect future launches; explicit launch overrides must still match.
+					// Catalog edits affect future launches; explicit launch overrides must still match.
 					old := prior.LaunchSettings
-					if old == nil || spec.Capability != "" && old.Capability != spec.Capability || spec.Approval != "" && old.Approval != spec.Approval || spec.Provider != "" && old.Provider != spec.Provider || spec.Model != "" && old.Model != spec.Model || spec.Thinking != "" && old.Thinking != spec.Thinking || spec.Subagents != "" && old.Subagents != spec.Subagents {
+					if spec.Capability != "" && old.Capability != spec.Capability || spec.Approval != "" && old.Approval != spec.Approval || spec.Provider != "" && old.Provider != spec.Provider || spec.Effort != "" && old.Effort != spec.Effort || spec.Subagents != "" && old.Subagents != spec.Subagents {
 						return errors.New("existing member launch settings differ")
 					}
 					for id, val := range spec.Configs {
@@ -411,8 +407,8 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if live >= w.MaxMembers {
 					return errors.New("workspace member limit reached")
 				}
-				explicit := swarm.AgentProfile{Capability: spec.Capability, Approval: spec.Approval, Provider: spec.Provider, Model: spec.Model, Thinking: spec.Thinking, Configs: spec.Configs, Subagents: spec.Subagents}
-				profile, settings, err := memberProfile(w, stacks, badStacks, spec.Tier, spec.Profile, explicit, swarm.AgentProfile{Provider: h.agent, Connection: h.connection})
+				explicit := swarm.AgentProfile{Capability: spec.Capability, Approval: spec.Approval, Provider: spec.Provider, Effort: spec.Effort, Configs: spec.Configs, Subagents: spec.Subagents}
+				catalog, settings, err := memberSettingsFor(w, catalogs, badCatalogs, spec.Catalog, spec.Model, explicit)
 				if err != nil {
 					return fmt.Errorf("member %s: %w", key, err)
 				}
@@ -428,7 +424,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if err := knownProvider(settings.Provider); err != nil {
 					return err
 				}
-				w.Members = append(w.Members, swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Profile: profile, Tier: spec.Tier, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: spec.Instructions, InitialTask: spec.Task, Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Package: spec.Package, Role: spec.Role})
+				w.Members = append(w.Members, swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: spec.Instructions, InitialTask: spec.Task, Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Package: spec.Package, Role: spec.Role})
 			}
 			return nil
 		})
@@ -443,7 +439,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		for _, key := range keys {
 			members[key] = swarm.GetMember(w, key).ID
 		}
-		return map[string]any{"workspace_id": w.ID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "profiles": w.Profiles, "packages": w.Packages, "default_profile": w.DefaultProfile, "stack": w.Stack, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
+		return map[string]any{"workspace_id": w.ID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "packages": w.Packages, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
 	})
 	if qaLocked {
 		ws.qaMu.Unlock()
@@ -544,28 +540,22 @@ func knownProvider(provider string) error {
 	return fmt.Errorf("unknown provider %q", provider)
 }
 
-// memberProfile is a new member's launch settings: its stack tier or its named
-// profile, with its explicit settings on top. A tier is the workspace stack's
-// settings for that tier, resolved now and kept, like a profile; the member's
-// instructions never carry a model name. A tier and a profile are two answers
-// to the same question, so a member may give one, not both.
-func memberProfile(w *swarm.Workspace, stacks map[string]Stack, bad map[string]error, tier, profile string, explicit, parent swarm.AgentProfile) (string, swarm.AgentProfile, error) {
-	if tier == "" {
-		return swarm.ResolveProfile(w, profile, explicit, parent)
+// memberSettingsFor is a new member's launch settings: the model it asked
+// for, a slot of its catalog (the workspace's unless it named one) or a
+// model id on that catalog's adapter, with its explicit settings on top.
+// Resolved now and kept: the member's instructions never carry a model
+// name, and a later catalog change moves no running member.
+func memberSettingsFor(w *swarm.Workspace, catalogs map[string]Catalog, bad map[string]error, catalog, model string, explicit swarm.AgentProfile) (string, swarm.AgentProfile, error) {
+	if catalog == "" {
+		catalog = w.Catalog
 	}
-	if profile != "" {
-		return "", swarm.AgentProfile{}, errors.New("give a tier or a profile, not both")
+	if catalog == "" {
+		return "", swarm.AgentProfile{}, errors.New(`the workspace has no catalog; set one with workspace_configure {"catalog":…}`)
 	}
-	if w.Stack == "" {
-		return "", swarm.AgentProfile{}, errors.New(`the workspace has no stack; set one with workspace_configure {"stack":…}`)
-	}
-	if err := bad[w.Stack]; err != nil {
+	base, err := resolveCatalog(catalogs, bad, catalog, model)
+	if err != nil {
 		return "", swarm.AgentProfile{}, err
 	}
-	base, ok := stacks[w.Stack].Tiers[tier]
-	if !ok {
-		return "", swarm.AgentProfile{}, fmt.Errorf("unknown tier %q; tiers are %v", tier, tierNames)
-	}
 	settings, err := swarm.Overlay(base, explicit)
-	return "", settings, err
+	return catalog, settings, err
 }

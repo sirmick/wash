@@ -7,8 +7,9 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { applyWorkspacePatch } from './workspace-patch';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import { HistoryPanel, historyAction, historySignature } from './HistoryPanel.tsx';
-import { defaultStack, defaultCwd } from './default-stack.ts';
-import { Launcher, startMessage, DEFAULT_TIER, type LaunchForm } from './Launcher.tsx';
+import { defaultCatalog, defaultCwd } from './default-catalog.ts';
+import { Launcher, startMessage, emptyForm, type LaunchForm } from './Launcher.tsx';
+import { CatalogPane, type CatalogResult } from './CatalogPane.tsx';
 import { Connections, type KeyResult } from './Connections.tsx';
 import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
@@ -16,7 +17,7 @@ import { isManagerElement } from './role.ts';
 import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
-  Overlay, Select, Splitter,
+  Overlay, Select, Splitter, Tab,
   agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
@@ -75,13 +76,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [managerSplit, setManagerSplit] = createSignal(68);
   let managerBody!: HTMLDivElement;
 
-  // Launcher form. stackDefaulted latches N5a's one-shot preselect so
+  // Launcher form. catalogDefaulted latches N5a's one-shot preselect so
   // later roster pushes can't overwrite a deliberate "Choose…".
-  let stackDefaulted = false;
-  const [form, setForm] = createSignal<LaunchForm>({ stack: '', tier: DEFAULT_TIER, agent: '', model: '', cwd: '' });
+  let catalogDefaulted = false;
+  const [form, setForm] = createSignal<LaunchForm>(emptyForm());
   const patchForm = (patch: Partial<LaunchForm>) => setForm((f) => ({ ...f, ...patch }));
   const [keyResults, setKeyResults] = createSignal<Record<string, KeyResult>>({});
   const setKeyResult = (id: string, r: KeyResult) => setKeyResults((all) => ({ ...all, [id]: r }));
+  const [catalogResults, setCatalogResults] = createSignal<Record<string, CatalogResult>>({});
+  const setCatalogResult = (id: string, r: CatalogResult) => setCatalogResults((all) => ({ ...all, [id]: r }));
+  // The manager's left column: the launcher and history, the catalogs, or
+  // the keys. Machine configuration is a different job from starting a
+  // session, and lived at the bottom of the launcher until the launcher
+  // was too tall for its pane.
+  const [managerTab, setManagerTab] = createSignal<'new' | 'catalog' | 'connections'>('new');
   const cwd = () => form().cwd;
   const [starting, setStarting] = createSignal(false);
   const [picking, setPicking] = createSignal(false);
@@ -213,7 +221,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
       case 'autostart':
         setAutostart({ agent: m.agent, cwd: m.cwd });
-        patchForm({ agent: m.agent, cwd: m.cwd });
+        patchForm({ cwd: m.cwd });
         setStarting(true);
         break;
       case 'started':
@@ -325,15 +333,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           }
         }
         // Fill the launcher in on the first roster that names the
-        // stacks (docs/AGENT_UX.md N5a/N5b): the stack you used last, in
-        // the folder you used it in. Once only, and only while the
+        // catalogs (docs/AGENT_UX.md N5a/N5b): the catalog you used last,
+        // in the folder you used it in. Once only, and only while the
         // untouched launcher is what's showing — a user who set the
         // select (or a window that's already a session) is never fought.
-        if (!stackDefaulted && !sessionKey() && !autostart() && form().stack === '') {
-          const d = defaultStack(roster().stacks ?? [], roster().recent ?? []);
+        if (!catalogDefaulted && !sessionKey() && !autostart() && form().catalog === '') {
+          const d = defaultCatalog(roster().catalogs ?? [], roster().recent ?? []);
           if (d) {
-            stackDefaulted = true;
-            patchForm({ stack: d, tier: DEFAULT_TIER });
+            catalogDefaulted = true;
+            patchForm({ catalog: d });
             // Only if the user hasn't typed/picked one — the folder field
             // is editable from the moment the window opens.
             if (cwd() === '') patchForm({ cwd: defaultCwd(roster().recent ?? []) });
@@ -347,6 +355,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
       case 'key_test':
         setKeyResult(m.name, { ok: m.ok, detail: m.detail });
+        break;
+      case 'catalog_saved':
+        setCatalogResult(m.id, m.error ? { ok: false, detail: m.error } : { ok: true, detail: 'Saved.' });
         break;
 
       case 'usage_patch':
@@ -526,10 +537,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     sendAgentd({ kind: 'agent_default_prompt' });
   };
 
+  const launch = () => roster().launch ?? {};
   const start = () => {
     setStarting(true);
     setError('');
-    sendAgentd(startMessage(form()));
+    sendAgentd(startMessage(form(), roster().catalogs ?? [], launch()));
   };
 
   const booting = (
@@ -553,8 +565,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const launcher = (
     <>
       <Launcher
-        stacks={roster().stacks ?? []}
+        catalogs={roster().catalogs ?? []}
         adapters={adapters()}
+        adapterOptions={roster().adapter_options ?? []}
+        launch={launch()}
+        onLaunch={(prefs) => sendAgentd({ kind: 'agent_set_launch', launch: prefs })}
         form={form()}
         onForm={patchForm}
         onStart={start}
@@ -563,14 +578,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         error={error()}
         hasDefaultPrompt={!!roster().has_default_prompt}
         onOpenPrompt={openPrompt}
-      >
-        <Connections
-          keys={roster().keys ?? []}
-          results={keyResults()}
-          onSave={(name, value) => { setKeyResult(name, {}); sendAgentd({ kind: 'agent_set_key', name, value }); }}
-          onTest={(name, value) => { setKeyResult(name, { busy: true }); sendAgentd({ kind: 'agent_test_key', name, value }); }}
-        />
-      </Launcher>
+      />
 
       <FilePicker
         open={saving()}
@@ -771,13 +779,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       onDelete={(s) => setDeleteFor(s)}
       onPrune={() => setPruning(true)}
       onRestart={(s) => {
-        // Fresh, the way it was started: its stack and tier, or, for a
-        // session started without one, its adapter.
+        // Fresh, the way it was started: its catalog and model, or, for a
+        // session started without one, its adapter on its defaults.
         setStarting(true);
         setError('');
-        sendAgentd(s.stack
-          ? startMessage({ stack: s.stack, tier: s.tier ?? DEFAULT_TIER, agent: '', model: '', cwd: s.cwd ?? '' })
-          : startMessage({ stack: '', tier: '', agent: s.agent ?? '', model: '', cwd: s.cwd ?? '' }));
+        sendAgentd(s.catalog
+          ? startMessage({ ...emptyForm(), catalog: s.catalog, model: s.launch_model ?? '', cwd: s.cwd ?? '' }, roster().catalogs ?? [], launch())
+          : { kind: 'agent_start', agent: s.agent ?? '', cwd: s.cwd ?? '', open: true, ...(launch().yolo ? { yolo: true } : {}), ...(launch().mode?.[s.agent ?? ''] ? { mode: launch().mode![s.agent ?? ''] } : {}) });
       }}
       onResume={(s) => {
         const act = historyAction(s);
@@ -1000,9 +1008,42 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </Show>
   );
 
+  const catalogPane = (
+    <CatalogPane
+      catalogs={roster().catalogs ?? []}
+      adapters={adapters()}
+      connections={roster().connections ?? []}
+      adapterOptions={roster().adapter_options ?? []}
+      results={catalogResults()}
+      onSave={(id, catalog) => { setCatalogResult(id, {}); sendAgentd({ kind: 'agent_set_catalog', id, catalog }); }}
+      onDelete={(id) => { setCatalogResult(id, {}); sendAgentd({ kind: 'agent_delete_catalog', id }); }}
+    />
+  );
+
+  // Keys for the connections catalogs name (OpenRouter's). A tab of its
+  // own: pasting a key is the first thing a new box needs, and it was easy
+  // to miss at the foot of the catalog list.
+  const connectionsPane = (
+    <div style={{ padding: `${tokens.spaceMd}px` }}>
+      <Connections
+        keys={roster().keys ?? []}
+        results={keyResults()}
+        onSave={(name, value) => { setKeyResult(name, {}); sendAgentd({ kind: 'agent_set_key', name, value }); }}
+        onTest={(name, value) => { setKeyResult(name, { busy: true }); sendAgentd({ kind: 'agent_test_key', name, value }); }}
+      />
+    </div>
+  );
+
   // The manager is a stable workspace rather than a sequence of modes:
-  // start a session in the compact upper-left pane, find an older one
-  // below it, and keep the live roster visible on the right throughout.
+  // start a session in the upper-left, find an older one below it, and
+  // keep the live roster visible on the right throughout. The Catalog and
+  // Connections tabs swap the left column for the machine's configuration.
+  //
+  // The launcher takes exactly the height its content needs and History
+  // the rest. It used to be a fixed 36% row with a 220px floor, which at
+  // the default window size showed the catalog, model and folder and hid the
+  // Start button below the fold, with no scrollbar to say so, while
+  // History sat half empty underneath.
   const managerView = (
     <>
       {promptDialog}
@@ -1035,19 +1076,39 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             style={{
               'min-width': 0,
               'min-height': 0,
-              display: 'grid',
-              'grid-template-rows': 'minmax(220px, 36%) minmax(0, 1fr)',
+              display: 'flex',
+              'flex-direction': 'column',
             }}
           >
-            <section data-testid="agents-new-pane" style={{ overflow: 'auto', 'min-height': 0 }}>
-              {launcher}
-            </section>
-            <section
-              data-testid="agents-history-pane"
-              style={{ overflow: 'hidden', 'min-height': 0, border: `0 solid ${tokens.borderMenu}`, 'border-top-width': '1px' }}
+            <div role="tablist" data-testid="agents-tabs" style={{ display: 'flex', 'align-items': 'flex-end', padding: `${tokens.spaceSm}px ${tokens.spaceMd}px 0`, 'border-bottom': `1px solid ${tokens.borderMenu}`, 'flex-shrink': 0 }}>
+              <Tab role="tab" active={managerTab() === 'new'} aria-selected={managerTab() === 'new'} data-testid="agents-tab-new" onClick={() => setManagerTab('new')}>New session</Tab>
+              <Tab role="tab" active={managerTab() === 'catalog'} aria-selected={managerTab() === 'catalog'} data-testid="agents-tab-catalog" onClick={() => setManagerTab('catalog')}>Catalog</Tab>
+              <Tab role="tab" active={managerTab() === 'connections'} aria-selected={managerTab() === 'connections'} data-testid="agents-tab-connections" onClick={() => setManagerTab('connections')}>Connections</Tab>
+            </div>
+            <Show
+              when={managerTab() === 'new'}
+              fallback={
+                <section data-testid={managerTab() === 'catalog' ? 'agents-catalog-pane' : 'agents-connections-pane'} style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
+                  {managerTab() === 'catalog' ? catalogPane : connectionsPane}
+                </section>
+              }
             >
-              {historyPanel}
-            </section>
+              {/* The New session pane is one scroller holding the launcher
+                  and History: shorter than the launcher alone, it scrolls
+                  as a whole rather than clipping the Start button, and the
+                  scroll stays here rather than reaching the window frame. */}
+              <div data-testid="agents-new-pane" style={{ flex: 1, 'min-height': 0, display: 'flex', 'flex-direction': 'column', overflow: 'auto', 'overscroll-behavior': 'contain' }}>
+                <section data-testid="agents-launcher" style={{ 'flex-shrink': 0 }}>
+                  {launcher}
+                </section>
+                <section
+                  data-testid="agents-history-pane"
+                  style={{ flex: 1, 'min-height': '220px', overflow: 'hidden', border: `0 solid ${tokens.borderMenu}`, 'border-top-width': '1px' }}
+                >
+                  {historyPanel}
+                </section>
+              </div>
+            </Show>
           </div>
           <Splitter
             container={managerBody}

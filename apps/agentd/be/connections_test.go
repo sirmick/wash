@@ -136,16 +136,16 @@ func TestResumeTargetKeepsTheConnection(t *testing.T) {
 	old := history
 	t.Cleanup(func() { history = old })
 	history = nil
-	rec := launchRecord{Agent: "opencode", Connection: "opencode@openrouter", Stack: "openrouter", Tier: "coding"}
+	rec := launchRecord{Agent: "opencode", Connection: "opencode@openrouter", Catalog: "openrouter-budget", Model: "coding"}
 	bindTranscript("acp:1", "s-conn", rec, "/w", time.Now())
 	waitForTranscriptWrites()
 	s, ok := resolveResumeTarget("s-conn")
-	if !ok || s.Agent != "opencode" || s.Connection != rec.Connection || s.Stack != "openrouter" || s.Tier != "coding" {
+	if !ok || s.Agent != "opencode" || s.Connection != rec.Connection || s.Catalog != "openrouter-budget" || s.Model != "coding" {
 		t.Fatalf("from the transcript: %+v %v", s, ok)
 	}
 	rememberSession(rec, "s-conn", "/w", "", time.Now())
 	rememberSession(launchRecord{Agent: "opencode", Connection: "opencode@openrouter"}, "s-conn", "/w", "", time.Now())
-	if s, _ := resolveResumeTarget("s-conn"); s.Connection != rec.Connection || s.Stack != "openrouter" {
+	if s, _ := resolveResumeTarget("s-conn"); s.Connection != rec.Connection || s.Catalog != "openrouter-budget" {
 		t.Fatalf("from history: %+v", s)
 	}
 }

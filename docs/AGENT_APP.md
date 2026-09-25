@@ -211,7 +211,7 @@ Run against `internal/acp` with a scratch probe and the conformance test
   hangs, retrying, until the caller's deadline.
 
 Model options offered by the other adapters on the same day, which the
-stacks' defaults (`apps/agentd/be/stacks.json`) are chosen from:
+catalogs' defaults (`apps/agentd/be/catalogs.json`) are chosen from:
 
 | Adapter | `model` values | effort option |
 |---|---|---|
@@ -223,54 +223,118 @@ releases; Fable 5.1 and every Codex model are pinned IDs. Codex's `read-only`
 mode still asks rather than refusing ("Always ask to edit external files"),
 so it does not make a reviewer read-only.
 
-### Stacks, connections and keys (2026-09-24)
+### Catalogs, connections and keys (2026-09-24, renamed 2026-09-25)
 
-The launcher picks a **stack** and a **tier** rather than an adapter. A stack
-is a named set of four tiers (`frontier`, `coding`, `review`, `small`); a tier
-is a `swarm.AgentProfile` naming an adapter, a connection, a model, an effort
-and optionally `capability:"reviewer"`. Three ship, as data in
-`apps/agentd/be/stacks.json`:
+The launcher picks a **catalog** and a **model** rather than an adapter. A
+catalog is where a model comes from, one of two things:
 
-| Stack | frontier | coding | review | small |
-|---|---|---|---|---|
-| All Anthropic (Claude Code) | `claude-fable-5-1[1m]` | `sonnet` | `sonnet`, reviewer (enforced) | `haiku` |
-| All OpenAI (Codex) | `gpt-6-astra` high | `gpt-6-sol` medium | `gpt-6-sol` medium (read-only by instruction) | `gpt-6-luna` low |
-| OpenRouter budget (OpenCode) | `~anthropic/claude-opus-latest` high | `deepseek/deepseek-v4-pro-0813` high | `z-ai/glm-5.3` high | `~deepseek/deepseek-v4-flash-latest` low |
+- an adapter's own list ("Anthropic": Claude Code direct; "OpenRouter":
+  OpenCode through the OpenRouter connection). Its models are whatever that
+  adapter reported the last time it ran here (adapter memory below), so
+  nothing is pinned and nothing goes stale;
+- a curated set of three **slots**, `frontier`, `coding` and `small`
+  ("Anthropic pro", "OpenRouter budget"), each a `swarm.AgentProfile` naming
+  an adapter, a connection, a model and an effort, and nothing about
+  permissions. (A `review` slot carrying `capability:"reviewer"` was tried
+  and dropped on 2026-09-24: it mixed what a session may do into the model
+  table. Read-only is a member's flag, set beside its model.)
 
-OpenRouter prices on 2026-09-24, per 1M tokens in/out: Opus 5.5 4.00/20.00,
-GLM-5.3 1.40/4.40, DeepSeek V4 Pro 0813 0.46/1.39, DeepSeek V4 Flash 0731
-0.03/0.32. The `~…-latest` aliases are used only where one priced the same as
-the intended model that day (Opus, V4 Flash); `~deepseek/deepseek-pro-latest`
-and `~z-ai/glm-latest` priced differently, so those tiers pin the snapshot.
+The same two questions a workspace member answers: `"model":"coding"` is a
+slot of the workspace's catalog, and the workspace's catalog is the one the
+orchestrator was started from, switchable with `workspace_configure
+{catalog}`. The per-workspace `profiles` map this replaced is gone. What
+ships, as data in `apps/agentd/be/catalogs.json`: an auto catalog per
+adapter (`anthropic`, `openai`, `gemini`, `opencode`) plus `openrouter`, and
+a pro and a budget catalog per vendor:
 
-- **Overrides.** `agents.json` `stacks` overrides a stack by key, tier by
-  tier (`{"stacks":{"anthropic":{"tiers":{"frontier":{"provider":"claude","model":"opus[1m]"}}}}}`),
-  or adds one with a `name` and all four tiers. A stack that fails the
-  profile rules, names an unknown adapter or connection, sets `approval`, or
-  asks for a reviewer capability off Claude Code is shown greyed with the
-  reason. Availability (adapter installed, key set) is re-read every sweep.
-- **Starting.** `agent_start {stack, tier, agent?, model?, cwd}`: the tier is
-  resolved, the adapter launched through its connection, and the settings
-  applied with `configureWorkspaceSession`, which fails the start, listing
-  the adapter's values, if a model is not offered. `agent` and `model` are
-  the launcher's Advanced overrides; another adapter drops the tier's
-  adapter-specific values. `wash ai --agent X` is `agent` alone. agentd logs
-  `session settings … effective=` with what the adapter reports.
+| Catalog | frontier | coding | small |
+|---|---|---|---|
+| Anthropic pro (`anthropic-pro`, Claude Code) | `claude-fable-5-1[1m]` | `opus[1m]` | `sonnet` |
+| Anthropic budget (`anthropic-budget`) | `opus[1m]` | `sonnet` | `sonnet` |
+| OpenAI pro (`openai-pro`, Codex) | `gpt-6-astra` high | `gpt-6-sol` medium | `gpt-6-luna` low |
+| OpenAI budget (`openai-budget`) | `gpt-6-sol` high | `gpt-6-sol` medium | `gpt-6-luna` low |
+| OpenRouter pro (`openrouter-pro`, OpenCode; open weights only) | `deepseek/deepseek-v4.1-flash` high | `z-ai/glm-5.3` high | `qwen/qwen3.8-flash` low |
+| OpenRouter budget (`openrouter-budget`; open weights only) | `qwen/qwen3.8-27b` high | `deepseek/deepseek-v4-pro-0813` high | `~deepseek/deepseek-v4-flash-latest` low |
+
+The OpenRouter catalogs are open-weight models only, by the owner's choice:
+the vendors' own models are reached through their own catalogs. Prices on
+2026-09-24, per 1M tokens in/out (from `GET /api/v1/models`, 460 models
+that day): DeepSeek V4.1 Flash 0.30/1.20, GLM-5.3 1.40/4.40, Qwen3.8 27B
+0.42/3.00, Qwen3.8 Flash 0.15/0.47, DeepSeek V4 Pro 0813 0.46/1.39,
+DeepSeek V4 Flash 0731 0.03/0.32. The `~…-latest` alias is used only where
+it priced the same as the intended model that day (V4 Flash);
+`~deepseek/deepseek-pro-latest` priced differently, so that slot pins the
+snapshot. GLM-5.3 and both DeepSeek V4 models were run live through OpenCode
+that day; DeepSeek V4.1 Flash and the Qwen models were not.
+
+- **Overrides.** `agents.json` `catalogs` replaces a catalog by id, whole
+  (`{"catalogs":{"anthropic-pro":{"name":"Mine","slots":{"frontier":{"provider":"claude","model":"opus[1m]"},…}}}}`),
+  or adds one: a name and three slots, or a name and an `adapter` (with an
+  optional `connection`) for an adapter's own list. The Agents window's
+  Catalog tab writes the same section (`agent_set_catalog`,
+  `agent_delete_catalog`); resetting a built-in deletes its override. A
+  catalog that fails the profile rules, names an unknown adapter or
+  connection, or sets `approval`, `capability`, `subagents` or `configs` in
+  a slot is shown greyed with the reason, what it has still listed so the
+  tab can fix it. Availability (adapter installed, key set) is re-read
+  every sweep.
+- **Starting.** `agent_start {catalog, model?, configs?, mode?, yolo?,
+  cwd}`: the model is a slot name (frontier when empty) or a model id on
+  the catalog's adapter; the adapter is launched through its connection,
+  and the settings applied with `configureWorkspaceSession`, which fails
+  the start, listing the adapter's values, if a model is not offered.
+  `configs` are the launcher's Advanced settings by the adapter's own
+  option ids (effort, fast mode, …), applied over the slot's. `mode` is the
+  adapter's session mode to start in, refused with the modes it does
+  offer; `yolo` starts with host auto-approval on, announced in the
+  transcript. `wash ai --agent X` sends `agent` alone: that adapter on its
+  defaults, and a workspace it leads is on that adapter's auto catalog.
+  agentd logs `session settings … catalog= model= mode= yolo= effective=`
+  with what the adapter reports.
+- **Mode before model.** A start applies its `mode` before its model and
+  effort, as `configureWorkspaceSession` does for a member's `configs`:
+  Claude Code re-picks the model on a mode change (verified live
+  2026-09-25, claude-agent-acp 0.81.2: haiku then plan mode reported
+  sonnet; plan mode then haiku stayed haiku). Any setting an adapter moves
+  on its own is logged as `acp config changed`.
+- **Permissions are remembered.** The launcher's Permissions row shows
+  agents.json's `launch` section (`{"mode":{"claude":"acceptEdits"},"yolo":true}`,
+  mode by adapter because the names are the adapter's own); changing the
+  row writes it (`agent_set_launch`), and Start sends what the row shows.
+  A change made on a running session (status bar, Session menu) is that
+  session's alone. Nothing here is enforcement: Codex's read-only preset
+  still asks. Enforced read-only stays a member's `capability:"reviewer"`.
+- **Adapter memory.** What an adapter offers (presets, models, efforts) is
+  only learned from a live session, so agentd remembers the last report per
+  adapter in `$XDG_STATE_HOME/wash/agent-adapters.json` and publishes it
+  (`State.AdapterOptions`, with the adapter's version). An auto catalog's
+  Model select, a curated catalog's extra models, Advanced and the Catalog
+  tab all offer those lists; an adapter that has never run here shows only
+  its default and says so. The launch path still checks every value against
+  the session that starts.
 - **Connections** are an adapter plus environment, named `adapter@provider`
   (`opencode@openrouter`, `claude@openrouter`); the adapter's own id is its
   direct connection. `agents.json` `connections` replaces or adds them. A
   session's connection is recorded in History and the transcript head, and a
   resume launches through it again.
 - **Keys** live in `~/.config/wash/keys.json`, beside `agents.json` and not
-  in it, written 0600. The launcher's Connections section saves, tests
+  in it, written 0600. The Connections tab saves, tests
   (`GET https://openrouter.ai/api/v1/key`) and clears them; after saving, the
   window sees only "set" and the last four characters, and no log carries a
   value. A key is injected into the environment of adapters on connections
   that name it (`OPENROUTER_API_KEY`; `ANTHROPIC_AUTH_TOKEN` for
   `claude@openrouter`). **There is no keychain yet**: the file is plain JSON
   protected by its mode only.
-- **Workspaces** take the orchestrator's stack; members say `"tier":"review"`
-  (AGENT_SWARM_BULK.md, API 3.3).
+- **Workspaces** take the orchestrator's catalog; members say
+  `"model":"coding"` (AGENT_SWARM_BULK.md, API 3.3), or a model id, or name
+  their own `catalog`; a reviewer that must not write adds
+  `capability:"reviewer"` beside it.
+- **The Agents window** has three tabs in its left column: New session (the
+  launcher, sized to its content, with History below), Catalog (every
+  catalog editable: an adapter and connection, or three slots) and
+  Connections (the keys). Machine configuration was at the bottom of the
+  launcher until the launcher grew taller than its fixed pane and hid its
+  own Start button.
 
 **So Node is a prerequisite for the managed tier as a whole**, not just for
 Claude, and the "Codex first because its adapter is static" argument does

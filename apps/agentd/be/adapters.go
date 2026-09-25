@@ -184,16 +184,18 @@ func Probe(pol agentpolicy.Policy) []agentproto.Adapter {
 // can happen outside wash. Reports whether anything changed.
 func refreshLaunchers(s *agentproto.State) bool {
 	pol, keys := hostedPolicy(), keyStore()
-	adapters, stacks, keyViews := Probe(pol), publishStacks(pol, keys), publishKeys(pol, keys)
-	if reflect.DeepEqual(adapters, s.Adapters) && reflect.DeepEqual(stacks, s.Stacks) && reflect.DeepEqual(keyViews, s.Keys) {
+	adapters, catalogs, keyViews := Probe(pol), publishCatalogs(pol, keys), publishKeys(pol, keys)
+	launch, options, conns := publishLaunch(pol), publishAdapterOptions(), publishConnections(pol)
+	if reflect.DeepEqual(adapters, s.Adapters) && reflect.DeepEqual(catalogs, s.Catalogs) && reflect.DeepEqual(keyViews, s.Keys) &&
+		reflect.DeepEqual(launch, s.Launch) && reflect.DeepEqual(options, s.AdapterOptions) && reflect.DeepEqual(conns, s.Connections) {
 		return false
 	}
-	s.Adapters, s.Stacks, s.Keys = adapters, stacks, keyViews
+	s.Adapters, s.Catalogs, s.Keys, s.Launch, s.AdapterOptions, s.Connections = adapters, catalogs, keyViews, launch, options, conns
 	for _, a := range adapters {
 		log.Printf("agentd: adapter %s available=%v %s", a.ID, a.Available, a.Note)
 	}
-	for _, st := range stacks {
-		log.Printf("agentd: stack %s available=%v %s", st.ID, st.Available, st.Note)
+	for _, c := range catalogs {
+		log.Printf("agentd: catalog %s available=%v %s", c.ID, c.Available, c.Note)
 	}
 	return true
 }
@@ -208,17 +210,18 @@ func adapterByID(id string) (adapterDef, bool) {
 }
 
 // sessionLaunch is how a session starts: the connection it runs through,
-// the stack tier it was chosen from, and a workspace member's restrictions.
+// the catalog and model it was chosen from, and a workspace member's restrictions.
 // The zero value is an ordinary session on the adapter direct, which may go
 // on to lead a workspace.
 type sessionLaunch struct {
 	// connection names an agentpolicy.Connection for the adapter; "" is
 	// the adapter direct.
 	connection string
-	// stack and tier are where the session's settings came from, kept so
-	// History can say so and the launcher can default to the stack used
-	// last. They change nothing about the launch itself.
-	stack, tier string
+	// catalog and model are where the session's settings came from (the
+	// model as asked: a slot name or an id), kept so History can say so and
+	// the launcher can default to the catalog used last. They change
+	// nothing about the launch itself.
+	catalog, model string
 	// capability "reviewer" restricts the provider's tools (Claude only).
 	capability string
 	// member is a session launched into a workspace rather than one that
@@ -267,6 +270,7 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 	// updates — without this the controls were empty until the agent
 	// happened to change something itself.
 	h.applyConfigs(res2.ConfigOptions)
+	rememberAdapter(h.agent, h.adapterInfo, res2.Modes.AvailableModes, res2.ConfigOptions)
 	// Record the model now, while the session is young: the index reads
 	// the LAST summary, so a session the router outlives still says what
 	// it was running rather than only cleanly-retired ones.
@@ -355,7 +359,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, connection: launch.connection, stack: launch.stack, tier: launch.tier, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
+	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, connection: launch.connection, catalog: launch.catalog, model: launch.model, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
 
 	// Only the injected coordination server is available to restricted reviewers.
 	if capability == "reviewer" {
@@ -423,6 +427,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 	// caller may need: authMethods advertises what is AVAILABLE, not what
 	// is required, so it is only meaningful once a session call fails.
 	h.authMethods = res.AuthMethods
+	h.adapterInfo = res.AgentInfo
 	switch {
 	case capability != "":
 		h.sessionMeta, err = reviewerMetadata(agentID, res.AgentInfo)
@@ -611,7 +616,7 @@ func resolveCwd(cwd string) (string, error) {
 // without the key, and without the models it was using.
 func resumeHosted(rec launchRecord, cwd, sessionID string, svcConn *sdk.Conn) (*hosted, error) {
 	launch := savedWorkspaceLaunch(sessionID)
-	launch.connection, launch.stack, launch.tier = rec.Connection, rec.Stack, rec.Tier
+	launch.connection, launch.catalog, launch.model = rec.Connection, rec.Catalog, rec.Model
 	return resumeHostedCapability(rec.Agent, cwd, sessionID, svcConn, launch)
 }
 func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {

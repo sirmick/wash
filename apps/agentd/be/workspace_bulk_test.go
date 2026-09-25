@@ -183,6 +183,11 @@ func TestConfigureInsideApprovedRootDoesNotAsk(t *testing.T) {
 	if _, err := s.Setup("lead", "claude", cwd, "Project", project, nil); err != nil {
 		t.Fatal(err)
 	}
+	// Set up directly rather than through workspace_configure, which would
+	// have given the workspace the orchestrator's catalog.
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error { w.Catalog = "anthropic"; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	ws := &workspaceService{store: s}
 	h := &hosted{key: "acp:lead", sessionID: "lead", agent: "claude", cwd: cwd}
 	call := func(args any) error {
@@ -305,7 +310,7 @@ func TestMemberTierResolvesFromTheOrchestratorsStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws := &workspaceService{store: s}
-	h := &hosted{sessionID: "lead", agent: "opencode", connection: "opencode@openrouter", stack: "openrouter", cwd: root}
+	h := &hosted{sessionID: "lead", agent: "opencode", connection: "opencode@openrouter", catalog: "openrouter-budget", cwd: root}
 	call := func(args string) error {
 		_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(args)})
 		return err
@@ -313,49 +318,53 @@ func TestMemberTierResolvesFromTheOrchestratorsStack(t *testing.T) {
 	member := func(key, extra string) string {
 		return fmt.Sprintf(`"%s":{"name":%q,"lifetime":"resident","instructions":"Wait for assignments."%s}`, key, key, extra)
 	}
-	if err := call(`{"workspace":{"name":"Team"},"members":{` + member("rev", `,"tier":"review"`) + `,` + member("impl", `,"tier":"coding","thinking":"max"`) + `,` + member("plain", "") + `}}`); err != nil {
+	if err := call(`{"workspace":{"name":"Team"},"members":{` + member("rev", `,"model":"small"`) + `,` + member("impl", `,"model":"coding","effort":"max"`) + `,` + member("plain", "") + `,` + member("own", `,"catalog":"anthropic","model":"haiku"`) + `}}`); err != nil {
 		t.Fatal(err)
 	}
 	w := s.View("lead")
-	if w.Stack != "openrouter" {
-		t.Fatalf("stack = %q, want the orchestrator's", w.Stack)
+	if w.Catalog != "openrouter-budget" {
+		t.Fatalf("catalog = %q, want the orchestrator's", w.Catalog)
 	}
 	if lead := swarm.GetMember(w, w.Lead); lead.LaunchSettings == nil || lead.LaunchSettings.Connection != "opencode@openrouter" {
 		t.Fatalf("orchestrator launch settings = %+v", lead.LaunchSettings)
 	}
-	want := builtinStacks["openrouter"].Tiers["review"]
+	want := builtinCatalogs["openrouter-budget"].Slots["small"]
 	rev := swarm.GetMember(w, "rev")
-	if rev.Tier != "review" || rev.LaunchSettings.Model != want.Model || rev.LaunchSettings.Connection != want.Connection || rev.Provider != "opencode" {
-		t.Fatalf("review member = tier %q %+v", rev.Tier, rev.LaunchSettings)
+	if rev.Model != "small" || rev.Catalog != "openrouter-budget" || rev.LaunchSettings.Model != want.Model || rev.LaunchSettings.Connection != want.Connection || rev.Provider != "opencode" {
+		t.Fatalf("reviewer member = %q %+v", rev.Model, rev.LaunchSettings)
 	}
-	if impl := swarm.GetMember(w, "impl"); impl.LaunchSettings.Model != builtinStacks["openrouter"].Tiers["coding"].Model || impl.LaunchSettings.Thinking != "max" {
-		t.Fatalf("explicit thinking did not override the tier: %+v", impl.LaunchSettings)
+	if impl := swarm.GetMember(w, "impl"); impl.LaunchSettings.Model != builtinCatalogs["openrouter-budget"].Slots["coding"].Model || impl.LaunchSettings.Effort != "max" {
+		t.Fatalf("explicit effort did not override the slot: %+v", impl.LaunchSettings)
 	}
-	if plain := swarm.GetMember(w, "plain"); plain.LaunchSettings.Provider != "opencode" || plain.LaunchSettings.Connection != "opencode@openrouter" {
-		t.Fatalf("member without tier = %+v", plain.LaunchSettings)
+	// No model: the catalog's default slot.
+	if plain := swarm.GetMember(w, "plain"); plain.LaunchSettings.Provider != "opencode" || plain.LaunchSettings.Connection != "opencode@openrouter" || plain.LaunchSettings.Model != builtinCatalogs["openrouter-budget"].Slots["frontier"].Model {
+		t.Fatalf("member without a model = %+v", plain.LaunchSettings)
+	}
+	// A member may name its own catalog, and a model id on it.
+	if own := swarm.GetMember(w, "own"); own.Catalog != "anthropic" || own.LaunchSettings.Provider != "claude" || own.LaunchSettings.Model != "haiku" || own.LaunchSettings.Connection != "" {
+		t.Fatalf("member on its own catalog = %+v", own.LaunchSettings)
 	}
 	// A member reads its role and task, never its model.
 	if brief := memberBrief(*rev, "a1"); strings.Contains(brief, rev.LaunchSettings.Model) {
 		t.Fatal("the member brief carries a model string")
 	}
 
-	// Another stack affects later launches only.
-	if err := call(`{"stack":"anthropic","members":{` + member("rev2", `,"tier":"review"`) + `}}`); err != nil {
+	// Another catalog affects later launches only.
+	if err := call(`{"catalog":"anthropic-pro","members":{` + member("rev2", `,"model":"coding"`) + `}}`); err != nil {
 		t.Fatal(err)
 	}
 	w = s.View("lead")
-	if rev2 := swarm.GetMember(w, "rev2"); rev2.LaunchSettings.Provider != "claude" || rev2.LaunchSettings.Capability != "reviewer" {
-		t.Fatalf("after the stack change = %+v", rev2.LaunchSettings)
+	if rev2 := swarm.GetMember(w, "rev2"); rev2.LaunchSettings.Provider != "claude" || rev2.LaunchSettings.Model != "opus[1m]" {
+		t.Fatalf("after the catalog change = %+v", rev2.LaunchSettings)
 	}
 	if swarm.GetMember(w, "rev").LaunchSettings.Provider != "opencode" {
-		t.Fatal("a stack change rewrote an existing member")
+		t.Fatal("a catalog change rewrote an existing member")
 	}
 
 	for name, args := range map[string]string{
-		"tier and profile": `{"profiles":{"p":{"provider":"claude"}},"members":{` + member("both", `,"tier":"coding","profile":"p"`) + `}}`,
-		"unknown tier":     `{"members":{` + member("odd", `,"tier":"huge"`) + `}}`,
-		"unknown stack":    `{"stack":"nope"}`,
-		"bad connection":   `{"profiles":{"p":{"provider":"codex","connection":"opencode@openrouter"}}}`,
+		"provider off the catalog": `{"members":{` + member("odd", `,"model":"coding","provider":"codex"`) + `}}`,
+		"unknown catalog":          `{"catalog":"nope"}`,
+		"unknown member catalog":   `{"members":{` + member("odd2", `,"catalog":"nope"`) + `}}`,
 	} {
 		if err := call(args); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -363,16 +372,18 @@ func TestMemberTierResolvesFromTheOrchestratorsStack(t *testing.T) {
 	}
 }
 
-// Without a stack there is nothing for a tier to name.
-func TestMemberTierNeedsAWorkspaceStack(t *testing.T) {
+// Without a catalog there is nothing for a member's model to name.
+func TestMemberModelNeedsAWorkspaceCatalog(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	withPolicy(t, agentpolicy.Policy{})
 	root := t.TempDir()
 	s, _ := swarm.Open(filepath.Join(root, "state.json"))
 	ws := &workspaceService{store: s}
-	h := &hosted{sessionID: "lead", agent: "codex", cwd: root}
-	_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(`{"workspace":{"name":"Team"},"members":{"a":{"name":"A","lifetime":"resident","instructions":"x","tier":"coding"}}}`)})
-	if err == nil || !strings.Contains(err.Error(), "no stack") {
+	// A launcher on a connection no catalog lists: nothing to resolve a
+	// member's model against.
+	h := &hosted{sessionID: "lead", agent: "codex", connection: "codex@nowhere", cwd: root}
+	_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(`{"workspace":{"name":"Team"},"members":{"a":{"name":"A","lifetime":"resident","instructions":"x","model":"coding"}}}`)})
+	if err == nil || !strings.Contains(err.Error(), "no catalog") {
 		t.Fatalf("err = %v", err)
 	}
 }

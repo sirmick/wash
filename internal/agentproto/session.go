@@ -6,13 +6,23 @@ package agentproto
 
 // AgentStart starts a session.
 type AgentStart struct {
-	// Stack and Tier choose the settings (stacks.go); Tier defaults to
-	// frontier. Agent and Model are the launcher's Advanced overrides, and
-	// Agent alone, with no stack, is how `wash ai --agent` starts.
-	Stack string `json:"stack,omitempty"`
-	Tier  string `json:"tier,omitempty"`
-	Agent string `json:"agent,omitempty"`
-	Model string `json:"model,omitempty"`
+	// Catalog and Model choose the settings (catalogs.go): Model is a slot
+	// of a curated catalog (frontier, coding, small; frontier when empty)
+	// or a model id the catalog's adapter offers (empty is its default on
+	// an auto catalog). Agent alone, with no catalog, is how `wash ai
+	// --agent` starts: that adapter on its defaults.
+	Catalog string `json:"catalog,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Agent   string `json:"agent,omitempty"`
+	// Configs are the launcher's Advanced settings, by the adapter's own
+	// option ids (effort, fast mode, …), applied over the catalog's.
+	Configs map[string]string `json:"configs,omitempty"`
+	// Mode is the adapter session mode to start in (State.Launch's default
+	// unless the launcher's Permissions row was changed for this start);
+	// empty is the adapter's default. Yolo starts with host-side
+	// auto-approval on.
+	Mode string `json:"mode,omitempty"`
+	Yolo bool   `json:"yolo,omitempty"`
 	// Cwd is the folder the session works in; empty is the home folder.
 	Cwd string `json:"cwd"`
 	// Prompt is sent as the first turn, after the stored default prompt.
@@ -158,7 +168,7 @@ type DefaultPrompt struct {
 
 func init() {
 	register(Spec{Kind: "agent_start", Dir: Request, Payload: AgentStart{}, From: "a launcher (the Agents manager, an Agent window, wash-edit, wash ai --agent)", Reply: "agent_started",
-		Doc: "Start a session from a stack tier, or an adapter on its defaults."})
+		Doc: "Start a session from a catalog and model, or an adapter on its defaults."})
 	register(Spec{Kind: "agent_prompt", Dir: Request, Payload: AgentPrompt{}, From: "a frontend showing the session",
 		Doc: "Send a prompt, with attachments; queued while a turn runs."})
 	register(Spec{Kind: "agent_cancel", Dir: Request, Payload: AgentCancel{}, From: "a frontend showing the session",

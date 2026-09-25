@@ -64,6 +64,9 @@ type hosted struct {
 	capability      string
 	workspaceMember bool
 	sessionMeta     map[string]any
+	// adapterInfo is how the adapter introduced itself at initialize:
+	// its package name and version (adapter memory, reviewer contract).
+	adapterInfo acp.Implementation
 	// interrupted marks a cancel the orchestrator asked for: the turn ends
 	// as a normal one and the member stays available, rather than being
 	// paused like a turn the human stopped.
@@ -75,9 +78,9 @@ type hosted struct {
 	// terminal tier's "<instance>:<channel>" so the two can never collide.
 	key   string
 	agent string
-	// connection, stack and tier are how it was launched (sessionLaunch).
-	connection, stack, tier string
-	cwd                     string
+	// connection, catalog and model are how it was launched (sessionLaunch).
+	connection, catalog, model string
+	cwd                        string
 
 	client *acp.Client
 	// authMethods is what the adapter said it offers, kept only so a
@@ -672,13 +675,26 @@ func (h *hosted) applyModes(m acp.SessionModes) {
 // authoritative: setting one option can change another (a model that does
 // not support an effort level resets it), so a set replaces the whole
 // list rather than patching one entry.
+//
+// A value that changed is logged with what it was: an adapter may move a
+// setting on its own (a model swapped after launch was the shakedown's
+// finding 3), and this is the line that says when it happened.
 func (h *hosted) applyConfigs(in []acp.ConfigOption) {
 	if len(in) == 0 {
 		return
 	}
 	hostedMu.Lock()
+	before := map[string]string{}
+	for _, o := range h.configs {
+		before[o.ID] = o.CurrentValue
+	}
 	h.configs = in
 	hostedMu.Unlock()
+	for _, o := range in {
+		if was, seen := before[o.ID]; seen && was != o.CurrentValue {
+			log.Printf("agentd: acp config changed key=%s %s=%s was=%s", h.key, o.ID, o.CurrentValue, was)
+		}
+	}
 	h.republish()
 }
 
@@ -1278,7 +1294,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	sdk.HandleFromVoid(bus, "agent_start", func(conn *sdk.Conn, _ string, req agentproto.AgentStart, from wire.Sender) error {
 		h, err := startSession(req, svcConn)
 		if err != nil {
-			log.Printf("agentd: acp start stack=%s tier=%s agent=%s cwd=%s: %v", req.Stack, req.Tier, req.Agent, req.Cwd, err)
+			log.Printf("agentd: acp start catalog=%s model=%s agent=%s cwd=%s: %v", req.Catalog, req.Model, req.Agent, req.Cwd, err)
 			if from.InstanceID != "" {
 				return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.AgentStarted{Error: err.Error(), ReqID: req.ReqID})
 			}
@@ -1505,7 +1521,7 @@ func publicConfigs(in []acp.ConfigOption) []agentproto.Config {
 		for _, v := range o.Options {
 			vals = append(vals, agentproto.ConfigValue{Value: v.Value, Name: v.Name, Description: v.Description})
 		}
-		out = append(out, agentproto.Config{ID: o.ID, Name: o.Name, Description: o.Description, Current: o.CurrentValue, Values: vals})
+		out = append(out, agentproto.Config{ID: o.ID, Name: o.Name, Description: o.Description, Category: o.Category, Current: o.CurrentValue, Values: vals})
 	}
 	return out
 }
@@ -1622,14 +1638,38 @@ func (h *hosted) setYolo(on bool, why string) bool {
 // toggleYolo is the human's switch. A workspace member's answer is also
 // remembered on its member record, where a restart (which pauses a member,
 // not ends it) finds it again, and which ends with the workspace.
+//
+// The orchestrator's switch is the workspace's: every live member that did
+// not choose an `approval` of its own follows it (spawn gives a new member
+// the same default), each told in its own transcript. A member with an
+// explicit "ask" or "auto", or a reviewer, keeps what it has.
 func (h *hosted) toggleYolo(on bool) {
 	if !h.setYolo(on, "") || workspaces == nil {
 		return
 	}
-	_ = workspaces.store.Mutate(h.sessionID, false, func(_ *swarm.Workspace, m *swarm.Member) error {
+	var followers []string
+	_ = workspaces.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
 		m.AutoApprove = on
+		if m.ID != w.Lead {
+			return nil
+		}
+		for i := range w.Members {
+			v := &w.Members[i]
+			if v.ID == m.ID || v.State == "ended" || v.LaunchSettings.Approval != "" || v.LaunchSettings.Capability == "reviewer" {
+				continue
+			}
+			v.AutoApprove = on
+			if v.Session != "" {
+				followers = append(followers, v.Session)
+			}
+		}
 		return nil
 	})
+	for _, session := range followers {
+		if f := workspaceHosted(session); f != nil {
+			f.setYolo(on, "the orchestrator's auto-approval changed")
+		}
+	}
 }
 
 // noteSubject is a tool subject as a transcript note shows it: the first line,

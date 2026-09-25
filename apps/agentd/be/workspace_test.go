@@ -371,6 +371,9 @@ func TestAutoApprovalIsBoundedByTheLauncherAndSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error { w.Catalog = "anthropic"; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	old := workspaces
 	workspaces = &workspaceService{store: s}
 	defer func() { workspaces = old }()
@@ -607,19 +610,108 @@ func TestResultCCIsANonWakingCopy(t *testing.T) {
 	}
 }
 
+// Three creates for one member in one batch failed with the bare "member
+// already has an active assignment": the conflict was with an earlier update
+// of the same batch, and nothing said which update failed. The batch stays
+// atomic.
+func TestAssignmentBatchNamesTheFailingUpdate(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Members = append(w.Members,
+			swarm.Member{ID: "red", Key: "K5-red", Session: "red-s", State: "available", Lifetime: "resident"},
+			swarm.Member{ID: "impl", Key: "K5-implementer", Session: "impl-s", State: "available", Lifetime: "resident"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead"}
+	assign := func(updates ...map[string]any) error {
+		raw, _ := json.Marshal(map[string]any{"updates": updates})
+		_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "assignment_update", Arguments: raw})
+		return err
+	}
+	create := func(member, text string) map[string]any {
+		return map[string]any{"action": "create", "member_id": member, "text": text}
+	}
+	err = assign(create("K5-implementer", "Build"), create("K5-red", "Review"), create("K5-red", "Review again"))
+	if err == nil || !strings.Contains(err.Error(), `update 2: member "K5-red": member already has an active assignment: update 1 of this batch created it`) {
+		t.Fatalf("batch conflict error = %v", err)
+	}
+	if got := s.View("lead").Assignments; len(got) != 0 {
+		t.Fatalf("a failed batch kept assignments: %+v", got)
+	}
+	if _, err = s.Assign("lead", "red", "Review", ""); err != nil {
+		t.Fatal(err)
+	}
+	err = assign(create("K5-implementer", "Build"), create("K5-red", "Review again"))
+	if err == nil || !strings.Contains(err.Error(), `update 1: member "K5-red": member already has an active assignment`) || strings.Contains(err.Error(), "of this batch") {
+		t.Fatalf("conflict with an existing assignment = %v", err)
+	}
+	if err = assign(create("K5-implementer", "Build"), map[string]any{"action": "complete", "id": "nope", "body": "x"}); err == nil || !strings.HasPrefix(err.Error(), "update 1: ") {
+		t.Fatalf("complete failure unnamed: %v", err)
+	}
+	if err = assign(create("K5-implementer", "Build")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// flash_message answered with the id it was given, which a flash has none
+// of; the created message's id is what the caller can refer to.
+func TestFlashMessageReturnsTheCreatedMessageID(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	res, err := ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "flash_message", Arguments: json.RawMessage(`{"text":"Build green","emoji":"✅"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := s.View("lead").Messages
+	last := msgs[len(msgs)-1]
+	if id, _ := res.(map[string]any)["id"].(string); id == "" || id != last.ID || last.Type != "flash" {
+		t.Fatalf("flash result %+v, last message %+v", res, last)
+	}
+}
+
 // A member's role and initial task are one first message. Sent as two, the
 // role went out alone and was taken as the go-ahead: an implementer whose
 // task said "PLAN FIRST, no code yet" had started coding before it read it.
-// Without a task the role says to wait rather than leaving it open.
+// Without a task the role says to wait rather than leaving it open; in plan
+// mode it also says not to plan, since an idle plan-mode member wrote an
+// empty plan and asked to leave plan mode, which woke the orchestrator.
 func TestMemberBriefCarriesTheTaskOrSaysWait(t *testing.T) {
-	m := swarm.Member{ID: "m1", Instructions: "You implement K5.", InitialTask: "PLAN FIRST, no code yet."}
+	m := swarm.Member{ID: "m1", Instructions: "You implement K5.", InitialTask: "PLAN FIRST, no code yet.", LaunchSettings: &swarm.AgentProfile{Provider: "claude"}}
 	withTask := memberBrief(m, "a1")
 	if !strings.HasPrefix(withTask, "You implement K5.") || !strings.Contains(withTask, "## Your assignment (a1)") || !strings.HasSuffix(withTask, "PLAN FIRST, no code yet.") || strings.Contains(withTask, "no assignment yet") {
 		t.Fatalf("brief with task: %q", withTask)
 	}
 	m.InitialTask = ""
-	if idle := memberBrief(m, ""); !strings.Contains(idle, "Do not start work") || strings.Contains(idle, "Your assignment (") {
+	if idle := memberBrief(m, ""); !strings.Contains(idle, "Do not start work") || strings.Contains(idle, "Your assignment (") || strings.Contains(idle, "ExitPlanMode") {
 		t.Fatalf("brief without task: %q", idle)
+	}
+	m.LaunchSettings.Configs = map[string]string{"mode": "plan"}
+	if idle := memberBrief(m, ""); !strings.Contains(idle, "Do not start work") || !strings.Contains(idle, "Do not write a plan or call ExitPlanMode until you have an assignment") {
+		t.Fatalf("plan-mode brief without task: %q", idle)
+	}
+	m.Adjusted = map[string]string{"mode": "default"}
+	if idle := memberBrief(m, ""); strings.Contains(idle, "ExitPlanMode") {
+		t.Fatalf("brief ignores the orchestrator's live mode change: %q", idle)
+	}
+	m.Adjusted = nil
+	m.InitialTask = "PLAN FIRST, no code yet."
+	if withTask := memberBrief(m, "a1"); strings.Contains(withTask, "ExitPlanMode") {
+		t.Fatalf("plan-mode brief with task told not to plan: %q", withTask)
 	}
 	dir := t.TempDir()
 	s, _ := swarm.Open(filepath.Join(dir, "state.json"))
@@ -666,5 +758,77 @@ func TestMailDoesNotStaleTheConfigurationRevision(t *testing.T) {
 	}
 	if _, err = ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "workspace_configure", Arguments: args}); err == nil {
 		t.Fatal("stale expected_revision accepted")
+	}
+}
+
+// The orchestrator's yolo switch is the workspace's: live members with no
+// approval of their own follow it, on their records and on their sessions;
+// a member that chose "ask" or "auto", or a reviewer, keeps what it has.
+func TestOrchestratorYoloReachesMembersWithoutTheirOwnApproval(t *testing.T) {
+	withState(t, 1)
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	w, err := s.Setup("lead", "claude", root, "Team", root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := workspaces
+	workspaces = &workspaceService{store: s}
+	defer func() { workspaces = old }()
+	profile := func(approval, capability string) *swarm.AgentProfile {
+		return &swarm.AgentProfile{Provider: "claude", Approval: approval, Capability: capability}
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Members = append(w.Members,
+			swarm.Member{ID: "follows", Name: "Impl", State: "available", Session: "s-follows", LaunchSettings: profile("", "")},
+			swarm.Member{ID: "asks", Name: "Careful", State: "available", Session: "s-asks", LaunchSettings: profile("ask", "")},
+			swarm.Member{ID: "auto", Name: "Auto", State: "available", Session: "s-auto", AutoApprove: true, LaunchSettings: profile("auto", "")},
+			swarm.Member{ID: "rev", Name: "Reviewer", State: "available", Session: "s-rev", LaunchSettings: profile("", "reviewer")},
+			swarm.Member{ID: "gone", Name: "Old", State: "ended", Session: "s-gone", LaunchSettings: profile("", "")})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	live := map[string]*hosted{}
+	for _, session := range []string{"lead", "s-follows", "s-asks", "s-auto", "s-rev"} {
+		h := &hosted{key: "yolo-" + session, sessionID: session, agent: "claude", cwd: root, yolo: session == "s-auto"}
+		h.sessionReady.Store(true)
+		live[session] = h
+		hostedMu.Lock()
+		hostedAll[h.key] = h
+		hostedMu.Unlock()
+		defer func() { hostedMu.Lock(); delete(hostedAll, h.key); hostedMu.Unlock() }()
+	}
+	yolo := func(session string) bool {
+		hostedMu.Lock()
+		defer hostedMu.Unlock()
+		return live[session].yolo
+	}
+	live["lead"].toggleYolo(true)
+	got := s.View("lead")
+	if !yolo("s-follows") || !swarm.GetMember(got, "follows").AutoApprove {
+		t.Error("a member without its own approval did not follow the orchestrator on")
+	}
+	if yolo("s-asks") || swarm.GetMember(got, "asks").AutoApprove || yolo("s-rev") || swarm.GetMember(got, "rev").AutoApprove {
+		t.Error("an opted-out member or a reviewer followed the orchestrator")
+	}
+	if !swarm.GetMember(got, w.Lead).AutoApprove {
+		t.Error("the orchestrator's own record did not change")
+	}
+	live["lead"].toggleYolo(false)
+	got = s.View("lead")
+	if yolo("s-follows") || swarm.GetMember(got, "follows").AutoApprove {
+		t.Error("a following member did not follow the orchestrator off")
+	}
+	if !yolo("s-auto") || !swarm.GetMember(got, "auto").AutoApprove {
+		t.Error("an explicitly auto member was switched off by the orchestrator")
+	}
+	// A member's own switch is its own.
+	live["s-follows"].toggleYolo(true)
+	if yolo("lead") || yolo("s-asks") {
+		t.Error("a member's switch reached other sessions")
 	}
 }

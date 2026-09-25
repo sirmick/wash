@@ -99,8 +99,14 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
 });
 
 
-test('MCP reads workspace JSON and launches named profiles with model-dependent thinking', async ({ page, router }) => {
+test('MCP reads workspace JSON and launches members from a catalog with model-dependent effort', async ({ page, router }) => {
  test.setTimeout(90_000);
+ // A curated catalog of the fake's models: smart (effort low or high) and
+ // fast (low only). The orchestrator starts on Codex's own list; the
+ // workspace switches to this one.
+ mkdirSync(join(router.xdgConfigHome, 'wash'), { recursive: true });
+ const slot = (model: string, effort: string) => ({ provider: 'codex', model, effort });
+ writeFileSync(join(router.xdgConfigHome, 'wash', 'agents.json'), JSON.stringify({ catalogs: { fake: { name: 'Fake', slots: { frontier: slot('smart', 'high'), coding: slot('fast', 'low'), small: slot('fast', 'low') } } } }));
  await page.goto(router.url);
  await expect(page.locator('wash-app-session')).toBeVisible();
  const started = await router.controlRequest({ t: 'launch', app_id: 'com.wash.ai' });
@@ -125,53 +131,55 @@ test('MCP reads workspace JSON and launches named profiles with model-dependent 
  expect(about.caller.role).toBe('unattached');
  expect(about.instructions).toContain('END YOUR TURN');
  expect(about.capabilities.bulk_workspace_configuration).toBe(true);
+ expect(about.capabilities.catalogs).toBe(true);
  expect(about.permissions.filesystem_enforcement).toMatch(/^unknown:/);
  expect(await tool('workspace_get')).toBeNull();
  await expect(app.locator('[data-testid="workspace-sidebar"]')).toHaveCount(0);
- await tool('workspace_configure', { workspace:{name: 'Profiles'} });
+ await tool('workspace_configure', { workspace:{name: 'Catalog'} });
  expect((await tool('workspace_get', {view:'about'})).caller.role).toBe('orchestrator');
  const before = await tool('workspace_get', {view:'state'});
+ // Started on the adapter alone: the workspace is on its own list.
+ expect(before.workspace.catalog).toBe('openai');
  expect(before.sessions[before.workspace.orchestrator].config_options.map((c: any) => c.category)).toEqual(['model', 'thought_level']);
- await tool('workspace_configure', {
-  expected_revision: before.workspace.revision,
-  profiles: { god: { provider: 'codex', model: 'smart', thinking: 'high' }, pleb: { provider: 'codex', model: 'fast', thinking: 'low' } },
-  default_profile: 'pleb',
- });
- const resident = (await tool('workspace_configure', {members:{architect:{ name: 'Architect', profile: 'god', instructions: 'Wait for design questions.', lifetime: 'resident' }}})).launches.architect;
- expect(resident.profile).toBe('god');
+ await tool('workspace_configure', { expected_revision: before.workspace.revision, catalog: 'fake' });
+ const resident = (await tool('workspace_configure', {members:{architect:{ name: 'Architect', model: 'frontier', instructions: 'Wait for design questions.', lifetime: 'resident' }}})).launches.architect;
+ expect(resident.catalog).toBe('fake');
+ expect(resident.model).toBe('frontier');
  expect(resident.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
  const sidebar = app.locator('[data-testid="workspace-sidebar"]');
  await sidebar.locator(`[data-testid="workspace-member-${resident.id}"]`).click();
- await expect(app.locator('[data-testid="workspace-member-launch"]')).toHaveText('Launched: god · codex · smart · thinking high');
- await tool('workspace_configure', { profiles: { god: { provider: 'codex', model: 'fast', thinking: 'low' } } });
+ await expect(app.locator('[data-testid="workspace-member-launch"]')).toHaveText('Launched: fake · frontier slot · codex · smart · effort high');
+ // No model: the catalog's default slot. A member's own settings sit on
+ // top of the slot's; a member may name another catalog outright.
  const helper = (await tool('workspace_configure', {members:{helper:{ name: 'Helper', instructions: 'Wait for work.', lifetime: 'resident' }}})).launches.helper;
- expect(helper.profile).toBe('pleb');
- expect(helper.initial_configs).toEqual({ model: 'fast', reasoning_effort: 'low' });
- const override = (await tool('workspace_configure', {members:{reviewer:{ name: 'Reviewer', profile: 'god', model: 'smart', thinking: 'high', instructions: 'Wait for a review.', lifetime: 'resident' }}})).launches.reviewer;
- expect(override.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
- await tool('workspace_configure', {members:{unknown:{ name: 'Unknown', profile: 'missing', instructions: 'Must not launch.', lifetime: 'resident' }}}, true);
- const failedLaunch = await tool('workspace_configure', {members:{invalid:{ name: 'Invalid thinking', profile: 'pleb', thinking: 'high', instructions: 'Must not run.', lifetime: 'resident' }}});
+ expect(helper.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
+ const override = (await tool('workspace_configure', {members:{reviewer:{ name: 'Reviewer', model: 'coding', instructions: 'Wait for a review.', lifetime: 'resident' }}})).launches.reviewer;
+ expect(override.initial_configs).toEqual({ model: 'fast', reasoning_effort: 'low' });
+ const own = (await tool('workspace_configure', {members:{own:{ name: 'Own', catalog: 'openai', model: 'smart', effort: 'high', instructions: 'Wait.', lifetime: 'resident' }}})).launches.own;
+ expect(own.catalog).toBe('openai');
+ expect(own.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
+ await tool('workspace_configure', {members:{unknown:{ name: 'Unknown', catalog: 'missing', instructions: 'Must not launch.', lifetime: 'resident' }}}, true);
+ const failedLaunch = await tool('workspace_configure', {members:{invalid:{ name: 'Invalid effort', model: 'coding', effort: 'high', instructions: 'Must not run.', lifetime: 'resident' }}});
  expect(failedLaunch.launches.invalid.state).toBe('failed');
  expect(failedLaunch.launches.invalid.error).toBeTruthy();
  const after = await tool('workspace_get', { view: 'state', include_messages: true });
- expect(after.workspace.profiles.god.model).toBe('fast');
- expect(after.workspace.members.find((m: any) => m.id === resident.id).launch_settings).toMatchObject({ model: 'smart', thinking: 'high' });
+ expect(after.workspace.catalog).toBe('fake');
+ expect(after.workspace.members.find((m: any) => m.id === resident.id).launch_settings).toMatchObject({ model: 'smart', effort: 'high' });
  expect(after.sessions[resident.id].config_options.find((c: any) => c.id === 'model').currentValue).toBe('smart');
  expect(after.workspace.members.some((m: any) => m.name === 'Unknown')).toBe(false);
- const failed = after.workspace.members.find((m: any) => m.name === 'Invalid thinking');
+ const failed = after.workspace.members.find((m: any) => m.name === 'Invalid effort');
  expect(failed.state).toBe('failed');
  expect(after.workspace.messages.some((m: any) => m.recipient === failed.id)).toBe(false);
  await tool('workspace_configure', { expected_revision: before.workspace.revision, name: 'Stale edit' }, true);
- await tool('workspace_configure', { profiles: { god: null }, default_profile: '' });
- const removed = await tool('workspace_get', {view:'state'});
- expect(removed.workspace.profiles.god).toBeUndefined();
- expect(removed.workspace.profiles.pleb.model).toBe('fast');
- expect(removed.workspace.default_profile).toBe('');
- expect(removed.workspace.name).toBe('Profiles');
+ // Back to the adapter's own list: later launches only.
+ await tool('workspace_configure', { catalog: 'openai' });
+ const switched = await tool('workspace_get', {view:'state'});
+ expect(switched.workspace.catalog).toBe('openai');
+ expect(switched.workspace.members.find((m: any) => m.id === resident.id).catalog).toBe('fake');
+ expect(switched.workspace.name).toBe('Catalog');
  await tool('workspace_end');
  await expect(sidebar).toHaveCount(0);
 });
-
 
 test('sidebar shows live context and activity, and human messages remain distinct', async ({page,router}) => {
  test.setTimeout(45_000);
@@ -302,9 +310,9 @@ test('bulk workspace setup keeps package workers resident and QA survives refres
  await expect(sidebar).toHaveCount(0);
 expect(about.caller.config_options.length).toBeGreaterThan(0);
  const qaPath=join(router.xdgConfigHome,'QA.md');
- const config={qa_document:{path:qaPath,title:'Package questions'},request_id:'package-setup',workspace:{name:'Package QA'},profiles:{worker:{provider:'codex',model:'fast',thinking:'low'}},members:{
-  implementer:{name:'K5 implementer',profile:'worker',lifetime:'resident',package:'K5',role:'implementer',instructions:'Implement only the assigned package.',task:'First delivery'},
-  red:{name:'K5 red',profile:'worker',lifetime:'resident',package:'K5',role:'reviewer',instructions:'Review defensively; wait for work.'},
+ const config={qa_document:{path:qaPath,title:'Package questions'},request_id:'package-setup',workspace:{name:'Package QA'},members:{
+  implementer:{name:'K5 implementer',model:'fast',effort:'low',lifetime:'resident',package:'K5',role:'implementer',instructions:'Implement only the assigned package.',task:'First delivery'},
+  red:{name:'K5 red',model:'fast',effort:'low',lifetime:'resident',package:'K5',role:'reviewer',instructions:'Review defensively; wait for work.'},
  },plan:{items:{K5:{text:'K5 package',state:'active'}}}};
  await tool('workspace_configure',{...config,preview:true});await expect(sidebar).toHaveCount(0);
  const configured=await tool('workspace_configure',config);
@@ -353,33 +361,73 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await tool('workspace_end');await expect(sidebar).toHaveCount(0);
 });
 
-// A workspace takes its stack from the orchestrator's own session, and a
-// member launched with "tier":"review" runs that stack's review settings with
-// no model string in its definition. The stack is agents.json's own, with the
-// fake's models, so the tier's model and effort are checkable here.
-test('a member launched by tier inherits the orchestrator\'s stack', async ({page,router}) => {
+// A workspace takes its catalog from the orchestrator's own session, and a
+// member launched with "model":"small" runs that catalog's small slot with
+// no model string in its definition. The catalog is agents.json's own, with
+// the fake's models, so the slot's model and effort are checkable here.
+test('a member launched by slot inherits the orchestrator\'s catalog', async ({page,router}) => {
  test.setTimeout(90_000);
  mkdirSync(join(router.xdgConfigHome,'wash'),{recursive:true});
- const tier=(model:string,thinking:string)=>({provider:'codex',model,thinking});
- writeFileSync(join(router.xdgConfigHome,'wash','agents.json'),JSON.stringify({stacks:{fake:{name:'Fake',tiers:{frontier:tier('smart','high'),coding:tier('fast','low'),review:tier('smart','low'),small:tier('fast','low')}}}}));
+ const slot=(model:string,effort:string)=>({provider:'codex',model,effort});
+ writeFileSync(join(router.xdgConfigHome,'wash','agents.json'),JSON.stringify({catalogs:{fake:{name:'Fake',slots:{frontier:slot('smart','high'),coding:slot('fast','low'),small:slot('smart','low')}}}}));
  await page.goto(router.url);
  await expect(page.locator('wash-app-session')).toBeVisible();
  const cursor=router.logCursor();
  const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
- await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'agent_start',claim:true,stack:'fake',tier:'frontier',cwd:router.xdgConfigHome,prompt:''}});
- await router.waitForLog(/agentd: session settings key=\S+ stack=fake tier=frontier connection= adapter=codex effective=map\[model:smart reasoning_effort:high\]/,25_000,cursor);
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'agent_start',claim:true,catalog:'fake',model:'frontier',cwd:router.xdgConfigHome,prompt:''}});
+ await router.waitForLog(/agentd: session settings key=\S+ catalog=fake model=frontier connection= adapter=codex mode=\S* yolo=false effective=map\[model:smart reasoning_effort:high\]/,25_000,cursor);
  const app=page.locator('wash-app-ai');
  const composer=app.locator('[data-testid="agent-composer"]').first();
  await expect(composer).toBeEnabled();
  // The store file appears with the first workspace.
  const state=()=>{try{return JSON.parse(readFileSync(join(router.xdgStateHome,'wash/workspaces.json'),'utf8')).workspaces.at(-1);}catch{return undefined;}};
  const tool=async(name:string,args:object={})=>{await composer.fill(`workspace ${name} ${JSON.stringify(args)}`);await composer.press('Enter');};
- await tool('workspace_configure',{workspace:{name:'Tiers'},members:{rev:{name:'Reviewer',tier:'review',instructions:'Review when asked.',lifetime:'resident'}}});
+ await tool('workspace_configure',{workspace:{name:'Slots'},members:{rev:{name:'Reviewer',model:'small',instructions:'Review when asked.',lifetime:'resident'}}});
  await expect.poll(()=>state()?.members?.find((m:any)=>m.key==='rev')?.state,{timeout:30_000}).toBe('available');
  const w=state();
- expect(w.stack).toBe('fake');
+ expect(w.catalog).toBe('fake');
  const rev=w.members.find((m:any)=>m.key==='rev');
- expect(rev.tier).toBe('review');
- expect(rev.launch_settings).toMatchObject({provider:'codex',model:'smart',thinking:'low'});
+ expect(rev.model).toBe('small');
+ expect(rev.catalog).toBe('fake');
+ expect(rev.launch_settings).toMatchObject({provider:'codex',model:'smart',effort:'low'});
  expect(rev.initial_configs).toMatchObject({model:'smart',reasoning_effort:'low'});
+});
+
+// Yolo on the orchestrator is yolo for the workspace: a member launched
+// with no approval of its own starts auto-approved because its launcher is,
+// and follows the orchestrator's later toggle; one that says "ask" does
+// not. The member records in workspaces.json are the durable form, and the
+// members' own sessions are told (log).
+test('members without their own approval follow the orchestrator\'s yolo', async ({page,router}) => {
+ test.setTimeout(90_000);
+ await page.goto(router.url);
+ await expect(page.locator('wash-app-session')).toBeVisible();
+ const started=await router.controlRequest({t:'launch',app_id:'com.wash.ai'});
+ // Started with yolo on, the way the launcher's Permissions row does it.
+ await router.controlRequest({t:'msg',instance_id:String(started.instance_id),data:{kind:'agent_start',claim:true,agent:'codex',cwd:router.xdgConfigHome,prompt:'',yolo:true}});
+ const app=page.locator('wash-app-ai');
+ const composer=app.locator('[data-testid="agent-composer"]').first();
+ await expect(composer).toBeEnabled();
+ await expect(app.locator('[data-testid="agent-yolo-badge"]')).toBeVisible({timeout:15_000});
+ const state=()=>{try{return JSON.parse(readFileSync(join(router.xdgStateHome,'wash/workspaces.json'),'utf8')).workspaces.at(-1);}catch{return undefined;}};
+ const member=(key:string)=>state()?.members?.find((m:any)=>m.key===key);
+ const tool=async(name:string,args:object={})=>{await composer.fill(`workspace ${name} ${JSON.stringify(args)}`);await composer.press('Enter');};
+ let cursor=router.logCursor();
+ await tool('workspace_configure',{workspace:{name:'Yolo'},members:{
+  follows:{name:'Follows',instructions:'Wait.',lifetime:'resident'},
+  asks:{name:'Asks',approval:'ask',instructions:'Wait.',lifetime:'resident'}}});
+ await expect.poll(()=>member('follows')?.state,{timeout:30_000}).toBe('available');
+ await expect.poll(()=>member('asks')?.state,{timeout:30_000}).toBe('available');
+ expect(member('follows').auto_approve).toBe(true);
+ expect(member('asks').auto_approve).toBeFalsy();
+ await router.waitForLog(/agentd: acp yolo key=\S+ on=true why="the session that launched this member is auto-approved"/,15_000,cursor);
+
+ // The orchestrator switches yolo off: the follower follows, the asker
+ // was never on.
+ cursor=router.logCursor();
+ await app.locator('[data-testid="ai-menubar-session"]').click();
+ await page.locator('[data-testid="ai-menu-yolo"]').click();
+ await router.waitForLog(/agentd: acp yolo key=\S+ on=false why="the orchestrator's auto-approval changed"/,15_000,cursor);
+ await expect.poll(()=>member('follows')?.auto_approve,{timeout:15_000}).toBeFalsy();
+ expect(member('asks').auto_approve).toBeFalsy();
 });

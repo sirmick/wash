@@ -28,12 +28,12 @@ orchestrator transcript or launcher default prompt.
 
 ## Bulk setup and progress
 
-Resolve actual model IDs/thinking choices from `about.caller.config_options` or
-`workspace_get.sessions[member_id].config_options` for the intended provider.
-Register `god` as Astra 6/high, `pleb` as Sol 5.6/high. Reviewers normally use pleb
-with medium thinking; use god for demanding defensive/consistency work. If unavailable,
-ask the owner for a supported alternative; do not guess IDs or silently substitute.
-Preserve existing user-selected profiles.
+Members name a slot of the workspace catalog: `frontier` for demanding
+defensive/consistency work, `coding` for implementers, `small` for reviewers, with an
+explicit `effort` where a slot's is not wanted. A model id must come from
+`about.caller.config_options` or `workspace_get.sessions[member_id].config_options`; do
+not guess IDs or silently substitute. Keep the catalog the owner started the
+workspace on unless asked.
 
 Call `workspace_configure` with a single setup/patch. This is a template: replace
 model placeholders and derive the keyed plan from the current project first.
@@ -44,16 +44,11 @@ model placeholders and derive the keyed plan from the current project first.
   "workspace":{"name":"Redoubt","project_root":"/data/redoubt"},
   "max_active":4,
   "max_members":16,
-  "profiles":{
-    "god":{"provider":"codex","model":"<verified Astra 6 ID>","thinking":"high"},
-    "pleb":{"provider":"codex","model":"<verified Sol 5.6 ID>","thinking":"high"}
-  },
-  "default_profile":"pleb",
   "document":{"path":"/data/redoubt/docs/BUILD-PLAN.md","title":"Redoubt build plan"},
   "qa_document":{"path":"/data/redoubt/docs/WORKSPACE-QA.md","title":"Redoubt QA"},
   "members":{
     "architect":{
-      "name":"Architect","profile":"god","cwd":"/data/redoubt",
+      "name":"Architect","model":"frontier","cwd":"/data/redoubt",
       "lifetime":"resident","role":"architect","can_spawn":false,
       "instructions":"You are Redoubt's resident Architect. Read PROJECT.md, docs/TENETS.md, docs/README.md, .pi/agents/architect.md and .pi/skills/architect-qa/SKILL.md. Own formal QUESTIONS/ANSWERS and specification updates, not implementation. Answer tracked QA through message_send with thread_id and reply_to. Cite settled rules; request genuine owner decisions with recommendation, alternatives and thread_id. Only actual human responses authorize changes. Apply the formal QA protocol, attach decision references and return the question to its implementer. Complete explicit assignments with a short summary; put detail in QA. Set status/emoji and waiting using member_update, then END YOUR TURN. Stay resident; never poll or create another swarm."
     }
@@ -108,7 +103,7 @@ an ephemeral agent retires after its assignment and turn end. Reserve ephemeral
 agents for bounded auxiliary tasks, not package implementers or reviewers.
 
 Reviewer roles alone impose no tool restrictions. Inspect about.permissions and use
-capability:"reviewer" only with an explicitly supported provider/profile. Currently the
+capability:"reviewer" only with an explicitly supported provider. Currently the
 verified Claude adapter supports read/search plus scoped coordination; the Codex adapter
 does not. Do not silently change the specified reviewer model/provider: ask the owner
 for an approved alternative if enforced review is required. About reports permission limits. Do not equate an adapter's 'read-only' mode with filesystem safety,

@@ -28,12 +28,24 @@ type State struct {
 	// with their reason rather than hiding them, so "why can I not pick
 	// Claude here" has an answer on screen.
 	Adapters []Adapter `json:"adapters,omitempty"`
-	// Stacks are what the launcher offers first (stacks.go): each with the
-	// availability of its tiers, greyed with a reason like an adapter.
-	Stacks []StackView `json:"stacks,omitempty"`
+	// Catalogs are what the launcher offers first (catalogs.go): each with
+	// the availability of its slots, greyed with a reason like an adapter.
+	Catalogs []CatalogView `json:"catalogs,omitempty"`
 	// Keys are the connection keys the launcher can store: set or not, and
 	// a stored key's last four characters. Never a value.
 	Keys []KeyView `json:"keys,omitempty"`
+	// Connections are the named ways to reach an adapter (built in, and
+	// agents.json's), which a tier may name instead of the adapter direct.
+	Connections []ConnectionView `json:"connections,omitempty"`
+	// AdapterOptions is what each adapter last reported when a session of
+	// it started: its version, approval presets and settings (models,
+	// efforts). The Stacks tab and the launcher's Advanced and Permissions
+	// controls offer these instead of free text; an adapter that has never
+	// run here has no entry, and its fields are typed.
+	AdapterOptions []AdapterOptions `json:"adapter_options,omitempty"`
+	// Launch is the remembered permission default the launcher starts a
+	// session with (agents.json `launch`).
+	Launch LaunchPrefs `json:"launch"`
 	// HasDefaultPrompt says whether a stored default prompt exists, so the
 	// launcher can say that a new session will not start empty. Only the
 	// FLAG rides the state push — the text itself is fetched on demand
@@ -137,11 +149,14 @@ type Mode struct {
 
 // Config is one agent setting the session can change.
 type Config struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Description string        `json:"description,omitempty"`
-	Current     string        `json:"current,omitempty"`
-	Values      []ConfigValue `json:"values,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Category is the ACP category ("model", "thought_level", …), which is
+	// how a setting is matched across adapters that name it differently.
+	Category string        `json:"category,omitempty"`
+	Current  string        `json:"current,omitempty"`
+	Values   []ConfigValue `json:"values,omitempty"`
 }
 
 type ConfigValue struct {
@@ -192,11 +207,11 @@ type Ask struct {
 type Session struct {
 	SessionID string `json:"session_id"`
 	Agent     string `json:"agent"`
-	// Connection is what a resume must launch through again; Stack and
-	// Tier are what the launcher defaults to next time (launchRecord).
+	// Connection is what a resume must launch through again; Catalog and
+	// Model are what the launcher defaults to next time (launchRecord).
 	Connection string `json:"connection,omitempty"`
-	Stack      string `json:"stack,omitempty"`
-	Tier       string `json:"tier,omitempty"`
+	Catalog    string `json:"catalog,omitempty"`
+	Model      string `json:"model,omitempty"`
 	Cwd        string `json:"cwd,omitempty"`
 	Dir        string `json:"dir,omitempty"`
 	// Title is what this session was ABOUT, in the agent's own words —
@@ -233,30 +248,73 @@ type Session struct {
 	RowKey string `json:"row_key,omitempty"`
 }
 
-// StackView is a stack as the launcher shows it.
-type StackView struct {
+// CatalogView is a catalog as the launcher and the Catalog tab show it. A
+// catalog is either an adapter's own model list (Adapter set, no Slots:
+// what the adapter reports is what the Model select offers) or a curated
+// set of three slots, frontier, coding and small, each a model on an
+// adapter.
+type CatalogView struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// Available is every tier startable here; Note says why not.
+	// Adapter and Connection are an auto catalog's: the adapter whose
+	// models it lists, reached direct or through the connection.
+	Adapter    string `json:"adapter,omitempty"`
+	Connection string `json:"connection,omitempty"`
+	// Available is every slot (or the adapter) startable here; Note says
+	// why not.
 	Available bool       `json:"available"`
 	Note      string     `json:"note,omitempty"`
-	Tiers     []TierView `json:"tiers,omitempty"`
+	Slots     []SlotView `json:"slots,omitempty"`
+	// Builtin is a catalog wash ships (catalogs.json); Overridden says
+	// agents.json changes it. A catalog that is neither is the user's
+	// own. The Catalog tab offers "reset" for an overridden built-in and
+	// "delete" for the user's own.
+	Builtin    bool `json:"builtin,omitempty"`
+	Overridden bool `json:"overridden,omitempty"`
 }
 
-// TierView is one tier as the launcher shows it.
-type TierView struct {
-	Tier       string `json:"tier"`
+// SlotView is one slot of a curated catalog: a model on an adapter, with
+// its effort. Nothing about permissions (see catalogs.go).
+type SlotView struct {
+	Slot       string `json:"slot"`
 	Adapter    string `json:"adapter"`
 	Connection string `json:"connection,omitempty"`
 	Model      string `json:"model,omitempty"`
-	Thinking   string `json:"thinking,omitempty"`
-	Capability string `json:"capability,omitempty"`
-	// ReadOnly is set on the review tier: "enforced" where the adapter's
-	// tools are restricted (Claude Code's reviewer capability), otherwise
-	// "instruction" — the reviewer is asked not to write, and could.
-	ReadOnly  string `json:"read_only,omitempty"`
-	Available bool   `json:"available"`
-	Note      string `json:"note,omitempty"`
+	Effort     string `json:"effort,omitempty"`
+	Available  bool   `json:"available"`
+	Note       string `json:"note,omitempty"`
+}
+
+// AdapterOptions is what one adapter offered the last time a session of it
+// started here (agentd remembers it across restarts).
+type AdapterOptions struct {
+	// Adapter is the adapter id ("claude", "codex", …).
+	Adapter string `json:"adapter"`
+	// Version is the adapter's own version string, as it introduced itself.
+	Version string `json:"version,omitempty"`
+	// Modes are its approval presets; Configs its settings, of which the
+	// ones in the "model" and "thought_level" categories are the model and
+	// effort lists. Current values are those of the session that reported
+	// them and mean nothing here.
+	Modes   []Mode   `json:"modes,omitempty"`
+	Configs []Config `json:"configs,omitempty"`
+}
+
+// ConnectionView is one named connection: which adapter it launches, and
+// the key it needs, if any.
+type ConnectionView struct {
+	ID      string `json:"id"`
+	Adapter string `json:"adapter"`
+	Key     string `json:"key,omitempty"`
+}
+
+// LaunchPrefs is the remembered permission default for a launch.
+type LaunchPrefs struct {
+	// Mode is the adapter session mode to start in, by adapter id; absent
+	// is the adapter's default.
+	Mode map[string]string `json:"mode,omitempty"`
+	// Yolo starts sessions with host-side auto-approval on.
+	Yolo bool `json:"yolo,omitempty"`
 }
 
 // KeyView is a key as the launcher shows it.

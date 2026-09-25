@@ -53,17 +53,16 @@ export async function startAgentSession(
   return win;
 }
 
+/** The auto catalog (an adapter's own model list) for each adapter id. */
+const AUTO_CATALOG: Record<string, string> = { codex: 'openai', claude: 'anthropic', gemini: 'gemini', opencode: 'opencode' };
+
 /**
- * chooseAgent picks an adapter under the launcher's Advanced section: that
- * adapter on its own defaults, whatever stack is selected. The fake stands in
- * for an adapter, not for a stack's models, so most specs start it this way.
+ * chooseAgent picks an adapter's auto catalog in the launcher: that adapter
+ * on its own defaults. The fake stands in for an adapter, not for a curated
+ * catalog's models, so most specs start it this way.
  */
 export async function chooseAgent(manager: Locator, agent: string): Promise<void> {
-  const advanced = manager.locator('[data-testid="ai-advanced"]');
-  if (!(await advanced.evaluate((d) => (d as HTMLDetailsElement).open))) {
-    await advanced.locator('summary').click();
-  }
-  await manager.locator('[data-testid="ai-agent-select"]').selectOption(agent);
+  await manager.locator('[data-testid="ai-catalog-select"]').selectOption(AUTO_CATALOG[agent] ?? agent);
 }
 
 /**

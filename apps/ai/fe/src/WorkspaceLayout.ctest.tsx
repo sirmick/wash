@@ -17,7 +17,7 @@ const message = (o: Partial<agentproto.Message> & { id: string }): agentproto.Me
 const thread = (o: Partial<agentproto.QAThread> & { id: string }): agentproto.QAThread =>
  ({ package: '', title: '', assignee: '', creator: '', state: 'open', blocking: false, revision: 1, decision_refs: [], events: [], ...o });
 const workspace = (o: Partial<agentproto.Workspace> & { id: string; name: string }): agentproto.Workspace =>
- ({ qa: [], profiles: {}, default_profile: '', project_root: '/project', orchestrator: '', state: 'active', revision: 1, plan_revision: 1,
+ ({ qa: [], project_root: '/project', orchestrator: '', state: 'active', revision: 1, plan_revision: 1,
     max_active: 4, max_members: 16, items: [], members: [], assignments: [], messages: [], ...o });
 const noWorkspace: agentproto.WorkspaceState = { kind: 'workspace_state', key: '', sequence: 0, workspace: null };
 const frame = (): agentproto.WorkspaceState => ({kind:'workspace_state', key:'acp:1', sequence:1, workspace: workspace({

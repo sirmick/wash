@@ -1,0 +1,62 @@
+{
+  "keys": {"openrouter": {"name": "OpenRouter API key", "test_url": "https://openrouter.ai/api/v1/key"}},
+  "connections": {
+    "opencode@openrouter": {"adapter": "opencode", "key": "openrouter", "key_env": ["OPENROUTER_API_KEY"]},
+    "claude@openrouter": {"adapter": "claude", "env": {"ANTHROPIC_BASE_URL": "https://openrouter.ai/api", "ANTHROPIC_API_KEY": ""}, "key": "openrouter", "key_env": ["ANTHROPIC_AUTH_TOKEN"]}
+  },
+  "catalogs": {
+    "anthropic": {"name": "Anthropic", "adapter": "claude"},
+    "anthropic-pro": {
+      "name": "Anthropic pro",
+      "slots": {
+        "frontier": {"provider": "claude", "model": "claude-fable-5-1[1m]"},
+        "coding": {"provider": "claude", "model": "opus[1m]"},
+        "small": {"provider": "claude", "model": "sonnet"}
+      }
+    },
+    "anthropic-budget": {
+      "name": "Anthropic budget",
+      "slots": {
+        "frontier": {"provider": "claude", "model": "opus[1m]"},
+        "coding": {"provider": "claude", "model": "sonnet"},
+        "small": {"provider": "claude", "model": "sonnet"}
+      }
+    },
+    "openai": {"name": "OpenAI", "adapter": "codex"},
+    "openai-pro": {
+      "name": "OpenAI pro",
+      "slots": {
+        "frontier": {"provider": "codex", "model": "gpt-6-astra", "effort": "high"},
+        "coding": {"provider": "codex", "model": "gpt-6-sol", "effort": "medium"},
+        "small": {"provider": "codex", "model": "gpt-6-luna", "effort": "low"}
+      }
+    },
+    "openai-budget": {
+      "name": "OpenAI budget",
+      "slots": {
+        "frontier": {"provider": "codex", "model": "gpt-6-sol", "effort": "high"},
+        "coding": {"provider": "codex", "model": "gpt-6-sol", "effort": "medium"},
+        "small": {"provider": "codex", "model": "gpt-6-luna", "effort": "low"}
+      }
+    },
+    "gemini": {"name": "Gemini", "adapter": "gemini"},
+    "opencode": {"name": "OpenCode", "adapter": "opencode"},
+    "openrouter": {"name": "OpenRouter", "adapter": "opencode", "connection": "opencode@openrouter"},
+    "openrouter-pro": {
+      "name": "OpenRouter pro",
+      "slots": {
+        "frontier": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "effort": "high"},
+        "coding": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/z-ai/glm-5.3", "effort": "high"},
+        "small": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/qwen/qwen3.8-flash", "effort": "low"}
+      }
+    },
+    "openrouter-budget": {
+      "name": "OpenRouter budget",
+      "slots": {
+        "frontier": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/qwen/qwen3.8-27b", "effort": "high"},
+        "coding": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4-pro-0813", "effort": "high"},
+        "small": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/~deepseek/deepseek-v4-flash-latest", "effort": "low"}
+      }
+    }
+  }
+}

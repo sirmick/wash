@@ -84,7 +84,7 @@ passes.
   short line shown to the human." Drop `until_assignments`, `cc`,
   `request_id`, `expected_revision`, `decision_refs`, `evidence`, and the QA
   `assign`/`reopen` actions. Keep `resolve` (with `expected_revision` and
-  `evidence`) for package reviewers only.
+  `evidence`) for the orchestrator, or the reviewer whose package is the thread's.
 - **`message_send`:** "Send a message. `recipient`: member ID or key, or
   `orchestrator`. `type`: `question` (wakes them), `answer` (set `reply_to`,
   and `thread_id` if it had one), `progress` (does not wake). Body at most
@@ -236,10 +236,9 @@ The project rule is no fallback code.
 - The `member_*` action strings inside `lifecycle`.
 - `InitialConfigs`, which only an e2e test reads.
 - `LaunchSettings == nil` guards: every spawned member has launch settings,
-  and since stacks the orchestrator of a new workspace has them too (its
+  and since catalogs the orchestrator of a new workspace has them too (its
   provider and connection). Orchestrators of workspaces set up before that
   still have none.
-- `reviewerVerifiedVersions` still lists claude-agent-acp 0.79.0.
 
 ### 3.4 UI (`apps/ai/fe/src/Workspace*.tsx`)
 
@@ -254,33 +253,44 @@ The project rule is no fallback code.
 - Usage is read from both `frame.usage` and `member.usage`; publish one
   merged value.
 
-## 3.5 Stacks, connections and keys (added 2026-09-24)
+## 3.5 Catalogs, connections and keys (added 2026-09-24)
 
-Stacks, tiers, named connections and the key store landed on this branch
-(AGENT_APP.md §6, AGENT_SWARM_BULK.md API 3.3). What is still open:
+Catalogs (stacks and tiers until 2026-09-25), named connections and the key
+store landed on this branch (AGENT_APP.md §6, AGENT_SWARM_BULK.md API 3.3).
+What is still open:
 
 - **A bad key on `claude@openrouter` hangs (S).** Claude Code retries a
   refused token instead of failing the turn. The launcher could run the key
-  test before starting a stack whose connection names a key, or agentd could
+  test before starting a catalog whose connection names a key, or agentd could
   time the first turn out with the reason.
 - **OpenCode runs its own tools (M, med).** It ignores wash's `fs/*` and
   `terminal/*`, so the session-folder confinement does not apply; approvals
   (forced to "ask" through `OPENCODE_CONFIG_CONTENT`) are the only gate.
   Check whether a newer OpenCode can use the client's capabilities, or add
   `external_directory: "ask"` and similar to its permission config.
-- **Stale tier models (S–M).** Codex and Fable names are pinned; when an
-  adapter drops one, that tier fails at start with the offered values. The
-  launcher could check tiers against the option list a live session of that
-  adapter last reported, and grey a stale tier before anyone starts it.
-- **Advanced model is free text (S).** It could offer the adapter's last
-  reported model list instead.
+- **Stale slot models (S).** agentd now remembers each adapter's last
+  reported option list (`State.AdapterOptions`), and the Catalog tab and
+  the Model select offer it; what is still missing is greying a slot whose
+  pinned model is not in that list before anyone starts it.
 - **`wash ai <dir>` with no agent (S)** still starts the first installed
-  adapter on its defaults rather than the default stack.
+  adapter on its defaults rather than the default catalog.
 - **A keychain (M).** keys.json is plain JSON protected by mode 0600; use the
   Secret Service where one exists.
-- **Reviewers off Claude Code (M).** A review tier on Codex or OpenCode is
-  read-only by instruction only (item 4's last bullet). OpenCode's
-  permission config could deny `edit` and `bash` outright for a review tier.
+- **Reviewers off Claude Code (M).** A reviewer member on Codex or OpenCode
+  is read-only by instruction only (item 4's last bullet). OpenCode's
+  permission config could deny `edit` and `bash` outright for
+  `capability:"reviewer"`.
+- **`wash ai` ignores the launch default (S).** The launcher sends
+  agents.json's `launch` (mode, yolo) with each start; a CLI start sends
+  nothing and begins on the adapter's default. Decide whether the CLI
+  should read the same default.
+- **Finding 3 of the tally shakedown (haiku + plan mode reports sonnet):
+  reproduced and fixed 2026-09-25.** Claude Code re-picks the model when
+  its mode changes: model haiku then mode plan came back as sonnet a moment
+  after the launch check had passed; mode plan then model haiku stayed
+  haiku through a turn. Launch and member configuration now apply the mode
+  before the model, and agentd logs every adapter-pushed setting change
+  (`acp config changed key=… model=… was=…`).
 - **Nothing typechecks the app frontends.** `tsc --noEmit` on
   `apps/ai/fe` fails on existing errors (import extensions, `variant`
   types, `node:test` types); only e2e is typechecked by `make`.

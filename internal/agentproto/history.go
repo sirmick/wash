@@ -4,7 +4,6 @@ package agentproto
 // deleted, pruned and reopened; and the connection keys the launcher
 // stores.
 
-
 // SessionMeta is what the history panel lists. Assembled from a
 // transcript's head and tail without reading the conversation in
 // between — a history list must not cost the sum of every transcript.
@@ -12,12 +11,15 @@ type SessionMeta struct {
 	SessionID  string `json:"session_id"`
 	Agent      string `json:"agent,omitempty"`
 	Connection string `json:"connection,omitempty"`
-	Stack      string `json:"stack,omitempty"`
-	Tier       string `json:"tier,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Cwd        string `json:"cwd,omitempty"`
-	Dir        string `json:"dir,omitempty"`
-	Title      string `json:"title,omitempty"`
+	// Catalog and LaunchModel are how the session was started (the model
+	// as asked: a slot name or an id), for starting another the same way;
+	// Model is what it actually ran, from its summary.
+	Catalog     string `json:"catalog,omitempty"`
+	LaunchModel string `json:"launch_model,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Cwd         string `json:"cwd,omitempty"`
+	Dir         string `json:"dir,omitempty"`
+	Title       string `json:"title,omitempty"`
 	// UserTitle is the person's name for the session, when they gave one.
 	// Title above is then the SAME string — the effective title, so every
 	// reader shows the name without knowing where it came from — and this

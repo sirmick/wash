@@ -92,14 +92,14 @@ var (
 )
 
 // launchRecord is what history keeps about how a session started: the
-// adapter and connection a resume must use again, and the stack and tier the
-// launcher defaults to next time.
+// adapter and connection a resume must use again, and the catalog and model
+// the launcher defaults to next time.
 type launchRecord struct {
-	Agent, Connection, Stack, Tier string
+	Agent, Connection, Catalog, Model string
 }
 
 func (h *hosted) record() launchRecord {
-	return launchRecord{Agent: h.agent, Connection: h.connection, Stack: h.stack, Tier: h.tier}
+	return launchRecord{Agent: h.agent, Connection: h.connection, Catalog: h.catalog, Model: h.model}
 }
 
 // rememberSession records (or refreshes) a session. Called from the roster
@@ -130,12 +130,12 @@ func rememberSession(launch launchRecord, sessionID, cwd, title string, now time
 			changed = changed || history[i].Agent != agent
 			history[i].Agent = agent
 		}
-		// A resumed session knows its connection but not always its stack:
+		// A resumed session knows its connection but not always its catalog:
 		// only what it says replaces what was recorded.
 		for _, f := range []struct {
 			to *string
 			v  string
-		}{{&history[i].Connection, launch.Connection}, {&history[i].Stack, launch.Stack}, {&history[i].Tier, launch.Tier}} {
+		}{{&history[i].Connection, launch.Connection}, {&history[i].Catalog, launch.Catalog}, {&history[i].Model, launch.Model}} {
 			if f.v != "" && *f.to != f.v {
 				*f.to, changed = f.v, true
 			}
@@ -151,8 +151,8 @@ func rememberSession(launch launchRecord, sessionID, cwd, title string, now time
 		SessionID:  sessionID,
 		Agent:      agent,
 		Connection: launch.Connection,
-		Stack:      launch.Stack,
-		Tier:       launch.Tier,
+		Catalog:    launch.Catalog,
+		Model:      launch.Model,
 		Cwd:        cwd,
 		Dir:        dirLabel(cwd),
 		Title:      title,
@@ -234,7 +234,7 @@ func resumeSession(c *sdk.Conn, sessionID string) {
 		return
 	}
 	cwd, sid := s.Cwd, s.SessionID
-	launch := launchRecord{Agent: s.Agent, Connection: s.Connection, Stack: s.Stack, Tier: s.Tier}
+	launch := launchRecord{Agent: s.Agent, Connection: s.Connection, Catalog: s.Catalog, Model: s.Model}
 	// The live-session check above closes the eventual-consistency window after
 	// registration. This closes the earlier window: repeated clicks while the
 	// adapter is still starting must share the first loadSession rather than
@@ -288,8 +288,8 @@ func resolveResumeTarget(sessionID string) (agentproto.Session, bool) {
 		SessionID:  m.SessionID,
 		Agent:      m.Agent,
 		Connection: m.Connection,
-		Stack:      m.Stack,
-		Tier:       m.Tier,
+		Catalog:    m.Catalog,
+		Model:      m.LaunchModel,
 		Cwd:        m.Cwd,
 		Dir:        m.Dir,
 		Title:      m.Title,

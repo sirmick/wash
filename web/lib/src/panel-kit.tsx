@@ -6,7 +6,7 @@
 // shipped in the @wash/ui vendor bundle so every panel resolves them via the
 // importmap.
 
-import { For, splitProps } from 'solid-js';
+import { For, createEffect, splitProps } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 
@@ -70,22 +70,38 @@ const selectStyle: JSX.CSSProperties = {
 
 /** Select is a styled <select> over [value, label] option pairs. A third
  *  element `true` greys an option out: shown, with its label saying why,
- *  but not choosable. */
+ *  but not choosable.
+ *
+ *  The value is applied AFTER the options render, and again whenever they
+ *  change. A <select> can only hold a value one of its <option>s has, and
+ *  when the value and the options arrive in the same update (the Agents
+ *  launcher's stack and the roster that lists the stacks), setting the
+ *  value first left the browser on the first option: the form held one
+ *  stack and showed another, and Start launched the one it did not show. */
 export const Select: Component<{
   value: string;
   options: [string, string, boolean?][];
   onChange: (v: string) => void;
+  disabled?: boolean;
   'data-testid'?: string;
-}> = (props) => (
-  <select
-    value={props.value}
-    data-testid={props['data-testid']}
-    onInput={(e) => props.onChange(e.currentTarget.value)}
-    style={selectStyle}
-  >
-    <For each={props.options}>{([v, l, off]) => <option value={v} disabled={off}>{l}</option>}</For>
-  </select>
-);
+}> = (props) => {
+  let el!: HTMLSelectElement;
+  createEffect(() => {
+    props.options.length;
+    el.value = props.value;
+  });
+  return (
+    <select
+      ref={el}
+      data-testid={props['data-testid']}
+      disabled={props.disabled}
+      onInput={(e) => props.onChange(e.currentTarget.value)}
+      style={{ ...selectStyle, ...(props.disabled ? { opacity: 0.5, cursor: 'default' } : {}) }}
+    >
+      <For each={props.options}>{([v, l, off]) => <option value={v} disabled={off} selected={v === props.value}>{l}</option>}</For>
+    </select>
+  );
+};
 
 const inputStyle: JSX.CSSProperties = {
   background: tokens.bgInset,

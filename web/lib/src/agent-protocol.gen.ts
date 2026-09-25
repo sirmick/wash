@@ -20,6 +20,25 @@ export interface Adapter {
   available: boolean;
 }
 
+/**
+ * AdapterOptions is what one adapter offered the last time a session of it
+ * started here (agentd remembers it across restarts).
+ */
+export interface AdapterOptions {
+  /** Adapter is the adapter id ("claude", "codex", …). */
+  adapter: string;
+  /** Version is the adapter's own version string, as it introduced itself. */
+  version?: string;
+  /**
+   * Modes are its approval presets; Configs its settings, of which the
+   * ones in the "model" and "thought_level" categories are the model and
+   * effort lists. Current values are those of the session that reported
+   * them and mean nothing here.
+   */
+  modes?: Mode[];
+  configs?: Config[];
+}
+
 /** AgentAddRoot widens which folders a session may reach beyond its cwd. */
 export interface AgentAddRoot {
   kind: 'agent_add_root';
@@ -69,6 +88,15 @@ export interface AgentDelete {
 }
 
 /**
+ * AgentDeleteCatalog removes a catalog from agents.json: a built-in goes
+ * back to what wash ships, the user's own is gone.
+ */
+export interface AgentDeleteCatalog {
+  kind: 'agent_delete_catalog';
+  id: string;
+}
+
+/**
  * AgentDetach leaves a session running with no window: its roster row
  * stays and offers Reattach, and its controller window is told to close.
  */
@@ -103,7 +131,7 @@ export interface AgentProfile {
    */
   connection?: string;
   model?: string;
-  thinking?: string;
+  effort?: string;
   configs?: Record<string, string>;
   /**
    * Subagents "deny" removes the provider's own subagent tool, so the
@@ -177,6 +205,17 @@ export interface AgentResume {
 }
 
 /**
+ * AgentSetCatalog stores one catalog under agents.json `catalogs`, whole,
+ * as the Catalog tab holds it. For a built-in catalog this is its override;
+ * for any other id it is the user's own.
+ */
+export interface AgentSetCatalog {
+  kind: 'agent_set_catalog';
+  id: string;
+  catalog: CatalogSpec;
+}
+
+/**
  * AgentSetConfig changes one of the agent's own settings (Row.Configs):
  * model, reasoning effort, plan mode, …
  */
@@ -206,6 +245,15 @@ export interface AgentSetKey {
   value?: string;
 }
 
+/**
+ * AgentSetLaunch stores the launcher's remembered permission default
+ * (State.Launch), whole.
+ */
+export interface AgentSetLaunch {
+  kind: 'agent_set_launch';
+  launch: LaunchPrefs;
+}
+
 /** AgentSetMode switches the agent's approval preset (Row.Modes). */
 export interface AgentSetMode {
   kind: 'agent_set_mode';
@@ -224,14 +272,28 @@ export interface AgentSetYolo {
 export interface AgentStart {
   kind: 'agent_start';
   /**
-   * Stack and Tier choose the settings (stacks.go); Tier defaults to
-   * frontier. Agent and Model are the launcher's Advanced overrides, and
-   * Agent alone, with no stack, is how `wash ai --agent` starts.
+   * Catalog and Model choose the settings (catalogs.go): Model is a slot
+   * of a curated catalog (frontier, coding, small; frontier when empty)
+   * or a model id the catalog's adapter offers (empty is its default on
+   * an auto catalog). Agent alone, with no catalog, is how `wash ai
+   * --agent` starts: that adapter on its defaults.
    */
-  stack?: string;
-  tier?: string;
-  agent?: string;
+  catalog?: string;
   model?: string;
+  agent?: string;
+  /**
+   * Configs are the launcher's Advanced settings, by the adapter's own
+   * option ids (effort, fast mode, …), applied over the catalog's.
+   */
+  configs?: Record<string, string>;
+  /**
+   * Mode is the adapter session mode to start in (State.Launch's default
+   * unless the launcher's Permissions row was changed for this start);
+   * empty is the adapter's default. Yolo starts with host-side
+   * auto-approval on.
+   */
+  mode?: string;
+  yolo?: boolean;
   /** Cwd is the folder the session works in; empty is the home folder. */
   cwd: string;
   /** Prompt is sent as the first turn, after the stored default prompt. */
@@ -344,6 +406,61 @@ export interface Attach {
   key: string;
 }
 
+/** CatalogSaved answers AgentSetCatalog and AgentDeleteCatalog. */
+export interface CatalogSaved {
+  kind: 'catalog_saved';
+  id: string;
+  error?: string;
+}
+
+/**
+ * CatalogSpec is a catalog as written: a name and either an adapter (an
+ * auto catalog, listing what that adapter offers) or three slots.
+ */
+export interface CatalogSpec {
+  name: string;
+  adapter?: string;
+  connection?: string;
+  /**
+   * Slots is keyed by slot name (frontier, coding, small); all three are
+   * required for a curated catalog, and none is given for an auto one.
+   */
+  slots?: Record<string, SlotSpec>;
+}
+
+/**
+ * CatalogView is a catalog as the launcher and the Catalog tab show it. A
+ * catalog is either an adapter's own model list (Adapter set, no Slots:
+ * what the adapter reports is what the Model select offers) or a curated
+ * set of three slots, frontier, coding and small, each a model on an
+ * adapter.
+ */
+export interface CatalogView {
+  id: string;
+  name: string;
+  /**
+   * Adapter and Connection are an auto catalog's: the adapter whose
+   * models it lists, reached direct or through the connection.
+   */
+  adapter?: string;
+  connection?: string;
+  /**
+   * Available is every slot (or the adapter) startable here; Note says
+   * why not.
+   */
+  available: boolean;
+  note?: string;
+  slots?: SlotView[];
+  /**
+   * Builtin is a catalog wash ships (catalogs.json); Overridden says
+   * agents.json changes it. A catalog that is neither is the user's
+   * own. The Catalog tab offers "reset" for an overridden built-in and
+   * "delete" for the user's own.
+   */
+  builtin?: boolean;
+  overridden?: boolean;
+}
+
 /**
  * ClaimDenied refuses the lease: another instance holds it, and has been
  * raised. A window denied its session closes.
@@ -364,6 +481,11 @@ export interface Config {
   id: string;
   name: string;
   description?: string;
+  /**
+   * Category is the ACP category ("model", "thought_level", …), which is
+   * how a setting is matched across adapters that name it differently.
+   */
+  category?: string;
   current?: string;
   values?: ConfigValue[];
 }
@@ -372,6 +494,16 @@ export interface ConfigValue {
   value: string;
   name: string;
   description?: string;
+}
+
+/**
+ * ConnectionView is one named connection: which adapter it launches, and
+ * the key it needs, if any.
+ */
+export interface ConnectionView {
+  id: string;
+  adapter: string;
+  key?: string;
 }
 
 /** DefaultPrompt is the stored default prompt's text, answering either. */
@@ -512,6 +644,21 @@ export interface KeyView {
 }
 
 /**
+ * LaunchPrefs is the remembered default for the two permission settings a
+ * launch has: the adapter's own approval preset and wash's auto-approval.
+ */
+export interface LaunchPrefs {
+  /**
+   * Mode is the adapter's session mode to start in, by adapter id: the
+   * names are the adapter's own ("acceptEdits" on Claude Code, "read-only"
+   * on Codex), so one remembered value cannot serve two adapters.
+   */
+  mode?: Record<string, string>;
+  /** Yolo starts every session with host-side auto-approval on. */
+  yolo?: boolean;
+}
+
+/**
  * ManagerState is the Agents manager's view of the roster: every row with
  * its transcript preview and workspace placement, without the per-session
  * settings only a controller needs.
@@ -536,12 +683,15 @@ export interface Member {
   instructions?: string;
   initial_task?: string;
   usage?: Usage;
-  profile?: string;
   /**
-   * Tier is the stack tier the member was launched from, resolved into
-   * LaunchSettings at reservation like a profile.
+   * Catalog and Model are what the member was asked to run on: the
+   * catalog (the workspace's unless the member named one) and the model
+   * as given, a slot name or an id. LaunchSettings is what that resolved
+   * to, with the member's own settings on top, fixed when its key was
+   * reserved: a later catalog change moves no running member.
    */
-  tier?: string;
+  catalog?: string;
+  model?: string;
   launch_settings?: AgentProfile;
   initial_configs?: Record<string, string>;
   /**
@@ -848,12 +998,12 @@ export interface Session {
   session_id: string;
   agent: string;
   /**
-   * Connection is what a resume must launch through again; Stack and
-   * Tier are what the launcher defaults to next time (launchRecord).
+   * Connection is what a resume must launch through again; Catalog and
+   * Model are what the launcher defaults to next time (launchRecord).
    */
   connection?: string;
-  stack?: string;
-  tier?: string;
+  catalog?: string;
+  model?: string;
   cwd?: string;
   dir?: string;
   /**
@@ -923,8 +1073,13 @@ export interface SessionMeta {
   session_id: string;
   agent?: string;
   connection?: string;
-  stack?: string;
-  tier?: string;
+  /**
+   * Catalog and LaunchModel are how the session was started (the model
+   * as asked: a slot name or an id), for starting another the same way;
+   * Model is what it actually ran, from its summary.
+   */
+  catalog?: string;
+  launch_model?: string;
   model?: string;
   cwd?: string;
   dir?: string;
@@ -983,14 +1138,30 @@ export interface SessionState {
   state: State;
 }
 
-/** StackView is a stack as the launcher shows it. */
-export interface StackView {
-  id: string;
-  name: string;
-  /** Available is every tier startable here; Note says why not. */
+/**
+ * SlotSpec is one slot as written: a model on an adapter. Effort and
+ * Connection may be empty (the adapter's default effort; the adapter
+ * direct).
+ */
+export interface SlotSpec {
+  adapter: string;
+  connection?: string;
+  model?: string;
+  effort?: string;
+}
+
+/**
+ * SlotView is one slot of a curated catalog: a model on an adapter, with
+ * its effort. Nothing about permissions (see catalogs.go).
+ */
+export interface SlotView {
+  slot: string;
+  adapter: string;
+  connection?: string;
+  model?: string;
+  effort?: string;
   available: boolean;
   note?: string;
-  tiers?: TierView[];
 }
 
 export interface State {
@@ -1014,15 +1185,33 @@ export interface State {
    */
   adapters?: Adapter[];
   /**
-   * Stacks are what the launcher offers first (stacks.go): each with the
-   * availability of its tiers, greyed with a reason like an adapter.
+   * Catalogs are what the launcher offers first (catalogs.go): each with
+   * the availability of its slots, greyed with a reason like an adapter.
    */
-  stacks?: StackView[];
+  catalogs?: CatalogView[];
   /**
    * Keys are the connection keys the launcher can store: set or not, and
    * a stored key's last four characters. Never a value.
    */
   keys?: KeyView[];
+  /**
+   * Connections are the named ways to reach an adapter (built in, and
+   * agents.json's), which a tier may name instead of the adapter direct.
+   */
+  connections?: ConnectionView[];
+  /**
+   * AdapterOptions is what each adapter last reported when a session of
+   * it started: its version, approval presets and settings (models,
+   * efforts). The Stacks tab and the launcher's Advanced and Permissions
+   * controls offer these instead of free text; an adapter that has never
+   * run here has no entry, and its fields are typed.
+   */
+  adapter_options?: AdapterOptions[];
+  /**
+   * Launch is the remembered permission default the launcher starts a
+   * session with (agents.json `launch`).
+   */
+  launch: LaunchPrefs;
   /**
    * HasDefaultPrompt says whether a stored default prompt exists, so the
    * launcher can say that a new session will not start empty. Only the
@@ -1039,24 +1228,6 @@ export interface State {
  */
 export interface Subscribe {
   kind: 'subscribe';
-}
-
-/** TierView is one tier as the launcher shows it. */
-export interface TierView {
-  tier: string;
-  adapter: string;
-  connection?: string;
-  model?: string;
-  thinking?: string;
-  capability?: string;
-  /**
-   * ReadOnly is set on the review tier: "enforced" where the adapter's
-   * tools are restricted (Claude Code's reviewer capability), otherwise
-   * "instruction" — the reviewer is asked not to write, and could.
-   */
-  read_only?: string;
-  available: boolean;
-  note?: string;
 }
 
 /**
@@ -1143,13 +1314,13 @@ export interface Workspace {
    * a bare code, and member names can shrink to their role.
    */
   packages?: Record<string, Package>;
-  profiles: Record<string, AgentProfile> | null;
-  default_profile: string;
   /**
-   * Stack is where members' tiers come from: set from the orchestrator's
-   * own stack at setup, changeable with workspace_configure.stack.
+   * Catalog is where members' models come from (a slot name in a
+   * member's `model` resolves against it): the orchestrator's own catalog
+   * at setup, changeable with workspace_configure.catalog for later
+   * launches.
    */
-  stack?: string;
+  catalog?: string;
   id: string;
   name: string;
   project_root: string;
@@ -1304,6 +1475,9 @@ export interface WorkspaceTranscript {
 
 /** Every request, discriminated by kind. */
 export type AgentdRequest =
+  | AgentSetCatalog
+  | AgentDeleteCatalog
+  | AgentSetLaunch
   | ManagerSubscribe
   | SessionClaim
   | Focus
@@ -1337,6 +1511,7 @@ export type AgentdRequestKind = AgentdRequest['kind'];
 
 /** Every push, discriminated by kind. */
 export type AgentdPush =
+  | CatalogSaved
   | SessionClaimed
   | ClaimDenied
   | Raise

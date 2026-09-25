@@ -124,6 +124,9 @@ test.describe('managed agent sessions', () => {
     const decision = win.locator('[data-testid="agent-decision"]').filter({ hasText: 'Auto-approved' });
     await expect(decision).toBeVisible({ timeout: 10_000 });
     await expect(decision).toContainText('yolo');
+    // Visible as a line, not as a stub: the row once shrank to 4px in the
+    // transcript's flex column, a green dash with its text clipped away.
+    expect((await decision.boundingBox())!.height).toBeGreaterThan(12);
   });
 
   test('the approval mode is on the window, and changing it reaches the agent', async ({ page, router }) => {

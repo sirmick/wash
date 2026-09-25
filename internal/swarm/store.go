@@ -37,7 +37,7 @@ type AgentProfile struct {
 	// empty is the provider direct. agentd owns the list and checks it.
 	Connection string            `json:"connection,omitempty"`
 	Model      string            `json:"model,omitempty"`
-	Thinking   string            `json:"thinking,omitempty"`
+	Effort     string            `json:"effort,omitempty"`
 	Configs    map[string]string `json:"configs,omitempty"`
 	// Subagents "deny" removes the provider's own subagent tool, so the
 	// member's work stays in its transcript and the workspace's accounting.
@@ -60,10 +60,13 @@ type Member struct {
 	Instructions string `json:"instructions,omitempty"`
 	InitialTask  string `json:"initial_task,omitempty"`
 	Usage        *Usage `json:"usage,omitempty"`
-	Profile      string `json:"profile,omitempty"`
-	// Tier is the stack tier the member was launched from, resolved into
-	// LaunchSettings at reservation like a profile.
-	Tier           string            `json:"tier,omitempty"`
+	// Catalog and Model are what the member was asked to run on: the
+	// catalog (the workspace's unless the member named one) and the model
+	// as given, a slot name or an id. LaunchSettings is what that resolved
+	// to, with the member's own settings on top, fixed when its key was
+	// reserved: a later catalog change moves no running member.
+	Catalog        string            `json:"catalog,omitempty"`
+	Model          string            `json:"model,omitempty"`
 	LaunchSettings *AgentProfile     `json:"launch_settings,omitempty"`
 	InitialConfigs map[string]string `json:"initial_configs,omitempty"`
 	// Adjusted are settings the orchestrator changed on the live member
@@ -139,12 +142,12 @@ type Workspace struct {
 	// Packages names each package code ("CT1") for people: the sidebar groups
 	// members and questions under "CT1 · Console input-flood test" instead of
 	// a bare code, and member names can shrink to their role.
-	Packages       map[string]Package      `json:"packages,omitempty"`
-	Profiles       map[string]AgentProfile `json:"profiles"`
-	DefaultProfile string                  `json:"default_profile"`
-	// Stack is where members' tiers come from: set from the orchestrator's
-	// own stack at setup, changeable with workspace_configure.stack.
-	Stack        string       `json:"stack,omitempty"`
+	Packages map[string]Package `json:"packages,omitempty"`
+	// Catalog is where members' models come from (a slot name in a
+	// member's `model` resolves against it): the orchestrator's own catalog
+	// at setup, changeable with workspace_configure.catalog for later
+	// launches.
+	Catalog      string       `json:"catalog,omitempty"`
 	ID           string       `json:"id"`
 	Name         string       `json:"name"`
 	Root         string       `json:"project_root"`
@@ -336,7 +339,7 @@ func (s *Store) Setup(session, provider, cwd, name, root string, items []Item, l
 			return errors.New("teardown current workspace first")
 		}
 		lead := Member{ID: ID(), Name: "Orchestrator", Provider: provider, Cwd: cwd, Session: session, Lifetime: "resident", State: "available", CanSpawn: true}
-		w := Workspace{Profiles: map[string]AgentProfile{}, ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Items: items, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}}
+		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Items: items, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}}
 		if w.Items == nil {
 			w.Items = []Item{}
 		}
@@ -480,6 +483,11 @@ func (s *Store) Send(session, to, kind, body, reply, assignment, request string)
 	})
 	return out, err
 }
+
+// ErrActiveAssignment is a sentinel so a batch can say which earlier update
+// the conflict was with.
+var ErrActiveAssignment = errors.New("member already has an active assignment")
+
 func (s *Store) Assign(session, member, text, request string) (Assignment, error) {
 	var out Assignment
 	err := s.Mutate(session, false, func(w *Workspace, m *Member) error {
@@ -505,7 +513,7 @@ func (s *Store) Assign(session, member, text, request string) (Assignment, error
 		}
 		for _, a := range w.Assignments {
 			if a.Member == member && (a.State == "assigned" || a.State == "active" || a.State == "blocked") {
-				return errors.New("member already has an active assignment")
+				return ErrActiveAssignment
 			}
 		}
 		out = Assignment{ID: ID(), Assigner: m.ID, Member: member, Text: text, State: "assigned"}

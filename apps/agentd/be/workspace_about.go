@@ -54,6 +54,8 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 		"active_capability":            h.capability,
 		"approval_profiles": map[string]any{
 			"values":   []string{"ask", "auto"},
+			"default":  "unset follows the launcher: the member is auto-approved while the session that launched it is, and follows the orchestrator's later toggles; reviewers never inherit",
+			"ask":      "always ask the human, whatever the orchestrator does",
 			"auto":     "host auto-approval from launch; host policy denies still win; every approval is narrated in the member's transcript",
 			"granting": "only a session that is itself auto-approved can configure an auto member (children stay within the launcher's authority)",
 			"lifetime": "kept on the member across a wash restart and restored on resume; ends with the workspace",
