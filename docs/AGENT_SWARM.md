@@ -232,8 +232,11 @@ with `catalog`. `members[key].model` is a slot of a curated catalog
 catalog's adapter offers. Model IDs are opaque provider values; Wash never
 translates a marketing name into a guessed ID. Read the actual IDs and
 allowed values from `workspace_get({"view":"state"}).sessions[member_id].config_options`
-for a live session of that provider, or prefer a slot. Invalid choices report
-the adapter's allowed values at launch. The per-workspace `profiles` map and
+for a live session of that provider, or prefer a slot where the catalog has
+them. An adapter's own list (e.g. `anthropic`) has no slots, and a slot name
+on it fails at configure time (preview included), naming the curated
+catalogs for that adapter. Invalid model ids report the adapter's allowed
+values at launch; the failed member's key then takes a corrected definition. The per-workspace `profiles` map and
 `default_profile` are gone (2026-09-25): a curated catalog on the Catalog
 tab does that job globally.
 

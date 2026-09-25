@@ -843,6 +843,11 @@ export interface QAThread {
   revision: number;
   decision_refs: string[] | null;
   evidence?: string;
+  /**
+   * Resumed marks a thread resolved in an earlier workspace and read
+   * back from its QA file: its evidence is about that workspace's code.
+   */
+  resumed?: boolean;
   events: QAEvent[] | null;
 }
 

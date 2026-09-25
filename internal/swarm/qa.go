@@ -17,17 +17,20 @@ type QAEvent struct {
 	Created int64  `json:"created_at"`
 }
 type QAThread struct {
-	ID           string    `json:"id"`
-	Package      string    `json:"package"`
-	Title        string    `json:"title"`
-	Creator      string    `json:"creator"`
-	Assignee     string    `json:"assignee"`
-	State        string    `json:"state"`
-	Blocking     bool      `json:"blocking"`
-	Revision     int64     `json:"revision"`
-	DecisionRefs []string  `json:"decision_refs"`
-	Evidence     string    `json:"evidence,omitempty"`
-	Events       []QAEvent `json:"events"`
+	ID           string   `json:"id"`
+	Package      string   `json:"package"`
+	Title        string   `json:"title"`
+	Creator      string   `json:"creator"`
+	Assignee     string   `json:"assignee"`
+	State        string   `json:"state"`
+	Blocking     bool     `json:"blocking"`
+	Revision     int64    `json:"revision"`
+	DecisionRefs []string `json:"decision_refs"`
+	Evidence     string   `json:"evidence,omitempty"`
+	// Resumed marks a thread resolved in an earlier workspace and read
+	// back from its QA file: its evidence is about that workspace's code.
+	Resumed bool      `json:"resumed,omitempty"`
+	Events  []QAEvent `json:"events"`
 }
 type QAUpdate struct {
 	ID           string   `json:"id"`
@@ -107,7 +110,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 				return nil, fmt.Errorf("QA revision conflict: read thread %s (revision %d)", q.ID, q.Revision)
 			}
 			if m.ID != w.Lead && m.ID != q.Creator && m.ID != q.Assignee && !(m.Role == "reviewer" && m.Package == q.Package) {
-				return nil, errors.New("QA transition requires participant or reviewer authority")
+				return nil, fmt.Errorf("QA thread %s is package %s's: only the orchestrator, the thread's creator or assignee, or the reviewer of package %s may %s it", q.ID, q.Package, q.Package, u.Action)
 			}
 		}
 		switch u.Action {
@@ -142,7 +145,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 				return nil, errors.New("QA awaits a human decision")
 			}
 			if m.ID != w.Lead && !(m.Role == "reviewer" && m.Package == q.Package) {
-				return nil, errors.New("QA resolution requires the orchestrator, or the reviewer whose package is the thread's")
+				return nil, fmt.Errorf("QA thread %s is package %s's: only the orchestrator or the reviewer of package %s may resolve it; reply with your verdict instead", q.ID, q.Package, q.Package)
 			}
 			if !ValidText(u.Evidence, 32768) {
 				return nil, errors.New("QA resolution requires evidence")
@@ -154,8 +157,13 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 			if !ValidText(u.Body, 32768) {
 				return nil, errors.New("reopen requires a reason")
 			}
+			// A reopened question is the orchestrator's until it assigns
+			// it again: left with its assignee, a thread resumed from an
+			// earlier workspace stayed with a member that no longer runs.
 			q.State = "open"
 			q.Evidence = ""
+			q.Assignee = w.Lead
+			q.Resumed = false
 		default:
 			return nil, errors.New("invalid QA action")
 		}
@@ -176,7 +184,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 		body += "\n\nEvidence: " + u.Evidence
 	}
 	if u.Action == "assign" {
-		body += "\nNext responder: " + q.Assignee
+		body += "\nNext responder: " + GetMember(w, q.Assignee).Name
 	}
 	if err := qaEvent(q, m.ID, u.Action, strings.TrimSpace(body), ""); err != nil {
 		return nil, err
@@ -290,6 +298,9 @@ func writeQAMarkdown(out io.Writer, w *Workspace, bounded bool) error {
 			break
 		}
 		fmt.Fprintf(b, "\n## %s · %s — %s\n\nStatus: **%s** · Assigned to: %s · Revision: %d\n", clean(q.Package), q.ID, clean(q.Title), q.State, clean(name(q.Assignee)), q.Revision)
+		if q.Resumed {
+			b.WriteString("\n*Resolved in an earlier workspace; reopen it if the code has changed since.*\n")
+		}
 		if q.Blocking {
 			b.WriteString("\n**Blocks package work.**\n")
 		}

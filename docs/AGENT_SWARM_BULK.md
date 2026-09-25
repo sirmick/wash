@@ -87,10 +87,16 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
 ```
 
 - Omitted fields stay. A member's `model` names a slot of the workspace catalog, or a
-  model id that must come from provider choices.
+  model id that must come from provider choices. An adapter's own list (`anthropic`)
+  has no slots: `model:"coding"` on it fails, in preview too, naming the catalogs with
+  slots for that adapter.
+- A member's `cwd` defaults to `project_root`, and a relative one is inside it; never
+  the orchestrator's own folder.
 - Members use stable keys; an existing matching definition is reused. Catalog edits
   affect future launches. Changed member definitions or ended keys require explicit
-  end/replacement with a new key. No implicit restart or termination.
+  end/replacement with a new key. No implicit restart or termination. The exception
+  is a member whose launch failed before it had a session: its key takes a corrected
+  definition in place (same member ID), and it holds no name.
 - Keyed plan objects patch individual fields, null removes; optional order must list
   every remaining ID exactly once. document:null detaches the live Markdown document.
 - `expected_revision` guards workspace edits (0 may guard initial setup). A conflict
@@ -98,8 +104,8 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
 - `preview:true` validates/stages without writing or launching. It does not prove
   provider availability or adapter support; launch applies mode, then model, then effort
   (Claude Code re-picks the model on a mode change and narrows effort by model).
-  A preview's workspace and member ids are not the commit's ids and cannot be
-  carried forward.
+  A preview returns only ids that already exist: a new workspace's id and new
+  members' ids are empty, so address new members by key.
 - Configuration and member reservations commit atomically. Processes start afterward,
   with separate `launches` outcomes. Check each; launch failure does not undo config.
   Explicit member_control resume can retry a failed reserved launch.
@@ -176,13 +182,16 @@ author and timestamp. QA updates through `member_update.qa_updates` support:
 | assign | expected_revision, next assignee |
 | block | expected_revision; marks blocking |
 | resolve | expected_revision, evidence; only the orchestrator, or the reviewer whose package is the thread's |
-| reopen | expected_revision, reason in body |
+| reopen | expected_revision, reason in body; the thread returns to the orchestrator until reassigned |
 
 Transitions also accept decision_refs and blocking where applicable. Only the creator,
 assignee, orchestrator or the reviewer whose package is the thread's may transition;
 resolution is stricter: the orchestrator, or the reviewer whose package is the thread's.
 A reviewer assigned to review every package is not that reviewer for any of them.
 There is no delete/edit-history operation. A resolved thread must be reopened before replies.
+A thread resumed from a QA file keeps its history and is the new orchestrator's. A resolved
+one is marked `resumed` (and the file says "Resolved in an earlier workspace"): its evidence
+is about the earlier code, so reopen any the current code may contradict.
 Thread transitions do not themselves wake an assignee: send a linked actionable message.
 
 Link `decision_request` to thread_id. The human's GUI answer is recorded with human

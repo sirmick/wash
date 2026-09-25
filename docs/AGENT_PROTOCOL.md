@@ -853,6 +853,7 @@ QADocumentStatus is where the workspace's QA file stands on disk.
 | `revision` | `number` |  |
 | `decision_refs` | `string[] \| null` |  |
 | `evidence?` | `string` |  |
+| `resumed?` | `boolean` | Resumed marks a thread resolved in an earlier workspace and read back from its QA file: its evidence is about that workspace's code. |
 | `events` | `QAEvent[] \| null` |  |
 
 #### Raise

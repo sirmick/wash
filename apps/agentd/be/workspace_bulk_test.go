@@ -387,3 +387,128 @@ func TestMemberModelNeedsAWorkspaceCatalog(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// Tally shakedown finding 1: members given no cwd launched in the
+// orchestrator's folder, not project_root, so an implementer edited the
+// orchestrator's repository. A relative cwd is inside the project too.
+func TestMembersDefaultToTheProjectRoot(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	withPolicy(t, agentpolicy.Policy{})
+	base := t.TempDir()
+	cwd, project := filepath.Join(base, "orchestrator"), filepath.Join(base, "project")
+	for _, d := range []string{cwd, filepath.Join(project, "sub")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, _ := swarm.Open(filepath.Join(base, "state.json"))
+	if _, err := s.Setup("lead", "claude", cwd, "Project", project, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error { w.Catalog = "anthropic"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "claude", cwd: cwd}
+	_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(`{"members":{"a":{"name":"A","lifetime":"resident","instructions":"x"},"b":{"name":"B","lifetime":"resident","instructions":"x","cwd":"sub"}}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := s.View("lead")
+	if got := swarm.GetMember(w, "a").Cwd; got != project {
+		t.Fatalf("member without cwd runs in %s, want the project root %s", got, project)
+	}
+	if got := swarm.GetMember(w, "b").Cwd; got != filepath.Join(project, "sub") {
+		t.Fatalf("relative cwd = %s", got)
+	}
+}
+
+// Tally shakedown findings 7, 12, 14 and 15, all before any process runs:
+// preview reports no ids it would not keep, a bad member names itself and
+// the field, a slot on an adapter's own list fails in preview, and a failed
+// launch's key and name take a corrected definition.
+func TestConfigureReportsWhatTheOrchestratorCanActOn(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // every launch fails
+	withPolicy(t, agentpolicy.Policy{})
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "claude", catalog: "anthropic", cwd: root}
+	call := func(args string) (any, error) {
+		return ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(args)})
+	}
+	res, err := call(`{"workspace":{"name":"Team"},"preview":true,"members":{"a":{"name":"A","lifetime":"resident","instructions":"x","model":"haiku"}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview := res.(map[string]any)
+	if preview["workspace_id"] != "" || preview["members"].(map[string]string)["a"] != "" {
+		t.Fatalf("preview reported ids the commit will not use: %v", preview)
+	}
+
+	_, err = call(`{"workspace":{"name":"Team"},"preview":true,"members":{"probe":{"name":"P","lifetime":"ephemeral","instructions":"x"}}}`)
+	if err == nil || !strings.Contains(err.Error(), "member probe") || !strings.Contains(err.Error(), "task") {
+		t.Fatalf("ephemeral without task: %v", err)
+	}
+	_, err = call(`{"workspace":{"name":"Team"},"preview":true,"members":{"a":{"name":"A","lifetime":"resident","instructions":"x","model":"coding"}}}`)
+	if err == nil || !strings.Contains(err.Error(), "no slots") || !strings.Contains(err.Error(), "anthropic-budget") {
+		t.Fatalf("slot on an adapter's own list passed preview: %v", err)
+	}
+
+	if _, err = call(`{"workspace":{"name":"Team"},"members":{"a":{"name":"A","lifetime":"resident","instructions":"x","model":"haiku"}}}`); err != nil {
+		t.Fatal(err)
+	}
+	failed := swarm.GetMember(s.View("lead"), "a")
+	if failed.State != "failed" || failed.Session != "" {
+		t.Fatalf("launch with no adapter on PATH: %+v", failed)
+	}
+	// The same key, a different model: the definition is replaced in place.
+	if _, err = call(`{"members":{"a":{"name":"A","lifetime":"resident","instructions":"x","model":"sonnet"}}}`); err != nil {
+		t.Fatalf("a failed launch's key refused a corrected definition: %v", err)
+	}
+	w := s.View("lead")
+	if again := swarm.GetMember(w, "a"); again.ID != failed.ID || again.LaunchSettings.Model != "sonnet" {
+		t.Fatalf("redefined member = %+v", again)
+	}
+	// A new key may take a failed member's name.
+	if _, err = call(`{"members":{"a2":{"name":"A","lifetime":"resident","instructions":"x"}}}`); err != nil {
+		t.Fatalf("a failed launch held its name: %v", err)
+	}
+}
+
+// Tally shakedown findings 16 and 19: a caller's assignment id was dropped
+// without a word, and a status set before waiting outlived it.
+func TestAssignmentIDsAndWaitingStatus(t *testing.T) {
+	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	w, _ := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "m", Key: "rec", Session: "m-session", Name: "Rec", State: "available", Lifetime: "resident"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	lead := &hosted{sessionID: "lead"}
+	call := func(name, raw string) (any, error) {
+		return ws.call(context.Background(), lead, workspacemcp.Call{Name: name, Arguments: json.RawMessage(raw)})
+	}
+	_, err := call("assignment_update", `{"updates":[{"action":"create","id":"rec-fix","member_id":"rec","text":"Fix"}]}`)
+	if err == nil || !strings.Contains(err.Error(), "create takes no id") {
+		t.Fatalf("caller id: %v", err)
+	}
+	if _, err = call("member_update", `{"status":"waiting on REC fix"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = call("member_update", `{"waiting":{"reason":"idle"}}`); err != nil {
+		t.Fatal(err)
+	}
+	if m := swarm.GetMember(s.View("lead"), w.Lead); m.Status != "" || m.Waiting != "idle" {
+		t.Fatalf("status %q waiting %q", m.Status, m.Waiting)
+	}
+	if _, err = call("member_update", `{"status":"reviewing","waiting":{"reason":"on the reviewer"}}`); err != nil {
+		t.Fatal(err)
+	}
+	if m := swarm.GetMember(s.View("lead"), w.Lead); m.Status != "reviewing" {
+		t.Fatalf("status set with waiting was dropped: %q", m.Status)
+	}
+}

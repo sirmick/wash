@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -221,5 +222,68 @@ func TestEndedMembersDecisionLeavesTheThreadOpen(t *testing.T) {
 	}
 	if q := QA(s.View("lead"), "q"); q.State != "open" {
 		t.Fatalf("thread still %s after its asker ended", q.State)
+	}
+}
+
+// Found in the tally shakedown (pass 5): a reopened thread stayed with the
+// member it was last assigned to, who may have ended, where the guide says
+// it returns to the orchestrator. Its events name members, not ids, and an
+// authority refusal says whose thread it is.
+func TestReopenedQuestionReturnsToTheOrchestrator(t *testing.T) {
+	s, lead, _ := qaStore(t)
+	if err := s.Mutate("lead", true, func(w *Workspace, _ *Member) error {
+		GetMember(w, "writer").Name = "K5 implementer"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := qaChange(s, "reviewer-session", QAUpdate{ID: "q", Action: "open", Package: "K5", Title: "Bound", Assignee: lead, Body: "Which bound?"}); err != nil {
+		t.Fatal(err)
+	}
+	rev := s.View("lead").QA[0].Revision
+	if err := qaChange(s, "lead", QAUpdate{ID: "q", Action: "assign", Expected: &rev, Assignee: "writer", Body: "Yours"}); err != nil {
+		t.Fatal(err)
+	}
+	q := s.View("lead").QA[0]
+	if body := q.Events[len(q.Events)-1].Body; body != "Yours\nNext responder: K5 implementer" {
+		t.Fatalf("assign event = %q", body)
+	}
+	rev = q.Revision
+	err := qaChange(s, "other-session", QAUpdate{ID: "q", Action: "block", Expected: &rev, Body: "no"})
+	if err == nil || !strings.Contains(err.Error(), "reviewer of package K5") {
+		t.Fatalf("authority error = %v", err)
+	}
+	if err := qaChange(s, "reviewer-session", QAUpdate{ID: "q", Action: "resolve", Expected: &rev, Evidence: "checked"}); err != nil {
+		t.Fatal(err)
+	}
+	rev = s.View("lead").QA[0].Revision
+	if err := qaChange(s, "reviewer-session", QAUpdate{ID: "q", Action: "reopen", Expected: &rev, Body: "regressed"}); err != nil {
+		t.Fatal(err)
+	}
+	if q := s.View("lead").QA[0]; q.State != "open" || q.Assignee != lead {
+		t.Fatalf("reopened thread: state %s assignee %s, want open and the orchestrator", q.State, q.Assignee)
+	}
+}
+
+// The orchestrator trying to complete an assignment it gave out, to record
+// acceptance, was told only "belongs to another member".
+func TestCompletingSomeoneElsesAssignmentSaysWhose(t *testing.T) {
+	s, _, _ := qaStore(t)
+	if err := s.Mutate("lead", true, func(w *Workspace, _ *Member) error {
+		GetMember(w, "writer").Name = "K5 implementer"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.Assign("lead", "writer", "Fix it", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Complete("writer-session", a.ID, "done", false); err != nil {
+		t.Fatal(err)
+	}
+	err = s.Complete("lead", a.ID, "accepted", false)
+	if err == nil || !strings.Contains(err.Error(), "K5 implementer's") || !strings.Contains(err.Error(), "completed") || !strings.Contains(err.Error(), "needs no call") {
+		t.Fatalf("err = %v", err)
 	}
 }

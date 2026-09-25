@@ -180,29 +180,50 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if !swarm.ValidProfileName(key) || slices.Contains([]string{"conversation", "plan", "qa"}, key) || m == nil {
 			return nil, errors.New("invalid member key; use member_control to end members")
 		}
-		if !swarm.ValidText(m.Name, 120) || !swarm.ValidText(m.Instructions, 30000) || !slices.Contains([]string{"resident", "ephemeral"}, m.Lifetime) || m.Lifetime == "ephemeral" && !swarm.ValidText(m.Task, 32768) || len(m.Task) > 32768 {
-			return nil, errors.New("invalid member definition")
+		// Each check names the member and the field: a bare "invalid member
+		// definition" left the orchestrator diffing its call by eye.
+		switch {
+		case !swarm.ValidText(m.Name, 120):
+			return nil, fmt.Errorf("member %s: name is required (at most 120 bytes)", key)
+		case !swarm.ValidText(m.Instructions, 30000):
+			return nil, fmt.Errorf("member %s: instructions are required (at most 30000 bytes)", key)
+		case !slices.Contains([]string{"resident", "ephemeral"}, m.Lifetime):
+			return nil, fmt.Errorf(`member %s: lifetime must be "resident" or "ephemeral"`, key)
+		case m.Lifetime == "ephemeral" && !swarm.ValidText(m.Task, 32768):
+			return nil, fmt.Errorf("member %s: an ephemeral member needs a task", key)
+		case len(m.Task) > 32768:
+			return nil, fmt.Errorf("member %s: task exceeds 32 KiB", key)
 		}
 		if len(memberBrief(swarm.Member{ID: swarm.ID(), Instructions: m.Instructions, InitialTask: m.Task}, swarm.ID())) > 32768 {
-			return nil, errors.New("instructions and task together exceed 32 KiB: a member receives them as one first message; put detail in a file it can read")
+			return nil, fmt.Errorf("member %s: instructions and task together exceed 32 KiB: a member receives them as one first message; put detail in a file it can read", key)
 		}
-		if m.Package != "" && !swarm.ValidProfileName(m.Package) || !slices.Contains([]string{"", "architect", "implementer", "reviewer"}, m.Role) {
-			return nil, errors.New("invalid member package/role")
+		if m.Package != "" && !swarm.ValidProfileName(m.Package) {
+			return nil, fmt.Errorf("member %s: package must be letters, digits, - and _", key)
 		}
+		if !slices.Contains([]string{"", "architect", "implementer", "reviewer"}, m.Role) {
+			return nil, fmt.Errorf("member %s: role must be architect, implementer or reviewer", key)
+		}
+		// A member works in the project, not wherever the orchestrator
+		// happens to run: defaulting to the caller's folder launched every
+		// member of a /tmp/tally-p5 workspace in the orchestrator's own
+		// repository, where an auto-approved implementer edits the wrong
+		// tree. A relative cwd is inside the project too.
 		if m.Cwd == "" {
-			m.Cwd = h.cwd
+			m.Cwd = root
+		} else if !filepath.IsAbs(m.Cwd) {
+			m.Cwd = filepath.Join(root, m.Cwd)
 		}
 		cwd, err := confine("Read", m.Cwd)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("member %s: cwd: %w", key, err)
 		}
 		m.Cwd = cwd
 		info, err := os.Stat(cwd)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("member %s: cwd: %w", key, err)
 		}
 		if !info.IsDir() {
-			return nil, errors.New("member cwd must be a directory")
+			return nil, fmt.Errorf("member %s: cwd must be a directory", key)
 		}
 		keys = append(keys, key)
 	}
@@ -373,7 +394,15 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			}
 			for _, key := range keys {
 				spec := p.Members[key]
-				if prior := swarm.GetMember(w, key); prior != nil {
+				// A launch that failed never ran: nothing holds its session,
+				// its assignments or its name. Its key takes a corrected
+				// definition in place (same ID), so one wrong model string
+				// costs one call rather than an end plus new keys.
+				redefine := swarm.GetMember(w, key)
+				if redefine != nil && !neverLaunched(redefine) {
+					redefine = nil
+				}
+				if prior := swarm.GetMember(w, key); prior != nil && redefine == nil {
 					if prior.State == "ended" {
 						return fmt.Errorf("member %s is ended; use a new key for replacement", key)
 					}
@@ -383,29 +412,30 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					// Catalog edits affect future launches; explicit launch overrides must still match.
 					old := prior.LaunchSettings
 					if spec.Capability != "" && old.Capability != spec.Capability || spec.Approval != "" && old.Approval != spec.Approval || spec.Provider != "" && old.Provider != spec.Provider || spec.Effort != "" && old.Effort != spec.Effort || spec.Subagents != "" && old.Subagents != spec.Subagents {
-						return errors.New("existing member launch settings differ")
+						return fmt.Errorf("member %s already exists with different launch settings; end and replace explicitly", key)
 					}
 					for id, val := range spec.Configs {
 						if old.Configs[id] != val {
-							return errors.New("existing member adapter settings differ")
+							return fmt.Errorf("member %s already exists with different adapter settings; end and replace explicitly", key)
 						}
 					}
 					continue
 				}
 				live := 0
 				for _, m := range w.Members {
-					if m.State != "ended" {
-						live++
+					if m.State == "ended" || neverLaunched(&m) {
+						continue
 					}
+					live++
 					// Unique within a package, not the workspace: with titled
 					// packages a member's name is its role, so every package
 					// has an "Implementer". Lookup is by ID or key, never name.
-					if m.Name == spec.Name && m.Package == spec.Package && m.State != "ended" {
-						return errors.New("member name already exists in this package")
+					if m.Name == spec.Name && m.Package == spec.Package {
+						return fmt.Errorf("member %s: name %q is already taken in this package", key, spec.Name)
 					}
 				}
 				if live >= w.MaxMembers {
-					return errors.New("workspace member limit reached")
+					return fmt.Errorf("member %s: workspace member limit (%d) reached", key, w.MaxMembers)
 				}
 				explicit := swarm.AgentProfile{Capability: spec.Capability, Approval: spec.Approval, Provider: spec.Provider, Effort: spec.Effort, Configs: spec.Configs, Subagents: spec.Subagents}
 				catalog, settings, err := memberSettingsFor(w, catalogs, badCatalogs, spec.Catalog, spec.Model, explicit)
@@ -416,15 +446,21 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				// that is itself auto-approved can launch one that is, so no agent
 				// grants a teammate what the human has not granted it.
 				if settings.Approval == "auto" && !callerAuto {
-					return errors.New(`approval "auto" requires the configuring session to be auto-approved itself`)
+					return fmt.Errorf(`member %s: approval "auto" requires the configuring session to be auto-approved itself`, key)
 				}
 				if settings.Capability == "reviewer" && spec.CanSpawn {
-					return errors.New("reviewer capability cannot spawn agents")
+					return fmt.Errorf("member %s: reviewer capability cannot spawn agents", key)
 				}
 				if err := knownProvider(settings.Provider); err != nil {
-					return err
+					return fmt.Errorf("member %s: %w", key, err)
 				}
-				w.Members = append(w.Members, swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: spec.Instructions, InitialTask: spec.Task, Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Package: spec.Package, Role: spec.Role})
+				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: spec.Instructions, InitialTask: spec.Task, Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Package: spec.Package, Role: spec.Role}
+				if redefine != nil {
+					member.ID = redefine.ID
+					*redefine = member
+					continue
+				}
+				w.Members = append(w.Members, member)
 			}
 			return nil
 		})
@@ -439,7 +475,22 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		for _, key := range keys {
 			members[key] = swarm.GetMember(w, key).ID
 		}
-		return map[string]any{"workspace_id": w.ID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "packages": w.Packages, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
+		// A preview's new ids are made up for the staged copy and thrown
+		// away with it; returned, they read as ids the commit would keep.
+		// Only ids that already exist are reported: new members are
+		// addressed by key.
+		workspaceID := w.ID
+		if p.Preview {
+			if current == nil {
+				workspaceID = ""
+			}
+			for key := range members {
+				if current == nil || swarm.GetMember(current, key) == nil {
+					members[key] = ""
+				}
+			}
+		}
+		return map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "packages": w.Packages, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
 	})
 	if qaLocked {
 		ws.qaMu.Unlock()
@@ -531,6 +582,10 @@ func (ws *workspaceService) launchOutcome(ctx context.Context, h *hosted, worksp
 	}
 	return nil
 }
+
+// neverLaunched is a member whose launch failed before it had a session.
+func neverLaunched(m *swarm.Member) bool { return m.State == "failed" && m.Session == "" }
+
 func knownProvider(provider string) error {
 	for _, a := range adapters {
 		if a.ID == provider {

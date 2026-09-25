@@ -413,3 +413,49 @@ func TestWorkspaceEndByIDEndsAStaleWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Tally shakedown findings 13 and 24: a resolved thread read back from the
+// QA file kept the ended workspace's member as assignee, reopening it left
+// it there, and nothing said its evidence was about the earlier code.
+func TestResumedResolvedThreadBelongsToTheNewOrchestrator(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "QA.md")
+	s, _ := swarm.Open(filepath.Join(dir, "first.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "first", agent: "codex", cwd: dir}
+	setup := map[string]any{"workspace": map[string]string{"name": "Project"}, "qa_document": map[string]string{"path": path}}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+	lead := s.View(h.sessionID).Lead
+	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": lead, "type": "question", "body": "Overflow?", "qa": map[string]any{"id": "q", "action": "open", "package": "REC", "title": "Overflow"}}); err != nil {
+		t.Fatal(err)
+	}
+	rev := s.View(h.sessionID).QA[0].Revision
+	if _, err := qaFileCall(t, ws, h, "member_update", map[string]any{"qa_updates": []any{map[string]any{"id": "q", "action": "resolve", "expected_revision": rev, "evidence": "fixed"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qaFileCall(t, ws, h, "workspace_end", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := swarm.Open(filepath.Join(dir, "second.json"))
+	ws2 := &workspaceService{store: s2}
+	h2 := &hosted{sessionID: "second", agent: "codex", cwd: dir}
+	if _, err := qaFileCall(t, ws2, h2, "workspace_configure", setup); err != nil {
+		t.Fatal(err)
+	}
+	w := s2.View(h2.sessionID)
+	q := w.QA[0]
+	if q.State != "resolved" || q.Assignee != w.Lead || !q.Resumed {
+		t.Fatalf("resumed thread = %+v", q)
+	}
+	if md := swarm.QAMarkdown(w); !strings.Contains(md, "earlier workspace") {
+		t.Fatal("the QA file does not say the resolution is from an earlier workspace")
+	}
+	if _, err := qaFileCall(t, ws2, h2, "member_update", map[string]any{"qa_updates": []any{map[string]any{"id": "q", "action": "reopen", "expected_revision": q.Revision, "body": "code changed"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if q := s2.View(h2.sessionID).QA[0]; q.State != "open" || q.Assignee != w.Lead || q.Resumed {
+		t.Fatalf("reopened thread = %+v", q)
+	}
+}

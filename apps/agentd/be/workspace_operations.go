@@ -61,6 +61,11 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 	for i, u := range updates {
 		switch u.Action {
 		case "create":
+			// Wash names assignments; a caller's id was dropped without a
+			// word, and the caller then waited on an id that did not exist.
+			if u.ID != "" {
+				return fail(i, errors.New("create takes no id: Wash assigns it and returns it; use request_id to make a retry safe"))
+			}
 			member, err := resolveMember(s, h.sessionID, u.Member)
 			if err != nil {
 				return fail(i, fmt.Errorf("member %q: %w", u.Member, err))
@@ -314,6 +319,13 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 					}
 					m.WaitingOn = slices.Clone(p.Waiting.Until)
 					m.WaitingFor, m.Waiting = p.Waiting.Reply, p.Waiting.Reason
+					// The waiting reason is what the member is doing now; a
+					// status from before it is stale, and the team view
+					// showed the two disagreeing. A status in the same call
+					// stands.
+					if p.Status == nil {
+						m.Status = ""
+					}
 					swarm.DeliverLastReport(w, m)
 					for i := range w.Assignments {
 						if w.Assignments[i].Member == m.ID && w.Assignments[i].State == "active" {

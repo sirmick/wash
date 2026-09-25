@@ -137,6 +137,13 @@ func restoreQA(w *swarm.Workspace, a *qaArchive) error {
 	// The new orchestrator owns unfinished questions until it assigns its team.
 	for i := range w.QA {
 		q := &w.QA[i]
+		// A resolved thread keeps its history but not its old assignee,
+		// who is not in this workspace; reopening it comes back here too.
+		// Its resolution is about the code as it was, so it says so.
+		if q.State == "resolved" {
+			q.Assignee = w.Lead
+			q.Resumed = true
+		}
 		if q.State != "resolved" {
 			rev := q.Revision
 			priorState := q.State

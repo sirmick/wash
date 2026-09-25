@@ -291,6 +291,27 @@ What is still open:
   haiku through a turn. Launch and member configuration now apply the mode
   before the model, and agentd logs every adapter-pushed setting change
   (`acp config changed key=… model=… was=…`).
+- **Tally shakedown pass 5 (~/tally-shakedown/SHAKEDOWN-NOTES.md), fixed
+  2026-09-25, to recheck live:** members default to `project_root`, not the
+  orchestrator's folder (1); preview returns no ids it would not keep (7);
+  member errors name the key and field (12); a reopened thread, and every
+  thread resumed from a QA file, is the orchestrator's (13), and a resumed
+  resolved thread is marked as from an earlier workspace (24); a slot on an
+  adapter's own list fails in preview, naming the curated catalogs (14); a
+  failed launch's key takes a corrected definition and holds no name (15);
+  `create` with an `id` is refused (16); completing someone else's
+  assignment says whose it is and its state (17); `member_update`'s result
+  schema offers only complete/fail (20); QA events name the next responder
+  (21); authority refusals name the package (22); the brief and guide say to
+  stop changing files after reporting (23); `waiting` clears a stale status
+  (19).
+- **Context size flips 200k/1M (finding 18): the adapter, not Wash.**
+  claude-agent-acp reports a 200000 default until the first turn's
+  `modelUsage` corrects it (its comment names `sonnet`), and caches the
+  correction per process. Wash relays `usage_update.size` as given.
+- **Two `wash-agentd` processes** (a dev build and /usr/local) served at
+  once in pass 5. Nothing reports which one owns a workspace; about could
+  carry the binary path and start time.
 - **Nothing typechecks the app frontends.** `tsc --noEmit` on
   `apps/ai/fe` fails on existing errors (import extensions, `variant`
   types, `node:test` types); only e2e is typechecked by `make`.

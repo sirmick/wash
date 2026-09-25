@@ -531,7 +531,17 @@ func (s *Store) Complete(session, id, body string, failed bool) error {
 				continue
 			}
 			if a.Member != m.ID {
-				return errors.New("assignment belongs to another member")
+				// Only the assignee reports a result. The one who assigned it
+				// was told only "another member", even when the work was
+				// already done and there was nothing left to record.
+				who := a.Member
+				if assignee := GetMember(w, a.Member); assignee != nil {
+					who = assignee.Name
+				}
+				if a.Assigner == m.ID {
+					return fmt.Errorf("assignment %s is %s's to complete or fail, and it is %s; accepting a result needs no call", id, who, a.State)
+				}
+				return fmt.Errorf("assignment %s is %s's; only its assignee completes or fails it", id, who)
 			}
 			state := "completed"
 			if failed {

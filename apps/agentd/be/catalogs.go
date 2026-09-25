@@ -156,6 +156,13 @@ func resolveCatalog(catalogs map[string]Catalog, bad map[string]error, id, model
 		return swarm.AgentProfile{}, fmt.Errorf("unknown catalog %q", id)
 	}
 	if c.auto() {
+		// An adapter's own list has no slots. Passed through, "coding"
+		// reached the adapter as a model id: preview passed and the launch
+		// failed. Refused here, preview says it, naming the catalogs that
+		// do have the slot on this adapter.
+		if slices.Contains(slotNames, model) {
+			return swarm.AgentProfile{}, fmt.Errorf("catalog %q is %s's own model list and has no slots; name a model id it offers (view=state config_options), or a catalog with slots%s", id, c.Adapter, curatedFor(catalogs, bad, c.Adapter))
+		}
 		return swarm.AgentProfile{Provider: c.Adapter, Connection: c.Connection, Model: model}, nil
 	}
 	if model == "" {
@@ -167,6 +174,22 @@ func resolveCatalog(catalogs map[string]Catalog, bad map[string]error, id, model
 	}
 	base := c.Slots[defaultSlot]
 	return swarm.AgentProfile{Provider: base.Provider, Connection: base.Connection, Model: model}, nil
+}
+
+// curatedFor lists the valid catalogs with slots whose frontier slot runs
+// on adapter, as ": a, b" for an error message, or "" when there are none.
+func curatedFor(catalogs map[string]Catalog, bad map[string]error, adapter string) string {
+	var ids []string
+	for id, c := range catalogs {
+		if !c.auto() && bad[id] == nil && c.Slots[defaultSlot].Provider == adapter {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	sort.Strings(ids)
+	return ": " + strings.Join(ids, ", ")
 }
 
 // autoCatalogFor is the catalog a session started with none is on: its
