@@ -3,7 +3,7 @@ import { For, Show, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { AgentSession, Button, Markdown, Splitter, tokens } from '@wash/ui';
 
-export type WorkspaceAction = (name: string, args: Record<string, unknown>) => void;
+export type WorkspaceAction = (name: string, args: agentproto.WorkspaceActionArgs) => void;
 const heading = { font: tokens.type.titleSm, padding: `${tokens.spaceSm}px 0` };
 
 export const WorkspacePlan: Component<{ frame: agentproto.WorkspaceState }> = (props) => {

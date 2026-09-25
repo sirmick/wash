@@ -1045,7 +1045,18 @@ WorkspaceAction is a human's action in the workspace sidebar.
 |---|---|---|
 | `key` | `string` |  |
 | `name` | `string` | Name is the operation: decision_response \| member_open \| member_resume \| member_message \| member_inspect. |
-| `arguments` | `unknown` |  |
+| `arguments` | `WorkspaceActionArgs` |  |
+
+#### WorkspaceActionArgs
+
+WorkspaceActionArgs are an action's arguments; each operation reads its own.
+
+| Field | Type | |
+|---|---|---|
+| `member_id?` | `string` | MemberID names the member for member_open, member_resume and member_inspect. |
+| `id?` | `string` | ID is the decision request's message id, for decision_response. |
+| `recipient?` | `string` | Recipient is the member a member_message goes to. |
+| `body?` | `string` | Body is a decision_response's answer or a member_message's text. |
 
 #### WorkspaceApproval
 

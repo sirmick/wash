@@ -1175,7 +1175,25 @@ export interface WorkspaceAction {
    * member_resume | member_message | member_inspect.
    */
   name: string;
-  arguments: unknown;
+  arguments: WorkspaceActionArgs;
+}
+
+/**
+ * WorkspaceActionArgs are an action's arguments; each operation reads its
+ * own.
+ */
+export interface WorkspaceActionArgs {
+  /**
+   * MemberID names the member for member_open, member_resume and
+   * member_inspect.
+   */
+  member_id?: string;
+  /** ID is the decision request's message id, for decision_response. */
+  id?: string;
+  /** Recipient is the member a member_message goes to. */
+  recipient?: string;
+  /** Body is a decision_response's answer or a member_message's text. */
+  body?: string;
 }
 
 /** WorkspaceApproval is a member's question waiting for the human. */

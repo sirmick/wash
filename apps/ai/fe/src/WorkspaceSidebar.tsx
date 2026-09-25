@@ -8,7 +8,7 @@ export const WorkspaceSidebar: Component<{
   result?: agentproto.WorkspaceResult;
   selected: string;
   onSelect: (id: string) => void;
-  onAction: (name: string, args: Record<string, unknown>) => void;
+  onAction: (name: string, args: agentproto.WorkspaceActionArgs) => void;
 }> = (props) => {
   const [answers, setAnswers] = createSignal<Record<string, string>>({});
   const w = () => props.frame.workspace!;

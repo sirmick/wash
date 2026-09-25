@@ -20,8 +20,22 @@ type WorkspaceAction struct {
 	Key string `json:"key"`
 	// Name is the operation: decision_response | member_open |
 	// member_resume | member_message | member_inspect.
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	Name      string              `json:"name"`
+	Arguments WorkspaceActionArgs `json:"arguments"`
+}
+
+// WorkspaceActionArgs are an action's arguments; each operation reads its
+// own.
+type WorkspaceActionArgs struct {
+	// MemberID names the member for member_open, member_resume and
+	// member_inspect.
+	MemberID string `json:"member_id,omitempty"`
+	// ID is the decision request's message id, for decision_response.
+	ID string `json:"id,omitempty"`
+	// Recipient is the member a member_message goes to.
+	Recipient string `json:"recipient,omitempty"`
+	// Body is a decision_response's answer or a member_message's text.
+	Body string `json:"body,omitempty"`
 }
 
 // WorkspaceState is the whole sidebar frame for an orchestrator's (or a

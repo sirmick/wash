@@ -105,78 +105,68 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 			// effects reach the window through the next frame.
 			var transcript *agentproto.WorkspaceTranscript
 			var err error
+			// The operations share the MCP tools' argument parsing, which
+			// reads JSON: only the fields the operation set are sent.
+			raw, _ := json.Marshal(req.Arguments)
+			member := req.Arguments.MemberID
 			switch req.Name {
 			case "decision_response":
-				_, err = ws.answer(h, req.Arguments)
+				_, err = ws.answer(h, raw)
 			case "member_open":
-				var a struct {
-					ID string `json:"member_id"`
-				}
-				err = json.Unmarshal(req.Arguments, &a)
-				if err == nil {
-					w := ws.store.View(h.sessionID)
-					if w == nil {
-						err = errors.New("workspace ended")
-					} else if m := swarm.GetMember(w, a.ID); m != nil {
-						if target := workspaceHosted(m.Session); target != nil {
-							openHosted(c, target.key)
-						} else {
-							err = errors.New("member is not running")
-						}
+				w := ws.store.View(h.sessionID)
+				if w == nil {
+					err = errors.New("workspace ended")
+				} else if m := swarm.GetMember(w, member); m != nil {
+					if target := workspaceHosted(m.Session); target != nil {
+						openHosted(c, target.key)
 					} else {
-						err = errors.New("unknown member")
+						err = errors.New("member is not running")
 					}
+				} else {
+					err = errors.New("unknown member")
 				}
 			case "member_resume":
-				var a workspaceArgs
-				a, err = parseWorkspaceArgs(req.Arguments)
+				// member_control is the orchestrator's; the human may be
+				// looking at a member's tab.
+				lead := h
+				if w := ws.store.View(h.sessionID); w != nil {
+					lead = workspaceHosted(workspaceLeadSession(*w))
+				}
+				if lead == nil {
+					err = errors.New("the orchestrator is not running")
+					break
+				}
+				args, _ := json.Marshal(map[string]any{"action": "resume", "member_ids": []string{member}})
+				var result any
+				result, err = ws.call(context.Background(), lead, workspacemcp.Call{Name: "member_control", Arguments: args})
+				// Surface this single member's failure in the GUI, even though
+				// bulk process controls return errors in individual outcomes.
 				if err == nil {
-					// member_control is the orchestrator's; the human may be
-					// looking at a member's tab.
-					lead := h
-					if w := ws.store.View(h.sessionID); w != nil {
-						lead = workspaceHosted(workspaceLeadSession(*w))
+					var report struct {
+						Outcomes []struct {
+							Error string `json:"error"`
+						} `json:"outcomes"`
 					}
-					if lead == nil {
-						err = errors.New("the orchestrator is not running")
-						break
-					}
-					args, _ := json.Marshal(map[string]any{"action": "resume", "member_ids": []string{a.Member}})
-					var result any
-					result, err = ws.call(context.Background(), lead, workspacemcp.Call{Name: "member_control", Arguments: args})
-					// Surface this single member's failure in the GUI, even though
-					// bulk process controls return errors in individual outcomes.
-					if err == nil {
-						var report struct {
-							Outcomes []struct {
-								Error string `json:"error"`
-							} `json:"outcomes"`
-						}
-						encoded, _ := json.Marshal(result)
-						if json.Unmarshal(encoded, &report) == nil {
-							for _, outcome := range report.Outcomes {
-								if outcome.Error != "" {
-									err = errors.New(outcome.Error)
-									break
-								}
+					encoded, _ := json.Marshal(result)
+					if json.Unmarshal(encoded, &report) == nil {
+						for _, outcome := range report.Outcomes {
+							if outcome.Error != "" {
+								err = errors.New(outcome.Error)
+								break
 							}
 						}
 					}
 				}
 			case "member_message":
-				_, err = ws.humanMessage(h, req.Arguments)
+				_, err = ws.humanMessage(h, raw)
 			case "member_inspect":
-				var a workspaceArgs
-				a, err = parseWorkspaceArgs(req.Arguments)
+				if member != "" {
+					transcript, err = ws.inspect(h, raw)
+				}
 				if err == nil {
-					if a.Member != "" {
-						transcript, err = ws.inspect(h, req.Arguments)
-					}
-					if err == nil {
-						ws.mu.Lock()
-						ws.previews[h.key] = a.Member
-						ws.mu.Unlock()
-					}
+					ws.mu.Lock()
+					ws.previews[h.key] = member
+					ws.mu.Unlock()
 				}
 			default:
 				err = errors.New("unknown workspace UI operation")
