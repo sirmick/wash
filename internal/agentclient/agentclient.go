@@ -22,12 +22,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/pkg/sdk"
-	"github.com/sirmick/wash/pkg/wire"
 )
-
-// AppID is agentd's app id — the recipient of everything sent here.
-const AppID = "com.wash.agentd"
 
 // defaultWatcherTTL is how long agentd keeps a transcript watcher it has
 // not heard from. The client re-affirms at a quarter of it, so three
@@ -67,19 +64,19 @@ type Handlers struct {
 	// which case key is empty — which is exactly why the id exists.
 	Started func(reqID, key, sessionID, err string)
 	// Snapshot is the whole transcript for a session, sent on subscribe.
-	Snapshot func(key string, events any)
+	Snapshot func(key string, events []agentproto.Event)
 	// Event is one transcript event appended to a session.
-	Event func(key string, event any)
+	Event func(key string, event agentproto.Event)
 	// State is the roster push (adapters, rows, per-session status). Not
 	// keyed — it describes every session agentd knows about.
-	State func(state any)
+	State func(state agentproto.State)
 }
 
 // Client relays to agentd over a host app's conn.
 type Client struct {
 	// sendTo and done are the conn, narrowed to what the client uses, so a
 	// test can stand in a recorder for the wire.
-	sendTo func(map[string]any) error
+	sendTo func(msg any) error
 	done   <-chan struct{}
 	h      Handlers
 
@@ -104,13 +101,14 @@ type Client struct {
 func New(c *sdk.Conn, h Handlers) *Client {
 	cl := &Client{h: h, keys: map[string]bool{}, stop: make(chan struct{}), refresh: WatcherRefresh()}
 	if c != nil {
-		cl.sendTo = func(m map[string]any) error { return c.SendAppMsgTo(wire.Recipient{AppID: AppID}, m) }
+		cl.sendTo = func(m any) error { return agentproto.SendAgentd(c, m) }
 		cl.done = c.Done()
 	}
 	return cl
 }
 
-func (cl *Client) send(m map[string]any) error {
+// send delivers one agentproto request to agentd.
+func (cl *Client) send(m any) error {
 	if cl.sendTo == nil {
 		return nil
 	}
@@ -146,7 +144,7 @@ func (cl *Client) keepWatching() {
 			return
 		case <-t.C:
 			for _, key := range cl.watched() {
-				_ = cl.send(map[string]any{"kind": "transcript_subscribe", "key": key})
+				_ = cl.send(agentproto.TranscriptSubscribe{Key: key})
 			}
 		}
 	}
@@ -165,7 +163,7 @@ func (cl *Client) watched() []string {
 
 // SubscribeRoster asks agentd for roster pushes (adapters + session rows).
 func (cl *Client) SubscribeRoster() error {
-	return cl.send(map[string]any{"kind": sdk.StateServiceKindSubscribe})
+	return cl.send(agentproto.Subscribe{})
 }
 
 // Start launches an adapter in cwd and returns the request id that will come
@@ -175,18 +173,12 @@ func (cl *Client) SubscribeRoster() error {
 // two tabs, cannot collide on the same one.
 func (cl *Client) Start(agent, cwd, prompt string) (reqID string, err error) {
 	reqID = fmt.Sprintf("s%d", cl.seq.Add(1))
-	return reqID, cl.send(map[string]any{
-		"kind":   "agent_start",
-		"agent":  agent,
-		"cwd":    cwd,
-		"prompt": prompt,
-		"req_id": reqID,
-	})
+	return reqID, cl.send(agentproto.AgentStart{Agent: agent, Cwd: cwd, Prompt: prompt, ReqID: reqID})
 }
 
 // Resume reopens a session agentd has on disk; it arrives back as an attach.
 func (cl *Client) Resume(sessionID string) error {
-	return cl.send(map[string]any{"kind": "agent_resume", "session_id": sessionID})
+	return cl.send(agentproto.AgentResume{SessionID: sessionID})
 }
 
 // Watch registers a session key so Snapshot/Event for it reach this host, and
@@ -200,7 +192,7 @@ func (cl *Client) Watch(key string) error {
 	cl.keys[key] = true
 	cl.mu.Unlock()
 	cl.keepOnce.Do(func() { go cl.keepWatching() })
-	return cl.send(map[string]any{"kind": "transcript_subscribe", "key": key})
+	return cl.send(agentproto.TranscriptSubscribe{Key: key})
 }
 
 // Resync asks for a watched session's history again. The FE uses it when
@@ -209,7 +201,7 @@ func (cl *Client) Resync(key string) error {
 	if key == "" || !cl.Watching(key) {
 		return nil
 	}
-	return cl.send(map[string]any{"kind": "transcript_subscribe", "key": key, "replay": true})
+	return cl.send(agentproto.TranscriptSubscribe{Key: key, Replay: true})
 }
 
 // Forget stops routing a session's events here. The session itself is
@@ -232,19 +224,13 @@ func (cl *Client) Prompt(key, text string) error {
 	if key == "" {
 		return nil
 	}
-	return cl.send(map[string]any{"kind": "agent_prompt", "key": key, "text": text})
+	return cl.send(agentproto.AgentPrompt{Key: key, Text: text})
 }
 
 // Answer resolves a pending permission question. A non-empty rule means the
 // user chose "always", which agentd persists as a standing decision.
 func (cl *Client) Answer(askID, decision, rule string) error {
-	return cl.send(map[string]any{
-		"kind":     "agent_answer",
-		"id":       askID,
-		"decision": decision,
-		"remember": rule != "",
-		"rule":     rule,
-	})
+	return cl.send(agentproto.AgentAnswer{ID: askID, Decision: decision, Remember: rule != "", Rule: rule})
 }
 
 // Cancel aborts the running turn, leaving the session alive.
@@ -252,7 +238,7 @@ func (cl *Client) Cancel(key string) error {
 	if key == "" {
 		return nil
 	}
-	return cl.send(map[string]any{"kind": "agent_cancel", "key": key})
+	return cl.send(agentproto.AgentCancel{Key: key})
 }
 
 // SetMode switches the agent's approval preset.
@@ -260,7 +246,7 @@ func (cl *Client) SetMode(key, modeID string) error {
 	if key == "" {
 		return nil
 	}
-	return cl.send(map[string]any{"kind": "agent_set_mode", "key": key, "mode": modeID})
+	return cl.send(agentproto.AgentSetMode{Key: key, Mode: modeID})
 }
 
 // SetConfig changes one of the agent's own settings.
@@ -268,7 +254,7 @@ func (cl *Client) SetConfig(key, id, value string) error {
 	if key == "" {
 		return nil
 	}
-	return cl.send(map[string]any{"kind": "agent_set_config", "key": key, "id": id, "value": value})
+	return cl.send(agentproto.AgentSetConfig{Key: key, ID: id, Value: value})
 }
 
 // Stop ends a session for good.
@@ -276,7 +262,7 @@ func (cl *Client) Stop(key string) error {
 	if key == "" {
 		return nil
 	}
-	return cl.send(map[string]any{"kind": "agent_stop", "key": key})
+	return cl.send(agentproto.AgentStop{Key: key})
 }
 
 // Handle routes one message from agentd. It reports whether the message was
@@ -292,41 +278,38 @@ func (cl *Client) Handle(data any) bool {
 	if m == nil {
 		return false
 	}
-	switch str(m["kind"]) {
+	kind, _ := m["kind"].(string)
+	if _, ok := agentproto.Lookup(agentproto.Push, kind); !ok {
+		return false
+	}
+	switch kind {
 	case "agent_started":
-		if cl.h.Started != nil {
-			cl.h.Started(str(m["req_id"]), str(m["key"]), str(m["session_id"]), str(m["error"]))
+		var p agentproto.AgentStarted
+		if agentproto.Decode(data, &p) == nil && cl.h.Started != nil {
+			cl.h.Started(p.ReqID, p.Key, p.SessionID, p.Error)
 		}
-		return true
 	case "attach":
 		// A resumed session: agentd hands back the key it loaded. Same
 		// shape as a start, minus the request that asked for it.
-		if cl.h.Started != nil {
-			cl.h.Started("", str(m["key"]), str(m["session_id"]), "")
+		var p agentproto.Attach
+		if agentproto.Decode(data, &p) == nil && cl.h.Started != nil {
+			cl.h.Started("", p.Key, "", "")
 		}
-		return true
 	case "transcript_snapshot":
-		key := str(m["key"])
-		if cl.Watching(key) && cl.h.Snapshot != nil {
-			cl.h.Snapshot(key, m["events"])
+		var p agentproto.TranscriptSnapshot
+		if agentproto.Decode(data, &p) == nil && cl.Watching(p.Key) && cl.h.Snapshot != nil {
+			cl.h.Snapshot(p.Key, p.Events)
 		}
-		return true
 	case "transcript_event":
-		key := str(m["key"])
-		if cl.Watching(key) && cl.h.Event != nil {
-			cl.h.Event(key, m["event"])
+		var p agentproto.TranscriptEvent
+		if agentproto.Decode(data, &p) == nil && cl.Watching(p.Key) && cl.h.Event != nil {
+			cl.h.Event(p.Key, p.Event)
 		}
-		return true
-	case sdk.StateServiceKindState:
-		if cl.h.State != nil {
-			cl.h.State(m["state"])
+	case "state":
+		var p agentproto.RosterState
+		if agentproto.Decode(data, &p) == nil && cl.h.State != nil {
+			cl.h.State(p.State)
 		}
-		return true
 	}
-	return false
-}
-
-func str(v any) string {
-	s, _ := v.(string)
-	return s
+	return true
 }

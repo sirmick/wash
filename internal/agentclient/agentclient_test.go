@@ -4,29 +4,31 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sirmick/wash/internal/agentproto"
 )
 
 // Handle is the half worth testing without a live conn: it decides what an
-// agentd payload means and, crucially, WHICH session it belongs to. The
-// send half is a one-line map literal per verb, exercised end to end by the
-// agent e2e specs.
+// agentd payload means and, crucially, WHICH session it belongs to. Payloads
+// arrive as the SDK hands them over, generic JSON; the send half is one
+// agentproto request per verb, exercised end to end by the agent e2e specs.
 
 func TestHandleRoutesTranscriptByKey(t *testing.T) {
 	var got []string
 	cl := New(nil, Handlers{
-		Event:    func(key string, _ any) { got = append(got, "event:"+key) },
-		Snapshot: func(key string, _ any) { got = append(got, "snap:"+key) },
+		Event:    func(key string, _ agentproto.Event) { got = append(got, "event:"+key) },
+		Snapshot: func(key string, _ []agentproto.Event) { got = append(got, "snap:"+key) },
 	})
 	// Two sessions in one host — the case wash-ai never had.
 	cl.keys["a"] = true
 	cl.keys["b"] = true
 
 	for _, m := range []map[string]any{
-		{"kind": "transcript_event", "key": "a", "event": 1},
+		{"kind": "transcript_event", "key": "a", "event": map[string]any{"seq": 1, "kind": "message"}},
 		{"kind": "transcript_snapshot", "key": "b", "events": []any{}},
 		// Another host's session, on the same agentd: must not be painted
 		// into ours.
-		{"kind": "transcript_event", "key": "someone-else", "event": 2},
+		{"kind": "transcript_event", "key": "someone-else", "event": map[string]any{"seq": 2, "kind": "message"}},
 	} {
 		if !cl.Handle(m) {
 			t.Errorf("Handle(%v) = false, want true (agentd owns this kind)", m["kind"])
@@ -56,12 +58,12 @@ func TestHandleStartedCarriesTheRequestID(t *testing.T) {
 	// tying it back to the tab that asked.
 	cl.Handle(map[string]any{"kind": "agent_started", "req_id": "s2", "error": "no such adapter"})
 	// A resume arrives as an attach: a key with no request behind it.
-	cl.Handle(map[string]any{"kind": "attach", "key": "k3", "session_id": "sess3"})
+	cl.Handle(map[string]any{"kind": "attach", "key": "k3"})
 
 	want := []call{
 		{"s1", "k1", "sess1", ""},
 		{"s2", "", "", "no such adapter"},
-		{"", "k3", "sess3", ""},
+		{"", "k3", "", ""},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v, want %+v", got, want)
@@ -89,14 +91,14 @@ func TestNilHandlersDropRatherThanPanic(t *testing.T) {
 	cl := New(nil, Handlers{})
 	cl.keys["a"] = true
 	// A host that only sends is legal; delivering to it must not panic.
-	cl.Handle(map[string]any{"kind": "transcript_event", "key": "a", "event": 1})
+	cl.Handle(map[string]any{"kind": "transcript_event", "key": "a", "event": map[string]any{"seq": 1}})
 	cl.Handle(map[string]any{"kind": "agent_started", "req_id": "s1", "key": "k"})
 	cl.Handle(map[string]any{"kind": "state", "state": map[string]any{}})
 }
 
 func TestForgetStopsRouting(t *testing.T) {
 	n := 0
-	cl := New(nil, Handlers{Event: func(string, any) { n++ }})
+	cl := New(nil, Handlers{Event: func(string, agentproto.Event) { n++ }})
 	cl.keys["a"] = true
 	cl.Handle(map[string]any{"kind": "transcript_event", "key": "a"})
 	cl.Forget("a")
@@ -116,9 +118,9 @@ func TestForgetStopsRouting(t *testing.T) {
 // wash-ai did so only on two of its four attach paths.
 func TestWatchKeepsReaffirmingEveryWatchedKey(t *testing.T) {
 	var mu sync.Mutex
-	var sent []map[string]any
+	var sent []any
 	cl := New(nil, Handlers{})
-	cl.sendTo = func(m map[string]any) error {
+	cl.sendTo = func(m any) error {
 		mu.Lock()
 		sent = append(sent, m)
 		mu.Unlock()
@@ -140,10 +142,10 @@ func TestWatchKeepsReaffirmingEveryWatchedKey(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, m := range sent {
-			if m["kind"] == "transcript_subscribe" && m["key"] == key {
+			if sub, ok := m.(agentproto.TranscriptSubscribe); ok && sub.Key == key {
 				// A keepalive must not ask for a replay: agentd answers a
 				// repeat subscribe with nothing, which is the point.
-				if r, _ := m["replay"].(bool); r {
+				if sub.Replay {
 					t.Errorf("keepalive for %s asked for a replay", key)
 				}
 				n++
@@ -180,7 +182,7 @@ func TestCloseStopsTheKeepalive(t *testing.T) {
 	var mu sync.Mutex
 	n := 0
 	cl := New(nil, Handlers{})
-	cl.sendTo = func(m map[string]any) error {
+	cl.sendTo = func(m any) error {
 		mu.Lock()
 		n++
 		mu.Unlock()

@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/sirmick/wash/internal/agentclient"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -57,13 +58,13 @@ func initAgent(c *sdk.Conn) {
 				"kind": "agent.started", "tab": tab, "key": key, "session_id": sessionID,
 			})
 		},
-		Snapshot: func(key string, events any) {
+		Snapshot: func(key string, events []agentproto.Event) {
 			_ = c.SendAppMsg(map[string]any{"kind": "agent.snapshot", "key": key, "events": events})
 		},
-		Event: func(key string, event any) {
+		Event: func(key string, event agentproto.Event) {
 			_ = c.SendAppMsg(map[string]any{"kind": "agent.event", "key": key, "event": event})
 		},
-		State: func(state any) {
+		State: func(state agentproto.State) {
 			_ = c.SendAppMsg(map[string]any{"kind": "agent.state", "state": state})
 		},
 	})
@@ -82,7 +83,7 @@ func agentClient() *agentclient.Client {
 // onAgentMsgFrom routes agentd's messages into the relay. The sender is
 // router-attested, so a message claiming to be the roster service is one.
 func onAgentMsgFrom(data any, from wire.Sender) bool {
-	if from.AppID != agentclient.AppID {
+	if from.AppID != agentproto.AppID {
 		return false
 	}
 	cl := agentClient()

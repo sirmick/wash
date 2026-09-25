@@ -11,10 +11,11 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
-	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
 
+	"github.com/sirmick/wash/internal/agentproto"
+	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/pkg/apps/registry"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
@@ -285,27 +286,21 @@ func registerAudioGateway(bus *sdk.Bus) {
 // permission question stays one click, from the rail).
 func registerAgentGateway(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "agent_subscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
-		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{"kind": "subscribe"})
+		return agentproto.SendAgentd(conn, agentproto.Subscribe{})
 	})
 	sdk.HandleVoid(bus, "agent_unsubscribe", func(conn *sdk.Conn, _ string, _ struct{}) error {
-		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{"kind": "unsubscribe"})
+		return agentproto.SendAgentd(conn, agentproto.Unsubscribe{})
 	})
 	// agent_answer carries a human's click on a pending permission
 	// question (docs/AGENT_TERM.md §12) to the roster service, which
 	// relays it to the terminal holding the agent's turn open. The
 	// session BE is the desktop speaking for the person in front of it —
 	// it adds no policy of its own.
-	sdk.HandleVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req agentAnswerReq) error {
+	sdk.HandleVoid(bus, "agent_answer", func(conn *sdk.Conn, _ string, req agentproto.AgentAnswer) error {
 		if req.ID == "" {
 			return nil
 		}
-		return conn.SendAppMsgTo(wire.Recipient{AppID: AgentdAppID}, map[string]any{
-			"kind":     "agent_answer",
-			"id":       req.ID,
-			"decision": req.Decision,
-			"remember": req.Remember,
-			"rule":     req.Rule,
-		})
+		return agentproto.SendAgentd(conn, req)
 	})
 	// agent_open reopens a session from the start menu's Agent flyout —
 	// the one per-session verb besides answer the chrome keeps, because a
@@ -313,24 +308,23 @@ func registerAgentGateway(bus *sdk.Bus) {
 	// never confused: resuming a session that is still running would
 	// start a second adapter on one conversation.
 	sdk.HandleVoid(bus, "agent_open", func(conn *sdk.Conn, _ string, req agentOpenReq) error {
-		to := wire.Recipient{AppID: AgentdAppID}
 		log.Printf("wash-session: agent open action=%s session=%s key=%s", req.Action, req.SessionID, req.RowKey)
 		switch req.Action {
 		case "resume":
 			if req.SessionID == "" {
 				return nil
 			}
-			return conn.SendAppMsgTo(to, map[string]any{"kind": "agent_resume", "session_id": req.SessionID})
+			return agentproto.SendAgentd(conn, agentproto.AgentResume{SessionID: req.SessionID})
 		case "reattach":
 			if req.RowKey == "" {
 				return nil
 			}
-			return conn.SendAppMsgTo(to, map[string]any{"kind": "agent_reattach", "key": req.RowKey})
+			return agentproto.SendAgentd(conn, agentproto.AgentReattach{Key: req.RowKey})
 		case "focus":
 			if req.RowKey == "" {
 				return nil
 			}
-			return conn.SendAppMsgTo(to, map[string]any{"kind": "wash.focus", "key": req.RowKey})
+			return agentproto.SendAgentd(conn, agentproto.Focus{Key: req.RowKey})
 		}
 		return nil
 	})
@@ -344,13 +338,6 @@ type agentOpenReq struct {
 	Action    string `json:"action"`
 	SessionID string `json:"session_id"`
 	RowKey    string `json:"row_key"`
-}
-
-type agentAnswerReq struct {
-	ID       string `json:"id"`
-	Decision string `json:"decision"`
-	Remember bool   `json:"remember"`
-	Rule     string `json:"rule"`
 }
 
 // registerRemoteGateway forwards the Hosts widget's subscribe + connect/
