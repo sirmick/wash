@@ -1159,6 +1159,18 @@ e2e-test: test-app
 	# KVM-backed net-vm tiers run under `make net-test` / `make e2e-vm`.
 	cd e2e && WASH_E2E_SKIP_VM=1 WASH_E2E_MULTICALL=1 $(PNPM) test
 
+# shakedown: a fresh copy of e2e/shakedown in a new git repository under
+# /tmp, for a live run of the workspace features by a real orchestrator with
+# cheap members (e2e/shakedown/README.md). The deterministic version of the
+# same steps is e2e/tests/agent-workspace-plan.spec.ts.
+.PHONY: shakedown
+shakedown:
+	@dir=$$(mktemp -d /tmp/wash-shakedown-XXXX) && cp -a e2e/shakedown/. "$$dir"/ && \
+	  cd "$$dir" && git init -q && git add -A && git commit -qm "shakedown: start" && \
+	  echo "Shakedown project: $$dir" && \
+	  echo "Open an Agent window there (the orchestrator on a frontier model; the workspace catalog needs a small slot, e.g. anthropic-budget) and paste:" && \
+	  echo "    Read SCRIPT.md and run the shakedown."
+
 # screenshots: regenerate the docs/screenshots/*.png marketing shots by posing
 # real app windows in a throwaway router and capturing them with Playwright.
 # Driven by its OWN config (NOT part of e2e-test). Deterministic (seeded window
