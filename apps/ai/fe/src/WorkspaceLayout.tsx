@@ -128,11 +128,11 @@ export const WorkspaceLayout: Component<{
             <WorkspaceMemberPanel frame={props.frame} result={props.result} memberID={active()}
               draft={drafts()[active()] ?? ''} onDraft={(text) => setDrafts({ ...drafts(), [active()]: text })} onAction={props.onAction} onAnswer={props.onAnswer} />
           }><WorkspacePlan frame={props.frame} /></Show>
-          }><div ref={qaPanel} data-testid="workspace-qa" style={{height:'100%', overflow:'auto', padding:`${tokens.spaceMd}px`, 'box-sizing':'border-box'}}><Show when={workspace()?.qa_document} fallback={<p style={{color:tokens.fgMuted}}>No QA Markdown file configured.</p>}>
-              <p data-testid="workspace-qa-path" style={{color:tokens.fgMuted,'overflow-wrap':'anywhere'}}>{workspace()?.qa_document?.path}</p>
+          }><div ref={qaPanel} data-testid="workspace-qa" style={{height:'100%', overflow:'auto', padding:`${tokens.spaceMd}px`, 'box-sizing':'border-box'}}><Show when={workspace()?.qa_dir} fallback={<p style={{color:tokens.fgMuted}}>No QA directory configured.</p>}>
+              <p data-testid="workspace-qa-path" style={{color:tokens.fgMuted,'overflow-wrap':'anywhere'}}>{workspace()?.qa_dir}</p>
             </Show>
             <Show when={props.frame.qa_document_status?.state === 'error'}><p>QA records are saved, but the Markdown file could not be updated: {props.frame.qa_document_status?.error}</p></Show>
-            <Show when={props.frame.qa_document_status?.state === 'saved'}><p style={{color:tokens.fgMuted}}>QA Markdown saved.</p></Show>
+            <Show when={props.frame.qa_document_status?.state === 'saved'}><p style={{color:tokens.fgMuted}}>QA thread files saved.</p></Show>
             <Markdown text={props.frame.qa_markdown ?? '# Workspace QA\n\nNo questions yet.'} /></div></Show>
         </div>
       </Show>

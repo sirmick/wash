@@ -1,168 +1,151 @@
 package agentd
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/sirmick/wash/internal/swarm"
 )
 
-// The visible Markdown is accompanied by a versioned, lossless checkpoint. A
-// project QA file can move between installations without the original store.
-const qaCheckpoint = "<!-- wash-qa-checkpoint-v1: "
-const maxQAFileBytes = 64 << 20
+// maxQAFileBytes bounds one thread file read back.
+const maxQAFileBytes = 16 << 20
 
-type qaArchive struct {
-	OriginalHash string            `json:"-"`
-	DocumentID   string            `json:"document_id"`
-	Threads      []swarm.QAThread  `json:"threads"`
-	Authors      map[string]string `json:"authors"`
-	Preamble     string            `json:"preamble,omitempty"`
-	Decisions    []swarm.Message   `json:"decisions,omitempty"`
-}
-
-func qaOwner(w *swarm.Workspace) string {
-	if w.QADocumentID != "" {
-		return w.QADocumentID
-	}
-	return w.ID
-}
-func archiveQA(w *swarm.Workspace) qaArchive {
-	a := qaArchive{DocumentID: qaOwner(w), Threads: w.QA, Preamble: w.QAPreamble, Authors: map[string]string{}}
-	for id, name := range w.QAAuthors {
-		a.Authors[id] = name
-	}
-	for _, m := range w.Members {
-		a.Authors[m.ID] = m.Name
-	}
-	for _, m := range w.Messages {
-		if m.Type == "decision_request" && m.State == "recorded" && m.Thread != "" {
-			a.Decisions = append(a.Decisions, m)
-		}
-	}
-	return a
-}
-func writeQACheckpoint(out io.Writer, w *swarm.Workspace) error {
-	b, err := json.Marshal(archiveQA(w))
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(out, "\n%s%s -->\n", qaCheckpoint, base64.StdEncoding.EncodeToString(b))
-	return err
-}
-func readQAArchive(path string) (*qaArchive, error) {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
+// readQADir reads every Wash thread file in dir, in thread-id order. Other
+// Markdown there is left alone; a Wash file that is damaged stops the resume
+// with its name, rather than resuming without it.
+func readQADir(dir string) ([]swarm.QAFile, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("QA document must be a regular file, not a symlink")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !os.SameFile(info, opened) {
-		return nil, errors.New("QA document changed while opening")
-	}
-	b, err := io.ReadAll(io.LimitReader(f, maxQAFileBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) > maxQAFileBytes {
-		return nil, errors.New("QA document exceeds 64 MiB restore limit")
-	}
-	if len(b) == 0 {
-		return nil, nil
-	}
-	if i := bytes.LastIndex(b, []byte("\n"+qaCheckpoint)); i >= 0 {
-		payload := strings.TrimSpace(string(b[i+1+len(qaCheckpoint):]))
-		if !strings.HasSuffix(payload, " -->") {
-			return nil, errors.New("incomplete QA checkpoint; original file preserved")
+	var files []swarm.QAFile
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
 		}
-		encoded, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(payload, " -->"))
+		b, err := readQAFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			return nil, fmt.Errorf("invalid QA checkpoint: %w", err)
-		}
-		var a qaArchive
-		if err := json.Unmarshal(encoded, &a); err != nil {
 			return nil, err
 		}
-		if a.DocumentID == "" || !bytes.HasPrefix(b, []byte(qaFileMarker(a.DocumentID)+"\n")) {
-			return nil, errors.New("QA checkpoint identity mismatch")
+		if !swarm.IsQAFile(b) {
+			continue
 		}
-		if len(a.Threads) > 500 {
-			return nil, errors.New("QA checkpoint exceeds thread limit")
+		f, err := swarm.DecodeQAFile(b)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", e.Name(), err)
 		}
-		seen := map[string]bool{}
-		for _, q := range a.Threads {
-			if !swarm.ValidProfileName(q.ID) || seen[q.ID] || q.Revision < 1 || len(q.Events) > 1000 {
-				return nil, errors.New("invalid QA checkpoint thread")
-			}
-			seen[q.ID] = true
+		if f.Thread.ID+".md" != e.Name() {
+			return nil, fmt.Errorf("%s holds thread %s", e.Name(), f.Thread.ID)
 		}
-		a.OriginalHash = fmt.Sprintf("%x", sha256.Sum256(b))
-		return &a, nil
+		files = append(files, *f)
 	}
-	if bytes.Contains(b, []byte("<!-- wash-qa-checkpoint")) {
-		return nil, errors.New("unsupported or damaged QA checkpoint; original file preserved")
+	if len(files) > 500 {
+		return nil, errors.New("QA directory holds more than 500 threads")
 	}
-	// Ordinary Markdown is preserved verbatim as the preamble.
-	return &qaArchive{OriginalHash: fmt.Sprintf("%x", sha256.Sum256(b)), Preamble: string(b), Authors: map[string]string{}}, nil
+	sort.Slice(files, func(i, j int) bool { return files[i].Thread.ID < files[j].Thread.ID })
+	return files, nil
 }
-func restoreQA(w *swarm.Workspace, a *qaArchive) error {
-	if len(w.QA) > 0 || w.QAPreamble != "" {
-		return errors.New("workspace already has QA history; resume the file in a new workspace")
+
+// restoreQA resumes an earlier workspace's threads. Open threads come back
+// whole and return to the new orchestrator until it assigns its team.
+// Resolved threads come back as headers only (their files keep the events)
+// and are marked resumed, since their evidence is about the code as it was.
+// Pending owner decisions are asked again.
+func restoreQA(w *swarm.Workspace, files []swarm.QAFile) error {
+	if len(w.QA) > 0 {
+		return errors.New("workspace already has QA threads; resume the directory in a new workspace")
 	}
-	w.QA, w.QAPreamble, w.QAAuthors = a.Threads, a.Preamble, a.Authors
-	if a.DocumentID != "" {
-		w.QADocumentID = a.DocumentID
+	if w.QAAuthors == nil {
+		w.QAAuthors = map[string]string{}
 	}
-	// Previous sessions are historical identities, never launch instructions.
-	// The new orchestrator owns unfinished questions until it assigns its team.
-	for i := range w.QA {
-		q := &w.QA[i]
-		// A resolved thread keeps its history but not its old assignee,
-		// who is not in this workspace; reopening it comes back here too.
-		// Its resolution is about the code as it was, so it says so.
+	for _, f := range files {
+		for id, name := range f.Authors {
+			w.QAAuthors[id] = name
+		}
+	}
+	lead := swarm.GetMember(w, w.Lead)
+	for _, f := range files {
+		q := f.Thread
 		if q.State == "resolved" {
-			q.Assignee = w.Lead
-			q.Resumed = true
+			q.Assignee, q.Resumed, q.Archived, q.Events = w.Lead, true, true, nil
+			w.QA = append(w.QA, q)
+			continue
 		}
-		if q.State != "resolved" {
-			rev := q.Revision
-			priorState := q.State
-			_, err := swarm.UpdateQA(w, swarm.GetMember(w, w.Lead), swarm.QAUpdate{ID: q.ID, Action: "assign", Expected: &rev, Assignee: w.Lead, Body: "Resumed from QA document; orchestrator will assign the current team."})
-			if err != nil {
-				return err
-			}
-			if priorState == "blocked" {
-				q.State = "blocked"
-			}
+		if q.Events == nil {
+			q.Events = []swarm.QAEvent{}
+		}
+		w.QA = append(w.QA, q)
+		rev, prior := q.Revision, q.State
+		if _, err := swarm.UpdateQA(w, lead, swarm.QAUpdate{ID: q.ID, Action: "assign", Expected: &rev, Assignee: w.Lead, Body: "Resumed from the QA directory; the orchestrator assigns the current team."}); err != nil {
+			return err
+		}
+		if prior == "blocked" {
+			swarm.QA(w, q.ID).State = "blocked"
 		}
 	}
-	for _, msg := range a.Decisions {
-		if swarm.QA(w, msg.Thread) == nil {
-			return errors.New("QA checkpoint decision references missing thread")
+	for _, f := range files {
+		for _, msg := range f.Decisions {
+			msg.Swarm, msg.Sender, msg.Recipient, msg.State = w.ID, w.Lead, "human", "recorded"
+			w.Messages = append(w.Messages, msg)
+			swarm.QA(w, msg.Thread).State = "awaiting-owner"
 		}
-		msg.Swarm, msg.Sender, msg.Recipient, msg.State = w.ID, w.Lead, "human", "recorded"
-		w.Messages = append(w.Messages, msg)
-		swarm.QA(w, msg.Thread).State = "awaiting-owner"
+	}
+	return nil
+}
+
+// loadQAEvents reads a header-only thread's events back from its file.
+func loadQAEvents(dir, id string) ([]swarm.QAEvent, error) {
+	if dir == "" {
+		return nil, fmt.Errorf("QA thread %s has its events in a file, and the workspace has no QA directory", id)
+	}
+	b, err := readQAFile(filepath.Join(dir, id+".md"))
+	if err != nil {
+		return nil, err
+	}
+	f, err := swarm.DecodeQAFile(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s.md: %w", id, err)
+	}
+	if f.Thread.ID != id {
+		return nil, fmt.Errorf("%s.md holds thread %s", id, f.Thread.ID)
+	}
+	if f.Thread.Events == nil {
+		return []swarm.QAEvent{}, nil
+	}
+	return f.Thread.Events, nil
+}
+
+// unarchiveQA loads the events of the header-only threads ids names, so they
+// can change again (a reopen appends to the history it had).
+func (ws *workspaceService) unarchiveQA(session string, ids []string) error {
+	w := ws.store.View(session)
+	if w == nil {
+		return nil
+	}
+	for _, id := range ids {
+		q := swarm.QA(w, id)
+		if q == nil || !q.Archived {
+			continue
+		}
+		events, err := loadQAEvents(w.QADir, id)
+		if err != nil {
+			return err
+		}
+		if err := ws.store.Mutate(session, false, func(w *swarm.Workspace, _ *swarm.Member) error {
+			if q := swarm.QA(w, id); q != nil && q.Archived {
+				q.Events, q.Archived = events, false
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

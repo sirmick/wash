@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -58,12 +57,12 @@ type bulkConfig struct {
 		Name string `json:"name"`
 		Root string `json:"project_root"`
 	} `json:"workspace,omitempty"`
-	Members    map[string]*memberSpec `json:"members,omitempty"`
-	Plan       *planPatch             `json:"plan,omitempty"`
-	QADocument json.RawMessage        `json:"qa_document,omitempty"`
-	Document   json.RawMessage        `json:"document,omitempty"`
-	Request    string                 `json:"request_id,omitempty"`
-	Preview    bool                   `json:"preview,omitempty"`
+	Members  map[string]*memberSpec `json:"members,omitempty"`
+	Plan     *planPatch             `json:"plan,omitempty"`
+	QADir    json.RawMessage        `json:"qa_dir,omitempty"`
+	Document json.RawMessage        `json:"document,omitempty"`
+	Request  string                 `json:"request_id,omitempty"`
+	Preview  bool                   `json:"preview,omitempty"`
 }
 
 func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw json.RawMessage) (any, error) {
@@ -73,7 +72,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		return nil, err
 	}
 	for key, value := range fields {
-		if string(value) == "null" && key != "document" && key != "qa_document" {
+		if string(value) == "null" && key != "document" && key != "qa_dir" {
 			return nil, fmt.Errorf("%s cannot be null", key)
 		}
 	}
@@ -143,41 +142,47 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 		doc.Path = path
 	}
-	var qaDoc *swarm.Document
-	var qaRestore *qaArchive
+	// qa_dir: a string sets the QA directory, null detaches it. The
+	// directory holds one file per thread; one that does not exist yet is
+	// created when the configuration commits.
+	qaDir, qaDetach := "", false
+	var qaRestore []swarm.QAFile
 	qaLocked := false
 	defer func() {
 		if qaLocked {
 			ws.qaMu.Unlock()
 		}
 	}()
-	if len(p.QADocument) > 0 && string(p.QADocument) != "null" {
-		if err := decodeWorkspace(p.QADocument, &qaDoc); err != nil {
-			return nil, err
-		}
-		if qaDoc == nil || !swarm.ValidText(qaDoc.Path, 4096) || len(qaDoc.Title) > 500 {
-			return nil, errors.New("invalid QA document")
-		}
-		path := qaDoc.Path
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(root, path)
-		}
-		path, err := confine("Write", path)
-		if err != nil {
-			return nil, err
-		}
-		parent, err := filepath.EvalSymlinks(filepath.Dir(path))
-		if err != nil {
-			return nil, err
-		}
-		qaDoc.Path = filepath.Join(parent, filepath.Base(path))
-		if !strings.EqualFold(filepath.Ext(qaDoc.Path), ".md") {
-			return nil, errors.New("QA document must be a .md file")
+	if len(p.QADir) > 0 {
+		if string(p.QADir) == "null" {
+			qaDetach = true
+		} else {
+			if err := json.Unmarshal(p.QADir, &qaDir); err != nil || !swarm.ValidText(qaDir, 4096) {
+				return nil, errors.New("qa_dir must be a directory path")
+			}
+			if !filepath.IsAbs(qaDir) {
+				qaDir = filepath.Join(root, qaDir)
+			}
+			path, err := confine("Write", qaDir)
+			if err != nil {
+				return nil, err
+			}
+			qaDir = filepath.Clean(path)
+			if info, err := os.Lstat(qaDir); err == nil {
+				if !info.IsDir() {
+					return nil, errors.New("qa_dir must be a directory")
+				}
+				if qaDir, err = filepath.EvalSymlinks(qaDir); err != nil {
+					return nil, err
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
 		}
 	}
 	keys := make([]string, 0, len(p.Members))
 	for key, m := range p.Members {
-		if !swarm.ValidProfileName(key) || slices.Contains([]string{"conversation", "plan", "qa"}, key) || m == nil {
+		if !swarm.ValidProfileName(key) || slices.Contains([]string{"conversation", "plan", "qa", swarm.OrchestratorKey}, key) || m == nil {
 			return nil, errors.New("invalid member key; use member_control to end members")
 		}
 		// Each check names the member and the field: a bare "invalid member
@@ -242,12 +247,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	}
 	// Never hold the projection lock while path approval can wait on a human.
 	// Read/claim under the same lock as export to avoid importing a stale write.
-	if qaDoc != nil {
+	if qaDir != "" {
 		ws.qaMu.Lock()
 		qaLocked = true
 		var err error
-		qaRestore, err = readQAArchive(qaDoc.Path)
-		if err != nil {
+		if qaRestore, err = readQADir(qaDir); err != nil {
 			return nil, err
 		}
 	}
@@ -296,40 +300,24 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 		allWorkspaces := s.Snapshot().Workspaces
 		err := s.Mutate(h.sessionID, true, func(w *swarm.Workspace, creator *swarm.Member) error {
-			if len(p.QADocument) > 0 {
-				if qaDoc != nil {
-					for _, other := range allWorkspaces {
-						if other.ID != w.ID && other.State != "ended" && other.QADocument != nil && (other.QADocument.Path == qaDoc.Path || qaRestore != nil && qaRestore.DocumentID != "" && qaOwner(&other) == qaRestore.DocumentID) {
-							return fmt.Errorf("QA document is used by workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", other.ID, other.Name, other.ID)
-						}
+			if qaDetach {
+				w.QADir = ""
+			}
+			if qaDir != "" && w.QADir != qaDir {
+				for _, other := range allWorkspaces {
+					if other.ID != w.ID && other.State != "ended" && other.QADir == qaDir {
+						return fmt.Errorf("QA directory is used by workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", other.ID, other.Name, other.ID)
 					}
 				}
-				if qaDoc != nil && (w.QADocument == nil || w.QADocument.Path != qaDoc.Path) {
-					source := qaRestore
-					// The store may contain newer history than a failed final export.
-					for _, other := range allWorkspaces {
-						if other.ID != w.ID && other.QADocument != nil && other.QADocument.Path == qaDoc.Path && other.State == "ended" {
-							restored := archiveQA(&other)
-							source = &restored
-							break
-						}
-					}
-					if source != nil && source.DocumentID != qaOwner(w) {
-						if err := restoreQA(w, source); err != nil {
-							return err
-						}
-					}
-					if qaRestore != nil {
-						w.QAOriginalHash = qaRestore.OriginalHash
+				if len(qaRestore) > 0 {
+					if err := restoreQA(w, qaRestore); err != nil {
+						return err
 					}
 				}
-				w.QADocument = qaDoc
+				w.QADir = qaDir
 			}
 			if len(p.Document) > 0 {
 				w.Document = doc
-			}
-			if w.QADocument != nil && w.Document != nil && w.QADocument.Path == w.Document.Path {
-				return errors.New("QA output must differ from the plan document")
 			}
 			if p.Plan != nil {
 				ids := make([]string, 0, len(p.Plan.Items))
@@ -467,7 +455,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if err != nil {
 			return nil, err
 		}
-		if err := s.ClaimQADocument(h.sessionID); err != nil {
+		if err := s.ClaimQADir(h.sessionID); err != nil {
 			return nil, err
 		}
 		w := s.View(h.sessionID)
@@ -490,7 +478,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				}
 			}
 		}
-		return map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "packages": w.Packages, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
+		return map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "packages": w.Packages, "items": w.Items, "document": w.Document, "qa_dir": w.QADir, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
 	})
 	if qaLocked {
 		ws.qaMu.Unlock()
@@ -498,6 +486,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	}
 	if err != nil || p.Preview {
 		return result, err
+	}
+	if qaDir != "" {
+		if err := os.MkdirAll(qaDir, 0o755); err != nil {
+			return nil, fmt.Errorf("configured, but the QA directory could not be created: %w", err)
+		}
 	}
 	// The durable configuration is complete. Launch outcomes are independent and
 	// retries never launch available/starting members again.

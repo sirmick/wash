@@ -848,6 +848,11 @@ export interface QAThread {
    * back from its QA file: its evidence is about that workspace's code.
    */
   resumed?: boolean;
+  /**
+   * Archived marks a resolved thread read back as a header only: its
+   * events stay in its file until something needs them.
+   */
+  archived?: boolean;
   events: QAEvent[] | null;
 }
 
@@ -1299,11 +1304,16 @@ export interface UsageRow {
 }
 
 export interface Workspace {
-  qa_original_hash?: string;
-  qa_document_id?: string;
-  qa_preamble?: string;
+  /**
+   * QAAuthors names the authors of threads read back from an earlier
+   * workspace's files, who are not members of this one.
+   */
   qa_authors?: Record<string, string>;
-  qa_document?: Document;
+  /**
+   * QADir is the directory holding one file per QA thread
+   * (<thread>.md), written by Wash as threads change.
+   */
+  qa_dir?: string;
   qa: QAThread[] | null;
   /**
    * Approvals apply to every member of this workspace, whatever its cwd.

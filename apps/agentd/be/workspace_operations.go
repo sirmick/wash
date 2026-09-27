@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/sirmick/wash/internal/agentproto"
@@ -115,7 +116,7 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 		ws.syncQADocuments()
 	}
 	w := ws.store.View(h.sessionID)
-	if w != nil && w.QADocument != nil && result != nil {
+	if w != nil && w.QADir != "" && result != nil {
 		// Report file failures separately from a successfully committed QA change.
 		status := ws.qaDocumentStatus(w)
 		if object, ok := result.(map[string]any); ok {
@@ -250,6 +251,17 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		if len(p.QA) > 100 {
 			return nil, errors.New("maximum 100 QA updates")
 		}
+		// A reopen appends to the thread's history, so a thread read back
+		// as a header only gets its events from its file first.
+		reopen := []string{}
+		for _, u := range p.QA {
+			if u.Action == "reopen" {
+				reopen = append(reopen, u.ID)
+			}
+		}
+		if err := ws.unarchiveQA(h.sessionID, reopen); err != nil {
+			return nil, err
+		}
 		return ws.store.Transaction(h.sessionID, c.Name, p.Request, c.Arguments, false, func(s *swarm.Store) (any, error) {
 			// A reporting call cannot create an assignment as a side effect.
 			for _, u := range p.Results {
@@ -279,6 +291,9 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				for _, u := range p.QA {
 					q, err := swarm.UpdateQA(w, m, u)
 					if err != nil {
+						return err
+					}
+					if err := notifyQAUpdate(w, m, q, u); err != nil {
 						return err
 					}
 					summary := *q
@@ -384,6 +399,9 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				if !slices.Contains([]string{"instruction", "question", "answer", "progress"}, msg.Type) {
 					return nil, errors.New("invalid message type")
 				}
+				if (msg.Thread != "" || msg.QA != nil) && len(msg.Body) > swarm.ReportLimit {
+					return nil, fmt.Errorf("a message on a QA thread is at most %d bytes (got %d): put the detail in a file and give its path", swarm.ReportLimit, len(msg.Body))
+				}
 				err := s.Mutate(h.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
 					target := swarm.GetMember(w, msg.Recipient)
 					if target == nil {
@@ -420,6 +438,13 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 					} else if msg.Thread != "" {
 						if err := swarm.LinkQA(w, msg.Thread, v); err != nil {
 							return err
+						}
+						// Whoever waits on the thread hears an answer, not
+						// only the message's recipient.
+						if msg.Type == "answer" {
+							if err := swarm.NotifyQA(w, swarm.QA(w, msg.Thread), m.ID, v.Body, target.ID); err != nil {
+								return err
+							}
 						}
 					}
 					out = append(out, *v)
@@ -469,4 +494,36 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 	default:
 		return ws.callCore(h, c)
 	}
+}
+
+// notifyQAUpdate tells the people on a thread about a change they wait for:
+// a reply or a resolution reaches its creator and assignee, and a new
+// assignee learns it is the next responder.
+func notifyQAUpdate(w *swarm.Workspace, m *swarm.Member, q *swarm.QAThread, u swarm.QAUpdate) error {
+	notice := func(text string) string {
+		if len(text) > swarm.ReportLimit {
+			text = strings.ToValidUTF8(text[:swarm.ReportLimit-len("…")], "") + "…"
+		}
+		return text
+	}
+	switch u.Action {
+	case "reply":
+		return swarm.NotifyQA(w, q, m.ID, notice("QA "+q.ID+": "+u.Body))
+	case "resolve":
+		return swarm.NotifyQA(w, q, m.ID, notice("QA "+q.ID+" resolved: "+u.Evidence))
+	case "assign":
+		if q.Assignee == m.ID {
+			return nil
+		}
+		text := "You are the next responder on QA thread " + q.ID + " (" + q.Title + "). Read it with workspace_get view=qa thread_id."
+		if u.Body != "" {
+			text += " " + u.Body
+		}
+		msg, err := swarm.AddMessage(w, m.ID, q.Assignee, "question", notice(text), "", "", "")
+		if err == nil {
+			msg.Thread = q.ID
+		}
+		return err
+	}
+	return nil
 }

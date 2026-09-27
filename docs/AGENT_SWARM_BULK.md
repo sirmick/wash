@@ -82,7 +82,7 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
     "K5-red":{"name":"K5 red","model":"small","effort":"high","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
   "plan":{"items":{"K5":{"text":"Accept K5","state":"active"}}},
   "document":{"path":"/data/project/docs/BUILD-PLAN.md","title":"Build plan"},
-  "qa_document":{"path":"/data/project/docs/WORKSPACE-QA.md","title":"Project QA"}
+  "qa_dir":".wash/qa"
 }
 ```
 
@@ -118,7 +118,7 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
   only after reconciliation; this is not an exactly-once model-execution guarantee.
 
 Stable member keys/IDs are accepted by message recipients, assignments, QA assignees
-and member_control. Keys `conversation`, `plan`, `qa` are reserved. Workspace configuration
+and member_control. Keys `conversation`, `plan`, `qa` and `orchestrator` are reserved; the orchestrator is addressed as `orchestrator`. Workspace configuration
 is orchestrator-only; CanSpawn grants assignment authority, not config
 ownership. All members can communicate. Process control retains existing authority checks.
 
@@ -141,30 +141,38 @@ already resolved (it read the task early with inbox_read) is dropped, not re-del
 the turn; actionable messages wake the member in a later turn. Never poll. Acknowledgment
 is not completion. question/answer/instruction wake; progress records without waking.
 
-## QA: one writer, concurrent append
+## QA: one file per thread
 
-Wash owns durable QA threads and generates the live Questions Markdown. The sidebar
+Wash owns durable QA threads and writes each to its own Markdown file. The sidebar
 shows open threads, blocking state and next responder; selecting one opens the main-panel
-Questions tab at its heading. Configure `qa_document:{path,title}` at setup. Wash creates
-the file and atomically replaces it after each QA update or human answer; the full file
-includes all events, IDs and timestamps. The bounded tab preview shows the configured
-path and file-write errors. No agent rewrites that generated file or commits per reply.
+Questions tab at its heading. Configure `qa_dir` at setup (`".wash/qa"`, relative to the
+project root; created if missing). Each thread is `<qa_dir>/<thread>.md`: a marker line
+naming the thread, the thread as Markdown (every event with its ID and time), and a
+checkpoint (the thread as JSON). A file is written only when its thread changes, so a
+resolved thread stops changing and a commit's diff shows only the threads it touched.
+Paths under the home directory and the project root are written as `~` and `.`. No agent
+edits those files or commits per reply.
 
-Relative output paths resolve from the project root; parent directories must exist.
-Specify a .md filename on creation. An existing file is loaded: Wash files contain a
-versioned checkpoint that restores threads, revisions, attribution and pending owner
-questions even without the old backend store. Ordinary Markdown is preserved verbatim
-in the live document; it is not guessed into structured threads. A corrupt/unsupported
-checkpoint fails without changing the file. Restore reads are limited to 64 MiB.
-Unfinished questions are assigned to the new orchestrator, who assigns the current team;
-historical agent identities do not relaunch sessions. A retained backend record takes
-precedence over its stale export. Symlinks, the plan path, and another active workspace's
-QA file/document identity are rejected. Completed runs transfer projection ownership.
-`qa_document:null` detaches output without deleting history or files. Configuration preview
-never writes the file. The backend remains authoritative: a projection failure does not
-undo a committed QA update. Read `qa_document_status` (saved/pending/error) in tool results
-or the Questions tab; the service retries failures and reconstructs output after restart.
-Changing the configured path leaves the old file intact. Output continues without an open tab.
+A thread body, reply, evidence or thread message is at most 2000 bytes: the thread holds
+the pointer, a file under version control holds the detail. (DOC1's single QA file reached
+2 MB because whole plans and review reports went into thread bodies.)
+
+Set on a new workspace, `qa_dir` resumes the threads found there, without the old backend
+store: open threads come back whole and are assigned to the new orchestrator, who assigns
+the current team; resolved threads come back as headers only (title, state, decision
+references, evidence), marked `resumed` because their evidence is about the earlier code,
+and their events stay in their files until `view=qa thread_id` reads them or a reopen loads
+them. Pending owner decisions are asked again. Other Markdown in the directory is ignored and
+never overwritten; a damaged Wash file stops the configuration, naming the file, and nothing
+changes. Symlinks are not written through. Another active workspace's directory is refused,
+naming it; an ended workspace's directory is taken over. `tools/qa-split` converts an API 3
+single-file QA document into thread files, once.
+
+`qa_dir:null` detaches output without deleting history or files. Configuration preview
+never writes. The backend remains authoritative: a failed write does not undo a committed
+QA update. Read `qa_document_status` (saved/pending/error, with the directory as its path)
+in tool results or the Questions tab; the service retries failures, also after teardown,
+and rewrites a file removed behind its back.
 
 Open and deliver atomically:
 
@@ -189,10 +197,13 @@ assignee, orchestrator or the reviewer whose package is the thread's may transit
 resolution is stricter: the orchestrator, or the reviewer whose package is the thread's.
 A reviewer assigned to review every package is not that reviewer for any of them.
 There is no delete/edit-history operation. A resolved thread must be reopened before replies.
-A thread resumed from a QA file keeps its history and is the new orchestrator's. A resolved
-one is marked `resumed` (and the file says "Resolved in an earlier workspace"): its evidence
-is about the earlier code, so reopen any the current code may contradict.
-Thread transitions do not themselves wake an assignee: send a linked actionable message.
+A thread resumed from a QA directory is the new orchestrator's. A resolved one is marked
+`resumed` (its view says "Resolved in an earlier workspace"): its evidence is about the earlier
+code, so reopen any the current code may contradict.
+A reply or a resolution through `qa_updates`, and an `answer` sent on a thread, reach the
+thread's creator and assignee (other than the author and the message's recipient) as an
+`answer`, which wakes them: a member blocked on a thread wakes when it is answered, whoever
+the answer was addressed to. An `assign` sends the new assignee a question naming the thread.
 
 Link `decision_request` to thread_id. The human's GUI answer is recorded with human
 authority in the same transaction as the response; an agent cannot fabricate that event.
@@ -201,13 +212,12 @@ formal project decisions/specifications, links them through decision_refs and ro
 implementation back. Package reviewers verify evidence before closure. Project acceptance
 policy requires no unresolved blocking QA; Wash does not infer whether a git merge satisfies it.
 
-`workspace_get({"view":"qa","package":"K5"})` returns summaries/generated Markdown;
-`thread_id` selects events, paginated with after/limit. General state and reporting receipts
-omit QA event bodies. The rendered view shows recent events and is bounded; use paginated
-readback for complete history. Limits: 500 threads/workspace, 1,000 events/thread, 32 KiB
-body/evidence, 100 items/batch; idempotency storage is capped at 10,000 retained receipts.
-Commit the automatically maintained Markdown with ordinary project tools when appropriate.
-There is no automatic Git commit or live two-way synchronization of manual edits. Reopening imports the checkpoint; agents must not edit generated history.
+`workspace_get({"view":"qa"})` returns the index: one row per thread (id, package, title,
+state, assignee, revision); `package` filters it. `thread_id` selects a thread's events,
+paginated with after/limit. General state and reporting receipts omit QA event bodies.
+Limits: 500 threads/workspace, 1,000 events/thread, 2000 bytes per body/evidence, 100
+items/batch; idempotency storage is capped at 10,000 retained receipts. Commit the thread
+files with ordinary project tools at acceptance; there is no automatic Git commit.
 
 ## Persistence and approval boundary
 

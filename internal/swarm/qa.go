@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 )
@@ -29,8 +30,11 @@ type QAThread struct {
 	Evidence     string   `json:"evidence,omitempty"`
 	// Resumed marks a thread resolved in an earlier workspace and read
 	// back from its QA file: its evidence is about that workspace's code.
-	Resumed bool      `json:"resumed,omitempty"`
-	Events  []QAEvent `json:"events"`
+	Resumed bool `json:"resumed,omitempty"`
+	// Archived marks a resolved thread read back as a header only: its
+	// events stay in its file until something needs them.
+	Archived bool      `json:"archived,omitempty"`
+	Events   []QAEvent `json:"events"`
 }
 type QAUpdate struct {
 	ID           string   `json:"id"`
@@ -70,11 +74,25 @@ func qaEvent(q *QAThread, author, kind, body, message string) error {
 	return nil
 }
 
+// qaDetail is what a QA body limit says: a thread is re-read by everyone on
+// it, and DOC1's QA file reached 2 MB because members pasted whole plans and
+// review reports into threads. The detail belongs in a file under version
+// control; the thread holds the pointer.
+func qaDetail(what string, n int) error {
+	return fmt.Errorf("QA %s is at most %d bytes (got %d): put the detail in a file and give its path here", what, ReportLimit, n)
+}
+
 // UpdateQA runs inside the caller's store transaction. Replies append without a
 // revision guard; state transitions require a guard and retain attributed history.
 func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
-	if !ValidProfileName(u.ID) || len(u.Body) > 32768 || len(u.Evidence) > 32768 {
-		return nil, errors.New("invalid QA id/body/evidence")
+	if !ValidProfileName(u.ID) {
+		return nil, errors.New("QA thread id must be 1–80 letters, digits, - or _")
+	}
+	if len(u.Body) > ReportLimit {
+		return nil, qaDetail("body", len(u.Body))
+	}
+	if len(u.Evidence) > ReportLimit {
+		return nil, qaDetail("evidence", len(u.Evidence))
 	}
 	if len(u.DecisionRefs) > 32 {
 		return nil, errors.New("too many decision references")
@@ -89,8 +107,15 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 		if q != nil {
 			return nil, errors.New("QA thread already exists; reply using its ID")
 		}
-		if len(w.QA) >= 500 || !ValidProfileName(u.Package) || !ValidText(u.Title, 500) || !ValidText(u.Body, 32768) {
-			return nil, errors.New("invalid QA thread or thread limit reached")
+		switch {
+		case len(w.QA) >= 500:
+			return nil, errors.New("QA thread limit (500) reached")
+		case !ValidProfileName(u.Package):
+			return nil, errors.New("opening a QA thread needs package: letters, digits, - or _")
+		case !ValidText(u.Title, 500):
+			return nil, errors.New("opening a QA thread needs a title of at most 500 bytes")
+		case !ValidText(u.Body, ReportLimit):
+			return nil, errors.New("opening a QA thread needs a body: the question")
 		}
 		assignee := GetMember(w, u.Assignee)
 		if assignee == nil || assignee.State == "ended" {
@@ -118,7 +143,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 			if q.State == "resolved" {
 				return nil, errors.New("reopen the QA thread before replying")
 			}
-			if !ValidText(u.Body, 32768) {
+			if strings.TrimSpace(u.Body) == "" {
 				return nil, errors.New("QA reply requires body")
 			}
 			if u.Package != "" || u.Title != "" || u.Assignee != "" || u.Blocking != nil || u.DecisionRefs != nil || u.Evidence != "" {
@@ -147,15 +172,18 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 			if m.ID != w.Lead && !(m.Role == "reviewer" && m.Package == q.Package) {
 				return nil, fmt.Errorf("QA thread %s is package %s's: only the orchestrator or the reviewer of package %s may resolve it; reply with your verdict instead", q.ID, q.Package, q.Package)
 			}
-			if !ValidText(u.Evidence, 32768) {
+			if strings.TrimSpace(u.Evidence) == "" {
 				return nil, errors.New("QA resolution requires evidence")
 			}
 			q.State = "resolved"
 			q.Blocking = false
 			q.Evidence = u.Evidence
 		case "reopen":
-			if !ValidText(u.Body, 32768) {
+			if strings.TrimSpace(u.Body) == "" {
 				return nil, errors.New("reopen requires a reason")
+			}
+			if q.Archived {
+				return nil, fmt.Errorf("QA thread %s was read back as a header only; Wash loads its events before a reopen", q.ID)
 			}
 			// A reopened question is the orchestrator's until it assigns
 			// it again: left with its assignee, a thread resumed from an
@@ -237,14 +265,63 @@ func WithdrawDecision(w *Workspace, msg *Message) {
 	}
 }
 
+// NotifyQA tells a thread's creator and assignee what author just added to
+// it, as an answer (which wakes an idle member). Whoever waits on a thread is
+// one of those two; a ruling that reached a blocked member only as a thread
+// event, or a copy that does not wake, left it asleep. skip names members
+// who already receive the text another way.
+func NotifyQA(w *Workspace, q *QAThread, author, body string, skip ...string) error {
+	told := append([]string{author, "human"}, skip...)
+	for _, id := range []string{q.Creator, q.Assignee} {
+		m := GetMember(w, id)
+		if m == nil || m.State == "ended" || slices.Contains(told, m.ID) {
+			continue
+		}
+		told = append(told, m.ID)
+		msg, err := AddMessage(w, author, m.ID, "answer", body, "", "", "")
+		if err != nil {
+			return err
+		}
+		msg.Thread = q.ID
+	}
+	return nil
+}
+
+// QAMarkdown is the bounded QA view the window shows: every thread's header,
+// and the latest events of the threads whose events are loaded.
 func QAMarkdown(w *Workspace) string {
 	var b strings.Builder
-	_ = writeQAMarkdown(&b, w, true)
+	name := qaNames(w)
+	b.WriteString("# Workspace QA\n\nQuestions, decisions and review evidence.\n")
+	for _, q := range w.QA {
+		if b.Len() > 200*1024 {
+			b.WriteString("\nView truncated; read complete thread events with workspace_get view=qa and thread_id.\n")
+			break
+		}
+		_ = WriteQAThread(&b, q, name, true)
+	}
+	if len(w.QA) == 0 {
+		b.WriteString("\nNo QA threads yet.\n")
+	}
 	return b.String()
 }
 
-// WriteQAMarkdown writes the complete history; UI readback alone is bounded.
-func WriteQAMarkdown(out io.Writer, w *Workspace) error { return writeQAMarkdown(out, w, false) }
+// qaNames names a thread author: a member, the owner, or an author from an
+// earlier workspace's files.
+func qaNames(w *Workspace) func(string) string {
+	return func(id string) string {
+		if id == "human" {
+			return "Owner"
+		}
+		if m := GetMember(w, id); m != nil && m.Name != "" {
+			return m.Name
+		}
+		if name := w.QAAuthors[id]; name != "" {
+			return name
+		}
+		return id
+	}
+}
 
 type qaWriter struct {
 	out  io.Writer
@@ -262,95 +339,69 @@ func (b *qaWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 func (b *qaWriter) WriteString(s string) { _, _ = io.WriteString(b, s) }
-func writeQAMarkdown(out io.Writer, w *Workspace, bounded bool) error {
-	b := &qaWriter{out: out}
 
-	name := func(id string) string {
-		if id == "human" {
-			return "Owner"
-		}
-		if m := GetMember(w, id); m != nil {
-			return m.Name
-		}
-		if name := w.QAAuthors[id]; name != "" {
-			return name
-		}
-		return id
-	}
+// WriteQAThread writes one thread as Markdown: its heading, status and every
+// event, quoted so collaborator text cannot forge an attributed heading.
+// bounded keeps the last 30 events and leaves out event IDs and times.
+func WriteQAThread(out io.Writer, q QAThread, name func(string) string, bounded bool) error {
+	b := &qaWriter{out: out}
 	clean := func(s string) string {
 		return strings.NewReplacer("\n", " ", "\r", " ", "#", "", "<", "&lt;", ">", "&gt;").Replace(s)
 	}
-	title := "Workspace QA"
-	if w.QADocument != nil && w.QADocument.Title != "" {
-		title = w.QADocument.Title
+	fmt.Fprintf(b, "\n## %s · %s — %s\n\nStatus: **%s** · Assigned to: %s · Revision: %d\n", clean(q.Package), q.ID, clean(q.Title), q.State, clean(name(q.Assignee)), q.Revision)
+	if q.Resumed {
+		b.WriteString("\n*Resolved in an earlier workspace; reopen it if the code has changed since.*\n")
 	}
-	fmt.Fprintf(b, "# %s\n\nQuestions, decisions and review evidence.\n", clean(title))
-	if w.QAPreamble != "" {
-		text := w.QAPreamble
-		if bounded && len(text) > 100*1024 {
-			text = text[:100*1024] + "\n\nEarlier Markdown truncated; read the QA file for the complete document."
-		}
-		fmt.Fprintf(b, "\n%s\n", text)
+	if q.Blocking {
+		b.WriteString("\n**Blocks package work.**\n")
 	}
-	for _, q := range w.QA {
-		if bounded && b.size > 200*1024 {
-			b.WriteString("\nView truncated; read complete thread events with workspace_get view=qa and thread_id.\n")
-			break
-		}
-		fmt.Fprintf(b, "\n## %s · %s — %s\n\nStatus: **%s** · Assigned to: %s · Revision: %d\n", clean(q.Package), q.ID, clean(q.Title), q.State, clean(name(q.Assignee)), q.Revision)
-		if q.Resumed {
-			b.WriteString("\n*Resolved in an earlier workspace; reopen it if the code has changed since.*\n")
-		}
-		if q.Blocking {
-			b.WriteString("\n**Blocks package work.**\n")
-		}
-		if len(q.DecisionRefs) > 0 {
-			fmt.Fprintf(b, "\nDecision references: %s\n", strings.Join(q.DecisionRefs, ", "))
-		}
-		events := q.Events
-		if bounded && len(events) > 30 {
-			b.WriteString("\nEarlier events omitted; read the thread through MCP.\n")
-			events = events[len(events)-30:]
-		}
-		for _, e := range events {
-			if bounded && b.size > 200*1024 {
-				break
-			}
-			kind := map[string]string{"open": "Question", "reply": "Reply", "question": "Question", "answer": "Answer", "assign": "Assigned", "block": "Blocked", "resolve": "Resolved", "reopen": "Reopened", "decision_request": "Owner decision requested", "decision_response": "Owner decision", "progress": "Progress", "instruction": "Instruction"}[e.Kind]
-			if kind == "" {
-				kind = e.Kind
-			}
-			fmt.Fprintf(b, "\n### %s · %s\n\n", clean(name(e.Author)), kind)
-			if !bounded {
-				fmt.Fprintf(b, "Event: `%s` · %s\n\n", e.ID, time.UnixMilli(e.Created).UTC().Format(time.RFC3339))
-			}
-			// Quote each line so collaborator text cannot forge attributed headings.
-			for _, line := range strings.Split(e.Body, "\n") {
-				fmt.Fprintf(b, "> %s\n", line)
-			}
-		}
+	if len(q.DecisionRefs) > 0 {
+		fmt.Fprintf(b, "\nDecision references: %s\n", strings.Join(q.DecisionRefs, ", "))
 	}
-	if len(w.QA) == 0 {
-		b.WriteString("\nNo QA threads yet.\n")
+	if q.Evidence != "" && q.State == "resolved" {
+		fmt.Fprintf(b, "\nEvidence: %s\n", clean(q.Evidence))
+	}
+	if q.Archived {
+		b.WriteString("\nEvents are in the thread's file; read them with workspace_get view=qa and thread_id.\n")
+		return b.err
+	}
+	events := q.Events
+	if bounded && len(events) > 30 {
+		b.WriteString("\nEarlier events omitted; read the thread through MCP.\n")
+		events = events[len(events)-30:]
+	}
+	for _, e := range events {
+		kind := map[string]string{"open": "Question", "reply": "Reply", "question": "Question", "answer": "Answer", "assign": "Assigned", "block": "Blocked", "resolve": "Resolved", "reopen": "Reopened", "decision_request": "Owner decision requested", "decision_response": "Owner decision", "progress": "Progress", "instruction": "Instruction"}[e.Kind]
+		if kind == "" {
+			kind = e.Kind
+		}
+		fmt.Fprintf(b, "\n### %s · %s\n\n", clean(name(e.Author)), kind)
+		if !bounded {
+			fmt.Fprintf(b, "Event: `%s` · %s\n\n", e.ID, time.UnixMilli(e.Created).UTC().Format(time.RFC3339))
+		}
+		for _, line := range strings.Split(e.Body, "\n") {
+			fmt.Fprintf(b, "> %s\n", line)
+		}
 	}
 	return b.err
 }
 
-// ClaimQADocument transfers file projection ownership from completed runs. The
-// caller runs this inside configuration's staged transaction.
-func (s *Store) ClaimQADocument(session string) error {
+// ClaimQADir takes a QA directory over from ended workspaces, which otherwise
+// keep retrying their last exports into it. The caller runs this inside
+// configuration's staged transaction.
+func (s *Store) ClaimQADir(session string) error {
 	return s.change(func(st *State) error {
 		w, _ := find(st, session)
-		if w == nil || w.QADocument == nil {
+		if w == nil || w.QADir == "" {
 			return nil
 		}
 		for i := range st.Workspaces {
 			old := &st.Workspaces[i]
-			if old.ID != w.ID && old.QADocument != nil && (old.QADocument.Path == w.QADocument.Path || w.QADocumentID != "" && (old.QADocumentID == w.QADocumentID || old.ID == w.QADocumentID)) {
+			if old.ID != w.ID && old.QADir == w.QADir {
 				if old.State != "ended" {
-					return fmt.Errorf("QA document belongs to active workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", old.ID, old.Name, old.ID)
+					return fmt.Errorf("QA directory belongs to active workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", old.ID, old.Name, old.ID)
 				}
-				old.QADocument = nil
+				old.QADir = ""
 			}
 		}
 		return nil

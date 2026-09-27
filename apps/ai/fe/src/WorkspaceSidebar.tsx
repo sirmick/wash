@@ -57,7 +57,7 @@ export const WorkspaceSidebar: Component<{
           <div style={heading}>Needs you</div>
           <Show when={props.frame.qa_document_status?.state === 'error'}>
             <button data-wash-hit type="button" role="alert" data-testid="workspace-qa-save-error" onClick={() => props.onSelect('qa')} style={{color:tokens.accentRed, 'text-align':'left'}}>
-              QA Markdown could not be saved: {props.frame.qa_document_status?.error}
+              QA files could not be saved: {props.frame.qa_document_status?.error}
             </button>
           </Show>
           <For each={props.frame.approvals ?? []}>{ask => (

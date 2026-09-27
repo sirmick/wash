@@ -287,3 +287,55 @@ func TestCompletingSomeoneElsesAssignmentSaysWhose(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A reply on a thread reaches the member who opened it, awake: DOC1's
+// members blocked on a thread slept through rulings sent to someone else.
+func TestNotifyQAWakesCreatorAndAssigneeOnly(t *testing.T) {
+	s, lead, _ := qaStore(t)
+	if err := qaChange(s, "writer-session", QAUpdate{ID: "Q1", Action: "open", Package: "K5", Title: "Bound", Assignee: "reviewer", Body: "Which bound?"}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Mutate("lead", false, func(w *Workspace, m *Member) error {
+		return NotifyQA(w, QA(w, "Q1"), m.ID, "Use 64")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, msg := range s.View("lead").Messages {
+		if msg.Thread == "Q1" && msg.Type == "answer" {
+			got[msg.Recipient] = msg.State
+		}
+	}
+	if len(got) != 2 || got["writer"] != "queued" || got["reviewer"] != "queued" || got[lead] != "" {
+		t.Fatalf("notified %v", got)
+	}
+}
+
+func TestQAFileRoundTripsWithShortenedPaths(t *testing.T) {
+	s, _, _ := qaStore(t)
+	if err := qaChange(s, "writer-session", QAUpdate{ID: "Q2", Action: "open", Package: "K5", Title: "Path", Assignee: "reviewer", Body: "See /home/u/proj/a.go and /home/u/notes"}); err != nil {
+		t.Fatal(err)
+	}
+	w := s.View("lead")
+	b, err := EncodeQAFile(QAFileFor(w, "Q2"), "/home/u/proj", "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "/home/u") || !strings.Contains(string(b), "./a.go") || !strings.Contains(string(b), "~/notes") {
+		t.Fatal(string(b))
+	}
+	f, err := DecodeQAFile(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Thread.ID != "Q2" || f.Thread.Events[0].Body != "See ./a.go and ~/notes" || f.Authors["writer"] == "" {
+		t.Fatalf("%+v", f)
+	}
+	if _, err := DecodeQAFile(append([]byte(nil), b[:len(b)-10]...)); err == nil {
+		t.Fatal("a truncated checkpoint decoded")
+	}
+	if _, err := DecodeQAFile([]byte("# notes\n")); err == nil || IsQAFile([]byte("# notes\n")) {
+		t.Fatal("someone's Markdown read as a thread")
+	}
+}

@@ -127,12 +127,13 @@ type Document struct {
 	Title string `json:"title"`
 }
 type Workspace struct {
-	QAOriginalHash string            `json:"qa_original_hash,omitempty"`
-	QADocumentID   string            `json:"qa_document_id,omitempty"`
-	QAPreamble     string            `json:"qa_preamble,omitempty"`
-	QAAuthors      map[string]string `json:"qa_authors,omitempty"`
-	QADocument     *Document         `json:"qa_document,omitempty"`
-	QA             []QAThread        `json:"qa"`
+	// QAAuthors names the authors of threads read back from an earlier
+	// workspace's files, who are not members of this one.
+	QAAuthors map[string]string `json:"qa_authors,omitempty"`
+	// QADir is the directory holding one file per QA thread
+	// (<thread>.md), written by Wash as threads change.
+	QADir string     `json:"qa_dir,omitempty"`
+	QA    []QAThread `json:"qa"`
 	// Approvals apply to every member of this workspace, whatever its cwd.
 	// Members work in worktrees the orchestrator chooses, and those are as
 	// often siblings of project_root as children of it, so a path-scoped
@@ -306,6 +307,10 @@ func ValidText(s string, max int) bool { return strings.TrimSpace(s) != "" && le
 
 type Limits struct{ MaxActive, MaxMembers int }
 
+// OrchestratorKey is the orchestrator's key, reserved for it: members
+// address it by this rather than by its random ID.
+const OrchestratorKey = "orchestrator"
+
 func (s *Store) Setup(session, provider, cwd, name, root string, items []Item, limits ...Limits) (*Workspace, error) {
 	cap := Limits{MaxActive: 4, MaxMembers: 16}
 	if len(limits) > 0 {
@@ -338,7 +343,7 @@ func (s *Store) Setup(session, provider, cwd, name, root string, items []Item, l
 			}
 			return errors.New("teardown current workspace first")
 		}
-		lead := Member{ID: ID(), Name: "Orchestrator", Provider: provider, Cwd: cwd, Session: session, Lifetime: "resident", State: "available", CanSpawn: true}
+		lead := Member{ID: ID(), Key: OrchestratorKey, Name: "Orchestrator", Provider: provider, Cwd: cwd, Session: session, Lifetime: "resident", State: "available", CanSpawn: true}
 		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Items: items, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}}
 		if w.Items == nil {
 			w.Items = []Item{}

@@ -309,14 +309,13 @@ test('bulk workspace setup keeps package workers resident and QA survives refres
  await tool('setup_workspace',{name:'Removed'},true);
  await expect(sidebar).toHaveCount(0);
 expect(about.caller.config_options.length).toBeGreaterThan(0);
- const qaPath=join(router.xdgConfigHome,'QA.md');
- const config={qa_document:{path:qaPath,title:'Package questions'},request_id:'package-setup',workspace:{name:'Package QA'},members:{
+ const qaDir=join(router.xdgConfigHome,'qa');const qaPath=join(qaDir,'K5-bound.md');
+ const config={qa_dir:qaDir,request_id:'package-setup',workspace:{name:'Package QA'},members:{
   implementer:{name:'K5 implementer',model:'fast',effort:'low',lifetime:'resident',package:'K5',role:'implementer',instructions:'Implement only the assigned package.',task:'First delivery'},
   red:{name:'K5 red',model:'fast',effort:'low',lifetime:'resident',package:'K5',role:'reviewer',instructions:'Review defensively; wait for work.'},
  },plan:{items:{K5:{text:'K5 package',state:'active'}}}};
  await tool('workspace_configure',{...config,preview:true});await expect(sidebar).toHaveCount(0);
  const configured=await tool('workspace_configure',config);
- expect(readFileSync(qaPath,'utf8')).toContain('# Package questions');
  expect(configured.qa_document_status.state).toBe('saved');
  expect(configured.launches.implementer.state).toBe('available');expect(configured.launches.red.state).toBe('available');
  const state=()=>JSON.parse(readFileSync(join(router.xdgStateHome,'wash/workspaces.json'),'utf8')).workspaces.at(-1);
@@ -334,7 +333,7 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await tool('message_send',{request_id:'open-qa',recipient:'red',type:'question',body:'Does the clock meet the bound?',qa:{id:'K5-bound',action:'open',package:'K5',title:'Wakeup bound',blocking:true}});
  await sidebar.getByTestId('workspace-question-K5-bound').click();
  await expect(app.getByTestId('workspace-qa')).toContainText('Does the clock meet the bound?');
- await expect(app.getByTestId('workspace-qa-path')).toHaveText(qaPath);
+ await expect(app.getByTestId('workspace-qa-path')).toHaveText(qaDir);
  expect(readFileSync(qaPath,'utf8')).toContain('Does the clock meet the bound?');
  await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author===configured.receipt.members.red&&e.body==='Fixture answer')).toBe(true);
  await tool('decision_request',{text:'Choose the bound: recommend A, alternative B.',thread_id:'K5-bound',request_id:'owner-choice'});
@@ -353,11 +352,13 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  expect(readFileSync(qaPath,'utf8')).toContain('Status: **resolved**');
  await sidebar.getByTestId('workspace-qa-link').click();await page.screenshot({path:test.info().outputPath('workspace-qa.png')});
  const final=await tool('workspace_end');expect(final.qa_document_status.state).toBe('saved');await expect(sidebar).toHaveCount(0);
- await tool('workspace_configure',{workspace:{name:'Resumed package QA'},qa_document:{path:qaPath,title:'Package questions'}});
+ await tool('workspace_configure',{workspace:{name:'Resumed package QA'},qa_dir:qaDir});
  await sidebar.getByTestId('workspace-qa-link').click();
- await expect(app.getByTestId('workspace-qa')).toContainText('Use bound A');
+ // A resolved thread resumes as a header; its events stay in its file.
  await expect(app.getByTestId('workspace-qa')).toContainText('Regression tests passed; review complete.');
- expect(state().qa[0].state).toBe('resolved');
+ await expect(app.getByTestId('workspace-qa')).toContainText('earlier workspace');
+ expect(state().qa[0].state).toBe('resolved');expect(state().qa[0].archived).toBe(true);
+ expect((await tool('workspace_get',{view:'qa',thread_id:'K5-bound'})).thread.events.some((e:any)=>e.body==='Use bound A')).toBe(true);
  await tool('workspace_end');await expect(sidebar).toHaveCount(0);
 });
 

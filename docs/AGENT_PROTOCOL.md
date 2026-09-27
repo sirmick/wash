@@ -854,6 +854,7 @@ QADocumentStatus is where the workspace's QA file stands on disk.
 | `decision_refs` | `string[] \| null` |  |
 | `evidence?` | `string` |  |
 | `resumed?` | `boolean` | Resumed marks a thread resolved in an earlier workspace and read back from its QA file: its evidence is about that workspace's code. |
+| `archived?` | `boolean` | Archived marks a resolved thread read back as a header only: its events stay in its file until something needs them. |
 | `events` | `QAEvent[] \| null` |  |
 
 #### Raise
@@ -1110,11 +1111,8 @@ UsageRow is one row's counters.
 
 | Field | Type | |
 |---|---|---|
-| `qa_original_hash?` | `string` |  |
-| `qa_document_id?` | `string` |  |
-| `qa_preamble?` | `string` |  |
-| `qa_authors?` | `Record<string, string>` |  |
-| `qa_document?` | `Document` |  |
+| `qa_authors?` | `Record<string, string>` | QAAuthors names the authors of threads read back from an earlier workspace's files, who are not members of this one. |
+| `qa_dir?` | `string` | QADir is the directory holding one file per QA thread (<thread>.md), written by Wash as threads change. |
 | `qa` | `QAThread[] \| null` |  |
 | `approvals?` | `Rule[]` | Approvals apply to every member of this workspace, whatever its cwd. Members work in worktrees the orchestrator chooses, and those are as often siblings of project_root as children of it, so a path-scoped rule cannot cover a fleet. Membership is the scope instead: these rules carry no Cwd, and agentpolicy's matcher is reused verbatim. |
 | `packages?` | `Record<string, Package>` | Packages names each package code ("CT1") for people: the sidebar groups members and questions under "CT1 · Console input-flood test" instead of a bare code, and member names can shrink to their role. |

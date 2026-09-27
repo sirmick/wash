@@ -20,7 +20,7 @@ A workspace has three formal mechanisms and one piece of runtime state:
 | Mechanism | What it is | Who writes it |
 |---|---|---|
 | **The plan** (A, B) | A graph of nodes: milestones, packages, steps, notes, however the orchestrator uses them. The backbone: every assignment and member hangs off a node. | The orchestrator (the Architect for unstarted nodes); Wash moves states as assignments open and close |
-| **Questions between agents** (F) | QA threads, one file each, the record of why | Agents, through the tools |
+| **Questions between agents** | QA threads, one file each, the record of why (done: AGENT_SWARM_BULK.md, "QA: one file per thread") | Agents, through the tools |
 | **Questions to the owner** (C, D) | Structured questions that block the asker until the owner answers; the answer is recorded verbatim in the QA thread | Agents ask, the owner answers in a panel |
 | Runtime (E) | Who is working, running a tool, waiting on a background task, or needs you | Wash, from the sessions |
 
@@ -174,33 +174,6 @@ One state for approvals, questions and decisions:
   workspace sidebar and the Plan tab, instead of idle.
 - To check live: whether a finished background Bash wakes the member again.
 
-## F. QA between agents
-
-- **One file per thread.** `qa_dir` (default `.wash/qa`, relative to the
-  project root) holds `<thread>.md` per thread: a marker line, the thread's
-  Markdown, and a checkpoint comment (the thread as JSON) for lossless resume.
-  Replaces `qa_document` and its single file. A file without Wash's marker is
-  never overwritten.
-- **A file is written only when its thread changes.** A resolved thread stops
-  changing, so it costs nothing in history.
-- **Resume** (`qa_dir` on a new workspace) loads open threads whole and
-  resolved threads as headers (title, state, decision references, evidence);
-  `workspace_get view=qa thread_id` reads a resolved thread's events from its
-  file.
-- **Bodies are capped** at 2000 bytes (opening, replies, evidence, owner
-  questions). The tool text says "detail in a file; the thread holds the
-  pointer".
-- **`view: qa` with no thread** returns the index: id, node, title, state,
-  assignee, revision. No Markdown dump.
-- **An answer wakes whoever is waiting on the thread**: a reply or a
-  resolution on a thread is delivered to its creator and its assignee (other
-  than the author) as an `answer`, which wakes them.
-- **Paths** under the home directory and the project root are written as `~`
-  and `.` in thread files.
-- The orchestrator has the fixed key `orchestrator`, reserved for it.
-- `tools/qa-split` converts an old single-file QA document (its checkpoint)
-  into thread files, once, outside Wash.
-
 ## G. Setup from a file
 
 - `workspace_configure({from: ".wash/workspace.toml"})` reads the workspace
@@ -251,7 +224,7 @@ sessions without elicitation (codex, opencode; check codex-acp first).
 
 ## Execution on `workspace-plan`
 
-Order: F, then A with B, then C with D and E, then G, then H. Each step
+Order: F (done), then A with B, then C with D and E, then G, then H. Each step
 lands with its unit tests, its e2e changes, the docs (AGENT_SWARM,
 AGENT_SWARM_BULK, AGENT_PROTOCOL via `make gen-agent-protocol`) and an entry
 removed here. The MCP API version goes to 4.0.0: `package`, `packages`,

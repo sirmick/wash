@@ -28,7 +28,7 @@ import (
 
 type workspaceService struct {
 	qaMu      sync.Mutex
-	qaFiles   map[string]qaFileState
+	qaFiles   map[string]*qaDirState
 	store     *swarm.Store
 	conn      *sdk.Conn
 	mu        sync.Mutex

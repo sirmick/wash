@@ -2,14 +2,12 @@ package agentd
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/json"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/sirmick/wash/internal/agentproto"
@@ -17,83 +15,46 @@ import (
 	"github.com/sirmick/wash/pkg/wire"
 )
 
+// qaDirState is what Wash last wrote into one workspace's QA directory: per
+// thread, the state it wrote and the file it left, so an unchanged thread is
+// not rewritten and a file replaced behind Wash's back is.
+type qaDirState struct {
+	Threads map[string]qaFileState
+	Status  agentproto.QADocumentStatus
+}
 type qaFileState struct {
-	Digest [32]byte
-	Info   os.FileInfo
-	Status agentproto.QADocumentStatus
+	Key  string
+	Info os.FileInfo
 }
 
-func qaFileMarker(id string) string { return "<!-- wash-workspace-qa: " + id + " -->" }
+// qaFileKey changes whenever a thread's file would: every event and
+// transition bumps its revision, and a withdrawn decision changes its state.
+func qaFileKey(q swarm.QAThread) string { return fmt.Sprintf("%d/%s", q.Revision, q.State) }
 
-// Existing project documents are never claimed as generated output. Parent
-// directories must already exist and output may not follow a replaced symlink.
-func validateQAFile(path, owner string, originalHash ...string) error {
-	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	if parent != filepath.Dir(path) {
-		return errors.New("QA output directory changed; reconfigure the path")
-	}
-	root, err := os.OpenRoot(parent)
+// writeQAThreadFile replaces dir/<id>.md atomically. A file there that does
+// not carry this thread's marker is someone's document and is left alone, as
+// is anything that is not a regular file.
+func writeQAThreadFile(dir, id string, content []byte) error {
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	return validateQATarget(root, filepath.Base(path), owner, originalHash...)
-}
-func validateQATarget(root *os.Root, name, owner string, originalHash ...string) error {
-	info, err := root.Lstat(name)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return errors.New("QA output must be a regular file, not a symlink")
-	}
-	if info.Size() == 0 {
-		return nil
-	}
-	f, err := root.Open(name)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	header, err := bufio.NewReader(io.LimitReader(f, 256)).ReadString('\n')
-	if err != nil && err != io.EOF {
-		return err
-	}
-	if owner == "" || strings.TrimSpace(header) != qaFileMarker(owner) {
-		if len(originalHash) > 0 && originalHash[0] != "" {
-			if _, err := f.Seek(0, 0); err != nil {
-				return err
-			}
-			hash := sha256.New()
-			if _, err := io.Copy(hash, io.LimitReader(f, maxQAFileBytes+1)); err != nil {
-				return err
-			}
-			if fmt.Sprintf("%x", hash.Sum(nil)) == originalHash[0] {
-				return nil
-			}
+	name := id + ".md"
+	if info, err := root.Lstat(name); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", name)
 		}
-		return errors.New("QA output already contains another document; choose an empty or new file")
-	}
-	return nil
-}
-func writeQAFile(w *swarm.Workspace) error {
-	path := w.QADocument.Path
-	if err := validateQAFile(path, qaOwner(w), w.QAOriginalHash); err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	name := filepath.Base(path)
-	if err = validateQATarget(root, name, qaOwner(w), w.QAOriginalHash); err != nil {
+		f, err := root.Open(name)
+		if err != nil {
+			return err
+		}
+		head, _ := bufio.NewReader(io.LimitReader(f, 256)).ReadString('\n')
+		f.Close()
+		if info.Size() > 0 && head != swarm.QAFileMarker(id)+"\n" {
+			return fmt.Errorf("%s is not a Wash QA thread file; move it away", name)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	temp := ".wash-qa-" + swarm.ID() + ".tmp"
@@ -102,23 +63,12 @@ func writeQAFile(w *swarm.Workspace) error {
 		return err
 	}
 	defer root.Remove(temp)
-	out := bufio.NewWriter(f)
-	_, err = fmt.Fprintln(out, qaFileMarker(qaOwner(w)))
-	if err == nil {
-		err = swarm.WriteQAMarkdown(out, w)
-	}
-	if err == nil {
-		err = writeQACheckpoint(out, w)
-	}
-	if err == nil {
-		err = out.Flush()
-	}
+	_, err = f.Write(content)
 	if err == nil {
 		err = f.Sync()
 	}
-	closeErr := f.Close()
-	if err == nil {
-		err = closeErr
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
 	if err != nil {
 		return err
@@ -126,65 +76,109 @@ func writeQAFile(w *swarm.Workspace) error {
 	if err = root.Rename(temp, name); err != nil {
 		return err
 	}
-	dir, err := root.Open(".")
+	d, err := root.Open(".")
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	return dir.Sync()
+	defer d.Close()
+	return d.Sync()
 }
 
-// Serialize writers and take the snapshot after acquiring the lock. A delayed
-// older caller therefore cannot replace newer QA with its original snapshot.
-// The durable store is authoritative; failed projections are retried on the
-// workspace loop and regenerated after restart. UI rendering stays bounded.
+// syncQADocuments writes each changed thread to its file. The store is
+// authoritative: a failed write is reported and retried on the workspace
+// loop, and a file removed or replaced behind Wash's back is written again.
+// A thread read back as a header only is never written: its file is its
+// record. Writers are serialized and take their snapshot under the lock, so
+// a delayed caller cannot put an older thread back.
 func (ws *workspaceService) syncQADocuments() {
 	ws.qaMu.Lock()
 	defer ws.qaMu.Unlock()
 	if ws.qaFiles == nil {
-		ws.qaFiles = map[string]qaFileState{}
+		ws.qaFiles = map[string]*qaDirState{}
 	}
+	home, _ := os.UserHomeDir()
 	for _, w := range ws.store.Snapshot().Workspaces {
-		if w.QADocument == nil {
+		if w.QADir == "" {
+			delete(ws.qaFiles, w.ID)
 			continue
 		}
-		names := map[string]string{}
-		for _, m := range w.Members {
-			names[m.ID] = m.Name
+		st := ws.qaFiles[w.ID]
+		if st == nil || st.Status.Path != w.QADir {
+			st = &qaDirState{Threads: map[string]qaFileState{}, Status: agentproto.QADocumentStatus{Path: w.QADir, State: "saved"}}
+			ws.qaFiles[w.ID] = st
 		}
-		encoded, _ := json.Marshal(struct {
-			Document *swarm.Document
-			Archive  qaArchive
-			Names    map[string]string
-		}{w.QADocument, archiveQA(&w), names})
-		digest := sha256.Sum256(encoded)
-		prior := ws.qaFiles[w.ID]
-		info, statErr := os.Lstat(w.QADocument.Path)
-		if prior.Status.State == "saved" && prior.Digest == digest && statErr == nil && info.Mode().IsRegular() && prior.Info != nil && os.SameFile(info, prior.Info) && info.ModTime() == prior.Info.ModTime() && info.Size() == prior.Info.Size() {
-			continue
-		}
-		next := qaFileState{Digest: digest, Status: agentproto.QADocumentStatus{Path: w.QADocument.Path, State: "saved", Updated: time.Now().UnixMilli()}}
-		if err := writeQAFile(&w); err != nil {
-			next.Status.State = "error"
-			next.Status.Error = err.Error()
-			next.Status.Updated = prior.Status.Updated
-			if ws.conn != nil && (prior.Status.State != "error" || prior.Status.Error != next.Status.Error) {
-				desktop(ws.conn, agentproto.Notify{Title: w.Name + " · QA save failed", Body: next.Status.Error + ". Records retained; Wash will retry.", Level: wire.NotifyLevelError})
+		var failed error
+		wrote := false
+		for _, q := range w.QA {
+			if q.Archived {
+				continue
 			}
-		} else {
-			next.Info, _ = os.Lstat(w.QADocument.Path)
+			path := filepath.Join(w.QADir, q.ID+".md")
+			key := qaFileKey(q)
+			prior, seen := st.Threads[q.ID]
+			info, err := os.Lstat(path)
+			if seen && prior.Key == key && err == nil && prior.Info != nil && os.SameFile(info, prior.Info) && info.ModTime().Equal(prior.Info.ModTime()) && info.Size() == prior.Info.Size() {
+				continue
+			}
+			content, err := swarm.EncodeQAFile(swarm.QAFileFor(&w, q.ID), w.Root, home)
+			if err == nil {
+				err = writeQAThreadFile(w.QADir, q.ID, content)
+			}
+			if err != nil {
+				if failed == nil {
+					failed = fmt.Errorf("thread %s: %w", q.ID, err)
+				}
+				delete(st.Threads, q.ID)
+				continue
+			}
+			info, _ = os.Lstat(path)
+			st.Threads[q.ID] = qaFileState{Key: key, Info: info}
+			wrote = true
 		}
-		ws.qaFiles[w.ID] = next
+		prior := st.Status
+		if failed != nil {
+			st.Status = agentproto.QADocumentStatus{Path: w.QADir, State: "error", Error: failed.Error(), Updated: prior.Updated}
+			if ws.conn != nil && (prior.State != "error" || prior.Error != st.Status.Error) {
+				desktop(ws.conn, agentproto.Notify{Title: w.Name + " · QA save failed", Body: st.Status.Error + ". Records retained; Wash will retry.", Level: wire.NotifyLevelError})
+			}
+		} else if wrote || prior.State != "saved" {
+			st.Status = agentproto.QADocumentStatus{Path: w.QADir, State: "saved", Updated: time.Now().UnixMilli()}
+		}
 	}
 }
+
 func (ws *workspaceService) qaDocumentStatus(w *swarm.Workspace) agentproto.QADocumentStatus {
-	if w == nil || w.QADocument == nil {
+	if w == nil || w.QADir == "" {
 		return agentproto.QADocumentStatus{State: "unconfigured"}
 	}
 	ws.qaMu.Lock()
 	defer ws.qaMu.Unlock()
-	if file, ok := ws.qaFiles[w.ID]; ok && file.Status.Path == w.QADocument.Path {
-		return file.Status
+	if st := ws.qaFiles[w.ID]; st != nil && st.Status.Path == w.QADir {
+		return st.Status
 	}
-	return agentproto.QADocumentStatus{Path: w.QADocument.Path, State: "pending"}
+	return agentproto.QADocumentStatus{Path: w.QADir, State: "pending"}
+}
+
+// readQAFile reads one thread file, bounded.
+func readQAFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", filepath.Base(path))
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxQAFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxQAFileBytes {
+		return nil, fmt.Errorf("%s exceeds %d MiB", filepath.Base(path), maxQAFileBytes>>20)
+	}
+	return bytes.Clone(b), nil
 }
