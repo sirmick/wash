@@ -17,12 +17,13 @@ func qaStore(t *testing.T) (*Store, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "codex", t.TempDir(), "QA", "", nil)
+	w, err := s.Setup("lead", "codex", t.TempDir(), "QA", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = s.Mutate("lead", true, func(w *Workspace, _ *Member) error {
-		w.Members = append(w.Members, Member{ID: "writer", Session: "writer-session", State: "available", Lifetime: "resident", Role: "implementer", Package: "K5"}, Member{ID: "reviewer", Session: "reviewer-session", State: "available", Lifetime: "resident", Role: "reviewer", Package: "K5"}, Member{ID: "other", Session: "other-session", State: "available", Lifetime: "resident", Role: "reviewer", Package: "R2"})
+		w.Plan = append(w.Plan, Node{ID: "K5", Title: "Timer", State: "todo"}, Node{ID: "R2", Title: "Review", State: "todo"})
+		w.Members = append(w.Members, Member{ID: "writer", Session: "writer-session", State: "available", Lifetime: "resident", Role: "implementer", Node: "K5"}, Member{ID: "reviewer", Session: "reviewer-session", State: "available", Lifetime: "resident", Role: "reviewer", Node: "K5"}, Member{ID: "other", Session: "other-session", State: "available", Lifetime: "resident", Role: "reviewer", Node: "R2"})
 		return nil
 	})
 	if err != nil {
@@ -35,7 +36,7 @@ func qaChange(s *Store, session string, u QAUpdate) error {
 }
 func TestQAConcurrentRepliesRevisionGuardsAndRecovery(t *testing.T) {
 	s, lead, path := qaStore(t)
-	if err := qaChange(s, "writer-session", QAUpdate{ID: "Q166", Action: "open", Package: "K5", Title: "Wakeup bound", Assignee: lead, Body: "Which bound?"}); err != nil {
+	if err := qaChange(s, "writer-session", QAUpdate{ID: "Q166", Action: "open", Node: "K5", Title: "Wakeup bound", Assignee: lead, Body: "Which bound?"}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -90,7 +91,7 @@ func TestTransactionRollsBackAndDeduplicatesAcrossRecovery(t *testing.T) {
 	s, lead, path := qaStore(t)
 	raw := []byte(`{"request_id":"open"}`)
 	invoke := func(store *Store) (any, error) {
-		err := qaChange(store, "lead", QAUpdate{ID: "q", Action: "open", Package: "K5", Title: "Question", Assignee: lead, Body: "Body"})
+		err := qaChange(store, "lead", QAUpdate{ID: "q", Action: "open", Node: "K5", Title: "Question", Assignee: lead, Body: "Body"})
 		return map[string]bool{"ok": true}, err
 	}
 	if _, err := s.Transaction("lead", "report", "open", raw, false, invoke); err != nil {
@@ -143,7 +144,7 @@ func TestReceiptsDoNotOutliveTheirWorkspace(t *testing.T) {
 	if err := s.Mutate("lead", true, func(w *Workspace, _ *Member) error { w.State = "ended"; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Setup("lead", "codex", "/project", "Next", "/project", nil); err != nil {
+	if _, err := s.Setup("lead", "codex", "/project", "Next", "/project"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Transaction("lead", "workspace_configure", "setup-1", raw, false, invoke); err != nil || calls != 2 {
@@ -156,7 +157,7 @@ func TestReceiptsDoNotOutliveTheirWorkspace(t *testing.T) {
 
 func TestQAResolutionWaitsForHumanAndCannotForgeOwner(t *testing.T) {
 	s, lead, _ := qaStore(t)
-	if err := qaChange(s, "writer-session", QAUpdate{ID: "q", Action: "open", Package: "K5", Title: "Question", Assignee: lead, Body: "Question"}); err != nil {
+	if err := qaChange(s, "writer-session", QAUpdate{ID: "q", Action: "open", Node: "K5", Title: "Question", Assignee: lead, Body: "Question"}); err != nil {
 		t.Fatal(err)
 	}
 	var questionID string
@@ -202,7 +203,7 @@ func TestQAResolutionWaitsForHumanAndCannotForgeOwner(t *testing.T) {
 // asked on stops waiting for the owner.
 func TestEndedMembersDecisionLeavesTheThreadOpen(t *testing.T) {
 	s, _, _ := qaStore(t)
-	if err := qaChange(s, "lead", QAUpdate{ID: "q", Action: "open", Package: "K5", Title: "Clock", Assignee: "writer", Body: "Which clock?"}); err != nil {
+	if err := qaChange(s, "lead", QAUpdate{ID: "q", Action: "open", Node: "K5", Title: "Clock", Assignee: "writer", Body: "Which clock?"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Mutate("writer-session", false, func(w *Workspace, m *Member) error {
@@ -237,7 +238,7 @@ func TestReopenedQuestionReturnsToTheOrchestrator(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := qaChange(s, "reviewer-session", QAUpdate{ID: "q", Action: "open", Package: "K5", Title: "Bound", Assignee: lead, Body: "Which bound?"}); err != nil {
+	if err := qaChange(s, "reviewer-session", QAUpdate{ID: "q", Action: "open", Node: "K5", Title: "Bound", Assignee: lead, Body: "Which bound?"}); err != nil {
 		t.Fatal(err)
 	}
 	rev := s.View("lead").QA[0].Revision
@@ -250,7 +251,7 @@ func TestReopenedQuestionReturnsToTheOrchestrator(t *testing.T) {
 	}
 	rev = q.Revision
 	err := qaChange(s, "other-session", QAUpdate{ID: "q", Action: "block", Expected: &rev, Body: "no"})
-	if err == nil || !strings.Contains(err.Error(), "reviewer of package K5") {
+	if err == nil || !strings.Contains(err.Error(), "reviewer on node K5") {
 		t.Fatalf("authority error = %v", err)
 	}
 	if err := qaChange(s, "reviewer-session", QAUpdate{ID: "q", Action: "resolve", Expected: &rev, Evidence: "checked"}); err != nil {
@@ -275,7 +276,7 @@ func TestCompletingSomeoneElsesAssignmentSaysWhose(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.Assign("lead", "writer", "Fix it", "")
+	a, err := s.Assign("lead", "writer", "", "", "Fix it", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,5 +286,57 @@ func TestCompletingSomeoneElsesAssignmentSaysWhose(t *testing.T) {
 	err = s.Complete("lead", a.ID, "accepted", false)
 	if err == nil || !strings.Contains(err.Error(), "K5 implementer's") || !strings.Contains(err.Error(), "completed") || !strings.Contains(err.Error(), "needs no call") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A reply on a thread reaches the member who opened it, awake: DOC1's
+// members blocked on a thread slept through rulings sent to someone else.
+func TestNotifyQAWakesCreatorAndAssigneeOnly(t *testing.T) {
+	s, lead, _ := qaStore(t)
+	if err := qaChange(s, "writer-session", QAUpdate{ID: "Q1", Action: "open", Node: "K5", Title: "Bound", Assignee: "reviewer", Body: "Which bound?"}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Mutate("lead", false, func(w *Workspace, m *Member) error {
+		return NotifyQA(w, QA(w, "Q1"), m.ID, "Use 64")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, msg := range s.View("lead").Messages {
+		if msg.Thread == "Q1" && msg.Type == "answer" {
+			got[msg.Recipient] = msg.State
+		}
+	}
+	if len(got) != 2 || got["writer"] != "queued" || got["reviewer"] != "queued" || got[lead] != "" {
+		t.Fatalf("notified %v", got)
+	}
+}
+
+func TestQAFileRoundTripsWithShortenedPaths(t *testing.T) {
+	s, _, _ := qaStore(t)
+	if err := qaChange(s, "writer-session", QAUpdate{ID: "Q2", Action: "open", Node: "K5", Title: "Path", Assignee: "reviewer", Body: "See /home/u/proj/a.go and /home/u/notes"}); err != nil {
+		t.Fatal(err)
+	}
+	w := s.View("lead")
+	b, err := EncodeQAFile(QAFileFor(w, "Q2"), "/home/u/proj", "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "/home/u") || !strings.Contains(string(b), "./a.go") || !strings.Contains(string(b), "~/notes") {
+		t.Fatal(string(b))
+	}
+	f, err := DecodeQAFile(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Thread.ID != "Q2" || f.Thread.Events[0].Body != "See ./a.go and ~/notes" || f.Authors["writer"] == "" {
+		t.Fatalf("%+v", f)
+	}
+	if _, err := DecodeQAFile(append([]byte(nil), b[:len(b)-10]...)); err == nil {
+		t.Fatal("a truncated checkpoint decoded")
+	}
+	if _, err := DecodeQAFile([]byte("# notes\n")); err == nil || IsQAFile([]byte("# notes\n")) {
+		t.Fatal("someone's Markdown read as a thread")
 	}
 }

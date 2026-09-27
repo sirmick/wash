@@ -11,7 +11,7 @@ func TestUsageSurvivesRetirementAndDoesNotInvalidateCoordinationRevision(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestUsageSurvivesRetirementAndDoesNotInvalidateCoordinationRevision(t *test
 
 func TestUsageDoesNotRewritePriorWorkspaceWhenLeadConversationIsReused(t *testing.T) {
 	s, _ := Open(filepath.Join(t.TempDir(), "state.json"))
-	if _, err := s.Setup("lead", "codex", t.TempDir(), "First", "", nil); err != nil {
+	if _, err := s.Setup("lead", "codex", t.TempDir(), "First", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RecordUsage("lead", 100, 1000); err != nil {
@@ -58,7 +58,7 @@ func TestUsageDoesNotRewritePriorWorkspaceWhenLeadConversationIsReused(t *testin
 	if err := s.Mutate("lead", true, func(w *Workspace, _ *Member) error { w.State = "ended"; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Setup("lead", "codex", t.TempDir(), "Second", "", nil); err != nil {
+	if _, err := s.Setup("lead", "codex", t.TempDir(), "Second", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RecordUsage("lead", 200, 1000); err != nil {

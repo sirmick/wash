@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../fixtures/router';
 import { closeButtonOf } from '../fixtures/agents';
@@ -22,18 +22,15 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
   if (await app.getByRole('tab',{name:'Conversation',exact:true}).count()) await app.getByRole('tab',{name:'Conversation',exact:true}).click();
   await composer.fill(`workspace ${name} ${JSON.stringify(args)}`);await composer.press('Enter');
  };
- await tool('workspace_configure',{workspace:{name:'Redoubt test'},plan:{items:{timer:{text:'Build timer',state:'pending'}}}});
+ const planFile=join(router.xdgConfigHome,'.wash','plan.toml');
+ await tool('workspace_configure',{workspace:{name:'Redoubt test'},plan_file:planFile});
+ await tool('plan_set',{nodes:{timer:{title:'Build timer'}}});
  const sidebar=app.locator('[data-testid="workspace-sidebar"]');
  await expect(sidebar).toBeVisible();
- await tool('workspace_configure',{plan:{items:{timer:{state:'active',emoji:'🔨'}}}});
+ await tool('plan_set',{nodes:{timer:{state:'active',emoji:'🔨'}}});
  await sidebar.locator('[data-testid="workspace-plan-link"]').click();
- await expect(app.locator('[data-testid="workspace-item-timer"]')).toContainText('active');
- const doc=join(router.xdgConfigHome,'PLAN.md');writeFileSync(doc,'# Timer design\nFirst version.');
- await tool('workspace_configure',{document:{path:doc,title:'Design notes'}});
- await sidebar.getByRole('button',{name:'Design notes',exact:true}).click();
- await expect(app.locator('[data-testid="workspace-document"]')).toContainText('First version');
- writeFileSync(doc+'.tmp','# Timer design\nAtomic replacement.');renameSync(doc+'.tmp',doc);
- await expect(app.locator('[data-testid="workspace-document"]')).toContainText('Atomic replacement');
+ await expect(app.locator('[data-testid="workspace-plan-state-timer"]')).toHaveText('active');
+ await expect.poll(()=>readFileSync(planFile,'utf8')).toContain('state = "active"');
  await tool('workspace_configure',{members:{architect:{name:'Architect',instructions:'Review clock designs.',lifetime:'resident'}}});
  await expect.poll(()=>state().members.length).toBe(2);
  const resident=state().members.find((m:any)=>m.name==='Architect').id;
@@ -41,7 +38,7 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  expect(state().members.find((m:any)=>m.id===resident).initial_configs.model).toBe('fast');
  await tool('message_send',{recipient:resident,type:'question',body:'Which clock?'});
  await expect.poll(()=>state().messages.some((m:any)=>m.type==='answer'&&m.body==='Fixture answer')).toBe(true);
- await tool('workspace_configure',{members:{implementer:{name:'Implementer',instructions:'Implement an assigned timer.',lifetime:'ephemeral',task:'WAIT_FOR_ANSWER'}}});
+ await tool('workspace_configure',{members:{implementer:{name:'Implementer',node:'timer',instructions:'Implement an assigned timer.',lifetime:'ephemeral',task:'WAIT_FOR_ANSWER'}}});
  await expect.poll(()=>state().members.find((m:any)=>m.name==='Implementer')?.state).toBe('ended');
  expect(state().assignments[0].state).toBe('completed');
  expect(state().assignments[0].result).toBe('Completed after an inbox reply');
@@ -67,9 +64,11 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await expect(app.locator('[data-testid="workspace-member-detail"]')).toContainText('Human follow-up');
  await tool('member_update',{status:'Review complete',emoji:'✅'});
  await expect(sidebar).toContainText('Review complete');
- await tool('decision_request',{text:'Ship the timer?'});
- await sidebar.getByLabel('Decision response').fill('Proceed');
- await sidebar.getByRole('button',{name:'Answer',exact:true}).click();
+ // The orchestrator's own question is answered in the panel above its composer.
+ await tool('decision_request',{questions:[{question:'Ship the timer?',options:[{label:'Yes'},{label:'No'}]}]});
+ const panel=app.getByTestId('question-panel');
+ await panel.getByRole('radio',{name:/Yes/}).click();await panel.getByRole('button',{name:/^Submit/}).click();
+ await expect(panel).toHaveCount(0);
  await expect.poll(()=>state().messages.some((m:any)=>m.type==='decision_response'&&m.sender==='human')).toBe(true);
  await tool('flash_message',{text:'Timer milestone reached',emoji:'🎉'});
  await router.controlRequest({t:'launch',app_id:'com.wash.about'});
@@ -79,19 +78,20 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  const focusCursor=router.logCursor();
  await flash.click();
  await router.waitForLog(/agentd: focus key=.*raising controller=/,10_000,focusCursor);
- await tool('workspace_configure',{plan:{items:{timer:{state:'done'}}}});
+ expect(state().plan.find((n:any)=>n.id==='timer').state).toBe('reported');
+ await tool('plan_set',{nodes:{timer:{state:'done'}}});
  await sidebar.locator('[data-testid="workspace-plan-link"]').click();
- await expect(app.locator('[data-testid="workspace-item-timer"]')).toContainText('done');
+ await expect(app.locator('[data-testid="workspace-plan-state-timer"]')).toHaveText('done');
  await page.reload();
  // Reload restores the About window used to check flash visibility in front.
  await closeButtonOf(page,page.locator('wash-app-about')).click();
  await expect(page.locator('wash-app-about')).toHaveCount(0);
  await expect(sidebar).toBeVisible();
  await sidebar.locator('[data-testid="workspace-plan-link"]').click();
- await expect(app.locator('[data-testid="workspace-item-timer"]')).toContainText('done');
+ await expect(app.locator('[data-testid="workspace-plan-state-timer"]')).toHaveText('done');
  await tool('workspace_end');
  await expect(sidebar).toHaveCount(0);
- expect(readFileSync(doc,'utf8')).toContain('Atomic replacement');
+ expect(readFileSync(planFile,'utf8')).toContain('state = "done"');
  expect(state().state).toBe('ended');
  await tool('workspace_configure',{workspace:{name:'Another project'}});
  await expect(sidebar).toContainText('Another project');
@@ -243,13 +243,14 @@ test('workspace tabs preserve drafts and the sidebar resizes without overflowing
   return JSON.parse((await outputs.last().innerText()).slice('WORKSPACE_RESULT '.length));
  };
  await expect(composer).toBeEnabled();
- await tool('workspace_configure',{workspace:{name:'Tab navigation'},plan:{items:{clock:{text:'Verify timer clock',state:'active'}}}});
+ await tool('workspace_configure',{workspace:{name:'Tab navigation'}});
+ await tool('plan_set',{nodes:{clock:{title:'Verify timer clock',state:'active'}}});
  const member=(await tool('workspace_configure',{members:{architect:{name:'Architect',lifetime:'resident',instructions:'Wait for a design question.'}}})).launches.architect;
  const other=(await tool('workspace_configure',{members:{reviewer:{name:'Reviewer',lifetime:'resident',instructions:'Wait for review.'}}})).launches.reviewer;
  await composer.fill('Keep this conversation draft');
  await sidebar.getByTestId('workspace-plan-link').click();
- await expect(main.getByTestId('workspace-item-clock')).toContainText('Verify timer clock');
- await expect(sidebar.getByTestId('workspace-item-clock')).toHaveCount(0);
+ await expect(main.getByTestId('workspace-plan-node-clock')).toContainText('Verify timer clock');
+ await expect(sidebar.getByTestId('workspace-plan-node-clock')).toHaveCount(0);
  await sidebar.getByTestId(`workspace-member-${member.id}`).click();
  await expect(main.getByTestId('workspace-member-detail')).toBeVisible();
  await expect(sidebar.getByTestId('workspace-member-detail')).toHaveCount(0);
@@ -281,8 +282,9 @@ test('workspace tabs preserve drafts and the sidebar resizes without overflowing
  await expect(composer).toHaveValue('Keep this conversation draft');
  await page.reload();
  await expect(divider).toHaveAttribute('aria-valuenow',saved!);
- await expect(app.getByRole('tab')).toHaveCount(1);
- await tool('workspace_end');
+ // Conversation and the Plan tab beside it; member tabs do not survive a reload.
+ await expect(app.getByRole('tab')).toHaveCount(2);
+ await tool('workspace_end',{confirm:true});
  await expect(sidebar).toHaveCount(0);
  await expect(app.getByRole('tablist',{name:'Workspace views'})).toHaveCount(0);
  await expect(composer).toBeEnabled();
@@ -303,21 +305,22 @@ test('bulk workspace setup keeps package workers resident and QA survives refres
   const text=await outputs.last().innerText();expect(text).toMatch(error?/^WORKSPACE_ERROR /:/^WORKSPACE_RESULT /);return error?text:JSON.parse(text.slice('WORKSPACE_RESULT '.length));
  };
  await expect(composer).toBeEnabled();
- const about=await tool('workspace_get',{view:'about'});expect(about.tools).toHaveLength(11);
+ const about=await tool('workspace_get',{view:'about'});expect(about.tools).toHaveLength(14);
  expect(about.tools).not.toContain('member_spawn');
  await tool('member_spawn',{},true);
  await tool('setup_workspace',{name:'Removed'},true);
  await expect(sidebar).toHaveCount(0);
 expect(about.caller.config_options.length).toBeGreaterThan(0);
- const qaPath=join(router.xdgConfigHome,'QA.md');
- const config={qa_document:{path:qaPath,title:'Package questions'},request_id:'package-setup',workspace:{name:'Package QA'},members:{
-  implementer:{name:'K5 implementer',model:'fast',effort:'low',lifetime:'resident',package:'K5',role:'implementer',instructions:'Implement only the assigned package.',task:'First delivery'},
-  red:{name:'K5 red',model:'fast',effort:'low',lifetime:'resident',package:'K5',role:'reviewer',instructions:'Review defensively; wait for work.'},
- },plan:{items:{K5:{text:'K5 package',state:'active'}}}};
- await tool('workspace_configure',{...config,preview:true});await expect(sidebar).toHaveCount(0);
+ const qaDir=join(router.xdgConfigHome,'qa');const qaPath=join(qaDir,'K5-bound.md');
+ const setup={qa_dir:qaDir,request_id:'package-setup',workspace:{name:'Package QA'}};
+ await tool('workspace_configure',{...setup,preview:true});await expect(sidebar).toHaveCount(0);
+ expect((await tool('workspace_configure',setup)).qa_document_status.state).toBe('saved');
+ await tool('plan_set',{nodes:{K5:{title:'K5 package'}}});
+ const config={request_id:'package-members',members:{
+  implementer:{name:'K5 implementer',model:'fast',effort:'low',lifetime:'resident',node:'K5',role:'implementer',instructions:'Implement only the assigned package.',task:'First delivery'},
+  red:{name:'K5 red',model:'fast',effort:'low',lifetime:'resident',node:'K5',role:'reviewer',instructions:'Review defensively; wait for work.'},
+ }};
  const configured=await tool('workspace_configure',config);
- expect(readFileSync(qaPath,'utf8')).toContain('# Package questions');
- expect(configured.qa_document_status.state).toBe('saved');
  expect(configured.launches.implementer.state).toBe('available');expect(configured.launches.red.state).toBe('available');
  const state=()=>JSON.parse(readFileSync(join(router.xdgStateHome,'wash/workspaces.json'),'utf8')).workspaces.at(-1);
  await expect.poll(()=>state().assignments[0]?.state).toBe('completed');
@@ -331,15 +334,17 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await expect(app.getByTestId('workspace-member-detail').getByRole('button',{name:/^Allow(\s|$)/})).toBeVisible();
  await app.getByTestId('workspace-member-detail').getByRole('button',{name:/^Allow(\s|$)/}).click();
  await expect(app.getByTestId('workspace-member-detail')).toContainText('Permission outcome: allow');
- await tool('message_send',{request_id:'open-qa',recipient:'red',type:'question',body:'Does the clock meet the bound?',qa:{id:'K5-bound',action:'open',package:'K5',title:'Wakeup bound',blocking:true}});
+ await tool('message_send',{request_id:'open-qa',recipient:'red',type:'question',body:'Does the clock meet the bound?',qa:{id:'K5-bound',action:'open',node:'K5',title:'Wakeup bound',blocking:true}});
  await sidebar.getByTestId('workspace-question-K5-bound').click();
  await expect(app.getByTestId('workspace-qa')).toContainText('Does the clock meet the bound?');
- await expect(app.getByTestId('workspace-qa-path')).toHaveText(qaPath);
+ await expect(app.getByTestId('workspace-qa-path')).toHaveText(qaDir);
  expect(readFileSync(qaPath,'utf8')).toContain('Does the clock meet the bound?');
  await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author===configured.receipt.members.red&&e.body==='Fixture answer')).toBe(true);
- await tool('decision_request',{text:'Choose the bound: recommend A, alternative B.',thread_id:'K5-bound',request_id:'owner-choice'});
- await sidebar.getByLabel('Decision response').fill('Use bound A');await sidebar.getByRole('button',{name:'Answer',exact:true}).click();
- await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author==='human'&&e.body==='Use bound A')).toBe(true);
+ await tool('decision_request',{questions:[{question:'Choose the bound',options:[{label:'A'},{label:'B'}],recommended:'A'}],thread_id:'K5-bound',request_id:'owner-choice'});
+ const panel=app.getByTestId('question-panel');
+ await panel.getByRole('radio',{name:/^1 A/}).click();await panel.getByLabel('Your answer: Choose the bound').fill('Use bound A');
+ await panel.getByRole('button',{name:/^Submit/}).click();
+ await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author==='human'&&e.body.includes('A — Use bound A'))).toBe(true);
  await expect.poll(()=>readFileSync(qaPath,'utf8')).toContain('Use bound A');
  await page.reload();await expect(sidebar).toBeVisible();await sidebar.getByTestId('workspace-qa-link').click();
  await expect(app.getByTestId('workspace-qa')).toContainText('Use bound A');await expect(app.getByTestId('workspace-qa')).toContainText('Owner');
@@ -347,18 +352,22 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await tool('member_update',{qa_updates:[{id:'K5-bound',action:'resolve',expected_revision:qa.thread.revision-1,evidence:'stale'}]},true);
  await tool('member_update',{request_id:'resolve-qa',status:'Package accepted',qa_updates:[{id:'K5-bound',action:'resolve',expected_revision:qa.thread.revision,evidence:'Regression tests passed; review complete.'}]});
  await expect(sidebar.getByTestId('workspace-qa-link')).toContainText('0 open');
- await tool('member_control',{action:'end',package:'K5'});
- await expect.poll(()=>state().members.filter((m:any)=>m.package==='K5').every((m:any)=>m.state==='ended')).toBe(true);
+ await tool('member_control',{action:'end',node:'K5'});
+ await expect.poll(()=>state().members.filter((m:any)=>m.node==='K5').every((m:any)=>m.state==='ended')).toBe(true);
  expect(state().qa[0].state).toBe('resolved');
  expect(readFileSync(qaPath,'utf8')).toContain('Status: **resolved**');
  await sidebar.getByTestId('workspace-qa-link').click();await page.screenshot({path:test.info().outputPath('workspace-qa.png')});
- const final=await tool('workspace_end');expect(final.qa_document_status.state).toBe('saved');await expect(sidebar).toHaveCount(0);
- await tool('workspace_configure',{workspace:{name:'Resumed package QA'},qa_document:{path:qaPath,title:'Package questions'}});
+ // K5 is reported, not accepted: ending with it is a decision.
+ expect(await tool('workspace_end',{},true)).toContain('K5');
+ const final=await tool('workspace_end',{confirm:true});expect(final.qa_document_status.state).toBe('saved');await expect(sidebar).toHaveCount(0);
+ await tool('workspace_configure',{workspace:{name:'Resumed package QA'},qa_dir:qaDir});
  await sidebar.getByTestId('workspace-qa-link').click();
- await expect(app.getByTestId('workspace-qa')).toContainText('Use bound A');
+ // A resolved thread resumes as a header; its events stay in its file.
  await expect(app.getByTestId('workspace-qa')).toContainText('Regression tests passed; review complete.');
- expect(state().qa[0].state).toBe('resolved');
- await tool('workspace_end');await expect(sidebar).toHaveCount(0);
+ await expect(app.getByTestId('workspace-qa')).toContainText('earlier workspace');
+ expect(state().qa[0].state).toBe('resolved');expect(state().qa[0].archived).toBe(true);
+ expect((await tool('workspace_get',{view:'qa',thread_id:'K5-bound'})).thread.events.some((e:any)=>e.body.includes('Use bound A'))).toBe(true);
+ await tool('workspace_end',{confirm:true});await expect(sidebar).toHaveCount(0);
 });
 
 // A workspace takes its catalog from the orchestrator's own session, and a

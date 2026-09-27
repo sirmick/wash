@@ -6,40 +6,45 @@ import (
 	"github.com/sirmick/wash/internal/swarm"
 )
 
-// qaView keeps transcript bodies out of general workspace snapshots. Explicit
-// thread reads are paginated and byte-bounded, like inbox history.
+// qaView answers view=qa. Without a thread it is the index, one row per
+// thread; with thread_id, that thread's events, paginated and byte-bounded
+// like inbox history. A resolved thread read back as a header only has its
+// events read from its file.
 func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 	if a.IncludeMessages {
 		return nil, errors.New("QA view does not accept include_messages")
-	}
-	selected := []swarm.QAThread{}
-	for _, q := range w.QA {
-		if a.Package != "" && q.Package != a.Package {
-			continue
-		}
-		if a.Thread != "" && q.ID != a.Thread {
-			continue
-		}
-		selected = append(selected, q)
 	}
 	if a.Thread == "" {
 		if a.After != "" || a.Limit != 0 {
 			return nil, errors.New("QA pagination requires thread_id")
 		}
-		for i := range selected {
-			selected[i].Events = nil
-		}
-		filtered := *w
-		filtered.QA = nil
+		index := []map[string]any{}
 		for _, q := range w.QA {
-			if a.Package == "" || q.Package == a.Package {
-				filtered.QA = append(filtered.QA, q)
+			if a.Node != "" && !swarm.Within(w, q.Node, a.Node) {
+				continue
 			}
+			row := map[string]any{"id": q.ID, "node": q.Node, "title": q.Title, "state": q.State, "assignee": q.Assignee, "revision": q.Revision}
+			if q.Blocking {
+				row["blocking"] = true
+			}
+			if q.Resumed {
+				row["resumed"] = true
+			}
+			index = append(index, row)
 		}
-		return map[string]any{"threads": selected, "markdown": swarm.QAMarkdown(&filtered)}, nil
+		return map[string]any{"threads": index}, nil
 	}
-	if len(selected) != 1 {
+	q := swarm.QA(w, a.Thread)
+	if q == nil || a.Node != "" && !swarm.Within(w, q.Node, a.Node) {
 		return nil, errors.New("unknown QA thread")
+	}
+	thread := *q
+	if thread.Archived {
+		events, err := loadQAEvents(w.QADir, thread.ID)
+		if err != nil {
+			return nil, err
+		}
+		thread.Events = events
 	}
 	limit := a.Limit
 	if limit == 0 {
@@ -48,12 +53,11 @@ func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 	if limit < 1 || limit > 100 {
 		return nil, errors.New("limit must be 1–100")
 	}
-	q := selected[0]
 	events := []swarm.QAEvent{}
 	after := a.After == ""
 	more := false
 	bytes := 0
-	for _, e := range q.Events {
+	for _, e := range thread.Events {
 		if !after {
 			if e.ID == a.After {
 				after = true
@@ -70,16 +74,14 @@ func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 	if !after {
 		return nil, errors.New("unknown QA event cursor")
 	}
-	q.Events = events
+	thread.Events = events
 	cursor := a.After
 	if len(events) > 0 {
 		cursor = events[len(events)-1].ID
 	}
-	return map[string]any{"thread": q, "cursor": cursor, "has_more": more}, nil
+	return map[string]any{"thread": thread, "cursor": cursor, "has_more": more}, nil
 }
 func qaSummary(w *swarm.Workspace) {
-	w.QAPreamble = ""
-	w.QAOriginalHash = ""
 	for i := range w.QA {
 		w.QA[i].Events = nil
 	}

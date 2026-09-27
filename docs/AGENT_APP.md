@@ -378,6 +378,27 @@ New `apps/agentd/be/acp.go`:
     until the next turn. Late chunks still reach the transcript; they no
     longer claim the agent is busy.
 - **`session/request_permission` → `ask.go`** through M0's source route.
+- **`elicitation/create` → `question.go`** (2026-09-26). agentd advertises
+  `clientCapabilities.elicitation.form`, so claude-agent-acp sends Claude
+  Code's `AskUserQuestion` as a form: one field per question (a `oneOf`, or
+  for multi-select an array of `anyOf`; the header as its title, the question
+  as its description) and a `question_<n>_custom` text field beside each. The
+  form becomes a question set (`swarm.QuestionSet`) in the roster's
+  `questions`, rendered by `question-panel.tsx` pinned above the asking
+  session's composer, and the request waits for `agent_question_answer`: no
+  timeout, cancelled with the turn or the session. Other form fields map by
+  type (boolean yes/no, string or number as text); URL elicitations are
+  declined. A workspace member's `decision_request` uses the same set and the
+  same panel. The row is `needs-input` with reason `question`, and a desktop
+  notification names the asker.
+- **Background work** (2026-09-26). agentd advertises claude-agent-acp's
+  `asyncTasks` extension (`clientCapabilities._meta.jetbrains.air`), and
+  tracks `async_task_spawned` / `async_task_state_update` per session
+  (`background.go`). A session whose turn ended with work still running in
+  the background carries it in `Row.background`; the status line and the
+  roster say `background · <what>`, and a workspace member's activity is
+  `background`, instead of idle. To check live: whether a background Bash
+  finishing starts a new turn.
 - **Liveness is real now.** We own the process, so exit is a fact rather
   than a 60s inference. The TTL sweep stays only as a backstop.
 - **Policy moves here.** The matcher from `apps/term/be/policy.go` and the

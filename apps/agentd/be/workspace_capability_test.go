@@ -38,7 +38,7 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 		t.Fatal("unsupported adapter launched")
 	}
 	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
-	_, err = s.Setup("review-session", "claude", t.TempDir(), "Review", "", nil)
+	_, err = s.Setup("review-session", "claude", t.TempDir(), "Review", "")
 	if err != nil {
 		t.Fatal(err)
 	}

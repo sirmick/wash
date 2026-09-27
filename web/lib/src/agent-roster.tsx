@@ -45,15 +45,15 @@ export function rosterTeams(rows: agentproto.Row[]): { top: string[]; teams: Map
   const teams = new Map<string, TeamEntry[]>();
   for (const [lead, list] of members) {
     list.sort((a, b) =>
-      (a.workspace!.package ?? '').localeCompare(b.workspace!.package ?? '') ||
+      (a.workspace!.node ?? '').localeCompare(b.workspace!.node ?? '') ||
       a.workspace!.member.localeCompare(b.workspace!.member) ||
       a.key.localeCompare(b.key));
     const entries: TeamEntry[] = [];
     let pkg = '';
     for (const r of list) {
-      const code = r.workspace!.package ?? '';
+      const code = r.workspace!.node ?? '';
       if (code && code !== pkg) {
-        const title = r.workspace!.package_title;
+        const title = r.workspace!.node_title;
         entries.push({ pkg: code, label: title ? `${code} · ${title}` : code });
       }
       pkg = code;
@@ -82,6 +82,8 @@ export interface AgentRosterProps {
   onReattach?: (row: agentproto.Row) => void;
   /** permission questions waiting on the human */
   asks?: () => agentproto.Ask[];
+  /** Question sets waiting for the human; each opens its asking session. */
+  questions?: () => agentproto.PendingQuestion[];
   /** answer one: decision allow|deny, remember writes the named rule */
   onAnswer?: (ask: agentproto.Ask, decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
   // recent / onResume / onCopyID used to live here. They went with
@@ -115,6 +117,9 @@ export function stateColor(state: string): string {
 }
 
 export function stateLabel(row: agentproto.Row): string {
+  // Work left running in the background outlives the turn: the session is
+  // waiting on it, not done.
+  if (row.background && row.state !== 'needs-input' && row.state !== 'working') return `background · ${row.background}`;
   return agentStateLabel(row.state, row.reason);
 }
 
@@ -191,6 +196,20 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
       {/* Questions first: an agent blocked on a human outranks every
           status line below it. */}
       <AgentAsks asks={() => props.asks?.() ?? []} onAnswer={props.onAnswer} />
+      {/* Question sets are answered in the asking session's window, where
+          they are pinned above its composer; here they are a way there. */}
+      <For each={props.questions?.() ?? []}>{(q) => (
+        <button data-wash-hit type="button" data-testid={`agents-question-${q.id}`}
+          onClick={() => { const r = rowByKey().get(q.row_key); if (r) props.onActivate(r); }}
+          style={{
+            'text-align': 'left', cursor: 'pointer', font: tokens.type.textSm, color: tokens.fg,
+            background: tokens.bgDenied, border: `1px solid ${tokens.borderDenied}`, 'border-radius': tokens.radiusMd,
+            padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
+          }}>
+          <span style={{ color: tokens.accentAmber, 'font-weight': 600 }}>● Needs you</span>{' '}
+          {q.workspace_name || q.agent}: {q.set.title || q.set.questions[0]?.question}
+        </button>
+      )}</For>
       <Show when={empty()}>
         <div
           data-testid="agents-empty"

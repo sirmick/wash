@@ -20,6 +20,7 @@
 //	"launchinfo" → reports its own argv, $WASH_FAKE_MARK and which keys it got
 //
 // Run as `opencode`, it offers OpenCode's options instead (opencode.go).
+//
 //	"crash"  → says why on stderr and exits mid-turn (the adapter died)
 //	anything → a short markdown reply with a tool call
 package main
@@ -205,6 +206,18 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		reply(out, id, map[string]any{"stopReason": "end_turn"})
 		return
 	}
+	// Background work a member leaves running: reported as an async task
+	// that outlives the turn and finishes a few seconds later.
+	background := os.Getenv("WASH_FAKE_WORKSPACE") == "1" && strings.Contains(raw, "BACKGROUND_WORK")
+	if background {
+		notify(out, update(map[string]any{"sessionUpdate": "async_task_spawned", "asyncTaskId": "bg-1", "name": "Background task", "description": "sleep 6 && echo ok", "taskType": "local_bash", "canStop": true}))
+		defer func() {
+			go func() {
+				time.Sleep(6 * time.Second)
+				notify(out, update(map[string]any{"sessionUpdate": "async_task_state_update", "asyncTaskId": "bg-1", "state": "completed"}))
+			}()
+		}()
+	}
 	if text, ok := workspaceScript(raw); ok {
 		notify(out, update(map[string]any{"sessionUpdate": "usage_update", "used": 2048, "size": 32000}))
 		// Preserve JSON option names verbatim through the Markdown transcript.
@@ -248,6 +261,41 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		// image or the resource_link actually reached the wire.
 		notify(out, chunk("BLOCKS<<"+blockSummary(m)+">>"))
 		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.Contains(text, "elicit") {
+		// A structured question, the way claude-agent-acp forwards Claude
+		// Code's AskUserQuestion: a form with one field per question and a
+		// custom-answer field beside each. The turn waits for the human.
+		rid := reqSeq.Add(1) + 5000
+		opt := func(label, desc string) map[string]any {
+			return map[string]any{"const": label, "title": label, "description": desc}
+		}
+		request(out, rid, "elicitation/create", map[string]any{
+			"sessionId": sessionID, "mode": "form", "message": "Please answer the following questions.",
+			"requestedSchema": map[string]any{"type": "object", "properties": map[string]any{
+				"question_0":        map[string]any{"type": "string", "title": "Clock", "description": "Which clock source?", "oneOf": []any{opt("Monotonic", "Never goes back"), opt("Wall", "Follows the date")}},
+				"question_0_custom": map[string]any{"type": "string", "title": "Other", "description": "Type your own answer, or add a note (optional)."},
+				"question_1":        map[string]any{"type": "array", "title": "Targets", "description": "Which targets?", "items": map[string]any{"anyOf": []any{opt("rv32", ""), opt("x86", "")}}},
+				"question_1_custom": map[string]any{"type": "string", "title": "Other", "description": "Type your own answer (optional)."},
+			}},
+		})
+		res, _ := await(fmt.Sprint(rid)).(map[string]any)
+		b, _ := json.Marshal(res["content"])
+		notify(out, chunk(fmt.Sprintf("ELICIT<<%v %s>>", res["action"], b)))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
+	if strings.Contains(text, "background") {
+		notify(out, update(map[string]any{"sessionUpdate": "async_task_spawned", "asyncTaskId": "bg-solo", "name": "Background task", "description": "make bench", "taskType": "local_bash"}))
+		notify(out, chunk("Started in the background."))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		go func() {
+			time.Sleep(4 * time.Second)
+			notify(out, update(map[string]any{"sessionUpdate": "async_task_state_update", "asyncTaskId": "bg-solo", "state": "completed"}))
+		}()
 		return
 	}
 

@@ -2,6 +2,8 @@ package agentd
 
 import (
 	"encoding/json"
+	"os"
+	"time"
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/workspacemcp"
@@ -38,6 +40,19 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 	pol := hostedPolicy()
 	caller["config_options"] = options
 	result["caller"] = caller
+	// Which workspaces are open, and whether their orchestrators run here:
+	// a stale one holding a QA directory is ended with workspace_end
+	// workspace_id. And which agentd this is, when two are serving.
+	open := []map[string]any{}
+	for _, w := range ws.store.Snapshot().Workspaces {
+		if w.State == "ended" {
+			continue
+		}
+		open = append(open, map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "project_root": w.Root, "orchestrator_running": workspaceHosted(workspaceLeadSession(w)) != nil})
+	}
+	result["open_workspaces"] = open
+	bin, _ := os.Executable()
+	result["agentd"] = map[string]any{"binary": bin, "pid": os.Getpid(), "started_at": agentdStarted.UTC().Format(time.RFC3339)}
 	if caller["role"] == "member" {
 		names := []string{}
 		for _, t := range workspacemcp.MemberTools() {
@@ -79,3 +94,6 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 	}
 	return result
 }
+
+// agentdStarted is when this agentd started, for about.
+var agentdStarted = time.Now()

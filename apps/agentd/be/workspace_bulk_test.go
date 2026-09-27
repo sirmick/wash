@@ -27,23 +27,23 @@ func TestBulkSetupPreviewRollbackAndStableMemberKeys(t *testing.T) {
 		raw, _ := json.Marshal(args)
 		return ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: raw})
 	}
-	args := map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"reviewer": map[string]any{"name": "Red", "lifetime": "resident", "instructions": "Review", "package": "K5", "role": "reviewer"}}, "plan": map[string]any{"items": map[string]any{"k5": map[string]string{"text": "Review K5", "state": "active"}}}}
+	args := map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"reviewer": map[string]any{"name": "Red", "lifetime": "resident", "instructions": "Review", "role": "reviewer"}}}
 	if _, err := call(args); err != nil {
 		t.Fatal(err)
 	}
 	if s.View(h.sessionID) != nil {
 		t.Fatal("preview created workspace")
 	}
+	// A member on a node the plan does not have fails, and nothing commits.
 	args["preview"] = false
-	args["plan"] = map[string]any{"items": map[string]any{"bad": map[string]string{"state": "bad"}}}
-	if _, err := call(args); err == nil {
-		t.Fatal("accepted invalid plan")
+	args["members"] = map[string]any{"reviewer": map[string]any{"name": "Red", "lifetime": "resident", "instructions": "Review", "role": "reviewer", "node": "K5"}}
+	if _, err := call(args); err == nil || !strings.Contains(err.Error(), "plan_set") {
+		t.Fatalf("accepted a member on a missing node: %v", err)
 	}
 	if s.View(h.sessionID) != nil {
 		t.Fatal("partial setup committed")
 	}
 	delete(args, "members")
-	args["plan"] = map[string]any{"items": map[string]any{"k5": map[string]string{"text": "Review K5"}}}
 	args["request_id"] = "setup"
 	if _, err := call(args); err != nil {
 		t.Fatal(err)
@@ -55,8 +55,13 @@ func TestBulkSetupPreviewRollbackAndStableMemberKeys(t *testing.T) {
 	if !reflect.DeepEqual(before, s.Snapshot()) {
 		t.Fatal("setup retry mutated workspace")
 	}
+	raw, _ := json.Marshal(map[string]any{"nodes": map[string]any{"K5": map[string]any{"title": "Review K5"}}})
+	if _, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "plan_set", Arguments: raw}); err != nil {
+		t.Fatal(err)
+	}
+	before = s.Snapshot()
 	// Reserved members are validated on preview, without a provider process.
-	args = map[string]any{"preview": true, "members": map[string]any{"reviewer": map[string]any{"name": "Red", "lifetime": "resident", "instructions": "Review", "role": "reviewer", "package": "K5"}}}
+	args = map[string]any{"preview": true, "members": map[string]any{"reviewer": map[string]any{"name": "Red", "lifetime": "resident", "instructions": "Review", "role": "reviewer", "node": "K5"}}}
 	if _, err := call(args); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +71,8 @@ func TestBulkSetupPreviewRollbackAndStableMemberKeys(t *testing.T) {
 }
 func TestCombinedMemberUpdateRollsBackAndQAReadback(t *testing.T) {
 	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
-	w, _ := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
+	w, _ := s.Setup("lead", "codex", t.TempDir(), "Team", "")
+	seedPlan(t, s, "lead", "K5")
 	ws := &workspaceService{store: s}
 	h := &hosted{sessionID: "lead", agent: "codex"}
 	call := func(name, raw string) (any, error) {
@@ -79,7 +85,7 @@ func TestCombinedMemberUpdateRollsBackAndQAReadback(t *testing.T) {
 	if !reflect.DeepEqual(before, s.Snapshot()) {
 		t.Fatal("partial report")
 	}
-	raw, _ := json.Marshal(map[string]any{"request_id": "q-open", "recipient": w.Lead, "type": "question", "body": "Which bound?", "qa": map[string]any{"id": "q", "action": "open", "package": "K5", "title": "Bound"}})
+	raw, _ := json.Marshal(map[string]any{"request_id": "q-open", "recipient": w.Lead, "type": "question", "body": "Which bound?", "qa": map[string]any{"id": "q", "action": "open", "node": "K5", "title": "Bound"}})
 	if _, err := call("message_send", string(raw)); err != nil {
 		t.Fatal(err)
 	}
@@ -119,13 +125,14 @@ func TestBulkRenamePreservesProjectRootAndBatchesRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A project may be attached to a conversation launched from another directory.
-	w, err := s.Setup("lead", "codex", root, "Project", filepath.Join(root, "project"), nil)
+	w, err := s.Setup("lead", "codex", root, "Project", filepath.Join(root, "project"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(w.Root, 0700); err != nil {
 		t.Fatal(err)
 	}
+	seedPlan(t, s, "lead", "K5")
 	ws := &workspaceService{store: s}
 	h := &hosted{sessionID: "lead", agent: "codex", cwd: root}
 	call := func(name, raw string) (any, error) {
@@ -145,11 +152,11 @@ func TestBulkRenamePreservesProjectRootAndBatchesRollback(t *testing.T) {
 	if !reflect.DeepEqual(before, s.Snapshot()) {
 		t.Fatal("batch partially committed")
 	}
-	if _, err := call("member_update", `{"qa_updates":[{"action":"open","id":"q","package":"K5","title":"Question","body":"Body","assignee":"`+w.Lead+`"}]}`); err != nil {
+	if _, err := call("member_update", `{"qa_updates":[{"action":"open","id":"q","node":"K5","title":"Question","body":"Body","assignee":"`+w.Lead+`"}]}`); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if _, err := call("decision_request", `{"text":"Choose A or B","thread_id":"q","request_id":"choice"}`); err != nil {
+		if _, err := call("decision_request", `{"questions":[{"question":"Choose A or B","options":[{"label":"A"},{"label":"B"}]}],"thread_id":"q","request_id":"choice"}`); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -180,7 +187,7 @@ func TestConfigureInsideApprovedRootDoesNotAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Setup("lead", "claude", cwd, "Project", project, nil); err != nil {
+	if _, err := s.Setup("lead", "claude", cwd, "Project", project); err != nil {
 		t.Fatal(err)
 	}
 	// Set up directly rather than through workspace_configure, which would
@@ -198,11 +205,11 @@ func TestConfigureInsideApprovedRootDoesNotAsk(t *testing.T) {
 	member := func(dir string) map[string]any {
 		return map[string]any{"k5-implementer": map[string]any{"name": "K5", "lifetime": "resident", "instructions": "Implement", "cwd": dir}}
 	}
-	if err := call(map[string]any{"preview": true, "document": map[string]string{"path": filepath.Join(project, "docs", "PLAN.md")}, "qa_document": map[string]string{"path": filepath.Join(project, "docs", "QA.md")}, "members": member(filepath.Join(project, ".worktrees", "k5"))}); err != nil {
+	if err := call(map[string]any{"preview": true, "plan_file": filepath.Join(project, "docs", "plan.toml"), "qa_dir": filepath.Join(project, "docs", "qa"), "members": member(filepath.Join(project, ".worktrees", "k5"))}); err != nil {
 		t.Fatalf("path inside the approved root asked: %v", err)
 	}
 	// Relative paths are the project root's, not the orchestrator's cwd.
-	if err := call(map[string]any{"preview": true, "document": map[string]string{"path": "docs/PLAN.md"}, "qa_document": map[string]string{"path": "docs/QA.md"}}); err != nil {
+	if err := call(map[string]any{"preview": true, "plan_file": "docs/plan.toml", "qa_dir": "docs/qa"}); err != nil {
 		t.Fatalf("relative paths under the project root: %v", err)
 	}
 	// Outside the root is still a question — here refused, as nobody is home.
@@ -213,7 +220,7 @@ func TestConfigureInsideApprovedRootDoesNotAsk(t *testing.T) {
 
 // With titled packages a member's name is its role, so names repeat across
 // packages; they must still be unique within one.
-func TestMemberNamesAreUniquePerPackage(t *testing.T) {
+func TestMemberNamesAreUniquePerNode(t *testing.T) {
 	root := t.TempDir()
 	s, err := swarm.Open(filepath.Join(root, "state.json"))
 	if err != nil {
@@ -221,79 +228,107 @@ func TestMemberNamesAreUniquePerPackage(t *testing.T) {
 	}
 	ws := &workspaceService{store: s}
 	h := &hosted{sessionID: "lead", agent: "claude", cwd: root}
+	raw, _ := json.Marshal(map[string]any{"workspace": map[string]string{"name": "Team"}})
+	if _, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: raw}); err != nil {
+		t.Fatal(err)
+	}
+	seedPlan(t, s, "lead", "CT1", "G1")
 	call := func(members map[string]any) error {
-		raw, _ := json.Marshal(map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": members})
+		raw, _ := json.Marshal(map[string]any{"preview": true, "members": members})
 		_, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: raw})
 		return err
 	}
-	member := func(pkg string) map[string]any {
-		return map[string]any{"name": "Red team", "package": pkg, "role": "reviewer", "lifetime": "resident", "instructions": "Review"}
+	member := func(node string) map[string]any {
+		return map[string]any{"name": "Red team", "node": node, "role": "reviewer", "lifetime": "resident", "instructions": "Review"}
 	}
 	if err := call(map[string]any{"CT1-red": member("CT1"), "G1-red": member("G1")}); err != nil {
-		t.Fatalf("same role name in two packages refused: %v", err)
-	}
-	if _, err := s.Setup("lead", "claude", root, "Team", "", nil); err != nil {
-		t.Fatal(err)
+		t.Fatalf("same role name on two nodes refused: %v", err)
 	}
 	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
-		w.Members = append(w.Members, swarm.Member{ID: "x", Key: "CT1-red", Name: "Red team", Package: "CT1", State: "available", Lifetime: "resident"})
+		w.Members = append(w.Members, swarm.Member{ID: "x", Key: "CT1-red", Name: "Red team", Node: "CT1", State: "available", Lifetime: "resident"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"preview": true, "members": map[string]any{"CT1-red2": member("CT1")}})
-	if _, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: raw}); err == nil {
-		t.Fatal("duplicate name within one package accepted")
+	if err := call(map[string]any{"CT1-red2": member("CT1")}); err == nil {
+		t.Fatal("duplicate name on one node accepted")
 	}
 }
 
-// Observed in Redoubt: the human answered the Architect's decision in the
-// member pane's message box. That sent a plain instruction, left the decision
-// recorded, and pinned its QA thread at awaiting-owner, where resolve refuses.
-func TestMessagingAMemberAnswersItsPendingDecision(t *testing.T) {
+// A decision blocks its asker: nothing else reaches it until the owner
+// answers, the answers arrive as its next message, and they are in the QA
+// thread word for word, so the thread can be resolved.
+func TestADecisionBlocksItsAskerUntilAnswered(t *testing.T) {
 	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedPlan(t, s, "lead", "R2")
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "arch", Name: "Architect", Role: "architect", Session: "arch-s", State: "available", Lifetime: "resident", Creator: m.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	ws := &workspaceService{store: s}
-	lead := &hosted{sessionID: "lead"}
-	call := func(name, raw string) (any, error) {
-		return ws.call(context.Background(), lead, workspacemcp.Call{Name: name, Arguments: json.RawMessage(raw)})
+	arch := &hosted{sessionID: "arch-s"}
+	call := func(h *hosted, name, raw string) (any, error) {
+		return ws.call(context.Background(), h, workspacemcp.Call{Name: name, Arguments: json.RawMessage(raw)})
 	}
-	if _, err = call("member_update", `{"qa_updates":[{"action":"open","id":"q","package":"R2","title":"Stub address","body":"Where?","assignee":"`+w.Lead+`"}]}`); err != nil {
+	if _, err = call(arch, "member_update", `{"qa_updates":[{"action":"open","id":"q","node":"R2","title":"Stub address","body":"Where?","assignee":"`+w.Lead+`"}]}`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = call("decision_request", `{"text":"Fixed address or relocatable?","thread_id":"q"}`); err != nil {
+	res, err := call(arch, "decision_request", `{"title":"Stub address","questions":[{"id":"where","question":"Fixed address or relocatable?","options":[{"label":"Fixed"},{"label":"Relocatable"}],"recommended":"Fixed"},{"question":"Anything else?"}],"thread_id":"q"}`)
+	if err != nil {
 		t.Fatal(err)
+	}
+	id := res.(map[string]any)["id"].(string)
+	if !strings.Contains(res.(map[string]any)["instruction"].(string), "End your turn") {
+		t.Fatal(res)
 	}
 	if got := s.View("lead").QA[0].State; got != "awaiting-owner" {
 		t.Fatalf("thread %s, want awaiting-owner", got)
 	}
-	raw, _ := json.Marshal(map[string]any{"recipient": w.Lead, "body": "Fixed address."})
-	res, err := ws.humanMessage(lead, raw)
-	if err != nil || res.(map[string]any)["answered"] == nil {
-		t.Fatal("message did not answer the pending decision", res, err)
+	notes := 0
+	for _, m := range s.View("lead").Messages {
+		if m.Type == "note" && m.Recipient == w.Lead && strings.Contains(m.Body, "Architect asked the owner") {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Fatal("the orchestrator was not told the Architect waits on the owner")
+	}
+	// The orchestrator's instruction waits behind the question.
+	if _, err := s.Send("lead", "arch", "instruction", "Also review K5", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if next, _ := s.Next("arch-s"); len(next) != 0 {
+		t.Fatalf("delivered while the asker waits for the owner: %+v", next)
+	}
+	if err := s.AnswerDecision(id, map[string]swarm.QuestionAnswer{"where": {Selected: []string{"Fixed"}, Text: "at 0x8000"}, "q2": {}}, false); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := s.Next("arch-s")
+	if len(next) != 2 || next[0].Type != "decision_response" || !strings.Contains(next[0].Body, "Fixed — at 0x8000") || !strings.Contains(next[0].Body, "(skipped)") || next[1].Body != "Also review K5" {
+		t.Fatalf("the answer does not lead the next turn: %+v", next)
 	}
 	v := s.View("lead")
-	if v.QA[0].State != "open" {
-		t.Fatalf("thread %s after the answer, want open", v.QA[0].State)
-	}
 	last := v.QA[0].Events[len(v.QA[0].Events)-1]
-	if last.Kind != "decision_response" || last.Body != "Fixed address." {
-		t.Fatalf("answer not in the thread: %+v", last)
+	if v.QA[0].State != "open" || last.Kind != "decision_response" || !strings.Contains(last.Body, "Fixed — at 0x8000") {
+		t.Fatalf("answer not in the thread: %s %+v", v.QA[0].State, last)
 	}
-	rev := v.QA[0].Revision
-	if _, err = call("member_update", fmt.Sprintf(`{"qa_updates":[{"action":"resolve","id":"q","expected_revision":%d,"evidence":"Human chose a fixed address."}]}`, rev)); err != nil {
-		t.Fatal("thread still cannot be resolved:", err)
+	if err := s.AnswerDecision(id, nil, false); err == nil {
+		t.Fatal("answered twice")
 	}
-	// With nothing pending, a message is an ordinary instruction again.
-	res, err = ws.humanMessage(lead, raw)
-	if err != nil || res.(map[string]any)["answered"] != nil {
-		t.Fatal("a plain message was taken as a decision answer", res, err)
+	if err := s.AnswerDecision("nope", nil, true); err == nil {
+		t.Fatal("answered an unknown decision")
+	}
+	if _, err := call(arch, "decision_request", `{"questions":[{"question":"Pick","options":[{"label":"A"}],"recommended":"B"}]}`); err == nil {
+		t.Fatal("a recommendation that is not an option was accepted")
 	}
 }
 
@@ -402,7 +437,7 @@ func TestMembersDefaultToTheProjectRoot(t *testing.T) {
 		}
 	}
 	s, _ := swarm.Open(filepath.Join(base, "state.json"))
-	if _, err := s.Setup("lead", "claude", cwd, "Project", project, nil); err != nil {
+	if _, err := s.Setup("lead", "claude", cwd, "Project", project); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error { w.Catalog = "anthropic"; return nil }); err != nil {
@@ -480,7 +515,7 @@ func TestConfigureReportsWhatTheOrchestratorCanActOn(t *testing.T) {
 // without a word, and a status set before waiting outlived it.
 func TestAssignmentIDsAndWaitingStatus(t *testing.T) {
 	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
-	w, _ := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
+	w, _ := s.Setup("lead", "codex", t.TempDir(), "Team", "")
 	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
 		w.Members = append(w.Members, swarm.Member{ID: "m", Key: "rec", Session: "m-session", Name: "Rec", State: "available", Lifetime: "resident"})
 		return nil

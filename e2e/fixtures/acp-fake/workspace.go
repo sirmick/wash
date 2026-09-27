@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// ownerAssignment and peerAssignment are the assignments this member is
+// finishing once the owner, or a peer, answers.
+var ownerAssignment, peerAssignment string
+
 var workspaceBridge struct {
 	Command string
 	Args    []string
@@ -107,6 +111,7 @@ func workspaceScript(raw string) (string, bool) {
 			Assignment     string `json:"assignment_id"`
 			Thread         string `json:"thread_id"`
 			Sender         string
+			Node           string `json:"node"`
 		}
 		if err := json.Unmarshal([]byte(data), &batch); err != nil {
 			return err.Error(), true
@@ -115,6 +120,62 @@ func workspaceScript(raw string) (string, bool) {
 		for _, msg := range batch {
 			if msg.Body == "ASK_PERMISSION" {
 				return "", false
+			}
+			// ASK_OWNER: ask the owner two structured questions and wait
+			// (the call blocks this member); the answers arrive as the
+			// next turn's decision_response, which completes the work.
+			if msg.Assignment != "" && msg.Type == "instruction" && strings.Contains(msg.Body, "ASK_OWNER") {
+				ownerAssignment = msg.Assignment
+				_, err := workspaceCall("decision_request", map[string]any{"title": "Gamma", "questions": []any{
+					map[string]any{"id": "word", "question": "Which word goes in gamma.txt?", "options": []any{map[string]any{"label": "gamma"}, map[string]any{"label": "GAMMA"}}, "recommended": "gamma"},
+					map[string]any{"id": "note", "question": "Anything to add?"},
+				}})
+				if err != nil {
+					return err.Error(), true
+				}
+				handled = append(handled, msg.ID)
+				return "ASKED_OWNER " + strings.Join(handled, ","), true
+			}
+			if msg.Type == "decision_response" && ownerAssignment != "" {
+				_, err := workspaceCall("assignment_update", map[string]any{"updates": []any{map[string]any{"action": "complete", "id": ownerAssignment, "body": "Owner answered: " + msg.Body}}})
+				if err != nil {
+					return err.Error(), true
+				}
+				ownerAssignment = ""
+				handled = append(handled, msg.ID)
+				continue
+			}
+			// FAIL_ON_PURPOSE: report the assignment failed.
+			if msg.Assignment != "" && msg.Type == "instruction" && strings.Contains(msg.Body, "FAIL_ON_PURPOSE") {
+				_, err := workspaceCall("assignment_update", map[string]any{"updates": []any{map[string]any{"action": "fail", "id": msg.Assignment, "body": "Failed on purpose"}}})
+				if err != nil {
+					return err.Error(), true
+				}
+				handled = append(handled, msg.ID)
+				continue
+			}
+			// ASK_PEER <member> <thread>: open a QA thread on this member's
+			// node with another member and wait; the answer completes it.
+			if msg.Assignment != "" && msg.Type == "instruction" && strings.Contains(msg.Body, "ASK_PEER") {
+				f := strings.Fields(msg.Body[strings.Index(msg.Body, "ASK_PEER"):])
+				if len(f) >= 4 {
+					peerAssignment = msg.Assignment
+					_, err := workspaceCall("message_send", map[string]any{"recipient": f[1], "type": "question", "body": "Is alpha lower case?", "qa": map[string]any{"id": f[2], "action": "open", "node": f[3], "title": "Alpha case"}})
+					if err != nil {
+						return err.Error(), true
+					}
+					handled = append(handled, msg.ID)
+					continue
+				}
+			}
+			if msg.Type == "answer" && msg.Thread != "" && peerAssignment != "" {
+				_, err := workspaceCall("assignment_update", map[string]any{"updates": []any{map[string]any{"action": "complete", "id": peerAssignment, "body": "Peer answered on " + msg.Thread}}})
+				if err != nil {
+					return err.Error(), true
+				}
+				peerAssignment = ""
+				handled = append(handled, msg.ID)
+				continue
 			}
 			// A member's first turn is its brief, with the task at the end.
 			if msg.Assignment != "" && msg.Type == "instruction" && strings.HasSuffix(strings.TrimSpace(msg.Body), "WAIT_FOR_ANSWER") {

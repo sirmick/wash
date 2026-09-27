@@ -123,6 +123,7 @@ edit by hand.
 | `agent_set_config` | [`AgentSetConfig`](#agentsetconfig) | a frontend showing the session |  | Change an agent setting (model, effort, …). A reviewer's mode cannot change. |
 | `agent_add_root` | [`AgentAddRoot`](#agentaddroot) | any frontend |  | Let the session reach another folder. |
 | `agent_remove_root` | [`AgentRemoveRoot`](#agentremoveroot) | any frontend |  | Take a folder back. |
+| `agent_question_answer` | [`AgentQuestionAnswer`](#agentquestionanswer) | any frontend (answering anywhere resolves everywhere) |  | The human's answers to a question set, or a decline. |
 | `agent_answer` | [`AgentAnswer`](#agentanswer) | any frontend (answering anywhere resolves everywhere) |  | Answer a question, optionally remembering the rule. |
 | `agent_default_prompt` | [`AgentDefaultPrompt`](#agentdefaultprompt) | any frontend | default_prompt | Read the stored default prompt. |
 | `agent_set_default_prompt` | [`AgentSetDefaultPrompt`](#agentsetdefaultprompt) | any frontend | default_prompt | Store (or, with empty text, delete) the default prompt. |
@@ -293,6 +294,16 @@ AgentPrune deletes stored sessions older than MaxAgeMS.
 |---|---|---|
 | `max_age_ms` | `number` | MaxAgeMS is how old a session must be to go; 0 means every stored session that is not running. A duration rather than a cutoff so a browser clock on another machine cannot be the one deciding. |
 
+#### AgentQuestionAnswer
+
+AgentQuestionAnswer answers a Question by its id: accept with the answers (question id to answer; a question left out is skipped), or decline.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `action` | `string` | Action is accept \| decline. |
+| `answers?` | `Record<string, QuestionAnswer>` |  |
+
 #### AgentReattach
 
 AgentReattach opens a window onto a running session.
@@ -461,6 +472,7 @@ Ask is one question waiting for a human.
 | `id` | `string` |  |
 | `assigner` | `string` |  |
 | `member_id` | `string` |  |
+| `node?` | `string` | Node is the plan node the work is on. |
 | `text` | `string` |  |
 | `state` | `string` |  |
 | `result?` | `string` |  |
@@ -573,13 +585,6 @@ Detach tells a session's controller window that the session was detached elsewhe
 |---|---|---|
 | `key` | `string` |  |
 
-#### Document
-
-| Field | Type | |
-|---|---|---|
-| `path` | `string` |  |
-| `title` | `string` |  |
-
 #### Event
 
 Event is one line in a transcript.
@@ -636,16 +641,6 @@ HistoryPruned answers AgentPrune: how many sessions went.
 | Field | Type | |
 |---|---|---|
 | `deleted` | `number` |  |
-
-#### Item
-
-| Field | Type | |
-|---|---|---|
-| `id` | `string` |  |
-| `text` | `string` |  |
-| `emoji?` | `string` |  |
-| `state` | `string` |  |
-| `revision` | `number` |  |
 
 #### KeySaved
 
@@ -706,10 +701,11 @@ No fields.
 | Field | Type | |
 |---|---|---|
 | `key?` | `string` |  |
-| `package?` | `string` |  |
+| `node?` | `string` | Node is the plan node the member works on; empty is the team (the orchestrator, an Architect). |
 | `role?` | `string` |  |
 | `instructions?` | `string` |  |
 | `initial_task?` | `string` |  |
+| `handoff?` | `string` | Handoff is the handoff a member launched with handoff_from reads in its first message: what the member it replaces had done and knew. |
 | `usage?` | `Usage` |  |
 | `catalog?` | `string` | Catalog and Model are what the member was asked to run on: the catalog (the workspace's unless the member named one) and the model as given, a slot name or an id. LaunchSettings is what that resolved to, with the member's own settings on top, fixed when its key was reserved: a later catalog change moves no running member. |
 | `model?` | `string` |  |
@@ -750,6 +746,8 @@ No fields.
 | `request_id?` | `string` |  |
 | `delivery` | `string` |  |
 | `created_at` | `number` |  |
+| `questions?` | `QuestionSet` | Questions is a decision_request's question set; Answers the owner's answers on its decision_response. |
+| `answers?` | `Record<string, QuestionAnswer>` |  |
 
 #### Mode
 
@@ -760,6 +758,23 @@ Mode is one approval/sandbox preset an agent offers.
 | `id` | `string` |  |
 | `name` | `string` |  |
 | `description?` | `string` |  |
+
+#### Node
+
+Node is one plan node.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `title` | `string` |  |
+| `emoji?` | `string` |  |
+| `template?` | `string` | Template is how the node is drawn: milestone, package, step or note. Wash gives it no other meaning, except that a milestone with no children is a sketch. |
+| `parent?` | `string` | Parent is the node this one sits inside. |
+| `needs?` | `string[]` | Needs are node IDs that must be done, or QA thread IDs that must be resolved, before work on this node (or anything inside it) starts. |
+| `body?` | `string` |  |
+| `state` | `string` | State is todo, active, reported, done, failed, or a short word of the orchestrator's own. |
+| `revision` | `number` |  |
+| `overrides?` | `string[]` | Overrides record each start with needs unmet, and why. |
 
 #### Notify
 
@@ -780,13 +795,29 @@ OpenSession opens a window showing a session.
 |---|---|---|
 | `key` | `string` |  |
 
-#### Package
+#### Option
 
-Package is the human-facing description of a package code.
+Option is one choice.
 
 | Field | Type | |
 |---|---|---|
-| `title` | `string` |  |
+| `label` | `string` |  |
+| `description?` | `string` |  |
+
+#### PendingQuestion
+
+PendingQuestion is a question set waiting for the human, shown pinned above the asking session's composer (and in its workspace tab) until answered.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` | ID is agentd's handle; the answer names it. A workspace decision's is its message id. |
+| `row_key` | `string` | RowKey is the asking session's roster row. |
+| `agent?` | `string` |  |
+| `source` | `string` | Source is elicitation (the adapter asked) or decision (a workspace member's decision_request). |
+| `set` | `QuestionSet` |  |
+| `workspace_name?` | `string` | WorkspaceName and MemberID place a workspace member's question. |
+| `member_id?` | `string` |  |
+| `age_ms` | `number` | AgeMS is how long it has been waiting, as of the push. |
 
 #### PreviewPatch
 
@@ -819,7 +850,7 @@ PromptAttachment is one attachment on its way to an ACP content block.
 
 #### QADocumentStatus
 
-QADocumentStatus is where the workspace's QA file stands on disk.
+QADocumentStatus is where a file (or directory) Wash writes for the workspace stands on disk: the QA thread files, the plan file.
 
 | Field | Type | |
 |---|---|---|
@@ -844,7 +875,7 @@ QADocumentStatus is where the workspace's QA file stands on disk.
 | Field | Type | |
 |---|---|---|
 | `id` | `string` |  |
-| `package` | `string` |  |
+| `node` | `string` | Node is the plan node the thread is about. |
 | `title` | `string` |  |
 | `creator` | `string` |  |
 | `assignee` | `string` |  |
@@ -854,7 +885,40 @@ QADocumentStatus is where the workspace's QA file stands on disk.
 | `decision_refs` | `string[] \| null` |  |
 | `evidence?` | `string` |  |
 | `resumed?` | `boolean` | Resumed marks a thread resolved in an earlier workspace and read back from its QA file: its evidence is about that workspace's code. |
+| `archived?` | `boolean` | Archived marks a resolved thread read back as a header only: its events stay in its file until something needs them. |
 | `events` | `QAEvent[] \| null` |  |
+
+#### Question
+
+Question is one question in a set.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `header?` | `string` | Header is a short label for the question (a chip, a tab). |
+| `question` | `string` |  |
+| `options?` | `Option[]` |  |
+| `multi?` | `boolean` | Multi lets the owner pick several options. |
+| `recommended?` | `string` | Recommended is the label of the option the asker recommends. |
+| `no_text?` | `boolean` | NoText says only the options are answers (a form field with no free text); a decision_request question always takes the owner's words. |
+
+#### QuestionAnswer
+
+QuestionAnswer is the owner's answer to one question: the options picked, their own words, or neither (skipped).
+
+| Field | Type | |
+|---|---|---|
+| `selected?` | `string[]` |  |
+| `text?` | `string` |  |
+
+#### QuestionSet
+
+QuestionSet is one ask of the owner.
+
+| Field | Type | |
+|---|---|---|
+| `title?` | `string` |  |
+| `questions` | `Question[] \| null` |  |
 
 #### Raise
 
@@ -887,6 +951,7 @@ Row is one hosted agent session.
 | `dir?` | `string` |  |
 | `branch?` | `string` | Branch / Dirty come from agentd shelling git in Cwd, lazily and cached — never from the agent's hooks (§7). |
 | `dirty?` | `boolean` |  |
+| `background?` | `string` | Background is the work the session left running in the background (a Bash run in the background): what it is, while it runs. |
 | `since_ms` | `number` | SinceMS is how long the row has been in this state, as of the push. The FE anchors its own clock to it (no cross-clock comparison). |
 | `used?` | `number` | Used / Size are the agent's context accounting (usage_update), and Title is its own name for the session (session_info_update). |
 | `size?` | `number` |  |
@@ -915,8 +980,8 @@ RowWorkspace is one session's place in a workspace team.
 | `orchestrator?` | `boolean` |  |
 | `member` | `string` |  |
 | `role?` | `string` |  |
-| `package?` | `string` |  |
-| `package_title?` | `string` |  |
+| `node?` | `string` | Node and NodeTitle are the plan node the member works on. |
+| `node_title?` | `string` |  |
 
 #### Rule
 
@@ -1032,6 +1097,7 @@ SlotView is one slot of a curated catalog: a model on an adapter, with its effor
 | `version` | `number` |  |
 | `rows` | `Row[] \| null` |  |
 | `asks?` | `Ask[]` | Asks are permission questions waiting for a human (§12). They ride the roster's own push so the sidebar needs no second subscription. |
+| `questions?` | `PendingQuestion[]` | Questions are question sets waiting for a human: an adapter's form elicitation (Claude Code's AskUserQuestion) or a workspace member's decision_request. The asker waits for the answer. |
 | `recent?` | `Session[]` | Recent is the remembered session history (§13) — what a reboot or a closed window would otherwise have cost you. |
 | `adapters?` | `Adapter[]` | Adapters is which agents this box can actually launch over ACP (docs/AGENT_APP.md §6). The launcher renders unavailable ones greyed with their reason rather than hiding them, so "why can I not pick Claude here" has an answer on screen. |
 | `catalogs?` | `CatalogView[]` | Catalogs are what the launcher offers first (catalogs.go): each with the availability of its slots, greyed with a reason like an adapter. |
@@ -1110,14 +1176,10 @@ UsageRow is one row's counters.
 
 | Field | Type | |
 |---|---|---|
-| `qa_original_hash?` | `string` |  |
-| `qa_document_id?` | `string` |  |
-| `qa_preamble?` | `string` |  |
-| `qa_authors?` | `Record<string, string>` |  |
-| `qa_document?` | `Document` |  |
+| `qa_authors?` | `Record<string, string>` | QAAuthors names the authors of threads read back from an earlier workspace's files, who are not members of this one. |
+| `qa_dir?` | `string` | QADir is the directory holding one file per QA thread (<thread>.md), written by Wash as threads change. |
 | `qa` | `QAThread[] \| null` |  |
 | `approvals?` | `Rule[]` | Approvals apply to every member of this workspace, whatever its cwd. Members work in worktrees the orchestrator chooses, and those are as often siblings of project_root as children of it, so a path-scoped rule cannot cover a fleet. Membership is the scope instead: these rules carry no Cwd, and agentpolicy's matcher is reused verbatim. |
-| `packages?` | `Record<string, Package>` | Packages names each package code ("CT1") for people: the sidebar groups members and questions under "CT1 · Console input-flood test" instead of a bare code, and member names can shrink to their role. |
 | `catalog?` | `string` | Catalog is where members' models come from (a slot name in a member's `model` resolves against it): the orchestrator's own catalog at setup, changeable with workspace_configure.catalog for later launches. |
 | `id` | `string` |  |
 | `name` | `string` |  |
@@ -1125,11 +1187,15 @@ UsageRow is one row's counters.
 | `orchestrator` | `string` |  |
 | `state` | `string` |  |
 | `revision` | `number` |  |
-| `plan_revision` | `number` |  |
 | `max_active` | `number` |  |
 | `max_members` | `number` |  |
-| `items` | `Item[] \| null` |  |
-| `document?` | `Document` |  |
+| `plan` | `Node[] \| null` | Plan is the workspace's node graph; PlanRevision counts its changes. |
+| `plan_revision` | `number` |  |
+| `plan_file?` | `string` | PlanFile is where Wash writes the plan as it changes (TOML). |
+| `legend?` | `string` | Legend says what the orchestrator's emojis and states mean. |
+| `roles?` | `Record<string, string>` | Roles are instruction templates by member role, put before a new member's own instructions (workspace.toml [roles.<role>]). |
+| `context_warn?` | `number` | ContextWarn is the share of its context window at which a member's use is reported to the orchestrator, once; 0 is the default. |
+| `nudged?` | `string[]` | Nudged are the lifecycle nudges already sent, so each goes once. |
 | `members` | `Member[] \| null` |  |
 | `assignments` | `Assignment[] \| null` |  |
 | `messages` | `Message[] \| null` |  |
@@ -1141,7 +1207,7 @@ WorkspaceAction is a human's action in the workspace sidebar.
 | Field | Type | |
 |---|---|---|
 | `key` | `string` |  |
-| `name` | `string` | Name is the operation: decision_response \| member_open \| member_resume \| member_message \| member_inspect. |
+| `name` | `string` | Name is the operation: member_open \| member_resume \| member_message \| member_inspect. |
 | `arguments` | `WorkspaceActionArgs` |  |
 
 #### WorkspaceActionArgs
@@ -1151,9 +1217,8 @@ WorkspaceActionArgs are an action's arguments; each operation reads its own.
 | Field | Type | |
 |---|---|---|
 | `member_id?` | `string` | MemberID names the member for member_open, member_resume and member_inspect. |
-| `id?` | `string` | ID is the decision request's message id, for decision_response. |
 | `recipient?` | `string` | Recipient is the member a member_message goes to. |
-| `body?` | `string` | Body is a decision_response's answer or a member_message's text. |
+| `body?` | `string` | Body is a member_message's text. |
 
 #### WorkspaceApproval
 
@@ -1166,19 +1231,9 @@ WorkspaceApproval is a member's question waiting for the human.
 | `tool` | `string` |  |
 | `subject` | `string` |  |
 
-#### WorkspaceItemsPatch
-
-WorkspaceItemsPatch changes the plan: items replaced or added, ids removed, and the new order when it changed.
-
-| Field | Type | |
-|---|---|---|
-| `upsert` | `Item[] \| null` |  |
-| `remove` | `string[] \| null` |  |
-| `order?` | `string[]` |  |
-
 #### WorkspacePatch
 
-WorkspacePatch changes a WorkspaceState: the frame fields and workspace fields that changed (null removes one), and the plan items by id.
+WorkspacePatch changes a WorkspaceState: the frame fields and workspace fields that changed (null removes one), and the plan's nodes by id.
 
 | Field | Type | |
 |---|---|---|
@@ -1186,8 +1241,18 @@ WorkspacePatch changes a WorkspaceState: the frame fields and workspace fields t
 | `base` | `number` |  |
 | `sequence` | `number` |  |
 | `frame` | `Record<string, unknown> \| null` | Frame holds changed WorkspaceState fields by their JSON name. |
-| `workspace` | `Record<string, unknown> \| null` | Workspace holds changed swarm.Workspace fields, except items. |
-| `items?` | `WorkspaceItemsPatch` |  |
+| `workspace` | `Record<string, unknown> \| null` | Workspace holds changed swarm.Workspace fields, except the plan. |
+| `plan?` | `WorkspacePlanPatch` |  |
+
+#### WorkspacePlanPatch
+
+WorkspacePlanPatch changes the plan: nodes replaced or added, ids removed, and the new order when it changed.
+
+| Field | Type | |
+|---|---|---|
+| `upsert` | `Node[] \| null` |  |
+| `remove` | `string[] \| null` |  |
+| `order?` | `string[]` |  |
 
 #### WorkspaceRefresh
 
@@ -1222,10 +1287,10 @@ WorkspaceState is the whole sidebar frame for an orchestrator's (or a member's) 
 | `activity_detail?` | `Record<string, string>` |  |
 | `usage?` | `Record<string, Usage>` | Usage is each member's context accounting, by member id. |
 | `approvals?` | `WorkspaceApproval[]` | Approvals are the members' questions waiting for the human. |
+| `questions?` | `PendingQuestion[]` | Questions are the members' question sets waiting for the human. |
 | `qa_markdown?` | `string` | QAMarkdown is the QA document as it is written to disk. |
 | `qa_document_status?` | `QADocumentStatus` |  |
-| `document_text?` | `string` | DocumentText is the registered plan document's text, or DocumentError why it could not be read. |
-| `document_error?` | `string` |  |
+| `plan_file_status?` | `QADocumentStatus` | PlanFileStatus is where the plan file stands on disk. |
 
 #### WorkspaceTranscript
 
@@ -1236,6 +1301,7 @@ WorkspaceTranscript is a member's recent transcript: the selected member's previ
 | `member_id` | `string` |  |
 | `events` | `Event[] \| null` |  |
 | `asks?` | `Ask[]` | Asks are the member's questions waiting for the human, when it runs. |
+| `questions?` | `PendingQuestion[]` | Questions are the member's question sets waiting for the human. |
 | `note?` | `string` | Note says what the transcript is when it is not live: an ended member's archive. |
 
 <!-- END GENERATED -->

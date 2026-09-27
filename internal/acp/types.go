@@ -42,6 +42,18 @@ type FsCapability struct {
 type ClientCapabilities struct {
 	Fs       FsCapability `json:"fs"`
 	Terminal bool         `json:"terminal"`
+	// Elicitation says which structured questions (elicitation/create) we
+	// render: form mode makes Claude Code send its AskUserQuestion here.
+	Elicitation *ElicitationCapabilities `json:"elicitation,omitempty"`
+	// Meta carries extension capabilities: claude-agent-acp reports
+	// background tasks when _meta.jetbrains.air lists "asyncTasks".
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+// ElicitationCapabilities advertises elicitation modes; an empty object
+// is "supported".
+type ElicitationCapabilities struct {
+	Form *struct{} `json:"form,omitempty"`
 }
 
 type InitializeRequest struct {
@@ -182,10 +194,11 @@ type AvailableCommand struct {
 // human decline — never to answer on their behalf.
 
 type ElicitRequest struct {
-	SessionID string          `json:"sessionId,omitempty"`
-	Message   string          `json:"message"`
-	Mode      string          `json:"mode,omitempty"`
-	Schema    json.RawMessage `json:"requestedSchema,omitempty"`
+	SessionID  string          `json:"sessionId,omitempty"`
+	ToolCallID string          `json:"toolCallId,omitempty"`
+	Message    string          `json:"message"`
+	Mode       string          `json:"mode,omitempty"`
+	Schema     json.RawMessage `json:"requestedSchema,omitempty"`
 }
 
 const (

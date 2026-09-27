@@ -18,14 +18,6 @@ import (
 	"github.com/sirmick/wash/internal/agentpolicy"
 )
 
-type Item struct {
-	ID       string `json:"id"`
-	Text     string `json:"text"`
-	Emoji    string `json:"emoji,omitempty"`
-	State    string `json:"state"`
-	Revision int64  `json:"revision"`
-}
-
 // AgentProfile describes launch settings and an optional enforced capability profile.
 type AgentProfile struct {
 	Capability string `json:"capability,omitempty"`
@@ -45,21 +37,22 @@ type AgentProfile struct {
 	Subagents string `json:"subagents,omitempty"`
 }
 
-// Package is the human-facing description of a package code.
-type Package struct {
-	Title string `json:"title"`
-}
 type Usage struct {
 	Used int64 `json:"used"`
 	Size int64 `json:"size"`
 }
 type Member struct {
-	Key          string `json:"key,omitempty"`
-	Package      string `json:"package,omitempty"`
+	Key string `json:"key,omitempty"`
+	// Node is the plan node the member works on; empty is the team (the
+	// orchestrator, an Architect).
+	Node         string `json:"node,omitempty"`
 	Role         string `json:"role,omitempty"`
 	Instructions string `json:"instructions,omitempty"`
 	InitialTask  string `json:"initial_task,omitempty"`
-	Usage        *Usage `json:"usage,omitempty"`
+	// Handoff is the handoff a member launched with handoff_from reads in
+	// its first message: what the member it replaces had done and knew.
+	Handoff string `json:"handoff,omitempty"`
+	Usage   *Usage `json:"usage,omitempty"`
 	// Catalog and Model are what the member was asked to run on: the
 	// catalog (the workspace's unless the member named one) and the model
 	// as given, a slot name or an id. LaunchSettings is what that resolved
@@ -104,9 +97,11 @@ type Assignment struct {
 	ID       string `json:"id"`
 	Assigner string `json:"assigner"`
 	Member   string `json:"member_id"`
-	Text     string `json:"text"`
-	State    string `json:"state"`
-	Result   string `json:"result,omitempty"`
+	// Node is the plan node the work is on.
+	Node   string `json:"node,omitempty"`
+	Text   string `json:"text"`
+	State  string `json:"state"`
+	Result string `json:"result,omitempty"`
 }
 type Message struct {
 	Thread     string `json:"thread_id,omitempty"`
@@ -121,47 +116,56 @@ type Message struct {
 	RequestID  string `json:"request_id,omitempty"`
 	State      string `json:"delivery"`
 	Created    int64  `json:"created_at"`
-}
-type Document struct {
-	Path  string `json:"path"`
-	Title string `json:"title"`
+	// Questions is a decision_request's question set; Answers the owner's
+	// answers on its decision_response.
+	Questions *QuestionSet              `json:"questions,omitempty"`
+	Answers   map[string]QuestionAnswer `json:"answers,omitempty"`
 }
 type Workspace struct {
-	QAOriginalHash string            `json:"qa_original_hash,omitempty"`
-	QADocumentID   string            `json:"qa_document_id,omitempty"`
-	QAPreamble     string            `json:"qa_preamble,omitempty"`
-	QAAuthors      map[string]string `json:"qa_authors,omitempty"`
-	QADocument     *Document         `json:"qa_document,omitempty"`
-	QA             []QAThread        `json:"qa"`
+	// QAAuthors names the authors of threads read back from an earlier
+	// workspace's files, who are not members of this one.
+	QAAuthors map[string]string `json:"qa_authors,omitempty"`
+	// QADir is the directory holding one file per QA thread
+	// (<thread>.md), written by Wash as threads change.
+	QADir string     `json:"qa_dir,omitempty"`
+	QA    []QAThread `json:"qa"`
 	// Approvals apply to every member of this workspace, whatever its cwd.
 	// Members work in worktrees the orchestrator chooses, and those are as
 	// often siblings of project_root as children of it, so a path-scoped
 	// rule cannot cover a fleet. Membership is the scope instead: these
 	// rules carry no Cwd, and agentpolicy's matcher is reused verbatim.
 	Approvals []agentpolicy.Rule `json:"approvals,omitempty"`
-	// Packages names each package code ("CT1") for people: the sidebar groups
-	// members and questions under "CT1 · Console input-flood test" instead of
-	// a bare code, and member names can shrink to their role.
-	Packages map[string]Package `json:"packages,omitempty"`
 	// Catalog is where members' models come from (a slot name in a
 	// member's `model` resolves against it): the orchestrator's own catalog
 	// at setup, changeable with workspace_configure.catalog for later
 	// launches.
-	Catalog      string       `json:"catalog,omitempty"`
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Root         string       `json:"project_root"`
-	Lead         string       `json:"orchestrator"`
-	State        string       `json:"state"`
-	Revision     int64        `json:"revision"`
-	PlanRevision int64        `json:"plan_revision"`
-	MaxActive    int          `json:"max_active"`
-	MaxMembers   int          `json:"max_members"`
-	Items        []Item       `json:"items"`
-	Document     *Document    `json:"document,omitempty"`
-	Members      []Member     `json:"members"`
-	Assignments  []Assignment `json:"assignments"`
-	Messages     []Message    `json:"messages"`
+	Catalog    string `json:"catalog,omitempty"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Root       string `json:"project_root"`
+	Lead       string `json:"orchestrator"`
+	State      string `json:"state"`
+	Revision   int64  `json:"revision"`
+	MaxActive  int    `json:"max_active"`
+	MaxMembers int    `json:"max_members"`
+	// Plan is the workspace's node graph; PlanRevision counts its changes.
+	Plan         []Node `json:"plan"`
+	PlanRevision int64  `json:"plan_revision"`
+	// PlanFile is where Wash writes the plan as it changes (TOML).
+	PlanFile string `json:"plan_file,omitempty"`
+	// Legend says what the orchestrator's emojis and states mean.
+	Legend string `json:"legend,omitempty"`
+	// Roles are instruction templates by member role, put before a new
+	// member's own instructions (workspace.toml [roles.<role>]).
+	Roles map[string]string `json:"roles,omitempty"`
+	// ContextWarn is the share of its context window at which a member's
+	// use is reported to the orchestrator, once; 0 is the default.
+	ContextWarn float64 `json:"context_warn,omitempty"`
+	// Nudged are the lifecycle nudges already sent, so each goes once.
+	Nudged      []string     `json:"nudged,omitempty"`
+	Members     []Member     `json:"members"`
+	Assignments []Assignment `json:"assignments"`
+	Messages    []Message    `json:"messages"`
 }
 type State struct {
 	Receipts   []Receipt   `json:"receipts,omitempty"`
@@ -306,7 +310,11 @@ func ValidText(s string, max int) bool { return strings.TrimSpace(s) != "" && le
 
 type Limits struct{ MaxActive, MaxMembers int }
 
-func (s *Store) Setup(session, provider, cwd, name, root string, items []Item, limits ...Limits) (*Workspace, error) {
+// OrchestratorKey is the orchestrator's key, reserved for it: members
+// address it by this rather than by its random ID.
+const OrchestratorKey = "orchestrator"
+
+func (s *Store) Setup(session, provider, cwd, name, root string, limits ...Limits) (*Workspace, error) {
 	cap := Limits{MaxActive: 4, MaxMembers: 16}
 	if len(limits) > 0 {
 		if limits[0].MaxActive != 0 {
@@ -328,9 +336,6 @@ func (s *Store) Setup(session, provider, cwd, name, root string, items []Item, l
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("project_root must be absolute")
 	}
-	if err := ValidateItems(items); err != nil {
-		return nil, err
-	}
 	err := s.change(func(st *State) error {
 		if w, _ := find(st, session); w != nil {
 			if w.Name == name && w.Root == root {
@@ -338,37 +343,12 @@ func (s *Store) Setup(session, provider, cwd, name, root string, items []Item, l
 			}
 			return errors.New("teardown current workspace first")
 		}
-		lead := Member{ID: ID(), Name: "Orchestrator", Provider: provider, Cwd: cwd, Session: session, Lifetime: "resident", State: "available", CanSpawn: true}
-		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Items: items, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}}
-		if w.Items == nil {
-			w.Items = []Item{}
-		}
-		for i := range w.Items {
-			w.Items[i].Revision = 1
-		}
+		lead := Member{ID: ID(), Key: OrchestratorKey, Name: "Orchestrator", Provider: provider, Cwd: cwd, Session: session, Lifetime: "resident", State: "available", CanSpawn: true}
+		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Plan: []Node{}, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}, QA: []QAThread{}}
 		st.Workspaces = append(st.Workspaces, w)
 		return nil
 	})
 	return s.View(session), err
-}
-func ValidateItems(items []Item) error {
-	if len(items) > 500 {
-		return errors.New("maximum 500 plan items")
-	}
-	seen := map[string]bool{}
-	for _, it := range items {
-		if !ValidText(it.ID, 80) || !ValidText(it.Text, 2000) || len(it.Emoji) > 64 {
-			return errors.New("invalid plan item")
-		}
-		if !slices.Contains([]string{"pending", "active", "blocked", "done"}, it.State) {
-			return errors.New("invalid plan state")
-		}
-		if seen[it.ID] {
-			return errors.New("duplicate plan item ID")
-		}
-		seen[it.ID] = true
-	}
-	return nil
 }
 func GetMember(w *Workspace, id string) *Member {
 	if w == nil {
@@ -488,7 +468,10 @@ func (s *Store) Send(session, to, kind, body, reply, assignment, request string)
 // the conflict was with.
 var ErrActiveAssignment = errors.New("member already has an active assignment")
 
-func (s *Store) Assign(session, member, text, request string) (Assignment, error) {
+// Assign gives member an assignment on a plan node: node, or the member's
+// own node when node is empty. The node's needs must be done unless override
+// says why not.
+func (s *Store) Assign(session, member, node, override, text, request string) (Assignment, error) {
 	var out Assignment
 	err := s.Mutate(session, false, func(w *Workspace, m *Member) error {
 		if !m.CanSpawn {
@@ -502,7 +485,7 @@ func (s *Store) Assign(session, member, text, request string) (Assignment, error
 			for _, msg := range w.Messages {
 				if msg.Sender == m.ID && msg.RequestID == request {
 					for _, a := range w.Assignments {
-						if a.ID == msg.Assignment && a.Text == text && a.Member == member {
+						if a.ID == msg.Assignment && a.Text == text && a.Member == target.ID {
 							out = a
 							return nil
 						}
@@ -511,17 +494,37 @@ func (s *Store) Assign(session, member, text, request string) (Assignment, error
 				}
 			}
 		}
-		for _, a := range w.Assignments {
-			if a.Member == member && (a.State == "assigned" || a.State == "active" || a.State == "blocked") {
-				return ErrActiveAssignment
-			}
+		a, err := NewAssignment(w, m, target, node, override, text)
+		if err != nil {
+			return err
 		}
-		out = Assignment{ID: ID(), Assigner: m.ID, Member: member, Text: text, State: "assigned"}
-		w.Assignments = append(w.Assignments, out)
-		_, err := AddMessage(w, m.ID, member, "instruction", text, "", out.ID, request)
+		out = *a
+		_, err = AddMessage(w, m.ID, target.ID, "instruction", text, "", out.ID, request)
 		return err
 	})
 	return out, err
+}
+
+// NewAssignment records an assignment for target on node (its own when
+// empty), starting work there: every assignment is on a plan node, and one
+// member holds one open assignment at a time.
+func NewAssignment(w *Workspace, by, target *Member, node, override, text string) (*Assignment, error) {
+	if node == "" {
+		node = target.Node
+	}
+	if node == "" {
+		return nil, fmt.Errorf("an assignment is on a plan node: give node (member %s is on none)", target.Name)
+	}
+	for _, a := range w.Assignments {
+		if a.Member == target.ID && a.Open() {
+			return nil, ErrActiveAssignment
+		}
+	}
+	if err := startWork(w, by, node, override); err != nil {
+		return nil, err
+	}
+	w.Assignments = append(w.Assignments, Assignment{ID: ID(), Assigner: by.ID, Member: target.ID, Node: node, Text: text, State: "assigned"})
+	return &w.Assignments[len(w.Assignments)-1], nil
 }
 func (s *Store) Complete(session, id, body string, failed bool) error {
 	return s.Mutate(session, false, func(w *Workspace, m *Member) error {
@@ -555,6 +558,8 @@ func (s *Store) Complete(session, id, body string, failed bool) error {
 			}
 			a.State = state
 			a.Result = body
+			settleWork(w, a.Node, failed)
+			PlanNudges(w)
 			recipient := a.Assigner
 			if assigner := GetMember(w, recipient); assigner == nil || assigner.State == "ended" {
 				recipient = w.Lead
@@ -663,9 +668,18 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 			}
 		}
 	}
+	// A member that asked the owner waits for the answer: its question
+	// blocks it, and nothing else reaches it until the answer does.
+	owner := false
+	for _, msg := range w.Messages {
+		owner = owner || msg.Sender == m.ID && msg.Type == "decision_request" && msg.State == "recorded"
+	}
 	asked, cut := false, false
 	for i, msg := range w.Messages {
 		if msg.Recipient != m.ID || msg.State != "queued" {
+			continue
+		}
+		if owner && msg.Type != "decision_response" {
 			continue
 		}
 		if msg.Type == "instruction" && msg.Assignment != "" && resolved(msg.Assignment) {
@@ -689,6 +703,23 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 			asked = true
 		}
 		batch = append(batch, i)
+	}
+	// The owner's answer leads its turn: it is what the member waited for,
+	// and what it held back comes after.
+	slices.SortStableFunc(batch, func(a, b int) int {
+		ra, rb := w.Messages[a].Type == "decision_response", w.Messages[b].Type == "decision_response"
+		switch {
+		case ra && !rb:
+			return -1
+		case rb && !ra:
+			return 1
+		}
+		return 0
+	})
+	// A note never wakes anyone: it goes out with the next turn that
+	// something else starts.
+	if !slices.ContainsFunc(batch, func(i int) bool { return w.Messages[i].Type != "note" }) {
+		batch = nil
 	}
 	return batch, stale, setDone
 }
@@ -737,9 +768,54 @@ func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped b
 				}
 			}
 		}
+		if !failed {
+			idleNudge(w, m)
+		}
 		return nil
 	})
 }
+
+// idleNudge reminds a member, once per assignment, that its turn ended with
+// its assignment open, no report and no waiting set: a cheap model that
+// forgets to report strands the work, and everyone waits on it.
+func idleNudge(w *Workspace, m *Member) {
+	if m.ID == w.Lead || m.Retire {
+		return
+	}
+	// Not when it will wake anyway (mail is queued for it), is waiting on
+	// the owner, or ended its turn on a question it is waiting to hear back on.
+	lastSent := ""
+	for _, msg := range w.Messages {
+		if msg.Recipient == m.ID && msg.State == "queued" {
+			return
+		}
+		if msg.Sender == m.ID && msg.Type == "decision_request" && msg.State == "recorded" {
+			return
+		}
+		if msg.Sender == m.ID {
+			lastSent = msg.Type
+		}
+	}
+	if lastSent == "question" {
+		return
+	}
+	for _, a := range w.Assignments {
+		if a.Member != m.ID || a.State != "active" {
+			continue
+		}
+		key := "idle:" + a.ID
+		if slices.Contains(w.Nudged, key) {
+			return
+		}
+		if _, err := AddMessage(w, "wash", m.ID, "instruction", "Your turn ended with assignment "+a.ID+" still open and no report. Report it now with member_update assignment_results (complete or fail, a summary of at most 2000 bytes), or, if you are waiting on someone, set member_update waiting and end your turn.", "", a.ID, ""); err == nil {
+			w.Nudged = append(w.Nudged, key)
+		}
+		return
+	}
+}
+
+// NudgeOnce sends the orchestrator one lifecycle message per key.
+func NudgeOnce(w *Workspace, key, body string) { nudge(w, key, body) }
 
 // EndMember ends a member. notify tells the lead with a lifecycle message,
 // which wakes it: right when the member ended outside the lead's control (the
@@ -776,8 +852,11 @@ func (s *Store) EndMember(session, id string, notify bool) error {
 		}
 		for i := range w.Assignments {
 			a := &w.Assignments[i]
-			if a.Member == id && (a.State == "assigned" || a.State == "active" || a.State == "blocked") {
+			if a.Member == id && a.Open() {
 				a.State = "cancelled"
+				if n := PlanNode(w, a.Node); n != nil && n.State == "active" && len(OpenOn(w, a.Node)) == 0 {
+					nudge(w, "idle:"+a.ID, "Node "+n.ID+" ("+n.Title+") is active with nobody on it: "+m.Name+" ended with assignment "+a.ID+" open. Assign it again, or set the node's state.")
+				}
 			}
 		}
 		return nil

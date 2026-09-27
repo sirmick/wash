@@ -7,16 +7,35 @@ import (
 )
 
 // ConfigurePatch changes a workspace's settings. Omitted fields are
-// preserved; a null package deletes it.
+// preserved.
 type ConfigurePatch struct {
-	Name       *string             `json:"name"`
-	MaxActive  *int                `json:"max_active"`
-	MaxMembers *int                `json:"max_members"`
-	Packages   map[string]*Package `json:"packages"`
+	Name       *string `json:"name"`
+	MaxActive  *int    `json:"max_active"`
+	MaxMembers *int    `json:"max_members"`
+	// Legend says what the orchestrator's emojis and states mean.
+	Legend *string `json:"legend"`
+	// Roles are instruction templates by role; a null role removes one.
+	Roles map[string]*RoleTemplate `json:"roles"`
+	// ContextWarn is the share (0–1) of a member's context window at which
+	// the orchestrator hears about it.
+	ContextWarn *float64 `json:"context_warn"`
 	// Catalog names the catalog members' models come from. agentd checks
 	// that it exists; the store only keeps the name.
 	Catalog  *string `json:"catalog"`
 	Expected *int64  `json:"expected_revision"`
+}
+
+// RoleTemplate is a role's instructions, put before every new member's own.
+type RoleTemplate struct {
+	Instructions string `json:"instructions"`
+}
+
+// WithRole is a member's instructions with its role's template first.
+func WithRole(w *Workspace, role, instructions string) string {
+	if t := w.Roles[role]; t != "" && role != "" {
+		return t + "\n\n" + instructions
+	}
+	return instructions
 }
 
 func ValidProfileName(s string) bool {
@@ -100,24 +119,33 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		if w.MaxMembers < live {
 			return errors.New("max_members cannot be below current membership")
 		}
-		for code, pkg := range p.Packages {
-			if !ValidProfileName(code) {
-				return errors.New("package code must be 1–80 ASCII letters, digits, underscores or hyphens")
+		for role, t := range p.Roles {
+			if !ValidProfileName(role) {
+				return fmt.Errorf("role %q: letters, digits, - or _", role)
 			}
-			if pkg == nil {
-				delete(w.Packages, code)
+			if t == nil {
+				delete(w.Roles, role)
 				continue
 			}
-			if !ValidText(pkg.Title, 120) {
-				return fmt.Errorf("package %q: title must contain 1–120 bytes", code)
+			if !ValidText(t.Instructions, 8000) {
+				return fmt.Errorf("role %s: instructions are 1–8000 bytes", role)
 			}
-			if w.Packages == nil {
-				w.Packages = map[string]Package{}
+			if w.Roles == nil {
+				w.Roles = map[string]string{}
 			}
-			w.Packages[code] = *pkg
+			w.Roles[role] = t.Instructions
 		}
-		if len(w.Packages) > 64 {
-			return errors.New("maximum 64 packages")
+		if p.ContextWarn != nil {
+			if *p.ContextWarn <= 0 || *p.ContextWarn >= 1 {
+				return errors.New("context_warn is a share of the window, between 0 and 1")
+			}
+			w.ContextWarn = *p.ContextWarn
+		}
+		if p.Legend != nil {
+			if len(*p.Legend) > ReportLimit {
+				return fmt.Errorf("legend is at most %d bytes", ReportLimit)
+			}
+			w.Legend = *p.Legend
 		}
 		if p.Catalog != nil {
 			w.Catalog = *p.Catalog

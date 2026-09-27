@@ -9,7 +9,7 @@ import (
 	"github.com/sirmick/wash/internal/swarm"
 )
 
-// workspacePatch sends only changed frame fields and keyed plan items. The
+// workspacePatch sends only changed frame fields and the plan's changed nodes. The
 // sequence guard lets a remounted view request a fresh snapshot instead of
 // applying a delta against stale state. old and next are encoded
 // agentproto.WorkspaceState frames without a sequence; nil means send the
@@ -37,7 +37,7 @@ func workspacePatch(old, next []byte, base, sequence int64) *agentproto.Workspac
 		}
 	}
 	for k, v := range bw {
-		if k != "items" && !bytes.Equal(aw[k], v) {
+		if k != "plan" && !bytes.Equal(aw[k], v) {
 			patch.Workspace[k] = v
 		}
 	}
@@ -46,32 +46,32 @@ func workspacePatch(old, next []byte, base, sequence int64) *agentproto.Workspac
 			patch.Workspace[k] = nil
 		}
 	}
-	if !bytes.Equal(aw["items"], bw["items"]) {
-		var before, after []swarm.Item
-		_ = json.Unmarshal(aw["items"], &before)
-		_ = json.Unmarshal(bw["items"], &after)
-		prior := map[string]swarm.Item{}
+	if !bytes.Equal(aw["plan"], bw["plan"]) {
+		var before, after []swarm.Node
+		_ = json.Unmarshal(aw["plan"], &before)
+		_ = json.Unmarshal(bw["plan"], &after)
+		prior := map[string]swarm.Node{}
 		oldOrder := []string{}
 		order := []string{}
-		items := &agentproto.WorkspaceItemsPatch{Upsert: []swarm.Item{}, Remove: []string{}}
-		for _, item := range before {
-			prior[item.ID] = item
-			oldOrder = append(oldOrder, item.ID)
+		nodes := &agentproto.WorkspacePlanPatch{Upsert: []swarm.Node{}, Remove: []string{}}
+		for _, n := range before {
+			prior[n.ID] = n
+			oldOrder = append(oldOrder, n.ID)
 		}
-		for _, item := range after {
-			order = append(order, item.ID)
-			if old, ok := prior[item.ID]; !ok || !reflect.DeepEqual(old, item) {
-				items.Upsert = append(items.Upsert, item)
+		for _, n := range after {
+			order = append(order, n.ID)
+			if old, ok := prior[n.ID]; !ok || !reflect.DeepEqual(old, n) {
+				nodes.Upsert = append(nodes.Upsert, n)
 			}
-			delete(prior, item.ID)
+			delete(prior, n.ID)
 		}
 		for id := range prior {
-			items.Remove = append(items.Remove, id)
+			nodes.Remove = append(nodes.Remove, id)
 		}
 		if !reflect.DeepEqual(oldOrder, order) {
-			items.Order = order
+			nodes.Order = order
 		}
-		patch.Items = items
+		patch.Plan = nodes
 	}
 	return patch
 }

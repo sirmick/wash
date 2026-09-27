@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
-	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/internal/workspacemcp"
-	"github.com/sirmick/wash/pkg/wire"
 )
 
 type assignmentChange struct {
@@ -21,6 +20,10 @@ type assignmentChange struct {
 	Text    string `json:"text,omitempty"`
 	Body    string `json:"body,omitempty"`
 	Request string `json:"request_id,omitempty"`
+	// Node is the plan node the work is on (the member's own by default);
+	// Override says why it starts before what the node needs is done.
+	Node     string `json:"node,omitempty"`
+	Override string `json:"override,omitempty"`
 	// CC copies a complete/fail result, as progress (which wakes nobody), to
 	// these members: a reviewer's findings reach the implementer they concern
 	// without the orchestrator retyping them into the fix assignment.
@@ -70,7 +73,7 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 			if err != nil {
 				return fail(i, fmt.Errorf("member %q: %w", u.Member, err))
 			}
-			a, err := s.Assign(h.sessionID, member, u.Text, u.Request)
+			a, err := s.Assign(h.sessionID, member, u.Node, u.Override, u.Text, u.Request)
 			if err != nil {
 				if j, ok := created[member]; ok && errors.Is(err, swarm.ErrActiveAssignment) {
 					err = fmt.Errorf("%w: update %d of this batch created it", err, j)
@@ -103,6 +106,15 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 	return results, nil
 }
 func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.Call) (any, error) {
+	seen := map[string]bool{}
+	if ws.store == nil {
+		return ws.callOperation(ctx, h, c)
+	}
+	if w := ws.store.View(h.sessionID); w != nil {
+		for _, m := range w.Messages {
+			seen[m.ID] = true
+		}
+	}
 	result, err := ws.callOperation(ctx, h, c)
 	var options struct {
 		Preview bool `json:"preview"`
@@ -111,25 +123,64 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 	if err != nil || options.Preview {
 		return result, err
 	}
-	if c.Name != "workspace_get" && c.Name != "inbox_read" {
+	if c.Name != "workspace_get" && c.Name != "inbox_read" && c.Name != "plan_get" {
 		ws.syncQADocuments()
+		ws.syncPlanFiles()
 	}
 	w := ws.store.View(h.sessionID)
-	if w != nil && w.QADocument != nil && result != nil {
-		// Report file failures separately from a successfully committed QA change.
-		status := ws.qaDocumentStatus(w)
+	add := func(key string, value any) {
 		if object, ok := result.(map[string]any); ok {
-			object["qa_document_status"] = status
-		} else {
-			encoded, _ := json.Marshal(result)
-			var object map[string]any
-			if json.Unmarshal(encoded, &object) == nil && object != nil {
-				object["qa_document_status"] = status
-				result = object
-			}
+			object[key] = value
+			return
+		}
+		encoded, _ := json.Marshal(result)
+		var object map[string]any
+		if json.Unmarshal(encoded, &object) == nil && object != nil {
+			object[key] = value
+			result = object
 		}
 	}
+	if w != nil && w.QADir != "" && result != nil {
+		// Report file failures separately from a successfully committed QA change.
+		add("qa_document_status", ws.qaDocumentStatus(w))
+	}
+	if nudges := ws.takeNudges(h, seen); len(nudges) > 0 && result != nil {
+		add("nudges", nudges)
+	}
 	return result, nil
+}
+
+// takeNudges hands the orchestrator, in the result of its own call, the
+// nudges that call caused (a milestone finished, a node left with nobody on
+// it), and marks them delivered. Queued, they reached it only after the
+// turn in which it had already moved on (live shakedown, step 9 and 10).
+func (ws *workspaceService) takeNudges(h *hosted, seen map[string]bool) []string {
+	w := ws.store.View(h.sessionID)
+	if w == nil {
+		return nil
+	}
+	if self := workspaceMember(w, h.sessionID); self == nil || self.ID != w.Lead {
+		return nil
+	}
+	var ids, bodies []string
+	for _, m := range w.Messages {
+		if !seen[m.ID] && m.Sender == "wash" && m.Recipient == w.Lead && m.State == "queued" {
+			ids = append(ids, m.ID)
+			bodies = append(bodies, m.Body)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	_ = ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, _ *swarm.Member) error {
+		for i := range w.Messages {
+			if slices.Contains(ids, w.Messages[i].ID) {
+				w.Messages[i].State = "delivered"
+			}
+		}
+		return nil
+	})
+	return bodies
 }
 func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c workspacemcp.Call) (any, error) {
 	if h.capability == "reviewer" && !reviewerWorkspaceTool(c.Name) {
@@ -144,11 +195,21 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 	switch c.Name {
 	case "workspace_configure":
 		return ws.configureBulk(ctx, h, c.Arguments)
+	case "plan_get":
+		w := ws.store.View(h.sessionID)
+		if w == nil {
+			return nil, errors.New("no workspace; call workspace_configure")
+		}
+		return ws.planGet(w, c.Arguments)
+	case "plan_set":
+		return ws.planSet(ctx, h, c.Arguments)
+	case "plan_accept":
+		return ws.planAccept(h, c.Arguments)
 	case "member_control":
 		var p struct {
 			Action  string            `json:"action"`
 			Members []string          `json:"member_ids"`
-			Package string            `json:"package,omitempty"`
+			Node    string            `json:"node,omitempty"`
 			Configs map[string]string `json:"configs,omitempty"`
 		}
 		if err := decodeWorkspace(c.Arguments, &p); err != nil {
@@ -167,12 +228,12 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		if lead := swarm.GetMember(w, w.Lead); lead == nil || lead.Session != h.sessionID {
 			return nil, errors.New("orchestrator operation")
 		}
-		if p.Package != "" {
+		if p.Node != "" {
 			if len(p.Members) > 0 {
-				return nil, errors.New("select member_ids or package")
+				return nil, errors.New("select member_ids or node")
 			}
 			for _, m := range w.Members {
-				if m.Package == p.Package && m.State != "ended" {
+				if m.Node != "" && swarm.Within(w, m.Node, p.Node) && m.State != "ended" {
 					p.Members = append(p.Members, m.ID)
 				}
 			}
@@ -233,8 +294,11 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		return map[string]any{"outcomes": outcomes}, nil
 	case "member_update":
 		var p struct {
-			Status  *string `json:"status,omitempty"`
-			Emoji   *string `json:"emoji,omitempty"`
+			Status *string `json:"status,omitempty"`
+			Emoji  *string `json:"emoji,omitempty"`
+			// Handoff is what this member has done and knows, for the
+			// member that replaces it (handoff_from).
+			Handoff *string `json:"handoff,omitempty"`
 			Waiting *struct {
 				Reason string   `json:"reason"`
 				Reply  string   `json:"reply_to,omitempty"`
@@ -249,6 +313,33 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		}
 		if len(p.QA) > 100 {
 			return nil, errors.New("maximum 100 QA updates")
+		}
+		handoff := ""
+		if p.Handoff != nil {
+			w := ws.store.View(h.sessionID)
+			self := workspaceMember(w, h.sessionID)
+			if w == nil || self == nil {
+				return nil, errors.New("no workspace")
+			}
+			if !swarm.ValidText(*p.Handoff, 32768) {
+				return nil, errors.New("a handoff is 1–32768 bytes")
+			}
+			path, err := writeHandoff(w.Root, memberRef(*self), *p.Handoff)
+			if err != nil {
+				return nil, fmt.Errorf("handoff not written: %w", err)
+			}
+			handoff = path
+		}
+		// A reopen appends to the thread's history, so a thread read back
+		// as a header only gets its events from its file first.
+		reopen := []string{}
+		for _, u := range p.QA {
+			if u.Action == "reopen" {
+				reopen = append(reopen, u.ID)
+			}
+		}
+		if err := ws.unarchiveQA(h.sessionID, reopen); err != nil {
+			return nil, err
 		}
 		return ws.store.Transaction(h.sessionID, c.Name, p.Request, c.Arguments, false, func(s *swarm.Store) (any, error) {
 			// A reporting call cannot create an assignment as a side effect.
@@ -279,6 +370,9 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				for _, u := range p.QA {
 					q, err := swarm.UpdateQA(w, m, u)
 					if err != nil {
+						return err
+					}
+					if err := notifyQAUpdate(w, m, q, u); err != nil {
 						return err
 					}
 					summary := *q
@@ -338,6 +432,9 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				}
 			}
 			out := map[string]any{"ok": true, "assignment_results": results, "qa": qas}
+			if handoff != "" {
+				out["handoff"] = handoff
+			}
 			if p.Waiting != nil {
 				out["instruction"] = "Finish your turn now; Wash wakes you for new messages. Do not poll."
 			}
@@ -347,6 +444,11 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		var p struct {
 			Updates []assignmentChange `json:"updates"`
 			Request string             `json:"request_id,omitempty"`
+			// Wait sets the caller waiting on the assignments this call
+			// creates, as one set: their results arrive together.
+			Wait *struct {
+				Reason string `json:"reason"`
+			} `json:"wait,omitempty"`
 		}
 		if err := decodeWorkspace(c.Arguments, &p); err != nil {
 			return nil, err
@@ -354,7 +456,36 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		if len(p.Updates) == 0 {
 			return nil, errors.New("updates required")
 		}
-		return ws.store.Transaction(h.sessionID, c.Name, p.Request, c.Arguments, false, func(s *swarm.Store) (any, error) { return applyAssignments(s, h, p.Updates) })
+		return ws.store.Transaction(h.sessionID, c.Name, p.Request, c.Arguments, false, func(s *swarm.Store) (any, error) {
+			results, err := applyAssignments(s, h, p.Updates)
+			if err != nil || p.Wait == nil {
+				return results, err
+			}
+			var created []string
+			for _, r := range results {
+				if a, ok := r.(swarm.Assignment); ok {
+					created = append(created, a.ID)
+				}
+			}
+			if len(created) == 0 {
+				return nil, errors.New("wait needs at least one create in the same call")
+			}
+			if !swarm.ValidText(p.Wait.Reason, 500) {
+				return nil, errors.New("wait needs a reason")
+			}
+			err = s.Mutate(h.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
+				m.WaitingOn, m.Waiting, m.WaitingFor = created, p.Wait.Reason, ""
+				m.Status = ""
+				swarm.DeliverLastReport(w, m)
+				for i := range w.Assignments {
+					if w.Assignments[i].Member == m.ID && w.Assignments[i].State == "active" {
+						w.Assignments[i].State = "blocked"
+					}
+				}
+				return nil
+			})
+			return map[string]any{"assignments": results, "waiting_on": created, "instruction": "Finish your turn now; the results arrive together, in one turn. Do not poll."}, err
+		})
 	case "message_send":
 		// A single message and a batch use the same atomic mutation path.
 		var fields map[string]json.RawMessage
@@ -383,6 +514,9 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			for _, msg := range p.Messages {
 				if !slices.Contains([]string{"instruction", "question", "answer", "progress"}, msg.Type) {
 					return nil, errors.New("invalid message type")
+				}
+				if (msg.Thread != "" || msg.QA != nil) && len(msg.Body) > swarm.ReportLimit {
+					return nil, fmt.Errorf("a message on a QA thread is at most %d bytes (got %d): put the detail in a file and give its path", swarm.ReportLimit, len(msg.Body))
 				}
 				err := s.Mutate(h.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
 					target := swarm.GetMember(w, msg.Recipient)
@@ -421,6 +555,13 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 						if err := swarm.LinkQA(w, msg.Thread, v); err != nil {
 							return err
 						}
+						// Whoever waits on the thread hears an answer, not
+						// only the message's recipient.
+						if msg.Type == "answer" {
+							if err := swarm.NotifyQA(w, swarm.QA(w, msg.Thread), m.ID, v.Body, target.ID); err != nil {
+								return err
+							}
+						}
 					}
 					out = append(out, *v)
 					return nil
@@ -435,38 +576,103 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			return map[string]any{"messages": out}, nil
 		})
 	case "decision_request":
+		// The owner answers in a panel above the asker's composer; the asker
+		// waits: nothing else reaches it until the answers do.
 		var p struct {
-			Text    string `json:"text"`
-			Thread  string `json:"thread_id,omitempty"`
-			Request string `json:"request_id,omitempty"`
+			Title     string           `json:"title,omitempty"`
+			Questions []swarm.Question `json:"questions"`
+			Thread    string           `json:"thread_id,omitempty"`
+			Request   string           `json:"request_id,omitempty"`
 		}
 		if err := decodeWorkspace(c.Arguments, &p); err != nil {
 			return nil, err
 		}
-		created := false
+		set := swarm.QuestionSet{Title: p.Title, Questions: p.Questions}
+		for i := range set.Questions {
+			set.Questions[i].NoText = false
+		}
+		if err := swarm.ValidateQuestions(&set); err != nil {
+			return nil, err
+		}
 		result, err := ws.store.Transaction(h.sessionID, c.Name, p.Request, c.Arguments, false, func(s *swarm.Store) (any, error) {
-			created = true
 			id := ""
 			err := s.Mutate(h.sessionID, false, func(w *swarm.Workspace, m *swarm.Member) error {
-				msg, err := swarm.AddMessage(w, m.ID, "human", "decision_request", p.Text, "", "", p.Request)
+				msg, err := swarm.AddMessage(w, m.ID, "human", "decision_request", swarm.QuestionsMarkdown(set), "", "", p.Request)
 				if err != nil {
 					return err
 				}
+				msg.Questions = &set
 				if p.Thread != "" {
 					if err := swarm.LinkQA(w, p.Thread, msg); err != nil {
 						return err
 					}
 				}
+				about := set.Title
+				if about == "" {
+					about = set.Questions[0].Question
+				}
+				m.Waiting = firstLine("Waiting for the owner: "+about, 200)
 				id = msg.ID
+				// The orchestrator learns that a member is blocked on the
+				// owner with its next turn, without being woken for it.
+				if m.ID != w.Lead {
+					if _, err := swarm.AddMessage(w, "wash", w.Lead, "note", firstLine(m.Name+" asked the owner and waits for the answer: "+about, 300), "", "", ""); err != nil {
+						return err
+					}
+				}
 				return nil
 			})
-			return map[string]any{"id": id}, err
+			return map[string]any{"id": id, "instruction": "End your turn now. The owner's answers arrive as your next message; nothing else reaches you until then."}, err
 		})
-		if err == nil && created && ws.conn != nil {
-			desktop(ws.conn, agentproto.Notify{Key: h.key, Title: "Workspace decision", Body: p.Text, Level: wire.NotifyLevelInfo})
+		if err == nil {
+			publishQuestions()
+			// A retried call answers with its stored receipt.
+			var receipt struct {
+				ID string `json:"id"`
+			}
+			encoded, _ := json.Marshal(result)
+			_ = json.Unmarshal(encoded, &receipt)
+			id := receipt.ID
+			for _, q := range ws.decisionQuestions(time.Now()) {
+				if q.ID == id {
+					notifyQuestion(q)
+				}
+			}
 		}
 		return result, err
 	default:
 		return ws.callCore(h, c)
 	}
+}
+
+// notifyQAUpdate tells the people on a thread about a change they wait for:
+// a reply or a resolution reaches its creator and assignee, and a new
+// assignee learns it is the next responder.
+func notifyQAUpdate(w *swarm.Workspace, m *swarm.Member, q *swarm.QAThread, u swarm.QAUpdate) error {
+	notice := func(text string) string {
+		if len(text) > swarm.ReportLimit {
+			text = strings.ToValidUTF8(text[:swarm.ReportLimit-len("…")], "") + "…"
+		}
+		return text
+	}
+	switch u.Action {
+	case "reply":
+		return swarm.NotifyQA(w, q, m.ID, notice("QA "+q.ID+": "+u.Body))
+	case "resolve":
+		return swarm.NotifyQA(w, q, m.ID, notice("QA "+q.ID+" resolved: "+u.Evidence))
+	case "assign":
+		if q.Assignee == m.ID {
+			return nil
+		}
+		text := "You are the next responder on QA thread " + q.ID + " (" + q.Title + "). Read it with workspace_get view=qa thread_id."
+		if u.Body != "" {
+			text += " " + u.Body
+		}
+		msg, err := swarm.AddMessage(w, m.ID, q.Assignee, "question", notice(text), "", "", "")
+		if err == nil {
+			msg.Thread = q.ID
+		}
+		return err
+	}
+	return nil
 }

@@ -144,6 +144,8 @@ export function agentActivityLabel(activity: string): string {
     case 'responding': return 'Responding';
     case 'waiting-message': return 'Awaiting message';
     case 'needs-input': return 'Needs you';
+    // The turn is over but work it started runs on in the background.
+    case 'background': return 'Background';
     case 'working': return 'Working';
     // A reserved member that workspace_configure has committed but not yet
     // launched reports its member state verbatim, so 'pending' reaches here.
@@ -163,6 +165,7 @@ export function agentActivityColor(activity: string): string {
     case 'tool': return tokens.accentCyan;
     case 'responding': return tokens.accentGreen;
     case 'waiting-message': return tokens.fgInfo;
+    case 'background': return tokens.accentTeal;
     case 'needs-input': return agentStateColor('needs-input');
     case 'failed': return agentStateColor('failed');
     case 'working': case 'starting': return agentStateColor('working');

@@ -536,10 +536,10 @@ test('team: members nest under their orchestrator, grouped by package, and say w
   const ws = (over: Partial<NonNullable<agentproto.Row['workspace']>>) => ({ id: 'w', name: 'Redoubt', lead_session: 'lead-s', member: '', ...over });
   const rows = [
     // Attention order from agentd: a member needing input sorts first.
-    row({ key: 'rev', state: 'needs-input', session_id: 'rev-s', workspace: ws({ member: 'reviewer', package: 'K5', package_title: 'Timer' }) }),
+    row({ key: 'rev', state: 'needs-input', session_id: 'rev-s', workspace: ws({ member: 'reviewer', node: 'K5', node_title: 'Timer' }) }),
     row({ key: 'solo', session_id: 'solo-s' }),
     row({ key: 'lead', session_id: 'lead-s', workspace: ws({ orchestrator: true, member: 'orchestrator' }) }),
-    row({ key: 'impl', session_id: 'impl-s', workspace: ws({ member: 'implementer', package: 'K5', package_title: 'Timer' }) }),
+    row({ key: 'impl', session_id: 'impl-s', workspace: ws({ member: 'implementer', node: 'K5', node_title: 'Timer' }) }),
     row({ key: 'arch', session_id: 'arch-s', workspace: ws({ member: 'architect' }) }),
     row({ key: 'stray', session_id: 'stray-s', workspace: ws({ member: 'scout', lead_session: 'elsewhere', name: 'Other' }) }),
   ];

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/swarm"
 )
@@ -45,12 +46,12 @@ type memberSpec struct {
 	Lifetime     string            `json:"lifetime"`
 	Task         string            `json:"task,omitempty"`
 	CanSpawn     bool              `json:"can_spawn,omitempty"`
-	Package      string            `json:"package,omitempty"`
-	Role         string            `json:"role,omitempty"`
-}
-type planPatch struct {
-	Items map[string]json.RawMessage `json:"items"`
-	Order []string                   `json:"order,omitempty"`
+	// Node is the plan node the member works on; none is the team.
+	Node string `json:"node,omitempty"`
+	Role string `json:"role,omitempty"`
+	// HandoffFrom names the member (key or id) whose handoff this one
+	// reads in its first message.
+	HandoffFrom string `json:"handoff_from,omitempty"`
 }
 type bulkConfig struct {
 	swarm.ConfigurePatch
@@ -58,12 +59,11 @@ type bulkConfig struct {
 		Name string `json:"name"`
 		Root string `json:"project_root"`
 	} `json:"workspace,omitempty"`
-	Members    map[string]*memberSpec `json:"members,omitempty"`
-	Plan       *planPatch             `json:"plan,omitempty"`
-	QADocument json.RawMessage        `json:"qa_document,omitempty"`
-	Document   json.RawMessage        `json:"document,omitempty"`
-	Request    string                 `json:"request_id,omitempty"`
-	Preview    bool                   `json:"preview,omitempty"`
+	Members  map[string]*memberSpec `json:"members,omitempty"`
+	QADir    json.RawMessage        `json:"qa_dir,omitempty"`
+	PlanFile json.RawMessage        `json:"plan_file,omitempty"`
+	Request  string                 `json:"request_id,omitempty"`
+	Preview  bool                   `json:"preview,omitempty"`
 }
 
 func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw json.RawMessage) (any, error) {
@@ -72,8 +72,17 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, err
 	}
+	// from: the workspace definition in a file, with this call's fields
+	// on top. It becomes one ordinary configuration.
+	if from, ok := fields["from"]; ok {
+		merged, err := ws.workspaceFromFile(ctx, h, from, fields)
+		if err != nil {
+			return nil, err
+		}
+		return ws.configureBulk(ctx, h, merged)
+	}
 	for key, value := range fields {
-		if string(value) == "null" && key != "document" && key != "qa_document" {
+		if string(value) == "null" && key != "plan_file" && key != "qa_dir" {
 			return nil, fmt.Errorf("%s cannot be null", key)
 		}
 	}
@@ -125,59 +134,84 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 	}
 	approvedRoot = root
-	var doc *swarm.Document
-	if len(p.Document) > 0 && string(p.Document) != "null" {
-		if err := decodeWorkspace(p.Document, &doc); err != nil {
-			return nil, err
+	// plan_file: where Wash writes the plan as it changes; null stops it.
+	planFile, planDetach := "", false
+	var planResume []swarm.Node
+	planLegend := ""
+	if len(p.PlanFile) > 0 {
+		if string(p.PlanFile) == "null" {
+			planDetach = true
+		} else {
+			if err := json.Unmarshal(p.PlanFile, &planFile); err != nil || !swarm.ValidText(planFile, 4096) {
+				return nil, errors.New("plan_file must be a file path")
+			}
+			if !filepath.IsAbs(planFile) {
+				planFile = filepath.Join(root, planFile)
+			}
+			path, err := confine("Write", planFile)
+			if err != nil {
+				return nil, err
+			}
+			planFile = filepath.Clean(path)
+			if !strings.EqualFold(filepath.Ext(planFile), ".toml") {
+				return nil, errors.New("plan_file must be a .toml file")
+			}
+			if err := checkPlanFileTarget(planFile); err != nil {
+				return nil, err
+			}
+			// A plan file Wash wrote earlier is this project's plan: a
+			// workspace set up on it resumes it, as qa_dir resumes threads.
+			if info, err := os.Stat(planFile); err == nil && info.Size() > 0 {
+				nodes, legend, err := readPlanFile(planFile)
+				if err != nil {
+					return nil, err
+				}
+				planResume, planLegend = nodes, legend
+			}
 		}
-		path := doc.Path
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(root, path)
-		}
-		path, err := confine("Read", path)
-		if err != nil {
-			return nil, err
-		}
-		if _, err = readWorkspaceDocument(path); err != nil {
-			return nil, err
-		}
-		doc.Path = path
 	}
-	var qaDoc *swarm.Document
-	var qaRestore *qaArchive
+	// qa_dir: a string sets the QA directory, null detaches it. The
+	// directory holds one file per thread; one that does not exist yet is
+	// created when the configuration commits.
+	qaDir, qaDetach := "", false
+	var qaRestore []swarm.QAFile
 	qaLocked := false
 	defer func() {
 		if qaLocked {
 			ws.qaMu.Unlock()
 		}
 	}()
-	if len(p.QADocument) > 0 && string(p.QADocument) != "null" {
-		if err := decodeWorkspace(p.QADocument, &qaDoc); err != nil {
-			return nil, err
-		}
-		if qaDoc == nil || !swarm.ValidText(qaDoc.Path, 4096) || len(qaDoc.Title) > 500 {
-			return nil, errors.New("invalid QA document")
-		}
-		path := qaDoc.Path
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(root, path)
-		}
-		path, err := confine("Write", path)
-		if err != nil {
-			return nil, err
-		}
-		parent, err := filepath.EvalSymlinks(filepath.Dir(path))
-		if err != nil {
-			return nil, err
-		}
-		qaDoc.Path = filepath.Join(parent, filepath.Base(path))
-		if !strings.EqualFold(filepath.Ext(qaDoc.Path), ".md") {
-			return nil, errors.New("QA document must be a .md file")
+	if len(p.QADir) > 0 {
+		if string(p.QADir) == "null" {
+			qaDetach = true
+		} else {
+			if err := json.Unmarshal(p.QADir, &qaDir); err != nil || !swarm.ValidText(qaDir, 4096) {
+				return nil, errors.New("qa_dir must be a directory path")
+			}
+			if !filepath.IsAbs(qaDir) {
+				qaDir = filepath.Join(root, qaDir)
+			}
+			path, err := confine("Write", qaDir)
+			if err != nil {
+				return nil, err
+			}
+			qaDir = filepath.Clean(path)
+			if info, err := os.Lstat(qaDir); err == nil {
+				if !info.IsDir() {
+					return nil, errors.New("qa_dir must be a directory")
+				}
+				if qaDir, err = filepath.EvalSymlinks(qaDir); err != nil {
+					return nil, err
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
 		}
 	}
 	keys := make([]string, 0, len(p.Members))
+	handoffs := map[string]string{}
 	for key, m := range p.Members {
-		if !swarm.ValidProfileName(key) || slices.Contains([]string{"conversation", "plan", "qa"}, key) || m == nil {
+		if !swarm.ValidProfileName(key) || slices.Contains([]string{"conversation", "plan", "qa", swarm.OrchestratorKey}, key) || m == nil {
 			return nil, errors.New("invalid member key; use member_control to end members")
 		}
 		// Each check names the member and the field: a bare "invalid member
@@ -197,8 +231,18 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if len(memberBrief(swarm.Member{ID: swarm.ID(), Instructions: m.Instructions, InitialTask: m.Task}, swarm.ID())) > 32768 {
 			return nil, fmt.Errorf("member %s: instructions and task together exceed 32 KiB: a member receives them as one first message; put detail in a file it can read", key)
 		}
-		if m.Package != "" && !swarm.ValidProfileName(m.Package) {
-			return nil, fmt.Errorf("member %s: package must be letters, digits, - and _", key)
+		if m.HandoffFrom != "" {
+			if !swarm.ValidProfileName(m.HandoffFrom) {
+				return nil, fmt.Errorf("member %s: handoff_from names a member key or id", key)
+			}
+			b, err := os.ReadFile(handoffPath(root, m.HandoffFrom))
+			if err != nil {
+				return nil, fmt.Errorf("member %s: no handoff from %s: %w", key, m.HandoffFrom, err)
+			}
+			handoffs[key] = string(b)
+		}
+		if m.Node != "" && !swarm.ValidProfileName(m.Node) {
+			return nil, fmt.Errorf("member %s: node must be a plan node id", key)
 		}
 		if !slices.Contains([]string{"", "architect", "implementer", "reviewer"}, m.Role) {
 			return nil, fmt.Errorf("member %s: role must be architect, implementer or reviewer", key)
@@ -242,12 +286,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	}
 	// Never hold the projection lock while path approval can wait on a human.
 	// Read/claim under the same lock as export to avoid importing a stale write.
-	if qaDoc != nil {
+	if qaDir != "" {
 		ws.qaMu.Lock()
 		qaLocked = true
 		var err error
-		qaRestore, err = readQAArchive(qaDoc.Path)
-		if err != nil {
+		if qaRestore, err = readQADir(qaDir); err != nil {
 			return nil, err
 		}
 	}
@@ -260,7 +303,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			if p.Workspace == nil || p.Workspace.Name == "" {
 				return nil, errors.New("initial configuration requires workspace.name")
 			}
-			if _, err := s.Setup(h.sessionID, h.agent, h.cwd, p.Workspace.Name, root, nil); err != nil {
+			if _, err := s.Setup(h.sessionID, h.agent, h.cwd, p.Workspace.Name, root); err != nil {
 				return nil, err
 			}
 			// Resuming the orchestrator reads its launch settings like any
@@ -296,101 +339,43 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 		allWorkspaces := s.Snapshot().Workspaces
 		err := s.Mutate(h.sessionID, true, func(w *swarm.Workspace, creator *swarm.Member) error {
-			if len(p.QADocument) > 0 {
-				if qaDoc != nil {
-					for _, other := range allWorkspaces {
-						if other.ID != w.ID && other.State != "ended" && other.QADocument != nil && (other.QADocument.Path == qaDoc.Path || qaRestore != nil && qaRestore.DocumentID != "" && qaOwner(&other) == qaRestore.DocumentID) {
-							return fmt.Errorf("QA document is used by workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", other.ID, other.Name, other.ID)
-						}
+			if qaDetach {
+				w.QADir = ""
+			}
+			if qaDir != "" && w.QADir != qaDir {
+				for _, other := range allWorkspaces {
+					if other.ID != w.ID && other.State != "ended" && other.QADir == qaDir {
+						return fmt.Errorf("QA directory is used by workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", other.ID, other.Name, other.ID)
 					}
 				}
-				if qaDoc != nil && (w.QADocument == nil || w.QADocument.Path != qaDoc.Path) {
-					source := qaRestore
-					// The store may contain newer history than a failed final export.
-					for _, other := range allWorkspaces {
-						if other.ID != w.ID && other.QADocument != nil && other.QADocument.Path == qaDoc.Path && other.State == "ended" {
-							restored := archiveQA(&other)
-							source = &restored
-							break
-						}
-					}
-					if source != nil && source.DocumentID != qaOwner(w) {
-						if err := restoreQA(w, source); err != nil {
-							return err
-						}
-					}
-					if qaRestore != nil {
-						w.QAOriginalHash = qaRestore.OriginalHash
-					}
-				}
-				w.QADocument = qaDoc
-			}
-			if len(p.Document) > 0 {
-				w.Document = doc
-			}
-			if w.QADocument != nil && w.Document != nil && w.QADocument.Path == w.Document.Path {
-				return errors.New("QA output must differ from the plan document")
-			}
-			if p.Plan != nil {
-				ids := make([]string, 0, len(p.Plan.Items))
-				for id := range p.Plan.Items {
-					ids = append(ids, id)
-				}
-				sort.Strings(ids)
-				for _, id := range ids {
-					patch := p.Plan.Items[id]
-					idx := slices.IndexFunc(w.Items, func(it swarm.Item) bool { return it.ID == id })
-					if string(patch) == "null" {
-						if idx < 0 {
-							return fmt.Errorf("unknown plan item %s", id)
-						}
-						w.Items = append(w.Items[:idx], w.Items[idx+1:]...)
-						continue
-					}
-					var fields struct {
-						Text  *string `json:"text"`
-						Emoji *string `json:"emoji"`
-						State *string `json:"state"`
-					}
-					if err := decodeWorkspace(patch, &fields); err != nil {
+				if len(qaRestore) > 0 {
+					if err := restoreQA(w, qaRestore); err != nil {
 						return err
 					}
-					if idx < 0 {
-						w.Items = append(w.Items, swarm.Item{ID: id, State: "pending"})
-						idx = len(w.Items) - 1
-					}
-					it := &w.Items[idx]
-					if fields.Text != nil {
-						it.Text = *fields.Text
-					}
-					if fields.Emoji != nil {
-						it.Emoji = *fields.Emoji
-					}
-					if fields.State != nil {
-						it.State = *fields.State
-					}
-					it.Revision = w.PlanRevision + 1
 				}
-				if p.Plan.Order != nil {
-					if len(p.Plan.Order) != len(w.Items) {
-						return errors.New("plan order must include each ID exactly once")
+				w.QADir = qaDir
+			}
+			if planDetach {
+				w.PlanFile = ""
+			}
+			if planFile != "" {
+				for _, other := range allWorkspaces {
+					if other.ID != w.ID && other.State != "ended" && other.PlanFile == planFile {
+						return fmt.Errorf("plan file is used by workspace %s (%q)", other.ID, other.Name)
 					}
-					ordered := []swarm.Item{}
-					seen := map[string]bool{}
-					for _, id := range p.Plan.Order {
-						idx := slices.IndexFunc(w.Items, func(it swarm.Item) bool { return it.ID == id })
-						if idx < 0 || seen[id] {
-							return errors.New("invalid plan order")
-						}
-						seen[id] = true
-						ordered = append(ordered, w.Items[idx])
+				}
+				if w.PlanFile != planFile && len(planResume) > 0 {
+					if len(w.Plan) > 0 {
+						return fmt.Errorf("%s holds a plan and this workspace has its own; load that one with plan_set {\"from\": …}, or choose another plan_file", filepath.Base(planFile))
 					}
-					w.Items = ordered
+					if err := swarm.ReplacePlan(w, creator, planResume); err != nil {
+						return fmt.Errorf("%s: %w", filepath.Base(planFile), err)
+					}
+					if w.Legend == "" {
+						w.Legend = planLegend
+					}
 				}
-				if err := swarm.ValidateItems(w.Items); err != nil {
-					return err
-				}
-				w.PlanRevision++
+				w.PlanFile = planFile
 			}
 			for _, key := range keys {
 				spec := p.Members[key]
@@ -406,7 +391,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					if prior.State == "ended" {
 						return fmt.Errorf("member %s is ended; use a new key for replacement", key)
 					}
-					if prior.Name != spec.Name || spec.Catalog != "" && prior.Catalog != spec.Catalog || spec.Model != "" && prior.Model != spec.Model || prior.Cwd != spec.Cwd || prior.Instructions != spec.Instructions || prior.Lifetime != spec.Lifetime || prior.CanSpawn != spec.CanSpawn || prior.Package != spec.Package || prior.Role != spec.Role || prior.InitialTask != spec.Task {
+					if prior.Name != spec.Name || spec.Catalog != "" && prior.Catalog != spec.Catalog || spec.Model != "" && prior.Model != spec.Model || prior.Cwd != spec.Cwd || prior.Instructions != swarm.WithRole(w, spec.Role, spec.Instructions) || prior.Lifetime != spec.Lifetime || prior.CanSpawn != spec.CanSpawn || prior.Node != spec.Node || prior.Role != spec.Role || prior.Handoff != handoffs[key] || prior.InitialTask != spec.Task {
 						return fmt.Errorf("member %s already exists with different settings; end and replace explicitly", key)
 					}
 					// Catalog edits affect future launches; explicit launch overrides must still match.
@@ -430,8 +415,21 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					// Unique within a package, not the workspace: with titled
 					// packages a member's name is its role, so every package
 					// has an "Implementer". Lookup is by ID or key, never name.
-					if m.Name == spec.Name && m.Package == spec.Package {
-						return fmt.Errorf("member %s: name %q is already taken in this package", key, spec.Name)
+					if m.Name == spec.Name && m.Node == spec.Node {
+						return fmt.Errorf("member %s: name %q is already taken on this node", key, spec.Name)
+					}
+				}
+				// A member works on a plan node, and its task is an
+				// assignment there, so the node must exist and be ready.
+				if spec.Node != "" && swarm.PlanNode(w, spec.Node) == nil {
+					return fmt.Errorf("member %s: node %q is not in the plan; add it with plan_set first", key, spec.Node)
+				}
+				if spec.Task != "" {
+					if spec.Node == "" {
+						return fmt.Errorf("member %s: a task is an assignment on a plan node; give the member a node", key)
+					}
+					if unmet := swarm.Unmet(w, spec.Node); len(unmet) > 0 {
+						return fmt.Errorf("member %s: node %s needs %s first; launch it without a task and assign with override", key, spec.Node, strings.Join(unmet, ", "))
 					}
 				}
 				if live >= w.MaxMembers {
@@ -454,7 +452,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if err := knownProvider(settings.Provider); err != nil {
 					return fmt.Errorf("member %s: %w", key, err)
 				}
-				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: spec.Instructions, InitialTask: spec.Task, Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Package: spec.Package, Role: spec.Role}
+				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: swarm.WithRole(w, spec.Role, spec.Instructions), InitialTask: spec.Task, Handoff: handoffs[key], Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Node: spec.Node, Role: spec.Role}
 				if redefine != nil {
 					member.ID = redefine.ID
 					*redefine = member
@@ -467,7 +465,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		if err != nil {
 			return nil, err
 		}
-		if err := s.ClaimQADocument(h.sessionID); err != nil {
+		if err := s.ClaimFiles(h.sessionID); err != nil {
 			return nil, err
 		}
 		w := s.View(h.sessionID)
@@ -490,7 +488,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				}
 			}
 		}
-		return map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "packages": w.Packages, "items": w.Items, "document": w.Document, "qa_document": w.QADocument, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
+		return map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "qa_dir": w.QADir, "plan_file": w.PlanFile, "legend": w.Legend, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
 	})
 	if qaLocked {
 		ws.qaMu.Unlock()
@@ -498,6 +496,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	}
 	if err != nil || p.Preview {
 		return result, err
+	}
+	if qaDir != "" {
+		if err := os.MkdirAll(qaDir, 0o755); err != nil {
+			return nil, fmt.Errorf("configured, but the QA directory could not be created: %w", err)
+		}
 	}
 	// The durable configuration is complete. Launch outcomes are independent and
 	// retries never launch available/starting members again.
@@ -613,4 +616,125 @@ func memberSettingsFor(w *swarm.Workspace, catalogs map[string]Catalog, bad map[
 	}
 	settings, err := swarm.Overlay(base, explicit)
 	return catalog, settings, err
+}
+
+// workspaceFileKeys are what a workspace file (workspace.toml) may set:
+// the same fields as workspace_configure, with name for workspace.name.
+var workspaceFileKeys = []string{"name", "max_active", "max_members", "catalog", "qa_dir", "plan_file", "legend", "context_warn", "roles", "members"}
+
+// workspaceFromFile reads a workspace definition (TOML) and returns the
+// configuration it describes, with the call's own fields on top: a field in
+// the call wins, and members merge by key.
+func (ws *workspaceService) workspaceFromFile(ctx context.Context, h *hosted, fromRaw json.RawMessage, fields map[string]json.RawMessage) (json.RawMessage, error) {
+	var from string
+	if err := json.Unmarshal(fromRaw, &from); err != nil || !swarm.ValidText(from, 4096) {
+		return nil, errors.New("from must be a file path")
+	}
+	existing := ws.store.View(h.sessionID)
+	base := h.cwd
+	if existing != nil {
+		base = existing.Root
+	}
+	var call struct {
+		Workspace *struct {
+			Root string `json:"project_root"`
+		} `json:"workspace"`
+	}
+	_ = json.Unmarshal(mustJSON(fields), &call)
+	if call.Workspace != nil && call.Workspace.Root != "" {
+		base = call.Workspace.Root
+	}
+	path := from
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	path, err := h.confineOrAsk(ctx, "Read", path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return nil, errors.New("the workspace file must be a regular file of at most 1 MiB")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var file map[string]any
+	if _, err := toml.Decode(string(b), &file); err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	out := map[string]any{}
+	for key, value := range file {
+		if !slices.Contains(workspaceFileKeys, key) {
+			return nil, fmt.Errorf("%s: unknown key %q (known: %s)", filepath.Base(path), key, strings.Join(workspaceFileKeys, ", "))
+		}
+		if key == "name" {
+			if existing == nil {
+				out["workspace"] = map[string]any{"name": value}
+			}
+			continue
+		}
+		out[key] = value
+	}
+	for key, raw := range fields {
+		if key == "from" {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, err
+		}
+		if key == "members" {
+			members, _ := out["members"].(map[string]any)
+			if members == nil {
+				members = map[string]any{}
+			}
+			given, _ := value.(map[string]any)
+			for k, v := range given {
+				members[k] = v
+			}
+			out["members"] = members
+			continue
+		}
+		if key == "workspace" && existing == nil {
+			w, _ := value.(map[string]any)
+			if prior, ok := out["workspace"].(map[string]any); ok && w != nil {
+				for k, v := range w {
+					prior[k] = v
+				}
+				continue
+			}
+		}
+		out[key] = value
+	}
+	return json.Marshal(out)
+}
+
+func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+// handoffPath is where a member's handoff is kept: under the project's
+// .wash/local, which Wash keeps out of git.
+func handoffPath(root, member string) string {
+	return filepath.Join(root, ".wash", "local", "handoffs", member+".md")
+}
+
+// writeHandoff keeps a member's handoff for the member that replaces it.
+// .wash/local ignores itself, so nothing in it reaches git.
+func writeHandoff(root, member, text string) (string, error) {
+	local := filepath.Join(root, ".wash", "local")
+	if err := os.MkdirAll(filepath.Join(local, "handoffs"), 0o755); err != nil {
+		return "", err
+	}
+	ignore := filepath.Join(local, ".gitignore")
+	if _, err := os.Stat(ignore); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(ignore, []byte("# Wash's local files: handoffs, scratch. Never committed.\n*\n"), 0o644); err != nil {
+			return "", err
+		}
+	}
+	path := handoffPath(root, member)
+	return path, os.WriteFile(path, []byte(strings.TrimSpace(text)+"\n"), 0o644)
 }

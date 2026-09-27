@@ -116,14 +116,14 @@ func TestWorkspaceGetAndConfigure(t *testing.T) {
 	if got, err := call("workspace_get", `{}`); err != nil || got != nil {
 		t.Fatal(got, err)
 	}
-	w, err := s.Setup(h.sessionID, h.agent, t.TempDir(), "Team", "", nil)
+	w, err := s.Setup(h.sessionID, h.agent, t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = call("workspace_configure", `{"catalog":"openai-pro","expected_revision":1}`); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range []string{`{"catalog":"not-a-catalog"}`, `{"packages":{"bad":{"title":"x","secret":"ignored"}}}`, `{"max_active":null}`, `{"catalog":null}`} {
+	for _, args := range []string{`{"catalog":"not-a-catalog"}`, `{"members":{"bad":{"name":"x","instructions":"y","lifetime":"resident","secret":"ignored"}}}`, `{"max_active":null}`, `{"catalog":null}`} {
 		before := s.Snapshot()
 		if _, err := call("workspace_configure", args); err == nil {
 			t.Fatal("invalid config", args)
@@ -191,7 +191,7 @@ func TestWorkspaceAboutBeforeSetupAndWithoutMutation(t *testing.T) {
 	}
 	for _, attached := range []bool{false, true} {
 		if attached {
-			if _, err = s.Setup(h.sessionID, h.agent, t.TempDir(), "Team", "", nil); err != nil {
+			if _, err = s.Setup(h.sessionID, h.agent, t.TempDir(), "Team", ""); err != nil {
 				t.Fatal(err)
 			}
 		}

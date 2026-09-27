@@ -1,10 +1,11 @@
 # Agent workspace backlog
 
-Status: started 2026-09-24 on the `workspace-approvals-debug` branch, after a
-review of the whole workspace feature. The design is in
-[AGENT_SWARM.md](AGENT_SWARM.md) and [AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md).
-This file lists what is still to do and the decisions behind it. When an item
-is done, delete it here and record the change in its commit message.
+Status: rewritten 2026-09-26 on the `workspace-plan` branch, after the Redoubt
+DOC1 run (about 20 members, two days) and a design discussion with the owner.
+The design as built is in [AGENT_SWARM.md](AGENT_SWARM.md) and
+[AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md). This file lists what is agreed and
+not yet built, with the API shapes. When an item is done, move its design into
+those documents, delete it here, and record the change in its commit message.
 
 The working assumption behind most items: **the orchestrator is a top-tier
 model working with the human, and members (implementer, simplifier,
@@ -12,28 +13,103 @@ reviewers, red team) run on cheap models.** Anything the orchestrator reads
 can be dense. Anything a member reads must be short, unambiguous and hard to
 misuse.
 
-Each item has a size and a risk (S/M/L, low/med/high) and the files it
-touches. Line numbers are as of 2026-09-24.
+## The shape
 
-## 0. Done in the 2026-09-24 pass
+A workspace has three formal mechanisms and one piece of runtime state:
 
-For context only; the commits have the detail.
+| Mechanism | What it is | Who writes it |
+|---|---|---|
+| **The plan** | A graph of nodes: milestones, packages, steps, notes, however the orchestrator uses them. The backbone: every assignment and member hangs off a node. (done: AGENT_SWARM_BULK.md, "The plan") | The orchestrator (the Architect for unstarted nodes); Wash moves states as assignments open and close |
+| **Questions between agents** | QA threads, one file each, the record of why (done: AGENT_SWARM_BULK.md, "QA: one file per thread") | Agents, through the tools |
+| **Questions to the owner** | Structured questions that block the asker until the owner answers; the answer is recorded verbatim in the QA thread (done: AGENT_SWARM_BULK.md, `decision_request`; AGENT_APP.md §7) | Agents ask, the owner answers in a panel |
+| Runtime | Who is working, running a tool, waiting on a background task, or needs you (done) | Wash, from the sessions |
 
-- A review round wakes the orchestrator once. Answers and progress from
-  members of a waiting set are held with the set's results. Everything
-  queued goes out in one turn, and a member's turn carries at most one
-  instruction or question.
-- A relative `document.path` resolves under the project root. A `create`
-  sent to `member_update` now says to use `assignment_update`.
-- Ten bugs found by the review: cancelled assignments settle a waiting set;
-  launches outlive the configure request; Stop only pauses a member with a
-  live turn; `member_control` is orchestrator-only; the revision counts
-  configuration changes only; request receipts are scoped to their
-  workspace; relaunch no longer unpauses the workspace; relaunch keeps the
-  orchestrator's setting changes; an owner decision shows once; an ended
-  member's decision reopens its QA thread.
+Work state lives in Wash and in the project's `.wash/` directory, never only in
+the orchestrator's context: a compaction or a new orchestrator reads the plan
+back instead of reconstructing it.
 
-Still to check in a live workspace: all of the above.
+## Decisions taken with the owner (2026-09-26)
+
+- Wash enforces that the plan is true (every piece of work on a node, needs
+  gate the start with a recorded override); it does not enforce a flow
+  (stage types, order, review counts).
+- `decision_request` blocks the asker.
+- QA stays the record of why (revisioned threads, resolve rights, evidence);
+  the old "shrink QA to questions" idea is dropped.
+- Assignments stay one active per member; no queues.
+- The Architect may edit nodes that have not started; running work is the
+  orchestrator's. (Confirmed by the owner 2026-09-27.)
+- `plan.toml` and thread files are committed at accept and wave end by the
+  orchestrator, from the paths Wash returns. (Confirmed by the owner 2026-09-27.)
+- Plan approval by the owner is the orchestrator's call (a `decision_request`),
+  not enforced.
+
+**Dropped:** a fresh reviewer each round; routing everything through the
+orchestrator; "the last message is the result"; shrinking QA; assignment
+queues; a reading-list field; a structured-results schema (accept reads
+result text); the project layout as a Wash concern. **Deferred:** checks run
+by Wash, an automatic worktree per node, best of N, a Wash `ask` tool for
+sessions without elicitation (codex, opencode; check codex-acp first).
+
+## Execution on `workspace-plan`
+
+Order (all done on this branch; the live shakedown is what remains): F, A with B, then C with D and E, then G, then H. Each step
+lands with its unit tests, its e2e changes, the docs (AGENT_SWARM,
+AGENT_SWARM_BULK, AGENT_PROTOCOL via `make gen-agent-protocol`) and an entry
+removed here. The MCP API version goes to 4.0.0: `package`, `packages`,
+`plan.items`, `document` and `qa_document` are removed, not aliased.
+
+**Proof.**
+
+- `e2e/tests/agent-workspace-plan.spec.ts` drives the whole flow on the fake
+  adapter, deterministically: the fake orchestrator is the spec typing tool
+  calls; fake members follow keywords in their task (`REJECT_ONCE`,
+  `ASK_OWNER`, `ASK_PEER`, `BACKGROUND`, `FAIL`).
+- `e2e/shakedown/` is a test project for a live run on cheap models. The work
+  is trivial (one-line files under `words/`); each step of its `SCRIPT.md`
+  exercises one feature, says what to expect, and `check.sh` verifies the end
+  state (files, plan states, thread files). `make shakedown` copies it to a
+  fresh git repository under `/tmp` and prints what to paste into an
+  orchestrator.
+
+| Step | Exercises |
+|---|---|
+| 1. Configure from `.wash/workspace.toml`; plan three milestones: Plan, Build, Ship | setup from file, sketch milestones, the Plan tab |
+| 2. Plan goes active: expand Build into A, B, C (C needs A and B) | `plan_set` upsert, needs, the graph |
+| 3. Assign C early | refusal, then `override` with a reason |
+| 4. A's implementer writes `alpha.txt`; its reviewer rejects round 1 | active → reported → reopened → done |
+| 5. B's implementer asks A's implementer through QA | a thread file; the asker woken by the answer; resolution |
+| 6. B's implementer runs `sleep 30` in the background | the Background state |
+| 7. C's implementer asks the owner two questions (a choice and free text) | the blocking panel, "needs you" badges, the answer in the thread |
+| 8. A member fails on purpose | `failed`, reassignment |
+| 9. End a member while its node is active | the "nobody on it" nudge |
+| 10. `plan_accept(A)` | trailers and paths to stage |
+| 11. Build done | the next-milestone nudge |
+| 12. `workspace_end` with Ship active; resume in a new workspace | the end check; plan and QA reload, resolved threads as headers |
+| 13. The owner asks "status?" | the answer comes from `plan_get` |
+
+**Live runs (2026-09-26),** `WASH_E2E_LIVE=1` with Sonnet orchestrating and
+Haiku members, the test answering as the owner:
+
+- Run 1 (3.6 min): every check passed. Deviation: nudges caused by the
+  orchestrator's own calls (ending a member, finishing M2) were queued and
+  reached it only after its turn. Fixed: they come back in that call's result.
+  The orchestrator also flattened the trailers onto one line; `check.sh` now
+  checks them as git parses them, and `plan_accept` says one per line.
+- Run 2 (9.8 min): every check passed, every nudge arrived, the trailers parse.
+  Nothing told the orchestrator when a member started waiting on the owner, so
+  step 9 (end a member while its question is pending) cost it about five
+  polls. Now it gets a note, which rides with its next turn and never wakes
+  it; step 9's polling stays, since only a waking message would end it. The
+  Haiku member also
+  spent minutes re-reading the whole QA view before asking; its instructions
+  could point it at its thread.
+
+# Earlier backlog, kept for reference
+
+The member-surface items (section 1) are to be reassessed once the plan and
+the question mechanisms have changed the member's tools. The simplifications
+(section 3) are still wanted where A–H do not absorb them.
 
 ## 1. Member surface for cheap models
 
@@ -135,26 +211,6 @@ In `memberBrief`:
 - Once 1.1 lands, the orchestrator's instructions can drop the member-only
   lines.
 - Optional: fold `message_retry` into `message_send`.
-
-## 2. Workflow changes (product decisions)
-
-These change how a workspace runs, not just what agents read. Each needs a
-yes or no from the owner first.
-
-| # | Idea | Why | Size |
-|---|---|---|---|
-| 2.1 | **Checks run by Wash.** An assignment carries a `check` command, such as `go test ./pkg/timer`. Wash runs it when the member reports completion; if it fails, the output goes back to the member, not up to the orchestrator. | Moves gates out of prompts, which cheap models forget, and into code. Claude Code's `TaskCompleted` hook and Copilot's checks before a PR work the same way. AGENT_SWARM.md §2 currently leaves gates to instructions. | M |
-| 2.2 | **Idle nudge.** A member whose turn ends with an open assignment and no report gets one automatic reminder. | Stops a forgetful model stranding a task. Like Claude Code's `TeammateIdle` hook. | S |
-| 2.3 | **Structured results.** `{status, files, test_command, exit_code, open_questions}` instead of 2000 bytes of free text. | Easier for a weak model to write and for the orchestrator to check. Like the Agents SDK's typed handoff input. | S–M |
-| 2.4 | **A fresh reviewer each round.** Ephemeral reviewers with explicit criteria, replacing resident reviewers. | Cognition and Anthropic both found a reviewer does better without the writer's context. Also drops the "refresh the diff" instruction. | S (mostly docs and examples) |
-| 2.5 | **Route everything through the orchestrator.** No member-to-member messages, apart from an optional "ask the architect". | Codex doesn't let subagents talk to each other; Cognition found agent-to-agent negotiation "mostly a distraction". | S |
-| 2.6 | **Automatic worktree per package.** | Cursor, Conductor and Claude Code's `isolation: worktree` do it; in Wash the orchestrator has to. | M |
-| 2.7 | **Best of N** for risky packages: 2–3 cheap implementers, the orchestrator picks one diff. | Cursor runs up to 8 in parallel. Often beats one cheap attempt followed by review loops. | M |
-| 2.8 | **Shrink QA to questions with a thread ID.** Drop the separate thread state machine and generate the Markdown from messages. | No other tool has revisioned QA threads; it is a second state machine beside assignments. | L |
-| 2.9 | **Result = final message.** A member's last text in the turn becomes its result, instead of a `member_update` call. | Claude Code subagents, Roo and Codex all work this way. Risky, since a turn can end for other reasons; 2.2 is the safer first step. | M |
-
-Suggested order: 2.2 and 2.1 first, then 2.3 and 2.4; decide 2.5 alongside
-1.2.
 
 ## 3. Code simplifications
 

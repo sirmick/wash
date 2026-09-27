@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"fmt"
 	"log"
 	"slices"
 
@@ -56,6 +57,11 @@ func workspaceMemberActivity(m swarm.Member, h *hosted, decision bool) (string, 
 		return "needs-input", ""
 	}
 	if !h.turnLive {
+		// Work left running in the background outlives the turn: the
+		// member is waiting on it, not idle.
+		if bg := h.background(); bg != "" {
+			return "background", bg
+		}
 		if m.Waiting != "" {
 			return "waiting-message", m.Waiting
 		}
@@ -145,4 +151,48 @@ func workspaceApprovals(w *swarm.Workspace) []agentproto.WorkspaceApproval {
 		}
 	}
 	return out
+}
+
+// defaultContextWarn is the share of a member's context window at which the
+// orchestrator hears about it, unless the workspace says otherwise.
+const defaultContextWarn = 0.6
+
+// contextNudges tells each orchestrator, once per member, when a member has
+// used most of its context window: DOC1 found a lead at 630K by accident,
+// after it had stalled. The fix then is a handoff and a fresh member.
+func (ws *workspaceService) contextNudges() {
+	for _, w := range ws.store.Snapshot().Workspaces {
+		if w.State != "active" {
+			continue
+		}
+		warn := w.ContextWarn
+		if warn == 0 {
+			warn = defaultContextWarn
+		}
+		_, _, usage := workspaceRuntime(&w)
+		for _, m := range w.Members {
+			u, ok := usage[m.ID]
+			if m.ID == w.Lead || m.State == "ended" || !ok || u.Size <= 0 || float64(u.Used) < warn*float64(u.Size) {
+				continue
+			}
+			key := "context:" + m.ID
+			if slices.Contains(w.Nudged, key) {
+				continue
+			}
+			body := fmt.Sprintf("%s has used %d%% of its context window (%d of %d tokens). Before it stalls: have it write a handoff (member_update handoff), end it, and launch a replacement with handoff_from:%q.", m.Name, int(100*float64(u.Used)/float64(u.Size)), u.Used, u.Size, memberRef(m))
+			_ = ws.store.Mutate(workspaceLeadSession(w), false, func(w *swarm.Workspace, _ *swarm.Member) error {
+				swarm.NudgeOnce(w, key, body)
+				return nil
+			})
+			ws.signal()
+		}
+	}
+}
+
+// memberRef is how a member is addressed: its key, or its id.
+func memberRef(m swarm.Member) string {
+	if m.Key != "" {
+		return m.Key
+	}
+	return m.ID
 }

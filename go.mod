@@ -15,6 +15,7 @@ require (
 require github.com/godbus/dbus/v5 v5.2.2
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/hanwen/go-fuse/v2 v2.10.1
 	github.com/pkg/sftp v1.13.10
 	golang.org/x/net v0.54.0

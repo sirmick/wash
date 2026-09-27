@@ -37,14 +37,14 @@ func TestManagerViewPlacesMembersUnderTheirOrchestrator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead-s", "claude", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead-s", "claude", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Mutate("lead-s", true, func(w *swarm.Workspace, _ *swarm.Member) error {
-		w.Packages = map[string]swarm.Package{"K5": {Title: "Timer"}}
+		w.Plan = []swarm.Node{{ID: "K5", Title: "Timer", State: "todo"}}
 		w.Members = append(w.Members,
-			swarm.Member{ID: "impl", Name: "implementer", Role: "implementer", Package: "K5", Session: "impl-s", State: "available"},
+			swarm.Member{ID: "impl", Name: "implementer", Role: "implementer", Node: "K5", Session: "impl-s", State: "available"},
 			swarm.Member{ID: "gone", Name: "old", Session: "gone-s", State: "ended"})
 		return nil
 	})
@@ -56,7 +56,7 @@ func TestManagerViewPlacesMembersUnderTheirOrchestrator(t *testing.T) {
 	if lead == nil || !lead.Orchestrator || lead.LeadSession != "lead-s" || lead.ID != w.ID {
 		t.Fatalf("orchestrator row: %#v", lead)
 	}
-	if impl == nil || impl.Orchestrator || impl.LeadSession != "lead-s" || impl.Member != "implementer" || impl.PackageTitle != "Timer" {
+	if impl == nil || impl.Orchestrator || impl.LeadSession != "lead-s" || impl.Member != "implementer" || impl.NodeTitle != "Timer" {
 		t.Fatalf("member row: %#v", impl)
 	}
 	if got.Rows[2].Workspace != nil || got.Rows[3].Workspace != nil {

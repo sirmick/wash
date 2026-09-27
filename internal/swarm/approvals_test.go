@@ -13,7 +13,7 @@ func approvalStore(t *testing.T) (*Store, *Workspace) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead-session", "claude", "/tmp", "Project", "/tmp", nil)
+	w, err := s.Setup("lead-session", "claude", "/tmp", "Project", "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}
