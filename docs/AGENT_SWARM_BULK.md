@@ -191,9 +191,11 @@ Reviewed-by: Red team: OK, no findings
 `Reviewed-by` is each reviewer's first result line on the node (or inside it). Wash never
 runs git.
 
-Nudges reach the orchestrator once each, as lifecycle messages: every node in a milestone
-is done; a done milestone's successor is still a sketch; a node is active with nobody on it
-(its member ended with work open).
+Nudges reach the orchestrator once each: every node in a milestone is done; a done
+milestone's successor is still a sketch; a node is active with nobody on it (its member
+ended with work open). A nudge the orchestrator's own call causes comes back in that call's
+result, as `nudges`; any other arrives as a lifecycle message. (Queued, a nudge from the
+orchestrator's own call reached it only after the turn in which it had already moved on.)
 
 `plan_get` returns one line per node in tree order (`id · state · title · needs … · on:
 Member (activity)`), the legend and the revision; `node` or `detail:true` adds bodies,

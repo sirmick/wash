@@ -389,7 +389,7 @@ func (ws *workspaceService) planAccept(h *hosted, raw json.RawMessage) (any, err
 				}
 			}
 			slices.Sort(stage)
-			out = map[string]any{"node": accepted.Node, "trailers": accepted.Trailers, "stage": stage, "instruction": "Put the trailers at the end of the node's merge commit message, and stage the listed files with it."}
+			out = map[string]any{"node": accepted.Node, "trailers": accepted.Trailers, "stage": stage, "instruction": "End the node's merge commit message with the trailers as its last paragraph, one per line exactly as given (e.g. git commit -m <subject> -m <trailers>, the trailers keeping their newlines), and stage the listed files with it."}
 			return nil
 		})
 		return out, err

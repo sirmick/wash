@@ -88,6 +88,22 @@ removed here. The MCP API version goes to 4.0.0: `package`, `packages`,
 | 12. `workspace_end` with Ship active; resume in a new workspace | the end check; plan and QA reload, resolved threads as headers |
 | 13. The owner asks "status?" | the answer comes from `plan_get` |
 
+**Live runs (2026-09-26),** `WASH_E2E_LIVE=1` with Sonnet orchestrating and
+Haiku members, the test answering as the owner:
+
+- Run 1 (3.6 min): every check passed. Deviation: nudges caused by the
+  orchestrator's own calls (ending a member, finishing M2) were queued and
+  reached it only after its turn. Fixed: they come back in that call's result.
+  The orchestrator also flattened the trailers onto one line; `check.sh` now
+  checks them as git parses them, and `plan_accept` says one per line.
+- Run 2 (9.8 min): every check passed, every nudge arrived, the trailers parse.
+  Open: nothing tells the orchestrator when a member starts waiting on the
+  owner, so step 9 (end a member while its question is pending) cost it about
+  five polls. Options: a non-waking note to the orchestrator when a member
+  asks the owner, or the script waits on the team view. The Haiku member also
+  spent minutes re-reading the whole QA view before asking; its instructions
+  could point it at its thread.
+
 # Earlier backlog, kept for reference
 
 The member-surface items (section 1) are to be reassessed once the plan and

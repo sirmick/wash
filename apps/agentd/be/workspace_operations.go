@@ -106,6 +106,15 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 	return results, nil
 }
 func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.Call) (any, error) {
+	seen := map[string]bool{}
+	if ws.store == nil {
+		return ws.callOperation(ctx, h, c)
+	}
+	if w := ws.store.View(h.sessionID); w != nil {
+		for _, m := range w.Messages {
+			seen[m.ID] = true
+		}
+	}
 	result, err := ws.callOperation(ctx, h, c)
 	var options struct {
 		Preview bool `json:"preview"`
@@ -119,21 +128,59 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 		ws.syncPlanFiles()
 	}
 	w := ws.store.View(h.sessionID)
-	if w != nil && w.QADir != "" && result != nil {
-		// Report file failures separately from a successfully committed QA change.
-		status := ws.qaDocumentStatus(w)
+	add := func(key string, value any) {
 		if object, ok := result.(map[string]any); ok {
-			object["qa_document_status"] = status
-		} else {
-			encoded, _ := json.Marshal(result)
-			var object map[string]any
-			if json.Unmarshal(encoded, &object) == nil && object != nil {
-				object["qa_document_status"] = status
-				result = object
-			}
+			object[key] = value
+			return
+		}
+		encoded, _ := json.Marshal(result)
+		var object map[string]any
+		if json.Unmarshal(encoded, &object) == nil && object != nil {
+			object[key] = value
+			result = object
 		}
 	}
+	if w != nil && w.QADir != "" && result != nil {
+		// Report file failures separately from a successfully committed QA change.
+		add("qa_document_status", ws.qaDocumentStatus(w))
+	}
+	if nudges := ws.takeNudges(h, seen); len(nudges) > 0 && result != nil {
+		add("nudges", nudges)
+	}
 	return result, nil
+}
+
+// takeNudges hands the orchestrator, in the result of its own call, the
+// nudges that call caused (a milestone finished, a node left with nobody on
+// it), and marks them delivered. Queued, they reached it only after the
+// turn in which it had already moved on (live shakedown, step 9 and 10).
+func (ws *workspaceService) takeNudges(h *hosted, seen map[string]bool) []string {
+	w := ws.store.View(h.sessionID)
+	if w == nil {
+		return nil
+	}
+	if self := workspaceMember(w, h.sessionID); self == nil || self.ID != w.Lead {
+		return nil
+	}
+	var ids, bodies []string
+	for _, m := range w.Messages {
+		if !seen[m.ID] && m.Sender == "wash" && m.Recipient == w.Lead && m.State == "queued" {
+			ids = append(ids, m.ID)
+			bodies = append(bodies, m.Body)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	_ = ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, _ *swarm.Member) error {
+		for i := range w.Messages {
+			if slices.Contains(ids, w.Messages[i].ID) {
+				w.Messages[i].State = "delivered"
+			}
+		}
+		return nil
+	})
+	return bodies
 }
 func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c workspacemcp.Call) (any, error) {
 	if h.capability == "reviewer" && !reviewerWorkspaceTool(c.Name) {

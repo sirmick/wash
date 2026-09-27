@@ -237,3 +237,32 @@ func TestAHandoffReachesTheReplacement(t *testing.T) {
 		t.Fatal(brief)
 	}
 }
+
+// A nudge the orchestrator's own call causes comes back in that call's
+// result, not queued for after the turn it already moved on in.
+func TestNudgesComeBackInTheCallThatCausedThem(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(dir, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex", cwd: dir}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Nudge"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qaFileCall(t, ws, h, "plan_set", map[string]any{"nodes": map[string]any{
+		"M2": map[string]any{"title": "Build", "template": "milestone", "state": "active"},
+		"A":  map[string]any{"title": "a", "parent": "M2"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := qaFileCall(t, ws, h, "plan_set", map[string]any{"nodes": map[string]any{"A": map[string]any{"state": "done"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nudges, _ := got.(map[string]any)["nudges"].([]string)
+	if len(nudges) != 1 || !strings.Contains(nudges[0], "Every node in milestone M2") {
+		t.Fatalf("nudges %v", got)
+	}
+	if next, _ := s.Next("lead"); len(next) != 0 {
+		t.Fatalf("the nudge was also queued: %+v", next)
+	}
+}

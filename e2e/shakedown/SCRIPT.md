@@ -73,7 +73,8 @@ Run `grep -qx alpha words/alpha.txt; echo $?` yourself, then `plan_accept
 <what it printed>}]}`.
 Expect: A done; trailers `Plan-Node: A`, `Gates: …`, and `Reviewed-by: Red
 team: OK…` (round 2's first line); no `QA:` line, since no thread is on A;
-and the files to stage. Commit with the trailers at the end of the message:
+and the files to stage. Commit with the trailers as the message's last
+paragraph, one per line exactly as returned (keep the newlines):
 `git add -A && git commit -m "A: alpha.txt" -m "<trailers>"`.
 Expect: nothing under `.wash/local` is committed.
 
@@ -127,7 +128,8 @@ active.
 
 ## 11. Status
 
-The owner asks "status?". Answer from `plan_get` only.
+Answer the owner's standing question "status?" now, in two or three lines,
+from `plan_get` only.
 
 ## 12. End and resume
 

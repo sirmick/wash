@@ -16,7 +16,8 @@ check "the QA thread B-case has a file"       'test -f .wash/qa/B-case.md'
 check "B-case holds the question and answer"  'grep -q "lower case" .wash/qa/B-case.md'
 check "the owner's answers are in C-owner"    'grep -q "Owner decision" .wash/qa/C-owner.md'
 check "no thread file names a home directory" '! grep -rq "$HOME" .wash/qa .wash/plan.toml'
-check "A was accepted with trailers"          'git log --format=%B | grep -q "^Plan-Node: A"'
-check "the trailers name A's review"          'git log --format=%B | grep -q "^Reviewed-by: "'
+# Trailers git itself reads: one per line, in the message's last paragraph.
+check "A was accepted with trailers"          'git log --format="%(trailers:key=Plan-Node,valueonly)" | grep -qx A'
+check "the trailers name A's review"          'git log --format="%(trailers:key=Reviewed-by,valueonly)" | grep -q "^Red team: "'
 check "handoffs stay out of git"              '! git ls-files | grep -q "^.wash/local/"'
 exit $fail
