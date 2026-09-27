@@ -716,6 +716,11 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 		}
 		return 0
 	})
+	// A note never wakes anyone: it goes out with the next turn that
+	// something else starts.
+	if !slices.ContainsFunc(batch, func(i int) bool { return w.Messages[i].Type != "note" }) {
+		batch = nil
+	}
 	return batch, stale, setDone
 }
 

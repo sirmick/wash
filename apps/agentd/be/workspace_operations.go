@@ -613,6 +613,13 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				}
 				m.Waiting = firstLine("Waiting for the owner: "+about, 200)
 				id = msg.ID
+				// The orchestrator learns that a member is blocked on the
+				// owner with its next turn, without being woken for it.
+				if m.ID != w.Lead {
+					if _, err := swarm.AddMessage(w, "wash", w.Lead, "note", firstLine(m.Name+" asked the owner and waits for the answer: "+about, 300), "", "", ""); err != nil {
+						return err
+					}
+				}
 				return nil
 			})
 			return map[string]any{"id": id, "instruction": "End your turn now. The owner's answers arrive as your next message; nothing else reaches you until then."}, err

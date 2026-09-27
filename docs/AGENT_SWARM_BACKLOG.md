@@ -38,9 +38,9 @@ back instead of reconstructing it.
   the old "shrink QA to questions" idea is dropped.
 - Assignments stay one active per member; no queues.
 - The Architect may edit nodes that have not started; running work is the
-  orchestrator's. (Recommended, not yet confirmed by the owner.)
+  orchestrator's. (Confirmed by the owner 2026-09-27.)
 - `plan.toml` and thread files are committed at accept and wave end by the
-  orchestrator, from the paths Wash returns. (Recommended, not yet confirmed.)
+  orchestrator, from the paths Wash returns. (Confirmed by the owner 2026-09-27.)
 - Plan approval by the owner is the orchestrator's call (a `decision_request`),
   not enforced.
 
@@ -97,10 +97,11 @@ Haiku members, the test answering as the owner:
   The orchestrator also flattened the trailers onto one line; `check.sh` now
   checks them as git parses them, and `plan_accept` says one per line.
 - Run 2 (9.8 min): every check passed, every nudge arrived, the trailers parse.
-  Open: nothing tells the orchestrator when a member starts waiting on the
-  owner, so step 9 (end a member while its question is pending) cost it about
-  five polls. Options: a non-waking note to the orchestrator when a member
-  asks the owner, or the script waits on the team view. The Haiku member also
+  Nothing told the orchestrator when a member started waiting on the owner, so
+  step 9 (end a member while its question is pending) cost it about five
+  polls. Now it gets a note, which rides with its next turn and never wakes
+  it; step 9's polling stays, since only a waking message would end it. The
+  Haiku member also
   spent minutes re-reading the whole QA view before asking; its instructions
   could point it at its thread.
 

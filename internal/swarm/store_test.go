@@ -430,3 +430,24 @@ func TestAMemberThatForgetsToReportIsRemindedOnce(t *testing.T) {
 		t.Fatalf("reminded twice: %+v", again)
 	}
 }
+
+// A note rides along with the next turn something else starts; alone it
+// wakes nobody.
+func TestANoteWaitsForTheNextTurn(t *testing.T) {
+	s, w := fixture(t)
+	if err := s.Mutate("lead-session", false, func(w *Workspace, _ *Member) error {
+		_, err := AddMessage(w, "wash", w.Lead, "note", "Worker asked the owner", "", "", "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if next, _ := s.Next("lead-session"); len(next) != 0 {
+		t.Fatalf("a note woke the orchestrator: %+v", next)
+	}
+	if _, err := s.Send("worker-session", w.Lead, "question", "Which timer?", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if next, _ := s.Next("lead-session"); len(next) != 2 || next[0].Type != "note" || next[1].Type != "question" {
+		t.Fatalf("the note did not ride along: %+v", next)
+	}
+}

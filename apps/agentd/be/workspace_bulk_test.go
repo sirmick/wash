@@ -293,6 +293,15 @@ func TestADecisionBlocksItsAskerUntilAnswered(t *testing.T) {
 	if got := s.View("lead").QA[0].State; got != "awaiting-owner" {
 		t.Fatalf("thread %s, want awaiting-owner", got)
 	}
+	notes := 0
+	for _, m := range s.View("lead").Messages {
+		if m.Type == "note" && m.Recipient == w.Lead && strings.Contains(m.Body, "Architect asked the owner") {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Fatal("the orchestrator was not told the Architect waits on the owner")
+	}
 	// The orchestrator's instruction waits behind the question.
 	if _, err := s.Send("lead", "arch", "instruction", "Also review K5", "", "", ""); err != nil {
 		t.Fatal(err)
