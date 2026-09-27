@@ -77,13 +77,20 @@ test('the graph navigates to a member and the breadcrumb back to its node', asyn
  expect(screen.getByTestId('workspace-plan-node-timer').getAttribute('data-selected')).toBe('true');
 });
 
-test('decisions and paused member recovery have explicit controls', async () => {
- const f=frame();f.workspace!.members![0].state='paused';f.workspace!.messages=[message({id:'q',sender:'lead',recipient:'human',type:'decision_request',body:'Ship?',delivery:'recorded'})];
- const onAction=vi.fn();render(()=> <WorkspaceLayout frame={f} onAction={onAction}>Conversation</WorkspaceLayout>);
- await fireEvent.input(screen.getByLabelText('Decision response'),{target:{value:'Proceed'}});
- await fireEvent.click(screen.getByText('Answer'));
- expect(onAction).toHaveBeenCalledWith('decision_response',{id:'q',body:'Proceed'});
- await fireEvent.click(screen.getByTestId('workspace-member-lead'));
+const question = (o: Partial<agentproto.PendingQuestion> & { id: string }): agentproto.PendingQuestion =>
+ ({ row_key: '', source: 'decision', age_ms: 0, set: { questions: [{ id: 'q1', question: 'Ship?', options: [{ label: 'Yes' }, { label: 'No' }], recommended: 'Yes' }] }, ...o });
+
+// A question is answered in the asker's tab, pinned above its turns; the
+// sidebar lists it as the way there, and the tab carries a dot.
+test('a member question is answered in its tab, and paused members have a resume control', async () => {
+ const f=frame();f.workspace!.members![0].state='paused';f.questions=[question({id:'d1',member_id:'lead'})];
+ const onAction=vi.fn(), onQuestionAnswer=vi.fn();
+ render(()=> <WorkspaceLayout frame={f} onAction={onAction} onQuestionAnswer={onQuestionAnswer}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-question-for-d1'));
+ expect(screen.getByRole('tab',{name:/Architect ●/}).getAttribute('aria-selected')).toBe('true');
+ await fireEvent.click(screen.getByTestId('question-option-q1-1'));
+ await fireEvent.click(screen.getByTestId('question-submit-d1'));
+ expect(onQuestionAnswer).toHaveBeenCalledWith('d1','accept',{q1:{selected:['No']}});
  await fireEvent.click(screen.getByText('Resume member'));
  expect(onAction).toHaveBeenCalledWith('member_resume',{member_id:'lead'});
 });
@@ -196,6 +203,7 @@ test('QA opens in the main panel, refreshes live and approval controls address t
 test('attention shows unselected teammate approvals, owner decisions and save failures before the plan', async () => {
  const f=frame();f.approvals=[{id:'pending',member_id:'lead',tool:'Read',subject:'notes'}];
  f.workspace!.messages=[message({id:'decision',sender:'lead',recipient:'human',type:'decision_request',body:'Choose?',delivery:'recorded'})];
+ f.questions=[question({id:'decision',member_id:'lead',set:{questions:[{id:'q1',question:'Choose?'}]}})];
  f.qa_document_status={path:'',state:'error',error:'disk full'};
  const [value,setValue]=createSignal(f);const onAction=vi.fn();
  render(()=><WorkspaceLayout frame={value()} onAction={onAction}>Conversation</WorkspaceLayout>);
@@ -206,7 +214,7 @@ test('attention shows unselected teammate approvals, owner decisions and save fa
  expect(onAction).toHaveBeenLastCalledWith('member_inspect',{member_id:'lead'});
  await fireEvent.click(screen.getByTestId('workspace-qa-save-error'));
  expect(screen.getByRole('tab',{name:/Questions/}).getAttribute('aria-selected')).toBe('true');
- setValue({...value(),approvals:[],qa_document_status:{path:'',state:'saved'},workspace:{...value().workspace!,messages:[]}});
+ setValue({...value(),approvals:[],questions:[],qa_document_status:{path:'',state:'saved'},workspace:{...value().workspace!,messages:[]}});
  expect(screen.queryByTestId('workspace-attention')).toBeNull();
 });
 
@@ -250,20 +258,13 @@ test('a member brief renders as Markdown above its turns, on a divider that reme
  expect(divider.getAttribute('aria-valuenow')).toBe('85');
 });
 
-test('a member waiting on a decision says the message box answers it', async () => {
- const f = frame();
- f.workspace!.messages = [message({id:'d1',sender:'lead',recipient:'human',type:'decision_request',body:'Fixed address or relocatable?',delivery:'recorded'})];
- render(() => <WorkspaceLayout frame={f} onAction={vi.fn()}>Conversation</WorkspaceLayout>);
- await fireEvent.click(screen.getByTestId('workspace-member-lead'));
- expect(screen.getByTestId('workspace-member-answers').textContent).toContain('Fixed address or relocatable?');
-});
-
 test('a decision asked on a QA thread needs the owner once, not twice', () => {
  const f=frame();
  f.workspace!.qa=[thread({id:'Q1',node:'K5',title:'Clock source',assignee:'lead',state:'awaiting-owner',blocking:false,revision:2}),thread({id:'Q2',node:'K5',title:'Tick rate',assignee:'lead',state:'awaiting-owner',blocking:false,revision:2})];
  f.workspace!.messages=[message({id:'d',sender:'lead',recipient:'human',type:'decision_request',body:'Which clock?',delivery:'recorded',thread_id:'Q1'})];
+ f.questions=[question({id:'d',member_id:'lead'})];
  render(()=> <WorkspaceLayout frame={f} onAction={()=>{}}>Conversation</WorkspaceLayout>);
- expect(screen.getAllByTestId('workspace-decision')).toHaveLength(1);
+ expect(screen.getAllByTestId(/^workspace-question-for-/)).toHaveLength(1);
  expect(screen.queryByText(/Owner question: Clock source/)).toBeNull();
  expect(screen.getByText(/Owner question: Tick rate/)).toBeTruthy();
 });

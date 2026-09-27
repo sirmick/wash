@@ -11,6 +11,7 @@
 // agentd's queue, but a change to a file is the one thing a person must
 // be able to read WITHOUT leaving the conversation to go and find it.
 
+import { QuestionPanel, type QuestionPanelProps } from './question-panel';
 import type * as agentproto from './agent-protocol.gen';
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
@@ -90,6 +91,9 @@ export interface AgentStatus {
    *  yolo). Rendered as a standing badge, never as a quiet flag: an agent
    *  nobody is vetting must not look like one that is being watched. */
   yolo?: boolean;
+  /** work the session left running in the background (a Bash run in the
+   *  background): while it runs the session is waiting on it, not done. */
+  background?: string;
   /** prompts agentd is holding until the current turn ends. Messenger
    *  semantics: the composer stays open mid-turn, what you send is queued
    *  in order, and the status line says how many are waiting. */
@@ -99,6 +103,10 @@ export interface AgentStatus {
 export interface AgentSessionProps {
   events: () => agentproto.Event[];
   asks?: () => agentproto.Ask[];
+  /** Question sets waiting for the human: shown pinned above the composer. */
+  questions?: () => agentproto.PendingQuestion[];
+  /** Answer or decline a question set. */
+  onQuestionAnswer?: QuestionPanelProps['onAnswer'];
   status?: () => AgentStatus;
   /** Send a prompt, with whatever the composer had attached to it.
    *  Absent while the session is not ready. */
@@ -1013,6 +1021,8 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
         </Show>
       </div>
 
+      <QuestionPanel questions={() => props.questions?.() ?? []} onAnswer={props.onQuestionAnswer} />
+
       <Show when={!props.hideComposer}>
       <div
         data-testid="agent-composer-drop"
@@ -1281,7 +1291,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             <Show when={st().state}>
               <span title={`Session: ${agentStateLabel(st().state, st().reason)}`} style={{ display: 'inline-flex', 'align-items': 'center', gap: `${tokens.spaceSm}px`, 'flex-shrink': 0, color: agentStateColor(st().state) }}>
                 <Dot color={agentStateColor(st().state)} />
-                {agentStateLabel(st().state, st().reason)}
+                {st().background && st().state !== 'working' && st().state !== 'needs-input' ? `background · ${st().background}` : agentStateLabel(st().state, st().reason)}
               </span>
             </Show>
           }

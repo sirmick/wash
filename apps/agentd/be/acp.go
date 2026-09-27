@@ -171,6 +171,12 @@ type hosted struct {
 	activityPhase string
 	activityTools map[string]string
 	activityAsks  int
+	// bgTasks is the background work the adapter reported still running
+	// (background.go), by task id; bgLabel says it in a line, readable
+	// without a lock because setState runs under turnMu.
+	bgMu    sync.Mutex
+	bgTasks map[string]string
+	bgLabel atomic.Value
 	// pending are prompts typed while a turn was open, in order. They run
 	// one after another when the turn ends — messenger semantics — rather
 	// than as concurrent session/prompt calls, which the protocol does not
@@ -543,6 +549,7 @@ func (h *hosted) releaseOwned(why string) {
 	if n := cancelAsksFor(h.key, why); n > 0 {
 		log.Printf("agentd: acp session %s key=%s asks_cancelled=%d", why, h.key, n)
 	}
+	cancelQuestionsFor(h.key, why)
 	if h.stop != nil {
 		h.stop()
 	}
@@ -617,6 +624,7 @@ func (h *hosted) setState(state, reason string) {
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
+		r.Background = h.background()
 		// Copied, not aliased: a snapshot outlives this callback, and a
 		// later append to h.extraRoots would otherwise rewrite a
 		// published row from under its readers (the shallow-snapshot
@@ -716,6 +724,7 @@ func (h *hosted) republish() {
 		r.Yolo = h.yolo
 		r.Configs = publicConfigs(h.configs)
 		r.Commands = publicCommands(h.commands)
+		r.Background = h.background()
 		// Copied, not aliased, for the reason setState gives above.
 		// Republished HERE as well as there: allowing a folder changes no
 		// state, so setState never runs for it, and a row that only
@@ -793,6 +802,9 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		if n.Update.Size > 0 || n.Update.Used > 0 {
 			h.setUsage(n.Update.Used, n.Update.Size)
 		}
+
+	case updateAsyncTaskSpawned, updateAsyncTaskState, updateAsyncTaskProgress:
+		h.trackAsyncTask(n.Update.Raw)
 
 	case acp.UpdateCurrentMode:
 		// The agent can change its own mode (a slash command, its own
@@ -1450,6 +1462,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// agent hears cancelled on it and then ends the turn, and the
 		// rail stops asking about a turn that is over.
 		cancelAsksFor(h.key, ReasonTurnCancelled)
+		cancelQuestionsFor(h.key, ReasonTurnCancelled)
 		return h.client.Cancel(h.sessionID)
 	})
 
@@ -1493,20 +1506,35 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 
 // Elicit answers elicitation/create — the agent asking the HUMAN a
 // structured question ("which of these?"), not permission ("may I?").
-//
-// Answering properly needs a form renderer for the requested JSON schema,
-// which does not exist yet. So this shows the question in the transcript
-// and declines: the human at least SEES what was asked, and the agent
-// learns the answer was no rather than that the client is broken.
-//
-// The alternative — not implementing it at all — returns -32601 and lets
-// the agent ask in prose instead, which for some agents is a better
-// outcome. That is the trade being made here, and it should be revisited
-// the moment a form renderer exists.
-func (h *hosted) Elicit(_ context.Context, req acp.ElicitRequest) (acp.ElicitResponse, error) {
-	log.Printf("agentd: acp elicitation key=%s message=%q (declining — no form renderer)", h.key, req.Message)
-	h.note("The agent asked: " + req.Message + "\n(wash cannot answer structured questions yet, so it declined.)")
-	return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
+// Claude Code's AskUserQuestion arrives this way. The form becomes a
+// question set in the panel above the composer, and the call waits for the
+// human: no timeout, since a question is not a permission that can fall
+// back to a default. A URL elicitation (sign in somewhere) is declined.
+func (h *hosted) Elicit(ctx context.Context, req acp.ElicitRequest) (acp.ElicitResponse, error) {
+	if req.Mode != "" && req.Mode != "form" {
+		log.Printf("agentd: acp elicitation key=%s mode=%s declined", h.key, req.Mode)
+		h.note("The agent asked for " + req.Mode + " input (" + req.Message + "), which wash cannot show; declined.")
+		return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
+	}
+	set, fields, err := elicitationQuestions(req)
+	if err != nil {
+		log.Printf("agentd: acp elicitation key=%s: %v", h.key, err)
+		h.note("The agent asked: " + req.Message + "\n(wash could not show this form: " + err.Error() + "; declined.)")
+		return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
+	}
+	reply, ok := h.askQuestions(ctx, "elicitation", set)
+	switch {
+	case !ok:
+		return acp.ElicitResponse{Action: acp.ElicitCancel}, nil
+	case reply.declined:
+		return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
+	}
+	content, err := elicitationContent(fields, reply.answers)
+	if err != nil {
+		h.note("Your answer could not be sent: " + err.Error())
+		return acp.ElicitResponse{Action: acp.ElicitDecline}, nil
+	}
+	return acp.ElicitResponse{Action: acp.ElicitAccept, Content: content}, nil
 }
 
 // publicConfigs / publicCommands copy for the wire (copy-on-write: a

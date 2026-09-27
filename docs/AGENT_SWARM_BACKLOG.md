@@ -21,86 +21,12 @@ A workspace has three formal mechanisms and one piece of runtime state:
 |---|---|---|
 | **The plan** | A graph of nodes: milestones, packages, steps, notes, however the orchestrator uses them. The backbone: every assignment and member hangs off a node. (done: AGENT_SWARM_BULK.md, "The plan") | The orchestrator (the Architect for unstarted nodes); Wash moves states as assignments open and close |
 | **Questions between agents** | QA threads, one file each, the record of why (done: AGENT_SWARM_BULK.md, "QA: one file per thread") | Agents, through the tools |
-| **Questions to the owner** (C, D) | Structured questions that block the asker until the owner answers; the answer is recorded verbatim in the QA thread | Agents ask, the owner answers in a panel |
-| Runtime (E) | Who is working, running a tool, waiting on a background task, or needs you | Wash, from the sessions |
+| **Questions to the owner** | Structured questions that block the asker until the owner answers; the answer is recorded verbatim in the QA thread (done: AGENT_SWARM_BULK.md, `decision_request`; AGENT_APP.md §7) | Agents ask, the owner answers in a panel |
+| Runtime | Who is working, running a tool, waiting on a background task, or needs you (done) | Wash, from the sessions |
 
 Work state lives in Wash and in the project's `.wash/` directory, never only in
 the orchestrator's context: a compaction or a new orchestrator reads the plan
 back instead of reconstructing it.
-
-## C. Questions to the owner
-
-- **Structured form.** A question set is `{title?, questions:[{id, question,
-  header?, options:[{label, description?}], multi?, recommended?}]}`; every
-  question also takes free text, and every one can be skipped.
-- **Adapter questions.** agentd advertises form elicitation
-  (`clientCapabilities.elicitation.form`), so Claude Code's `AskUserQuestion`
-  arrives as `elicitation/create` with a form schema (one enum field per
-  question, a `_custom` text field beside each). agentd turns the schema into a
-  question set, shows it, and holds the request until the owner answers, the
-  turn is stopped, or the session ends. No timeout. (Today every elicitation
-  is declined.)
-- **`decision_request {questions, title?, thread_id?}`** takes the same shape.
-  It blocks the asker: nothing else is delivered to it until the owner
-  answers (other messages wait in its inbox), and the call tells it to end its
-  turn; the answer arrives as its next message. Asked on a thread, the
-  question and the owner's answer are both events on it, word for word.
-- **One panel.** Pending questions render pinned above the composer of the
-  session view (the Conversation tab, and a member's tab), scrollable, one
-  card per question (option buttons or checkboxes, a text box, Skip), one
-  Submit. Keys: 1–9 pick an option of the focused card, Ctrl+Enter submits.
-  Built from the approval row's parts.
-- Workspace questions persist in the workspace store and survive a restart;
-  an adapter's question ends with its session.
-- The instructions tell agents to ask with the structured tool, never with a
-  list of questions in prose.
-
-## D. "Needs you"
-
-One state for approvals, questions and decisions:
-
-- the roster row's state is `needs-input` with a count;
-- a member tab's label carries a dot while its member needs you;
-- the Plan tab's node carries the badge;
-- the workspace sidebar's "Needs you" list names each, and clicking jumps to
-  the tab that answers it;
-- a desktop notification when one arrives.
-
-## E. Background work is visible
-
-- agentd advertises claude-agent-acp's `asyncTasks` capability
-  (`clientCapabilities._meta.jetbrains.air = {version:1, capabilities:
-  ["asyncTasks"]}`) and tracks `async_task_spawned` /
-  `async_task_state_update` / `async_task_progress` per session.
-- A session whose turn has ended with a background task still running shows
-  **"Background: <description>"** (activity `background`) in the roster, the
-  workspace sidebar and the Plan tab, instead of idle.
-- To check live: whether a finished background Bash wakes the member again.
-
-## G. Setup from a file
-
-- `workspace_configure({from: ".wash/workspace.toml"})` reads the workspace
-  definition: `name`, `max_active`, `max_members`, `catalog`, `qa_dir`,
-  `plan_file`, `legend`, `context_warn`, role templates (`[roles.<role>]
-  instructions`, prepended to a member's instructions) and members (the
-  Architect). Fields in the call override the file's for that call.
-- Paths are configurable; Wash does not require a layout beyond them.
-
-## H. Signals and reads
-
-- **Context warning:** a member crossing `context_warn` (default 0.6) of its
-  window sends the orchestrator one lifecycle message.
-- **Idle nudge:** a member whose turn ends with an active assignment, no
-  report and no `waiting` gets one reminder.
-- **Create and wait in one call:** `assignment_update {updates, wait:{reason}}`
-  creates the assignments and sets the caller waiting on them as a set.
-- **Handoffs:** `member_update {handoff}` writes
-  `.wash/local/handoffs/<key>.md`; a member launched with
-  `handoff_from:"<key>"` gets it in its brief.
-- **Bounded reads:** `inbox_read` pages are byte-bounded like the history
-  pages; `view=state` leaves out finished assignments' texts and results.
-- **`view: about`** lists the open workspaces (id, name, orchestrator running
-  or not) and this agentd's binary path and start time.
 
 ## Decisions taken with the owner (2026-09-26)
 
@@ -127,7 +53,7 @@ sessions without elicitation (codex, opencode; check codex-acp first).
 
 ## Execution on `workspace-plan`
 
-Order: F and A with B (done), then then C with D and E, then G, then H. Each step
+Order (all done on this branch; the live shakedown is what remains): F, A with B, then C with D and E, then G, then H. Each step
 lands with its unit tests, its e2e changes, the docs (AGENT_SWARM,
 AGENT_SWARM_BULK, AGENT_PROTOCOL via `make gen-agent-protocol`) and an entry
 removed here. The MCP API version goes to 4.0.0: `package`, `packages`,

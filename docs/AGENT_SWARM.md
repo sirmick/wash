@@ -556,8 +556,10 @@ declarative workflow engine are outside the initial slice.
 - `workspace_get` adds JSON configuration, launch snapshots and live adapter settings;
   `workspace_configure` persists atomic configuration patches. `workspace_get` reports
   members, plan, assignments, pending decisions and delivery
-  counts. It avoids replaying the whole inbox. `inbox_read` accepts `after` and
-  `limit` (default 50, maximum 100), returning messages, cursor and has_more.
+  counts. It avoids replaying the whole inbox, and cuts finished assignments'
+  texts to their first line. `inbox_read` accepts `after` and `limit` (default
+  50, maximum 100, and at most 64 KiB a page), returning messages, cursor and
+  has_more. `about` lists the open workspaces and this agentd's binary.
 - Tool arguments are bounded to 1 MiB; individual messages to 32 KiB, plan
   nodes to 500, and messages to 10,000 per workspace. This initial store rewrites its
   atomic JSON snapshot on mutations; it is intended for project coordination,

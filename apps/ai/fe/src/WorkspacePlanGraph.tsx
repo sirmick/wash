@@ -121,7 +121,7 @@ export const WorkspacePlanGraph: Component<{
                     title={`Open ${m.name}`}
                     style={{ display: 'flex', gap: `${tokens.spaceXs}px`, 'align-items': 'center', width: '100%', height: `${LINE_H}px`, padding: 0, border: 'none', background: 'transparent', color: tokens.fg, font: tokens.type.textSm, cursor: 'pointer', 'text-align': 'left' }}>
                     <span aria-hidden="true" style={{ width: '7px', height: '7px', 'border-radius': '50%', background: agentActivityColor(activity(m)), 'flex-shrink': 0 }} />
-                    <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{m.emoji} {m.name} · {agentActivityLabel(activity(m))}</span>
+                    <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{m.emoji} {m.name} · {agentActivityLabel(activity(m))}{(activity(m) === 'background' || activity(m) === 'tool') && props.frame.activity_detail?.[m.id] ? `: ${props.frame.activity_detail[m.id]}` : ''}</span>
                   </button>
                 )}</For>
                 <For each={nested(box.id)}>{({ node: step, depth }) => (

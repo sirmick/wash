@@ -156,7 +156,7 @@ func TestBulkRenamePreservesProjectRootAndBatchesRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if _, err := call("decision_request", `{"text":"Choose A or B","thread_id":"q","request_id":"choice"}`); err != nil {
+		if _, err := call("decision_request", `{"questions":[{"question":"Choose A or B","options":[{"label":"A"},{"label":"B"}]}],"thread_id":"q","request_id":"choice"}`); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -255,10 +255,10 @@ func TestMemberNamesAreUniquePerNode(t *testing.T) {
 	}
 }
 
-// Observed in Redoubt: the human answered the Architect's decision in the
-// member pane's message box. That sent a plain instruction, left the decision
-// recorded, and pinned its QA thread at awaiting-owner, where resolve refuses.
-func TestMessagingAMemberAnswersItsPendingDecision(t *testing.T) {
+// A decision blocks its asker: nothing else reaches it until the owner
+// answers, the answers arrive as its next message, and they are in the QA
+// thread word for word, so the thread can be resolved.
+func TestADecisionBlocksItsAskerUntilAnswered(t *testing.T) {
 	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -268,41 +268,58 @@ func TestMessagingAMemberAnswersItsPendingDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPlan(t, s, "lead", "R2")
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "arch", Name: "Architect", Role: "architect", Session: "arch-s", State: "available", Lifetime: "resident", Creator: m.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	ws := &workspaceService{store: s}
-	lead := &hosted{sessionID: "lead"}
-	call := func(name, raw string) (any, error) {
-		return ws.call(context.Background(), lead, workspacemcp.Call{Name: name, Arguments: json.RawMessage(raw)})
+	arch := &hosted{sessionID: "arch-s"}
+	call := func(h *hosted, name, raw string) (any, error) {
+		return ws.call(context.Background(), h, workspacemcp.Call{Name: name, Arguments: json.RawMessage(raw)})
 	}
-	if _, err = call("member_update", `{"qa_updates":[{"action":"open","id":"q","node":"R2","title":"Stub address","body":"Where?","assignee":"`+w.Lead+`"}]}`); err != nil {
+	if _, err = call(arch, "member_update", `{"qa_updates":[{"action":"open","id":"q","node":"R2","title":"Stub address","body":"Where?","assignee":"`+w.Lead+`"}]}`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = call("decision_request", `{"text":"Fixed address or relocatable?","thread_id":"q"}`); err != nil {
+	res, err := call(arch, "decision_request", `{"title":"Stub address","questions":[{"id":"where","question":"Fixed address or relocatable?","options":[{"label":"Fixed"},{"label":"Relocatable"}],"recommended":"Fixed"},{"question":"Anything else?"}],"thread_id":"q"}`)
+	if err != nil {
 		t.Fatal(err)
+	}
+	id := res.(map[string]any)["id"].(string)
+	if !strings.Contains(res.(map[string]any)["instruction"].(string), "End your turn") {
+		t.Fatal(res)
 	}
 	if got := s.View("lead").QA[0].State; got != "awaiting-owner" {
 		t.Fatalf("thread %s, want awaiting-owner", got)
 	}
-	raw, _ := json.Marshal(map[string]any{"recipient": w.Lead, "body": "Fixed address."})
-	res, err := ws.humanMessage(lead, raw)
-	if err != nil || res.(map[string]any)["answered"] == nil {
-		t.Fatal("message did not answer the pending decision", res, err)
+	// The orchestrator's instruction waits behind the question.
+	if _, err := s.Send("lead", "arch", "instruction", "Also review K5", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if next, _ := s.Next("arch-s"); len(next) != 0 {
+		t.Fatalf("delivered while the asker waits for the owner: %+v", next)
+	}
+	if err := s.AnswerDecision(id, map[string]swarm.QuestionAnswer{"where": {Selected: []string{"Fixed"}, Text: "at 0x8000"}, "q2": {}}, false); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := s.Next("arch-s")
+	if len(next) != 2 || next[0].Type != "decision_response" || !strings.Contains(next[0].Body, "Fixed — at 0x8000") || !strings.Contains(next[0].Body, "(skipped)") || next[1].Body != "Also review K5" {
+		t.Fatalf("the answer does not lead the next turn: %+v", next)
 	}
 	v := s.View("lead")
-	if v.QA[0].State != "open" {
-		t.Fatalf("thread %s after the answer, want open", v.QA[0].State)
-	}
 	last := v.QA[0].Events[len(v.QA[0].Events)-1]
-	if last.Kind != "decision_response" || last.Body != "Fixed address." {
-		t.Fatalf("answer not in the thread: %+v", last)
+	if v.QA[0].State != "open" || last.Kind != "decision_response" || !strings.Contains(last.Body, "Fixed — at 0x8000") {
+		t.Fatalf("answer not in the thread: %s %+v", v.QA[0].State, last)
 	}
-	rev := v.QA[0].Revision
-	if _, err = call("member_update", fmt.Sprintf(`{"qa_updates":[{"action":"resolve","id":"q","expected_revision":%d,"evidence":"Human chose a fixed address."}]}`, rev)); err != nil {
-		t.Fatal("thread still cannot be resolved:", err)
+	if err := s.AnswerDecision(id, nil, false); err == nil {
+		t.Fatal("answered twice")
 	}
-	// With nothing pending, a message is an ordinary instruction again.
-	res, err = ws.humanMessage(lead, raw)
-	if err != nil || res.(map[string]any)["answered"] != nil {
-		t.Fatal("a plain message was taken as a decision answer", res, err)
+	if err := s.AnswerDecision("nope", nil, true); err == nil {
+		t.Fatal("answered an unknown decision")
+	}
+	if _, err := call(arch, "decision_request", `{"questions":[{"question":"Pick","options":[{"label":"A"}],"recommended":"B"}]}`); err == nil {
+		t.Fatal("a recommendation that is not an option was accepted")
 	}
 }
 

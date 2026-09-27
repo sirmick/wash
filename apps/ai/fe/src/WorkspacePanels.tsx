@@ -2,6 +2,7 @@ import type { agentproto } from '@wash/ui';
 import { For, Show, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { AgentSession, Button, Markdown, Splitter, tokens } from '@wash/ui';
+import type { QuestionAnswers } from '@wash/ui';
 import { planPath, planStateColor } from './WorkspacePlanGraph';
 
 export type WorkspaceAction = (name: string, args: agentproto.WorkspaceActionArgs) => void;
@@ -26,6 +27,7 @@ export const WorkspaceMemberPanel: Component<{
   draft: string; onDraft: (draft: string) => void; onAction: WorkspaceAction;
   /** Opens the Plan tab on a node: the breadcrumb's destination. */
   onOpenNode?: (id: string) => void;
+  onQuestionAnswer?: (id: string, action: 'accept' | 'decline', answers?: QuestionAnswers) => void;
 }> = (props) => {
   const w = () => props.frame.workspace!;
   const member = () => (w().members ?? []).find((m) => m.id === props.memberID);
@@ -34,6 +36,9 @@ export const WorkspaceMemberPanel: Component<{
   const events = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.events ?? []
     : props.result?.operation === 'member_inspect' && props.result.transcript?.member_id === props.memberID ? props.result.transcript.events ?? [] : [];
   const asks = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.asks ?? [] : props.result?.operation === 'member_inspect' && props.result.transcript?.member_id === props.memberID ? props.result.transcript.asks ?? [] : [];
+  // The member's questions for the human, live from the frame: answered here,
+  // in its tab, like its permission asks.
+  const questions = () => (props.frame.questions ?? []).filter((q) => q.member_id === props.memberID);
   let panes!: HTMLDivElement;
   const [split, setSplit] = createSignal(savedMemberSplit());
   const persistSplit = () => {
@@ -92,15 +97,8 @@ export const WorkspaceMemberPanel: Component<{
             }}>
             <Splitter container={panes} orientation="horizontal" thickness={5} min={MEMBER_MIN} max={MEMBER_MAX} onChange={setSplit} onCommit={persistSplit} />
           </div>
-          <div style={{ 'min-height': 0 }}><AgentSession events={events} asks={asks} onAnswer={props.onAnswer} hideComposer /></div>
+          <div style={{ 'min-height': 0 }}><AgentSession events={events} asks={asks} onAnswer={props.onAnswer} questions={questions} onQuestionAnswer={props.onQuestionAnswer} hideComposer /></div>
           </div>
-          {/* A member waiting on a decision takes the next message as its
-              answer (oldest first), linked into the decision's QA thread. */}
-          <Show when={(w().messages ?? []).find((q) => q.type === 'decision_request' && q.delivery === 'recorded' && q.sender === m().id)}>{(q) => (
-            <div data-testid="workspace-member-answers" style={{ color: tokens.fgMuted, font: tokens.type.textSm, padding: `${tokens.spaceSm}px 0`, 'overflow-wrap': 'anywhere' }}>
-              Your message answers {m().name}'s decision: {q().body}
-            </div>
-          )}</Show>
           <textarea aria-label={`Message ${m().name}`} value={draft()} onInput={(e) => setDraft(e.currentTarget.value)} style={{ width: '100%', 'box-sizing': 'border-box' }} />
           <Button disabled={!draft().trim() || m().state === 'ended'} onClick={() => { props.onAction('member_message', { recipient: m().id, body: draft() }); setDraft(''); }}>Send message</Button>
         </section>

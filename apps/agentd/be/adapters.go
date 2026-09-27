@@ -418,6 +418,14 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 		// the capability is worth having before that, because it moves
 		// execution behind wash's boundary rather than the adapter's.
 		Terminal: true,
+		// elicitation: an agent's structured question (Claude Code's
+		// AskUserQuestion arrives as a form) is shown in the question
+		// panel and answered there, instead of asked in prose.
+		Elicitation: &acp.ElicitationCapabilities{Form: &struct{}{}},
+		// asyncTasks: claude-agent-acp reports background work (a Bash
+		// run in the background) so an agent waiting on it shows as
+		// such, not as idle.
+		Meta: map[string]any{"jetbrains": map[string]any{"air": map[string]any{"version": 1, "capabilities": []string{"asyncTasks"}}}},
 	}, acp.Implementation{Name: "wash", Title: "wash", Version: version.Version})
 	if err != nil {
 		h.stop()

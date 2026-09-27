@@ -2,6 +2,7 @@ import type { agentproto } from '@wash/ui';
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, untrack } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Splitter, Tab, Markdown, tokens } from '@wash/ui';
+import type { QuestionAnswers } from '@wash/ui';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { WorkspaceMemberPanel, type WorkspaceAction } from './WorkspacePanels';
 import { WorkspacePlanGraph } from './WorkspacePlanGraph';
@@ -22,6 +23,7 @@ const savedSplit = () => {
 export const WorkspaceLayout: Component<{
   frame: agentproto.WorkspaceState; result?: agentproto.WorkspaceResult; currentSessionID?: string;
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
+  onQuestionAnswer?: (id: string, action: 'accept' | 'decline', answers?: QuestionAnswers) => void;
   onAction: WorkspaceAction; children: JSX.Element;
 }> = (props) => {
   let container!: HTMLDivElement;
@@ -46,8 +48,14 @@ export const WorkspaceLayout: Component<{
   const ownMember = createMemo(() => (workspace()?.members ?? []).find((m) => m.session_id === props.currentSessionID)?.id);
   // The Plan tab stands beside Conversation for the whole workspace.
   const tabs = () => ['conversation', 'plan', ...opened()];
-  const label = (id: string) => id === 'conversation' ? 'Conversation' : id === 'plan' ? 'Plan' : id === 'qa' ? 'Questions'
-    : memberTab((workspace()?.members ?? []).find((m) => m.id === id)) ?? id;
+  // A member (or this session) waiting on the human carries a dot on its tab.
+  const needsYou = (member?: string) => !!member && (
+    (props.frame.questions ?? []).some((q) => q.member_id === member)
+    || (props.frame.approvals ?? []).some((a) => a.member_id === member)
+    || props.frame.activity?.[member] === 'needs-input');
+  const dot = (member?: string) => needsYou(member) ? ' ●' : '';
+  const label = (id: string) => id === 'conversation' ? `Conversation${dot(ownMember())}` : id === 'plan' ? 'Plan' : id === 'qa' ? 'Questions'
+    : `${memberTab((workspace()?.members ?? []).find((m) => m.id === id)) ?? id}${dot(id)}`;
   // Role-only names repeat across packages ("Implementer" twice), so a tab
   // carries the package code unless the name already starts with it.
   function memberTab(m?: { name: string; node?: string }) {
@@ -132,7 +140,7 @@ export const WorkspaceLayout: Component<{
           <Show when={active() === 'plan'} fallback={
             <WorkspaceMemberPanel frame={props.frame} result={props.result} memberID={active()}
               draft={drafts()[active()] ?? ''} onDraft={(text) => setDrafts({ ...drafts(), [active()]: text })} onAction={props.onAction} onAnswer={props.onAnswer}
-              onOpenNode={(id) => select(`plan:${id}`)} />
+              onQuestionAnswer={props.onQuestionAnswer} onOpenNode={(id) => select(`plan:${id}`)} />
           }><WorkspacePlanGraph frame={props.frame} focus={planFocus()} onSelect={select} /></Show>
           }><div ref={qaPanel} data-testid="workspace-qa" style={{height:'100%', overflow:'auto', padding:`${tokens.spaceMd}px`, 'box-sizing':'border-box'}}><Show when={workspace()?.qa_dir} fallback={<p style={{color:tokens.fgMuted}}>No QA directory configured.</p>}>
               <p data-testid="workspace-qa-path" style={{color:tokens.fgMuted,'overflow-wrap':'anywhere'}}>{workspace()?.qa_dir}</p>

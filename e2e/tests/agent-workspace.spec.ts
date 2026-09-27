@@ -64,9 +64,11 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  await expect(app.locator('[data-testid="workspace-member-detail"]')).toContainText('Human follow-up');
  await tool('member_update',{status:'Review complete',emoji:'✅'});
  await expect(sidebar).toContainText('Review complete');
- await tool('decision_request',{text:'Ship the timer?'});
- await sidebar.getByLabel('Decision response').fill('Proceed');
- await sidebar.getByRole('button',{name:'Answer',exact:true}).click();
+ // The orchestrator's own question is answered in the panel above its composer.
+ await tool('decision_request',{questions:[{question:'Ship the timer?',options:[{label:'Yes'},{label:'No'}]}]});
+ const panel=app.getByTestId('question-panel');
+ await panel.getByRole('radio',{name:/Yes/}).click();await panel.getByRole('button',{name:/^Submit/}).click();
+ await expect(panel).toHaveCount(0);
  await expect.poll(()=>state().messages.some((m:any)=>m.type==='decision_response'&&m.sender==='human')).toBe(true);
  await tool('flash_message',{text:'Timer milestone reached',emoji:'🎉'});
  await router.controlRequest({t:'launch',app_id:'com.wash.about'});
@@ -338,9 +340,11 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await expect(app.getByTestId('workspace-qa-path')).toHaveText(qaDir);
  expect(readFileSync(qaPath,'utf8')).toContain('Does the clock meet the bound?');
  await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author===configured.receipt.members.red&&e.body==='Fixture answer')).toBe(true);
- await tool('decision_request',{text:'Choose the bound: recommend A, alternative B.',thread_id:'K5-bound',request_id:'owner-choice'});
- await sidebar.getByLabel('Decision response').fill('Use bound A');await sidebar.getByRole('button',{name:'Answer',exact:true}).click();
- await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author==='human'&&e.body==='Use bound A')).toBe(true);
+ await tool('decision_request',{questions:[{question:'Choose the bound',options:[{label:'A'},{label:'B'}],recommended:'A'}],thread_id:'K5-bound',request_id:'owner-choice'});
+ const panel=app.getByTestId('question-panel');
+ await panel.getByRole('radio',{name:/^1 A/}).click();await panel.getByLabel('Your answer: Choose the bound').fill('Use bound A');
+ await panel.getByRole('button',{name:/^Submit/}).click();
+ await expect.poll(()=>state().qa[0].events.some((e:any)=>e.author==='human'&&e.body.includes('A — Use bound A'))).toBe(true);
  await expect.poll(()=>readFileSync(qaPath,'utf8')).toContain('Use bound A');
  await page.reload();await expect(sidebar).toBeVisible();await sidebar.getByTestId('workspace-qa-link').click();
  await expect(app.getByTestId('workspace-qa')).toContainText('Use bound A');await expect(app.getByTestId('workspace-qa')).toContainText('Owner');
@@ -362,7 +366,7 @@ expect(about.caller.config_options.length).toBeGreaterThan(0);
  await expect(app.getByTestId('workspace-qa')).toContainText('Regression tests passed; review complete.');
  await expect(app.getByTestId('workspace-qa')).toContainText('earlier workspace');
  expect(state().qa[0].state).toBe('resolved');expect(state().qa[0].archived).toBe(true);
- expect((await tool('workspace_get',{view:'qa',thread_id:'K5-bound'})).thread.events.some((e:any)=>e.body==='Use bound A')).toBe(true);
+ expect((await tool('workspace_get',{view:'qa',thread_id:'K5-bound'})).thread.events.some((e:any)=>e.body.includes('Use bound A'))).toBe(true);
  await tool('workspace_end',{confirm:true});await expect(sidebar).toHaveCount(0);
 });
 

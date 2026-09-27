@@ -110,3 +110,130 @@ func TestPlanAcceptReturnsTrailersAndFilesToStage(t *testing.T) {
 		t.Fatal("plan file does not show A done")
 	}
 }
+
+// A project's workspace is defined once, in .wash/workspace.toml, not
+// transcribed from a template into every setup call (DOC1's drifted).
+func TestWorkspaceConfiguresFromItsFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".wash"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := `name = "Shakedown"
+max_active = 2
+max_members = 6
+qa_dir = ".wash/qa"
+plan_file = ".wash/plan.toml"
+legend = "🧪 in review"
+context_warn = 0.5
+
+[roles.implementer]
+instructions = "Write one line; report with member_update."
+
+[members.architect]
+name = "Architect"
+role = "architect"
+lifetime = "resident"
+instructions = "Plan the next milestone when asked."
+`
+	if err := os.WriteFile(filepath.Join(dir, ".wash", "workspace.toml"), []byte(file), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := swarm.Open(filepath.Join(dir, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex", cwd: dir}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"from": ".wash/workspace.toml", "max_active": 3, "preview": true}); err != nil {
+		t.Fatal(err)
+	}
+	w := s.View("lead")
+	if w != nil {
+		t.Fatal("preview created the workspace")
+	}
+	// Members launch later (no adapter here); the file's definition is what
+	// is under test, so leave its members out of this call.
+	os.WriteFile(filepath.Join(dir, ".wash", "team.toml"), []byte(strings.Split(file, "[members.architect]")[0]), 0o644)
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"from": ".wash/team.toml", "max_active": 3}); err != nil {
+		t.Fatal(err)
+	}
+	w = s.View("lead")
+	if w.Name != "Shakedown" || w.MaxActive != 3 || w.MaxMembers != 6 || w.Legend != "🧪 in review" || w.ContextWarn != 0.5 || w.Roles["implementer"] == "" || !strings.HasSuffix(w.QADir, filepath.Join(".wash", "qa")) || !strings.HasSuffix(w.PlanFile, "plan.toml") {
+		t.Fatalf("workspace from file: %+v", w)
+	}
+	addNodes(t, ws, h, "A")
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"preview": true, "members": map[string]any{"impl": map[string]any{"name": "Implementer", "role": "implementer", "node": "A", "lifetime": "resident", "instructions": "Write alpha."}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"from": ".wash/nope.toml"}); err == nil {
+		t.Fatal("a missing file configured")
+	}
+	os.WriteFile(filepath.Join(dir, "bad.toml"), []byte("nmae = \"typo\"\n"), 0o644)
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"from": "bad.toml"}); err == nil || !strings.Contains(err.Error(), "nmae") {
+		t.Fatalf("an unknown key was accepted: %v", err)
+	}
+}
+
+// Creating a review round and waiting on it is one call, not two with an id
+// copied between them (DOC1: "until_assignments rejects placeholders").
+func TestAssignmentsCreatedAndWaitedOnInOneCall(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(dir, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex", cwd: dir}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Round"}}); err != nil {
+		t.Fatal(err)
+	}
+	addNodes(t, ws, h, "A")
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		for _, id := range []string{"r1", "r2"} {
+			w.Members = append(w.Members, swarm.Member{ID: id, Name: id, Node: "A", Session: id + "-s", State: "available", Lifetime: "resident", Creator: m.ID})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := qaFileCall(t, ws, h, "assignment_update", map[string]any{"updates": []any{map[string]any{"action": "create", "member_id": "r1", "text": "Review"}, map[string]any{"action": "create", "member_id": "r2", "text": "Review"}}, "wait": map[string]any{"reason": "Review round 1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := got.(map[string]any)["waiting_on"].([]string)
+	lead := swarm.GetMember(s.View("lead"), "orchestrator")
+	if len(ids) != 2 || len(lead.WaitingOn) != 2 || lead.Waiting != "Review round 1" {
+		t.Fatalf("not waiting on the round: %v %+v", ids, lead)
+	}
+}
+
+// A member near the end of its context writes a handoff; its replacement
+// reads it in its first message; nothing of it is meant for git.
+func TestAHandoffReachesTheReplacement(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(dir, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex", cwd: dir}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Handoff"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "old", Key: "writer", Name: "Writer", Session: "old-s", State: "available", Lifetime: "resident", Creator: m.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := &hosted{sessionID: "old-s", cwd: dir}
+	got, err := qaFileCall(t, ws, old, "member_update", map[string]any{"handoff": "Pages 1–14 written; 15 needs the scheduler page."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := got.(map[string]any)["handoff"].(string)
+	if path != filepath.Join(dir, ".wash", "local", "handoffs", "writer.md") {
+		t.Fatalf("handoff at %s", path)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, ".wash", "local", ".gitignore")); !strings.Contains(string(b), "*") {
+		t.Fatal(".wash/local does not keep itself out of git")
+	}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"preview": true, "members": map[string]any{"writer2": map[string]any{"name": "Writer 2", "lifetime": "resident", "instructions": "Write pages.", "handoff_from": "missing"}}}); err == nil {
+		t.Fatal("a handoff that does not exist was accepted")
+	}
+	brief := memberBrief(swarm.Member{ID: "new", Instructions: "Write pages.", Handoff: "Pages 1–14 written", LaunchSettings: &swarm.AgentProfile{Provider: "codex"}}, "")
+	if !strings.Contains(brief, "## Handoff from the member you replace") || !strings.Contains(brief, "Pages 1–14") {
+		t.Fatal(brief)
+	}
+}

@@ -1,5 +1,7 @@
 package agentproto
 
+import "github.com/sirmick/wash/internal/swarm"
+
 // The roster state: what agentd publishes through its StateService to every
 // subscriber (the session gateway, hostgw), and as keyed views to the Agents
 // manager and each Agent window (manager_state, session_state).
@@ -20,6 +22,10 @@ type State struct {
 	// Asks are permission questions waiting for a human (§12). They ride
 	// the roster's own push so the sidebar needs no second subscription.
 	Asks []Ask `json:"asks,omitempty"`
+	// Questions are question sets waiting for a human: an adapter's form
+	// elicitation (Claude Code's AskUserQuestion) or a workspace member's
+	// decision_request. The asker waits for the answer.
+	Questions []PendingQuestion `json:"questions,omitempty"`
 	// Recent is the remembered session history (§13) — what a reboot or a
 	// closed window would otherwise have cost you.
 	Recent []Session `json:"recent,omitempty"`
@@ -78,6 +84,9 @@ type Row struct {
 	// cached — never from the agent's hooks (§7).
 	Branch string `json:"branch,omitempty"`
 	Dirty  bool   `json:"dirty,omitempty"`
+	// Background is the work the session left running in the background
+	// (a Bash run in the background): what it is, while it runs.
+	Background string `json:"background,omitempty"`
 	// SinceMS is how long the row has been in this state, as of the push.
 	// The FE anchors its own clock to it (no cross-clock comparison).
 	SinceMS int64 `json:"since_ms"`
@@ -200,6 +209,26 @@ type Ask struct {
 	// alongside the global "always". The ID is deliberately NOT sent: the
 	// answer names a scope, never a target (see the answer path).
 	WorkspaceName string `json:"workspace_name,omitempty"`
+	// AgeMS is how long it has been waiting, as of the push.
+	AgeMS int64 `json:"age_ms"`
+}
+
+// PendingQuestion is a question set waiting for the human, shown pinned above the
+// asking session's composer (and in its workspace tab) until answered.
+type PendingQuestion struct {
+	// ID is agentd's handle; the answer names it. A workspace decision's is
+	// its message id.
+	ID string `json:"id"`
+	// RowKey is the asking session's roster row.
+	RowKey string `json:"row_key"`
+	Agent  string `json:"agent,omitempty"`
+	// Source is elicitation (the adapter asked) or decision (a workspace
+	// member's decision_request).
+	Source string            `json:"source"`
+	Set    swarm.QuestionSet `json:"set"`
+	// WorkspaceName and MemberID place a workspace member's question.
+	WorkspaceName string `json:"workspace_name,omitempty"`
+	MemberID      string `json:"member_id,omitempty"`
 	// AgeMS is how long it has been waiting, as of the push.
 	AgeMS int64 `json:"age_ms"`
 }

@@ -21,7 +21,7 @@ import {
   agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
-  AgentStatus,
+  AgentStatus, QuestionAnswers,
 } from '@wash/ui';
 
 /** What this window's backend sends besides agentd's pushes, which it
@@ -396,6 +396,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // An answer remembers a rule when it names one.
   const answer = (id: string, decision: string, rule?: string, scope?: string) =>
     sendAgentd({ kind: 'agent_answer', id, decision, remember: !!rule, rule: rule ?? '', ...(scope ? { scope } : {}) });
+  // A question set's answers, or its decline (question-panel.tsx).
+  const answerQuestion = (id: string, action: 'accept' | 'decline', answers?: QuestionAnswers) =>
+    sendAgentd({ kind: 'agent_question_answer', id, action, ...(answers ? { answers } : {}) });
 
   // History is a permanent manager pane now, so populate it as soon as
   // agentd assigns this window the manager role. Session controllers do
@@ -459,6 +462,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const asks = createMemo<agentproto.Ask[]>(() =>
     (roster().asks ?? []).filter((a) => a.row_key === sessionKey()),
   );
+  const questions = createMemo<agentproto.PendingQuestion[]>(() =>
+    (roster().questions ?? []).filter((q) => q.row_key === sessionKey()),
+  );
   // Questions on a row this window is not showing. The session pane above
   // can only render its own — a window is one session's view — but the
   // roster pane renders every row's, and answering is key-addressed, so
@@ -467,6 +473,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // is waiting behind it.
   const offRowAsks = createMemo<agentproto.Ask[]>(() =>
     (roster().asks ?? []).filter((a) => a.row_key !== sessionKey()),
+  );
+  const offRowQuestions = createMemo<agentproto.PendingQuestion[]>(() =>
+    (roster().questions ?? []).filter((q) => q.row_key !== sessionKey()),
   );
   const status = createMemo<AgentStatus>(() => {
     const r = row();
@@ -488,6 +497,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       yolo: r?.yolo,
       queued: r?.queued,
       roots: r?.roots,
+      background: r?.background,
     };
   });
 
@@ -750,6 +760,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           // the list always open the two were printing the same question
           // twice in one window. The list's job is what you can't see.
           asks={offRowAsks}
+          questions={offRowQuestions}
           startedAt={(key) => startedAt.get(key) ?? Date.now()}
           now={now}
           activeKey={sessionKey}
@@ -1159,7 +1170,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           overflow: 'hidden',
         }}
       >
-        <WorkspaceLayout onAnswer={answer} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
+        <WorkspaceLayout onAnswer={answer} onQuestionAnswer={answerQuestion} frame={workspaceFrame()} result={workspaceResult()} currentSessionID={row()?.session_id}
           onAction={(name, args) => sendAgentd({ kind: 'workspace_action', key: sessionKey(), name, arguments: args })}>
           <Show
             when={sessionKey()}
@@ -1182,6 +1193,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <AgentSession
               events={events}
               asks={asks}
+              questions={questions}
+              onQuestionAnswer={answerQuestion}
               status={status}
               onSend={(text, blocks) => sendAgentd({ kind: 'agent_prompt', key: sessionKey(), text, blocks })}
               onRemoveRoot={(path) => sendAgentd({ kind: 'agent_remove_root', key: sessionKey(), path })}

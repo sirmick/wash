@@ -102,8 +102,6 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 			raw, _ := json.Marshal(req.Arguments)
 			member := req.Arguments.MemberID
 			switch req.Name {
-			case "decision_response":
-				_, err = ws.answer(h, raw)
 			case "member_open":
 				w := ws.store.View(h.sessionID)
 				if w == nil {
@@ -316,6 +314,13 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 			return nil, errors.New("thread_id/node require view=qa")
 		}
 		qaSummary(w)
+		// Finished work is in the team view and the plan; its texts are
+		// most of a long run's state (DOC1's was 276 KB).
+		for i := range w.Assignments {
+			if !w.Assignments[i].Open() {
+				w.Assignments[i].Text, w.Assignments[i].Result = firstLine(w.Assignments[i].Text, 80), firstLine(w.Assignments[i].Result, 80)
+			}
+		}
 		counts := map[string]int{}
 		decisions := []swarm.Message{}
 		for _, msg := range w.Messages {
@@ -400,6 +405,7 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		out := []swarm.Message{}
 		more := false
 		after := a.After == ""
+		size := 0
 		for _, m := range w.Messages {
 			if !after {
 				if m.ID == a.After {
@@ -408,10 +414,14 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 				continue
 			}
 			if m.Recipient == self {
-				if len(out) == a.Limit {
+				// Pages are bounded in bytes too, like history pages: DOC1's
+				// inbox_read returned 73 KB in one line.
+				b, _ := json.Marshal(m)
+				if len(out) == a.Limit || len(out) > 0 && size+len(b) > 64<<10 {
 					more = true
 					break
 				}
+				size += len(b)
 				out = append(out, m)
 			}
 		}
@@ -625,6 +635,9 @@ func memberSettings(m swarm.Member) swarm.AgentProfile {
 // works, and its initial task (assignment), or, without one, to wait for it.
 func memberBrief(m swarm.Member, assignment string) string {
 	brief := m.Instructions + "\n\nYou are member " + m.ID + " in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Once you report an assignment complete, stop changing its files: others are now checking that tree. If a later message shows the work needs a change, reply saying what you would change and wait for a new assignment. Resident package workers remain available for fixes until the orchestrator ends them."
+	if m.Handoff != "" {
+		brief += "\n\n## Handoff from the member you replace\n\n" + m.Handoff
+	}
 	if assignment == "" {
 		idle := brief + "\n\nYou have no assignment yet. Do not start work: set waiting with member_update and end your turn. Your assignment arrives as a message."
 		// A plan-mode member with nothing to plan wrote an empty plan and asked
@@ -704,6 +717,7 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 	}
 	if action == "member_pause" && target != nil {
 		cancelAsksFor(target.key, ReasonTurnCancelled)
+		cancelQuestionsFor(target.key, ReasonTurnCancelled)
 		err = target.client.Cancel(target.sessionID)
 	}
 	if loading {
@@ -836,6 +850,7 @@ func (ws *workspaceService) interrupt(id string, m *swarm.Member) (any, error) {
 		return map[string]any{"interrupted": false, "reason": "no turn running"}, nil
 	}
 	cancelAsksFor(target.key, ReasonTurnCancelled)
+	cancelQuestionsFor(target.key, ReasonTurnCancelled)
 	if err := target.client.Cancel(target.sessionID); err != nil {
 		target.interrupted.Store(false)
 		return nil, err
@@ -908,67 +923,15 @@ func (ws *workspaceService) planExitDenied(h *hosted, plan string) {
 	ws.publish(false)
 }
 
-func (ws *workspaceService) answer(h *hosted, raw json.RawMessage) (any, error) {
-	defer ws.syncQADocuments()
-	a, err := parseWorkspaceArgs(raw)
-	if err != nil {
-		return nil, err
-	}
-	err = ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, _ *swarm.Member) error {
-		for i := range w.Messages {
-			q := &w.Messages[i]
-			if q.ID == a.ID && q.Type == "decision_request" && q.State == "recorded" {
-				return answerDecision(w, q, a.Body)
-			}
-		}
-		return errors.New("decision no longer pending")
-	})
-	return map[string]any{"id": a.ID}, err
-}
-
-// answerDecision records the human's answer to a decision request and links
-// it into the request's QA thread, which is what lets that thread leave
-// awaiting-owner and be resolved.
-func answerDecision(w *swarm.Workspace, q *swarm.Message, body string) error {
-	q.State = "answered"
-	reply, err := swarm.AddMessage(w, "human", q.Sender, "decision_response", body, q.ID, "", "")
-	if err == nil && q.Thread != "" {
-		err = swarm.LinkQA(w, q.Thread, reply)
-	}
-	return err
-}
-
-// pendingDecision is the oldest decision request member is still waiting on
-// the human for, or nil.
-func pendingDecision(w *swarm.Workspace, member string) *swarm.Message {
-	for i := range w.Messages {
-		if q := &w.Messages[i]; q.Type == "decision_request" && q.State == "recorded" && q.Sender == member {
-			return q
-		}
-	}
-	return nil
-}
 func (ws *workspaceService) humanMessage(h *hosted, raw json.RawMessage) (any, error) {
 	a, err := parseWorkspaceArgs(raw)
 	if err != nil {
 		return nil, err
 	}
-	answered := ""
 	err = ws.store.Mutate(h.sessionID, false, func(w *swarm.Workspace, _ *swarm.Member) error {
-		// Writing to a member that is waiting on a decision IS the answer:
-		// sent as a plain instruction it left the decision recorded, so its
-		// QA thread stayed awaiting-owner and could not be resolved.
-		if q := pendingDecision(w, a.Recipient); q != nil {
-			answered = q.ID
-			return answerDecision(w, q, a.Body)
-		}
 		_, err := swarm.AddMessage(w, "human", a.Recipient, "instruction", a.Body, "", "", "")
 		return err
 	})
-	if answered != "" {
-		ws.syncQADocuments()
-		return map[string]any{"ok": true, "answered": answered}, err
-	}
 	return map[string]any{"ok": true}, err
 }
 func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (*agentproto.WorkspaceTranscript, error) {
@@ -997,7 +960,7 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (*agentproto
 				}
 			}
 		}
-		return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Asks: pending}, nil
+		return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Asks: pending, Questions: questionsFor(target.key, m.ID)}, nil
 	}
 	events, err := loadTranscript(m.Session)
 	if err != nil {
@@ -1009,11 +972,12 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (*agentproto
 	if events == nil {
 		events = []agentproto.Event{}
 	}
-	return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Note: "Archived conversation; reopen through Agent History to resume."}, nil
+	return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Questions: questionsFor("", m.ID), Note: "Archived conversation; reopen through Agent History to resume."}, nil
 }
 func (ws *workspaceService) publish(force bool) {
 	ws.syncQADocuments()
 	ws.syncPlanFiles()
+	publishQuestions()
 	ws.publishMu.Lock()
 	defer ws.publishMu.Unlock()
 	controllerState.Lock()
@@ -1044,6 +1008,7 @@ func (ws *workspaceService) publish(force bool) {
 			}
 			frame.Activity, frame.ActivityDetail, frame.Usage = workspaceRuntime(w)
 			frame.Approvals = workspaceApprovals(w)
+			frame.Questions = workspaceQuestions(w)
 			frame.QAMarkdown = swarm.QAMarkdown(w)
 			status := ws.qaDocumentStatus(w)
 			frame.QADocumentStatus = &status
@@ -1115,6 +1080,7 @@ func (ws *workspaceService) loop() {
 		case <-tick.C:
 		}
 		ws.dispatch()
+		ws.contextNudges()
 		ws.publish(false)
 	}
 }

@@ -121,6 +121,11 @@ func sessionView(state agentproto.State, key string) agentproto.State {
 			out.Asks = append(out.Asks, a)
 		}
 	}
+	for _, q := range state.Questions {
+		if q.RowKey == key {
+			out.Questions = append(out.Questions, q)
+		}
+	}
 	return out
 }
 

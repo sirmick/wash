@@ -18,8 +18,8 @@ type WorkspaceRefresh struct {
 // WorkspaceAction is a human's action in the workspace sidebar.
 type WorkspaceAction struct {
 	Key string `json:"key"`
-	// Name is the operation: decision_response | member_open |
-	// member_resume | member_message | member_inspect.
+	// Name is the operation: member_open | member_resume |
+	// member_message | member_inspect.
 	Name      string              `json:"name"`
 	Arguments WorkspaceActionArgs `json:"arguments"`
 }
@@ -30,11 +30,9 @@ type WorkspaceActionArgs struct {
 	// MemberID names the member for member_open, member_resume and
 	// member_inspect.
 	MemberID string `json:"member_id,omitempty"`
-	// ID is the decision request's message id, for decision_response.
-	ID string `json:"id,omitempty"`
 	// Recipient is the member a member_message goes to.
 	Recipient string `json:"recipient,omitempty"`
-	// Body is a decision_response's answer or a member_message's text.
+	// Body is a member_message's text.
 	Body string `json:"body,omitempty"`
 }
 
@@ -58,6 +56,8 @@ type WorkspaceState struct {
 	Usage map[string]swarm.Usage `json:"usage,omitempty"`
 	// Approvals are the members' questions waiting for the human.
 	Approvals []WorkspaceApproval `json:"approvals,omitempty"`
+	// Questions are the members' question sets waiting for the human.
+	Questions []PendingQuestion `json:"questions,omitempty"`
 	// QAMarkdown is the QA document as it is written to disk.
 	QAMarkdown       string            `json:"qa_markdown,omitempty"`
 	QADocumentStatus *QADocumentStatus `json:"qa_document_status,omitempty"`
@@ -72,6 +72,8 @@ type WorkspaceTranscript struct {
 	Events   []Event `json:"events"`
 	// Asks are the member's questions waiting for the human, when it runs.
 	Asks []Ask `json:"asks,omitempty"`
+	// Questions are the member's question sets waiting for the human.
+	Questions []PendingQuestion `json:"questions,omitempty"`
 	// Note says what the transcript is when it is not live: an ended
 	// member's archive.
 	Note string `json:"note,omitempty"`

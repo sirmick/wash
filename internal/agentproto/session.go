@@ -1,5 +1,7 @@
 package agentproto
 
+import "github.com/sirmick/wash/internal/swarm"
+
 // Session messages: starting a session, talking to it, changing its
 // settings, answering its questions, and ending it. A session is named by
 // its roster key ("acp:<n>").
@@ -152,6 +154,16 @@ type AgentAnswer struct {
 	Scope string `json:"scope,omitempty"`
 }
 
+// AgentQuestionAnswer answers a Question by its id: accept with the
+// answers (question id to answer; a question left out is skipped), or
+// decline.
+type AgentQuestionAnswer struct {
+	ID string `json:"id"`
+	// Action is accept | decline.
+	Action  string                          `json:"action"`
+	Answers map[string]swarm.QuestionAnswer `json:"answers,omitempty"`
+}
+
 // AgentDefaultPrompt asks for the stored default prompt's text.
 type AgentDefaultPrompt struct{}
 
@@ -189,6 +201,8 @@ func init() {
 		Doc: "Let the session reach another folder."})
 	register(Spec{Kind: "agent_remove_root", Dir: Request, Payload: AgentRemoveRoot{}, From: "any frontend",
 		Doc: "Take a folder back."})
+	register(Spec{Kind: "agent_question_answer", Dir: Request, Payload: AgentQuestionAnswer{}, From: "any frontend (answering anywhere resolves everywhere)",
+		Doc: "The human's answers to a question set, or a decline."})
 	register(Spec{Kind: "agent_answer", Dir: Request, Payload: AgentAnswer{}, From: "any frontend (answering anywhere resolves everywhere)",
 		Doc: "Answer a question, optionally remembering the rule."})
 	register(Spec{Kind: "agent_default_prompt", Dir: Request, Payload: AgentDefaultPrompt{}, From: "any frontend", Reply: "default_prompt",

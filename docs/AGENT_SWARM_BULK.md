@@ -69,7 +69,7 @@ read-only by instruction. The per-workspace `profiles` map and `default_profile`
 | `inbox_read` | Paginated caller inbox history |
 | `message_retry` | Explicit reconciliation/retry of uncertain delivery |
 | `assignment_update` | Atomic create/complete/fail batch; every assignment is on a node |
-| `decision_request` | Actual human choice, optionally linked to QA |
+| `decision_request` | Structured questions for the owner, blocking the asker until answered, optionally recorded in a QA thread |
 | `flash_message` | Attributed desktop notification |
 
 `tools/list` supplies full schemas. `workspace_get({"view":"about"})` works before
@@ -97,6 +97,15 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
 A member's `node` must already be in the plan (`plan_set` first); a member on no node is
 the team's (an Architect). A member's `task` is an assignment on its node, so it needs a
 node whose needs are done.
+
+`from` reads the definition from a TOML file, usually `.wash/workspace.toml`: `name`,
+`max_active`, `max_members`, `catalog`, `qa_dir`, `plan_file`, `legend`, `context_warn`,
+`[roles.<role>] instructions` and `[members.<key>]` tables. Fields in the call win, and
+members merge by key, so a setup is one call and the definition is not transcribed from a
+template into every setup. An unknown key is an error naming it. A role's instructions
+are put before the instructions of every new member with that role. `context_warn`
+(default 0.6) is the share of its context window at which a member's use is reported to
+the orchestrator, once, with the handoff to make.
 
 - Omitted fields stay. A member's `model` names a slot of the workspace catalog, or a
   model id that must come from provider choices. An adapter's own list (`anthropic`)
@@ -198,6 +207,12 @@ Completing an assignment leaves residents available. Ephemeral members retire af
 assignment and turn finish. Explicit `member_control` (by IDs, or `node`) ends package residents at acceptance
 or abandonment. Limits count idle residents; they do not consume model turns while waiting.
 
+`assignment_update {updates, wait:{reason}}` creates assignments and sets the caller
+waiting on exactly those as one set, in the same call. `member_update {handoff}` writes the
+caller's handoff to `.wash/local/handoffs/<key>.md` (`.wash/local` keeps itself out of git);
+a member launched with `handoff_from:"<key>"` reads it in its first message. A member whose
+turn ends with its assignment active, no report and no waiting set is reminded once.
+
 `member_update` can complete assignments, update status and set
 `waiting:{reason,...}` together. `waiting.until_assignments` lists assignments the caller
 created: their results are held and delivered together, in one turn, once the last one
@@ -274,9 +289,16 @@ thread's creator and assignee (other than the author and the message's recipient
 `answer`, which wakes them: a member blocked on a thread wakes when it is answered, whoever
 the answer was addressed to. An `assign` sends the new assignee a question naming the thread.
 
-Link `decision_request` to thread_id. The human's GUI answer is recorded with human
-authority in the same transaction as the response; an agent cannot fabricate that event.
-Pending decisions prevent resolution. An answer does not resolve QA. The Architect writes
+`decision_request {title?, questions:[{id?, question, header?, options?:[{label,
+description?}], multi?, recommended?}], thread_id?}` asks the owner up to ten questions;
+each takes the owner's own words too, and any may be skipped. The call returns at once and
+tells the asker to end its turn: the question blocks it, so nothing else is delivered to it
+until the owner answers, and the answers lead its next turn (`decision_response`, with the
+answers rendered question by question). The owner answers in the panel pinned above the
+asker's composer, in its workspace tab (the sidebar's "Needs you" and the Plan tab's node
+point there; the tab and the node carry a dot). Asked on `thread_id`, the questions and the
+answers are both thread events, word for word, and the thread is awaiting-owner until then.
+An answer does not resolve QA. Ask the owner this way, never with questions in prose. The Architect writes
 formal project decisions/specifications, links them through decision_refs and routes the
 implementation back. Package reviewers verify evidence before closure. Project acceptance
 policy requires no unresolved blocking QA; Wash does not infer whether a git merge satisfies it.

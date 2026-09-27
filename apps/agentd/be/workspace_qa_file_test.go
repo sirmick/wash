@@ -99,14 +99,14 @@ func TestQADirWritesOneFilePerThreadAndRecovers(t *testing.T) {
 	}
 	// Only the thread that changed is rewritten.
 	before, _ := os.Stat(filepath.Join(qa, "other.md"))
-	result, err := qaFileCall(t, ws, h, "decision_request", map[string]any{"text": "Choose A or B", "thread_id": "q"})
+	result, err := qaFileCall(t, ws, h, "decision_request", map[string]any{"questions": []any{map[string]any{"question": "Choose A or B"}}, "thread_id": "q"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"id": result.(map[string]any)["id"], "body": "Use A"})
-	if _, err = ws.answer(h, raw); err != nil {
+	if err = s.AnswerDecision(result.(map[string]any)["id"].(string), map[string]swarm.QuestionAnswer{"q1": {Text: "Use A"}}, false); err != nil {
 		t.Fatal(err)
 	}
+	ws.syncQADocuments()
 	if text = readThread(t, qa, "q"); !strings.Contains(text, "Owner · Owner decision") || !strings.Contains(text, "Use A") {
 		t.Fatal(text)
 	}
@@ -213,7 +213,7 @@ func TestQADirResumesWithoutStoreAndRetainsDecisions(t *testing.T) {
 	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": lead, "type": "question", "body": "Keep evidence", "qa": map[string]any{"id": "q", "action": "open", "node": "K5", "title": "Decision"}}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := qaFileCall(t, ws, h, "decision_request", map[string]any{"text": "Use A?", "thread_id": "q"})
+	result, err := qaFileCall(t, ws, h, "decision_request", map[string]any{"questions": []any{map[string]any{"question": "Use A?"}}, "thread_id": "q"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,8 +233,7 @@ func TestQADirResumesWithoutStoreAndRetainsDecisions(t *testing.T) {
 	if len(w.QA) != 1 || w.QA[0].State != "awaiting-owner" || w.QA[0].Assignee != w.Lead || w.QA[0].Events[0].Author != old.Lead || w.QAAuthors[old.Lead] == "" {
 		t.Fatalf("bad restore: %+v", w)
 	}
-	raw, _ := json.Marshal(map[string]any{"id": decision, "body": "Use A"})
-	if _, err = ws2.answer(h2, raw); err != nil {
+	if err = s2.AnswerDecision(decision.(string), map[string]swarm.QuestionAnswer{"q1": {Text: "Use A"}}, false); err != nil {
 		t.Fatal(err)
 	}
 	if s2.View(h2.sessionID).QA[0].State != "open" {

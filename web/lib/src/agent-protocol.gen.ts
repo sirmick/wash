@@ -170,6 +170,19 @@ export interface AgentPrune {
   max_age_ms: number;
 }
 
+/**
+ * AgentQuestionAnswer answers a Question by its id: accept with the
+ * answers (question id to answer; a question left out is skipped), or
+ * decline.
+ */
+export interface AgentQuestionAnswer {
+  kind: 'agent_question_answer';
+  id: string;
+  /** Action is accept | decline. */
+  action: string;
+  answers?: Record<string, QuestionAnswer>;
+}
+
 /** AgentReattach opens a window onto a running session. */
 export interface AgentReattach {
   kind: 'agent_reattach';
@@ -675,6 +688,11 @@ export interface Member {
   role?: string;
   instructions?: string;
   initial_task?: string;
+  /**
+   * Handoff is the handoff a member launched with handoff_from reads in
+   * its first message: what the member it replaces had done and knew.
+   */
+  handoff?: string;
   usage?: Usage;
   /**
    * Catalog and Model are what the member was asked to run on: the
@@ -738,6 +756,12 @@ export interface Message {
   request_id?: string;
   delivery: string;
   created_at: number;
+  /**
+   * Questions is a decision_request's question set; Answers the owner's
+   * answers on its decision_response.
+   */
+  questions?: QuestionSet;
+  answers?: Record<string, QuestionAnswer>;
 }
 
 /** Mode is one approval/sandbox preset an agent offers. */
@@ -797,6 +821,38 @@ export interface Notify {
 export interface OpenSession {
   kind: 'open_session';
   key: string;
+}
+
+/** Option is one choice. */
+export interface Option {
+  label: string;
+  description?: string;
+}
+
+/**
+ * PendingQuestion is a question set waiting for the human, shown pinned above the
+ * asking session's composer (and in its workspace tab) until answered.
+ */
+export interface PendingQuestion {
+  /**
+   * ID is agentd's handle; the answer names it. A workspace decision's is
+   * its message id.
+   */
+  id: string;
+  /** RowKey is the asking session's roster row. */
+  row_key: string;
+  agent?: string;
+  /**
+   * Source is elicitation (the adapter asked) or decision (a workspace
+   * member's decision_request).
+   */
+  source: string;
+  set: QuestionSet;
+  /** WorkspaceName and MemberID place a workspace member's question. */
+  workspace_name?: string;
+  member_id?: string;
+  /** AgeMS is how long it has been waiting, as of the push. */
+  age_ms: number;
 }
 
 /**
@@ -877,6 +933,39 @@ export interface QAThread {
   events: QAEvent[] | null;
 }
 
+/** Question is one question in a set. */
+export interface Question {
+  id: string;
+  /** Header is a short label for the question (a chip, a tab). */
+  header?: string;
+  question: string;
+  options?: Option[];
+  /** Multi lets the owner pick several options. */
+  multi?: boolean;
+  /** Recommended is the label of the option the asker recommends. */
+  recommended?: string;
+  /**
+   * NoText says only the options are answers (a form field with no free
+   * text); a decision_request question always takes the owner's words.
+   */
+  no_text?: boolean;
+}
+
+/**
+ * QuestionAnswer is the owner's answer to one question: the options picked,
+ * their own words, or neither (skipped).
+ */
+export interface QuestionAnswer {
+  selected?: string[];
+  text?: string;
+}
+
+/** QuestionSet is one ask of the owner. */
+export interface QuestionSet {
+  title?: string;
+  questions: Question[] | null;
+}
+
 /** Raise tells a session's controller to come forward. */
 export interface Raise {
   kind: 'wash.focus';
@@ -928,6 +1017,11 @@ export interface Row {
    */
   branch?: string;
   dirty?: boolean;
+  /**
+   * Background is the work the session left running in the background
+   * (a Bash run in the background): what it is, while it runs.
+   */
+  background?: string;
   /**
    * SinceMS is how long the row has been in this state, as of the push.
    * The FE anchors its own clock to it (no cross-clock comparison).
@@ -1205,6 +1299,12 @@ export interface State {
    */
   asks?: Ask[];
   /**
+   * Questions are question sets waiting for a human: an adapter's form
+   * elicitation (Claude Code's AskUserQuestion) or a workspace member's
+   * decision_request. The asker waits for the answer.
+   */
+  questions?: PendingQuestion[];
+  /**
    * Recent is the remembered session history (§13) — what a reboot or a
    * closed window would otherwise have cost you.
    */
@@ -1367,6 +1467,16 @@ export interface Workspace {
   plan_file?: string;
   /** Legend says what the orchestrator's emojis and states mean. */
   legend?: string;
+  /**
+   * Roles are instruction templates by member role, put before a new
+   * member's own instructions (workspace.toml [roles.<role>]).
+   */
+  roles?: Record<string, string>;
+  /**
+   * ContextWarn is the share of its context window at which a member's
+   * use is reported to the orchestrator, once; 0 is the default.
+   */
+  context_warn?: number;
   /** Nudged are the lifecycle nudges already sent, so each goes once. */
   nudged?: string[];
   members: Member[] | null;
@@ -1379,8 +1489,8 @@ export interface WorkspaceAction {
   kind: 'workspace_action';
   key: string;
   /**
-   * Name is the operation: decision_response | member_open |
-   * member_resume | member_message | member_inspect.
+   * Name is the operation: member_open | member_resume |
+   * member_message | member_inspect.
    */
   name: string;
   arguments: WorkspaceActionArgs;
@@ -1396,11 +1506,9 @@ export interface WorkspaceActionArgs {
    * member_inspect.
    */
   member_id?: string;
-  /** ID is the decision request's message id, for decision_response. */
-  id?: string;
   /** Recipient is the member a member_message goes to. */
   recipient?: string;
-  /** Body is a decision_response's answer or a member_message's text. */
+  /** Body is a member_message's text. */
   body?: string;
 }
 
@@ -1483,6 +1591,8 @@ export interface WorkspaceState {
   usage?: Record<string, Usage>;
   /** Approvals are the members' questions waiting for the human. */
   approvals?: WorkspaceApproval[];
+  /** Questions are the members' question sets waiting for the human. */
+  questions?: PendingQuestion[];
   /** QAMarkdown is the QA document as it is written to disk. */
   qa_markdown?: string;
   qa_document_status?: QADocumentStatus;
@@ -1499,6 +1609,8 @@ export interface WorkspaceTranscript {
   events: Event[] | null;
   /** Asks are the member's questions waiting for the human, when it runs. */
   asks?: Ask[];
+  /** Questions are the member's question sets waiting for the human. */
+  questions?: PendingQuestion[];
   /**
    * Note says what the transcript is when it is not live: an ended
    * member's archive.
@@ -1534,6 +1646,7 @@ export type AgentdRequest =
   | AgentSetConfig
   | AgentAddRoot
   | AgentRemoveRoot
+  | AgentQuestionAnswer
   | AgentAnswer
   | AgentDefaultPrompt
   | AgentSetDefaultPrompt

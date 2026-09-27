@@ -1,6 +1,6 @@
-import { For, Show, createMemo, createSignal } from 'solid-js';
+import { For, Show, createMemo } from 'solid-js';
 import type { Component } from 'solid-js';
-import { Button, Markdown, tokens, agentActivityLabel, agentActivityColor, agentActivityPulses } from '@wash/ui';
+import { Button, tokens, agentActivityLabel, agentActivityColor, agentActivityPulses } from '@wash/ui';
 import type { agentproto } from '@wash/ui';
 
 export const WorkspaceSidebar: Component<{
@@ -10,12 +10,12 @@ export const WorkspaceSidebar: Component<{
   onSelect: (id: string) => void;
   onAction: (name: string, args: agentproto.WorkspaceActionArgs) => void;
 }> = (props) => {
-  const [answers, setAnswers] = createSignal<Record<string, string>>({});
   const w = () => props.frame.workspace!;
-  const questions = createMemo(() => (w().messages ?? []).filter((m) => m.type === 'decision_request' && m.delivery === 'recorded'));
+  const decisions = createMemo(() => (w().messages ?? []).filter((m) => m.type === 'decision_request' && m.delivery === 'recorded'));
   // A decision asked on a QA thread also puts the thread awaiting-owner; the
-  // decision form stands for both, so the thread is listed only without one.
-  const ownerThreads = createMemo(() => (w().qa ?? []).filter(q => q.state === 'awaiting-owner' && !questions().some(m => m.thread_id === q.id)));
+  // question stands for both, so the thread is listed only without one.
+  const ownerThreads = createMemo(() => (w().qa ?? []).filter(q => q.state === 'awaiting-owner' && !decisions().some(m => m.thread_id === q.id)));
+  const questions = () => props.frame.questions ?? [];
   const needsAttention = () => (props.frame.approvals?.length ?? 0) + questions().length + ownerThreads().length + (props.frame.qa_document_status?.state === 'error' ? 1 : 0);
   const label = (id: string) => id === 'human' ? 'You' : (w().members ?? []).find((m) => m.id === id)?.name ?? id;
   const activity = (m: agentproto.Member) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
@@ -68,14 +68,13 @@ export const WorkspaceSidebar: Component<{
           <For each={ownerThreads()}>{q => (
             <Button onClick={() => props.onSelect(`qa:${q.id}`)}>{pkg(q.node)} · Owner question: {q.title}</Button>
           )}</For>
-      <For each={questions()}>{(q) => (
-        <section data-testid="workspace-decision" style={{ padding: `${tokens.spaceSm}px 0` }}>
-          <div style={heading}>{label(q.sender)} needs your decision</div>
-          <Markdown text={q.body} />
-          <textarea aria-label="Decision response" value={answers()[q.id] ?? ''} onInput={(e) => setAnswers({ ...answers(), [q.id]: e.currentTarget.value })} style={{ width: '100%', 'box-sizing': 'border-box' }} />
-          <Button disabled={!answers()[q.id]?.trim()} onClick={() => props.onAction('decision_response', { id: q.id, body: answers()[q.id] })}>Answer</Button>
-        </section>
-      )}</For>
+          {/* Questions are answered in the asker's tab, where they are
+              pinned above its composer; here they are a way there. */}
+          <For each={questions()}>{(q) => (
+            <Button data-testid={`workspace-question-for-${q.id}`} onClick={() => props.onSelect(q.member_id ?? '')}>
+              {label(q.member_id ?? '')} · Question: {q.set.title || q.set.questions[0]?.question}
+            </Button>
+          )}</For>
         </section>
       </Show>
       <Button data-testid="workspace-plan-link" onClick={() => props.onSelect('plan')}>
@@ -111,7 +110,7 @@ export const WorkspaceSidebar: Component<{
             <span>{m.emoji} {m.name}</span>
           </div>
           <small data-testid={`workspace-activity-label-${m.id}`} style={{ color: agentActivityColor(activity(m)) }}>{agentActivityLabel(activity(m))}</small>
-          <Show when={props.frame.activity_detail?.[m.id] && activity(m) === 'tool'}>
+          <Show when={props.frame.activity_detail?.[m.id] && (activity(m) === 'tool' || activity(m) === 'background')}>
             <div title={props.frame.activity_detail?.[m.id]} style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>{props.frame.activity_detail?.[m.id]}</div>
           </Show>
           <div data-testid={`workspace-usage-${m.id}`} style={{ color: tokens.fgMuted, 'font-variant-numeric': 'tabular-nums' }}>

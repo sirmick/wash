@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/swarm"
 )
@@ -48,6 +49,9 @@ type memberSpec struct {
 	// Node is the plan node the member works on; none is the team.
 	Node string `json:"node,omitempty"`
 	Role string `json:"role,omitempty"`
+	// HandoffFrom names the member (key or id) whose handoff this one
+	// reads in its first message.
+	HandoffFrom string `json:"handoff_from,omitempty"`
 }
 type bulkConfig struct {
 	swarm.ConfigurePatch
@@ -67,6 +71,15 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, err
+	}
+	// from: the workspace definition in a file, with this call's fields
+	// on top. It becomes one ordinary configuration.
+	if from, ok := fields["from"]; ok {
+		merged, err := ws.workspaceFromFile(ctx, h, from, fields)
+		if err != nil {
+			return nil, err
+		}
+		return ws.configureBulk(ctx, h, merged)
 	}
 	for key, value := range fields {
 		if string(value) == "null" && key != "plan_file" && key != "qa_dir" {
@@ -196,6 +209,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 	}
 	keys := make([]string, 0, len(p.Members))
+	handoffs := map[string]string{}
 	for key, m := range p.Members {
 		if !swarm.ValidProfileName(key) || slices.Contains([]string{"conversation", "plan", "qa", swarm.OrchestratorKey}, key) || m == nil {
 			return nil, errors.New("invalid member key; use member_control to end members")
@@ -216,6 +230,16 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 		if len(memberBrief(swarm.Member{ID: swarm.ID(), Instructions: m.Instructions, InitialTask: m.Task}, swarm.ID())) > 32768 {
 			return nil, fmt.Errorf("member %s: instructions and task together exceed 32 KiB: a member receives them as one first message; put detail in a file it can read", key)
+		}
+		if m.HandoffFrom != "" {
+			if !swarm.ValidProfileName(m.HandoffFrom) {
+				return nil, fmt.Errorf("member %s: handoff_from names a member key or id", key)
+			}
+			b, err := os.ReadFile(handoffPath(root, m.HandoffFrom))
+			if err != nil {
+				return nil, fmt.Errorf("member %s: no handoff from %s: %w", key, m.HandoffFrom, err)
+			}
+			handoffs[key] = string(b)
 		}
 		if m.Node != "" && !swarm.ValidProfileName(m.Node) {
 			return nil, fmt.Errorf("member %s: node must be a plan node id", key)
@@ -367,7 +391,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					if prior.State == "ended" {
 						return fmt.Errorf("member %s is ended; use a new key for replacement", key)
 					}
-					if prior.Name != spec.Name || spec.Catalog != "" && prior.Catalog != spec.Catalog || spec.Model != "" && prior.Model != spec.Model || prior.Cwd != spec.Cwd || prior.Instructions != spec.Instructions || prior.Lifetime != spec.Lifetime || prior.CanSpawn != spec.CanSpawn || prior.Node != spec.Node || prior.Role != spec.Role || prior.InitialTask != spec.Task {
+					if prior.Name != spec.Name || spec.Catalog != "" && prior.Catalog != spec.Catalog || spec.Model != "" && prior.Model != spec.Model || prior.Cwd != spec.Cwd || prior.Instructions != swarm.WithRole(w, spec.Role, spec.Instructions) || prior.Lifetime != spec.Lifetime || prior.CanSpawn != spec.CanSpawn || prior.Node != spec.Node || prior.Role != spec.Role || prior.Handoff != handoffs[key] || prior.InitialTask != spec.Task {
 						return fmt.Errorf("member %s already exists with different settings; end and replace explicitly", key)
 					}
 					// Catalog edits affect future launches; explicit launch overrides must still match.
@@ -428,7 +452,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if err := knownProvider(settings.Provider); err != nil {
 					return fmt.Errorf("member %s: %w", key, err)
 				}
-				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: spec.Instructions, InitialTask: spec.Task, Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Node: spec.Node, Role: spec.Role}
+				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: swarm.WithRole(w, spec.Role, spec.Instructions), InitialTask: spec.Task, Handoff: handoffs[key], Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Node: spec.Node, Role: spec.Role}
 				if redefine != nil {
 					member.ID = redefine.ID
 					*redefine = member
@@ -592,4 +616,125 @@ func memberSettingsFor(w *swarm.Workspace, catalogs map[string]Catalog, bad map[
 	}
 	settings, err := swarm.Overlay(base, explicit)
 	return catalog, settings, err
+}
+
+// workspaceFileKeys are what a workspace file (workspace.toml) may set:
+// the same fields as workspace_configure, with name for workspace.name.
+var workspaceFileKeys = []string{"name", "max_active", "max_members", "catalog", "qa_dir", "plan_file", "legend", "context_warn", "roles", "members"}
+
+// workspaceFromFile reads a workspace definition (TOML) and returns the
+// configuration it describes, with the call's own fields on top: a field in
+// the call wins, and members merge by key.
+func (ws *workspaceService) workspaceFromFile(ctx context.Context, h *hosted, fromRaw json.RawMessage, fields map[string]json.RawMessage) (json.RawMessage, error) {
+	var from string
+	if err := json.Unmarshal(fromRaw, &from); err != nil || !swarm.ValidText(from, 4096) {
+		return nil, errors.New("from must be a file path")
+	}
+	existing := ws.store.View(h.sessionID)
+	base := h.cwd
+	if existing != nil {
+		base = existing.Root
+	}
+	var call struct {
+		Workspace *struct {
+			Root string `json:"project_root"`
+		} `json:"workspace"`
+	}
+	_ = json.Unmarshal(mustJSON(fields), &call)
+	if call.Workspace != nil && call.Workspace.Root != "" {
+		base = call.Workspace.Root
+	}
+	path := from
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	path, err := h.confineOrAsk(ctx, "Read", path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return nil, errors.New("the workspace file must be a regular file of at most 1 MiB")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var file map[string]any
+	if _, err := toml.Decode(string(b), &file); err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	out := map[string]any{}
+	for key, value := range file {
+		if !slices.Contains(workspaceFileKeys, key) {
+			return nil, fmt.Errorf("%s: unknown key %q (known: %s)", filepath.Base(path), key, strings.Join(workspaceFileKeys, ", "))
+		}
+		if key == "name" {
+			if existing == nil {
+				out["workspace"] = map[string]any{"name": value}
+			}
+			continue
+		}
+		out[key] = value
+	}
+	for key, raw := range fields {
+		if key == "from" {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, err
+		}
+		if key == "members" {
+			members, _ := out["members"].(map[string]any)
+			if members == nil {
+				members = map[string]any{}
+			}
+			given, _ := value.(map[string]any)
+			for k, v := range given {
+				members[k] = v
+			}
+			out["members"] = members
+			continue
+		}
+		if key == "workspace" && existing == nil {
+			w, _ := value.(map[string]any)
+			if prior, ok := out["workspace"].(map[string]any); ok && w != nil {
+				for k, v := range w {
+					prior[k] = v
+				}
+				continue
+			}
+		}
+		out[key] = value
+	}
+	return json.Marshal(out)
+}
+
+func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+// handoffPath is where a member's handoff is kept: under the project's
+// .wash/local, which Wash keeps out of git.
+func handoffPath(root, member string) string {
+	return filepath.Join(root, ".wash", "local", "handoffs", member+".md")
+}
+
+// writeHandoff keeps a member's handoff for the member that replaces it.
+// .wash/local ignores itself, so nothing in it reaches git.
+func writeHandoff(root, member, text string) (string, error) {
+	local := filepath.Join(root, ".wash", "local")
+	if err := os.MkdirAll(filepath.Join(local, "handoffs"), 0o755); err != nil {
+		return "", err
+	}
+	ignore := filepath.Join(local, ".gitignore")
+	if _, err := os.Stat(ignore); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(ignore, []byte("# Wash's local files: handoffs, scratch. Never committed.\n*\n"), 0o644); err != nil {
+			return "", err
+		}
+	}
+	path := handoffPath(root, member)
+	return path, os.WriteFile(path, []byte(strings.TrimSpace(text)+"\n"), 0o644)
 }

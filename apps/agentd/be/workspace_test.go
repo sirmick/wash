@@ -181,7 +181,7 @@ func TestWorkspaceConcurrentDecisionReceipts(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		go func(i int) {
 			body := fmt.Sprintf("Decision %d", i)
-			args, _ := json.Marshal(map[string]any{"text": body})
+			args, _ := json.Marshal(map[string]any{"questions": []any{map[string]any{"question": body}}})
 			result, err := ws.call(context.Background(), h, workspacemcp.Call{Name: "decision_request", Arguments: args})
 			id := ""
 			if err == nil {
@@ -199,7 +199,7 @@ func TestWorkspaceConcurrentDecisionReceipts(t *testing.T) {
 		messages[m.ID] = m.Body
 	}
 	for _, r := range receipts {
-		if r.err != nil || messages[r.id] != r.body {
+		if r.err != nil || messages[r.id] != "1. "+r.body {
 			t.Fatalf("mismatched receipt: %+v", r)
 		}
 	}

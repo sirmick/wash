@@ -49,7 +49,10 @@ type Member struct {
 	Role         string `json:"role,omitempty"`
 	Instructions string `json:"instructions,omitempty"`
 	InitialTask  string `json:"initial_task,omitempty"`
-	Usage        *Usage `json:"usage,omitempty"`
+	// Handoff is the handoff a member launched with handoff_from reads in
+	// its first message: what the member it replaces had done and knew.
+	Handoff string `json:"handoff,omitempty"`
+	Usage   *Usage `json:"usage,omitempty"`
 	// Catalog and Model are what the member was asked to run on: the
 	// catalog (the workspace's unless the member named one) and the model
 	// as given, a slot name or an id. LaunchSettings is what that resolved
@@ -113,6 +116,10 @@ type Message struct {
 	RequestID  string `json:"request_id,omitempty"`
 	State      string `json:"delivery"`
 	Created    int64  `json:"created_at"`
+	// Questions is a decision_request's question set; Answers the owner's
+	// answers on its decision_response.
+	Questions *QuestionSet              `json:"questions,omitempty"`
+	Answers   map[string]QuestionAnswer `json:"answers,omitempty"`
 }
 type Workspace struct {
 	// QAAuthors names the authors of threads read back from an earlier
@@ -148,6 +155,12 @@ type Workspace struct {
 	PlanFile string `json:"plan_file,omitempty"`
 	// Legend says what the orchestrator's emojis and states mean.
 	Legend string `json:"legend,omitempty"`
+	// Roles are instruction templates by member role, put before a new
+	// member's own instructions (workspace.toml [roles.<role>]).
+	Roles map[string]string `json:"roles,omitempty"`
+	// ContextWarn is the share of its context window at which a member's
+	// use is reported to the orchestrator, once; 0 is the default.
+	ContextWarn float64 `json:"context_warn,omitempty"`
 	// Nudged are the lifecycle nudges already sent, so each goes once.
 	Nudged      []string     `json:"nudged,omitempty"`
 	Members     []Member     `json:"members"`
@@ -655,9 +668,18 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 			}
 		}
 	}
+	// A member that asked the owner waits for the answer: its question
+	// blocks it, and nothing else reaches it until the answer does.
+	owner := false
+	for _, msg := range w.Messages {
+		owner = owner || msg.Sender == m.ID && msg.Type == "decision_request" && msg.State == "recorded"
+	}
 	asked, cut := false, false
 	for i, msg := range w.Messages {
 		if msg.Recipient != m.ID || msg.State != "queued" {
+			continue
+		}
+		if owner && msg.Type != "decision_response" {
 			continue
 		}
 		if msg.Type == "instruction" && msg.Assignment != "" && resolved(msg.Assignment) {
@@ -682,6 +704,18 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 		}
 		batch = append(batch, i)
 	}
+	// The owner's answer leads its turn: it is what the member waited for,
+	// and what it held back comes after.
+	slices.SortStableFunc(batch, func(a, b int) int {
+		ra, rb := w.Messages[a].Type == "decision_response", w.Messages[b].Type == "decision_response"
+		switch {
+		case ra && !rb:
+			return -1
+		case rb && !ra:
+			return 1
+		}
+		return 0
+	})
 	return batch, stale, setDone
 }
 
@@ -729,9 +763,54 @@ func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped b
 				}
 			}
 		}
+		if !failed {
+			idleNudge(w, m)
+		}
 		return nil
 	})
 }
+
+// idleNudge reminds a member, once per assignment, that its turn ended with
+// its assignment open, no report and no waiting set: a cheap model that
+// forgets to report strands the work, and everyone waits on it.
+func idleNudge(w *Workspace, m *Member) {
+	if m.ID == w.Lead || m.Retire {
+		return
+	}
+	// Not when it will wake anyway (mail is queued for it), is waiting on
+	// the owner, or ended its turn on a question it is waiting to hear back on.
+	lastSent := ""
+	for _, msg := range w.Messages {
+		if msg.Recipient == m.ID && msg.State == "queued" {
+			return
+		}
+		if msg.Sender == m.ID && msg.Type == "decision_request" && msg.State == "recorded" {
+			return
+		}
+		if msg.Sender == m.ID {
+			lastSent = msg.Type
+		}
+	}
+	if lastSent == "question" {
+		return
+	}
+	for _, a := range w.Assignments {
+		if a.Member != m.ID || a.State != "active" {
+			continue
+		}
+		key := "idle:" + a.ID
+		if slices.Contains(w.Nudged, key) {
+			return
+		}
+		if _, err := AddMessage(w, "wash", m.ID, "instruction", "Your turn ended with assignment "+a.ID+" still open and no report. Report it now with member_update assignment_results (complete or fail, a summary of at most 2000 bytes), or, if you are waiting on someone, set member_update waiting and end your turn.", "", a.ID, ""); err == nil {
+			w.Nudged = append(w.Nudged, key)
+		}
+		return
+	}
+}
+
+// NudgeOnce sends the orchestrator one lifecycle message per key.
+func NudgeOnce(w *Workspace, key, body string) { nudge(w, key, body) }
 
 // EndMember ends a member. notify tells the lead with a lifecycle message,
 // which wakes it: right when the member ended outside the lead's control (the

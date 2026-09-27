@@ -407,3 +407,26 @@ func TestAMembersLastReportBeforeWaitingWakesTheOrchestrator(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A cheap model that ends its turn without reporting is reminded once.
+func TestAMemberThatForgetsToReportIsRemindedOnce(t *testing.T) {
+	s, _ := fixture(t)
+	a, err := s.Assign("lead-session", "worker", "", "", "Build timers", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.Next("worker-session")
+	if err := s.TurnEnded("worker-session", []string{first[0].ID}, false); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := s.Next("worker-session")
+	if len(next) != 1 || next[0].Sender != "wash" || next[0].Assignment != a.ID || !strings.Contains(next[0].Body, "member_update") {
+		t.Fatalf("no reminder: %+v", next)
+	}
+	if err := s.TurnEnded("worker-session", []string{next[0].ID}, false); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.Next("worker-session"); len(again) != 0 {
+		t.Fatalf("reminded twice: %+v", again)
+	}
+}
