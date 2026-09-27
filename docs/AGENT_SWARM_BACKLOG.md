@@ -19,7 +19,7 @@ A workspace has three formal mechanisms and one piece of runtime state:
 
 | Mechanism | What it is | Who writes it |
 |---|---|---|
-| **The plan** (A, B) | A graph of nodes: milestones, packages, steps, notes, however the orchestrator uses them. The backbone: every assignment and member hangs off a node. | The orchestrator (the Architect for unstarted nodes); Wash moves states as assignments open and close |
+| **The plan** | A graph of nodes: milestones, packages, steps, notes, however the orchestrator uses them. The backbone: every assignment and member hangs off a node. (done: AGENT_SWARM_BULK.md, "The plan") | The orchestrator (the Architect for unstarted nodes); Wash moves states as assignments open and close |
 | **Questions between agents** | QA threads, one file each, the record of why (done: AGENT_SWARM_BULK.md, "QA: one file per thread") | Agents, through the tools |
 | **Questions to the owner** (C, D) | Structured questions that block the asker until the owner answers; the answer is recorded verbatim in the QA thread | Agents ask, the owner answers in a panel |
 | Runtime (E) | Who is working, running a tool, waiting on a background task, or needs you | Wash, from the sessions |
@@ -27,103 +27,6 @@ A workspace has three formal mechanisms and one piece of runtime state:
 Work state lives in Wash and in the project's `.wash/` directory, never only in
 the orchestrator's context: a compaction or a new orchestrator reads the plan
 back instead of reconstructing it.
-
-## A. The plan
-
-**Nodes, barely structured.** A node is:
-
-| Field | Meaning |
-|---|---|
-| `id` | letters, digits, `-`, `_`; the citation form |
-| `title` | one line |
-| `emoji` | optional colour |
-| `template` | how the node is drawn: `milestone`, `package`, `step`, `note`. Wash gives it no other meaning. |
-| `parent` | the node this one sits inside (a package in a milestone) |
-| `needs` | node ids, or QA thread ids, that must be done (resolved) first |
-| `body` | at most 2000 bytes; link to pages for detail |
-| `state` | `todo`, `active`, `reported`, `done`, `failed`, or any short word the orchestrator uses (drawn neutral) |
-| `revision` | per node; bumped by every change to it |
-| `overrides` | recorded reasons work started with needs unmet |
-
-Checks: ids unique, `parent` and `needs` point at nodes (or, for `needs`, QA
-threads), no cycles, at most 500 nodes.
-
-**Tools** (orchestrator; the Architect may `plan_set` nodes that have not
-started):
-
-- `plan_get({node?, detail?})`: one line per node by default (`id · state ·
-  title · needs · who is on it`), the legend from `workspace.toml`, and the
-  plan revision. `detail:true` or `node` returns bodies.
-- `plan_set({nodes:{ID: node|null}, from?})`: upsert by id; omitted fields
-  stay, `null` deletes a node (refused while it has open assignments or
-  children). A node may carry `expected_revision`; an automatic state change
-  on K7 does not invalidate an edit to M3. `from` loads a plan file, replacing
-  the plan (refused while any node has open assignments).
-- `plan_accept({node, gates?:[{command, exit_code}]})`: sets the node `done`
-  and returns the trailer block for its merge commit, built from its
-  assignments' results (reviewers' verdict lines), its QA threads and the
-  gates, plus the paths to stage (the plan file and the node's thread files):
-
-  ```
-  Plan-Node: K7
-  QA: K7-scan, K7-pid-pool
-  Gates: bench 0, rv32 0, doccheck 0
-  Reviewed-by: Red team: OK; Simplifier: OK with notes
-  ```
-
-**What Wash enforces** (the plan must be true, not what it says):
-
-1. Every assignment names a node (`assignment_update create {node}`; it
-   defaults to the member's node). No work happens off the plan.
-2. Every member is attached to a node (`members[key].node`) or to the team
-   (no node: the Architect).
-3. Needs gate the start: creating an assignment on a node whose needs are not
-   done is refused unless the call gives `override:"reason"`, which is recorded
-   on the node.
-4. Creating an assignment makes its node `active`; a completed result makes it
-   `reported`, a failed one `failed`. Only the orchestrator sets `done`, and
-   only with no open assignments on the node.
-5. `workspace_end` lists nodes still active and needs `confirm:true` to end
-   with them.
-
-**Nudges** (a lifecycle message to the orchestrator, once each):
-
-- every child of an active milestone is done, and the next milestone is a
-  sketch (has no children);
-- a node is `active` with nobody on it: its member ended or its assignment was
-  cancelled.
-
-**The file.** `plan_file` (default `.wash/plan.toml`, relative to the project
-root) is written by Wash on every change and never edited by hand while a
-workspace runs; a hand edit applies at the next `plan_set {from}`. Wash never
-runs git: `plan_accept` and `workspace_end` return the paths to stage.
-
-**Instructions.** The orchestrator's: "When the owner asks for status, read
-`plan_get` first and answer from it. If the plan does not explain what is
-happening, the plan is wrong: fix it, then answer." A node legend (what the
-orchestrator's emojis and extra states mean) lives in `workspace.toml` and is
-returned by `plan_get`.
-
-**Replaces:** plan `items`, `plan.order`, `packages:{CODE:{title}}`, the
-registered plan `document` (and its file watcher). A member's and a QA
-thread's `package` becomes `node`; `member_control {package}` becomes
-`{node}`.
-
-## B. The Plan tab
-
-- A tab beside Conversation in the workspace window: a left-to-right graph.
-  Milestones are columns in `needs` order; a milestone's children are laid out
-  inside it in layers by `needs`; edges are drawn between boxes. Sketch
-  milestones (no children) are dashed. Wash's own layout (longest-path layers,
-  barycentre ordering), no graph library: the plain version first.
-- A node shows its state colour, emoji, title, its members with their live
-  activity dots, and a "needs you" badge. Clicking a member opens its tab;
-  clicking the node opens its detail (body, needs, assignments, threads,
-  overrides).
-- A member tab shows its node as a breadcrumb (`M2 › K7`); clicking it opens
-  the Plan tab on that node.
-- The sidebar keeps "Needs you" and the team; the plan list and the document
-  link go.
 
 ## C. Questions to the owner
 
@@ -224,7 +127,7 @@ sessions without elicitation (codex, opencode; check codex-acp first).
 
 ## Execution on `workspace-plan`
 
-Order: F (done), then A with B, then C with D and E, then G, then H. Each step
+Order: F and A with B (done), then then C with D and E, then G, then H. Each step
 lands with its unit tests, its e2e changes, the docs (AGENT_SWARM,
 AGENT_SWARM_BULK, AGENT_PROTOCOL via `make gen-agent-protocol`) and an entry
 removed here. The MCP API version goes to 4.0.0: `package`, `packages`,

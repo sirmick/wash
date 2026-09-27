@@ -25,14 +25,15 @@ func planWorkspace(t *testing.T) (*swarm.Store, *workspaceService) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Plan = []swarm.Node{{ID: "K5a", Title: "Loader", State: "todo", Revision: 1}}
 		w.Members = append(w.Members,
-			swarm.Member{ID: "impl", Name: "Implementer", Session: "impl-s", State: "available", Creator: m.ID,
+			swarm.Member{ID: "impl", Name: "Implementer", Node: "K5a", Session: "impl-s", State: "available", Creator: m.ID,
 				LaunchSettings: &swarm.AgentProfile{Provider: "claude", Configs: map[string]string{"mode": "plan"}}},
-			swarm.Member{ID: "rev", Name: "Reviewer", Session: "rev-s", State: "available", Creator: m.ID,
+			swarm.Member{ID: "rev", Name: "Reviewer", Node: "K5a", Session: "rev-s", State: "available", Creator: m.ID,
 				LaunchSettings: &swarm.AgentProfile{Provider: "claude", Capability: "reviewer"}})
 		return nil
 	}); err != nil {
@@ -84,7 +85,7 @@ func TestAMemberCannotApproveItsOwnExitFromPlanMode(t *testing.T) {
 func TestARefusedPlanExitHandsTheOrchestratorThePlan(t *testing.T) {
 	withStateDir(t)
 	s, ws := planWorkspace(t)
-	if _, err := s.Assign("lead", "impl", "Plan K5a", ""); err != nil {
+	if _, err := s.Assign("lead", "impl", "", "", "Plan K5a", ""); err != nil {
 		t.Fatal(err)
 	}
 	plan := "# K5a plan v3\n\n1. Loader stub at a fixed address.\n" + strings.Repeat("Detail line.\n", 400)
@@ -119,7 +120,7 @@ func TestARefusedPlanExitWithoutAnAssignmentWakesNobody(t *testing.T) {
 		t.Fatalf("plan file written for an unassigned member: %v", entries)
 	}
 	// A completed assignment is not an open one either.
-	a, err := s.Assign("lead", "impl", "Plan K5a", "")
+	a, err := s.Assign("lead", "impl", "", "", "Plan K5a", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +284,7 @@ func TestMemberControlIsOrchestratorOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
@@ -312,7 +313,7 @@ func TestRelaunchDoesNotUnpauseTheWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {

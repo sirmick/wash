@@ -3,7 +3,8 @@ import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, 
 import type { Component, JSX } from 'solid-js';
 import { Splitter, Tab, Markdown, tokens } from '@wash/ui';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
-import { WorkspaceMemberPanel, WorkspacePlan, type WorkspaceAction } from './WorkspacePanels';
+import { WorkspaceMemberPanel, type WorkspaceAction } from './WorkspacePanels';
+import { WorkspacePlanGraph } from './WorkspacePlanGraph';
 
 const MIN_SPLIT = 35;
 const MAX_SPLIT = 85;
@@ -30,6 +31,7 @@ export const WorkspaceLayout: Component<{
   const [opened, setOpened] = createSignal<string[]>([]);
   const [active, setActive] = createSignal('conversation');
   const [qaFocus, setQaFocus] = createSignal('');
+  const [planFocus, setPlanFocus] = createSignal('');
   let qaPanel!: HTMLDivElement;
   createEffect(() => {
     const id=qaFocus(); props.frame.qa_markdown;
@@ -42,23 +44,25 @@ export const WorkspaceLayout: Component<{
   const [drafts, setDrafts] = createSignal<Record<string, string>>({});
   const workspace = () => props.frame.workspace;
   const ownMember = createMemo(() => (workspace()?.members ?? []).find((m) => m.session_id === props.currentSessionID)?.id);
-  const tabs = () => ['conversation', ...opened()];
+  // The Plan tab stands beside Conversation for the whole workspace.
+  const tabs = () => ['conversation', 'plan', ...opened()];
   const label = (id: string) => id === 'conversation' ? 'Conversation' : id === 'plan' ? 'Plan' : id === 'qa' ? 'Questions'
     : memberTab((workspace()?.members ?? []).find((m) => m.id === id)) ?? id;
   // Role-only names repeat across packages ("Implementer" twice), so a tab
   // carries the package code unless the name already starts with it.
-  function memberTab(m?: { name: string; package?: string }) {
+  function memberTab(m?: { name: string; node?: string }) {
     if (!m) return undefined;
-    return m.package && !m.name.startsWith(m.package) ? `${m.package} · ${m.name}` : m.name;
+    return m.node && !m.name.startsWith(m.node) ? `${m.node} · ${m.name}` : m.name;
   }
   const select = (id: string) => {
     if (id.startsWith('qa:')) {setQaFocus(id.slice(3));id='qa';}
+    if (id.startsWith('plan:')) {setPlanFocus(id.slice(5));id='plan';}
     if (id === ownMember()) id = 'conversation';
-    if (id !== 'conversation' && !opened().includes(id)) setOpened([...opened(), id]);
+    if (id !== 'conversation' && id !== 'plan' && !opened().includes(id)) setOpened([...opened(), id]);
     setActive(id);
   };
   const close = (id: string) => {
-    if (id === 'conversation') return;
+    if (id === 'conversation' || id === 'plan') return;
     const index = tabs().indexOf(id);
     if (active() === id) setActive(tabs()[index - 1] ?? 'conversation');
     setOpened(opened().filter((tab) => tab !== id));
@@ -72,6 +76,7 @@ export const WorkspaceLayout: Component<{
     setOpened([]);
     setActive('conversation');
     setQaFocus('');
+    setPlanFocus('');
     setDrafts({});
   }));
   // Membership may change in a snapshot; retired members remain navigable.
@@ -79,9 +84,9 @@ export const WorkspaceLayout: Component<{
     const members = workspace()?.members ?? [];
     const own = ownMember();
     untrack(() => {
-      const valid = opened().filter((id) => id === 'plan' || id === 'qa' || members.some((m) => m.id === id && id !== own));
+      const valid = opened().filter((id) => id === 'qa' || members.some((m) => m.id === id && id !== own));
       if (valid.length !== opened().length) setOpened(valid);
-      if (active() !== 'conversation' && !valid.includes(active())) setActive('conversation');
+      if (active() !== 'conversation' && active() !== 'plan' && !valid.includes(active())) setActive('conversation');
     });
   });
   const inspected = createMemo(() => workspace() && active() !== 'conversation' && active() !== 'plan' && active() !== 'qa' ? active() : '');
@@ -100,7 +105,7 @@ export const WorkspaceLayout: Component<{
         <div ref={tablist} role="tablist" aria-label="Workspace views" style={{ display: 'flex', overflow: 'auto', 'flex-shrink': 0, background: tokens.bgMenu }}>
           <For each={tabs()}>{(id) => <Tab role="tab" id={`${prefix}-tab-${id}`} aria-controls={`${prefix}-panel-${id}`}
             aria-selected={active() === id} tabIndex={active() === id ? 0 : -1} active={active() === id}
-            onClick={() => select(id)} onClose={id === 'conversation' ? undefined : () => { close(id); focusActive(); }}
+            onClick={() => select(id)} onClose={id === 'conversation' || id === 'plan' ? undefined : () => { close(id); focusActive(); }}
             closeTitle={`Close ${label(id)}`} closeTestId={`workspace-close-${id}`}
             onKeyDown={(event) => {
               const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Delete'];
@@ -126,8 +131,9 @@ export const WorkspaceLayout: Component<{
           <Show when={active() === 'qa'} fallback={
           <Show when={active() === 'plan'} fallback={
             <WorkspaceMemberPanel frame={props.frame} result={props.result} memberID={active()}
-              draft={drafts()[active()] ?? ''} onDraft={(text) => setDrafts({ ...drafts(), [active()]: text })} onAction={props.onAction} onAnswer={props.onAnswer} />
-          }><WorkspacePlan frame={props.frame} /></Show>
+              draft={drafts()[active()] ?? ''} onDraft={(text) => setDrafts({ ...drafts(), [active()]: text })} onAction={props.onAction} onAnswer={props.onAnswer}
+              onOpenNode={(id) => select(`plan:${id}`)} />
+          }><WorkspacePlanGraph frame={props.frame} focus={planFocus()} onSelect={select} /></Show>
           }><div ref={qaPanel} data-testid="workspace-qa" style={{height:'100%', overflow:'auto', padding:`${tokens.spaceMd}px`, 'box-sizing':'border-box'}}><Show when={workspace()?.qa_dir} fallback={<p style={{color:tokens.fgMuted}}>No QA directory configured.</p>}>
               <p data-testid="workspace-qa-path" style={{color:tokens.fgMuted,'overflow-wrap':'anywhere'}}>{workspace()?.qa_dir}</p>
             </Show>

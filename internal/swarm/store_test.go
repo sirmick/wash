@@ -15,12 +15,13 @@ func fixture(t *testing.T) (*Store, *Workspace) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	w, e := s.Setup("lead-session", "codex", "/project", "Project", "/project", nil)
+	w, e := s.Setup("lead-session", "codex", "/project", "Project", "/project")
 	if e != nil {
 		t.Fatal(e)
 	}
 	e = s.Mutate("lead-session", true, func(w *Workspace, m *Member) error {
-		w.Members = append(w.Members, Member{ID: "worker", Name: "Worker", Session: "worker-session", Lifetime: "resident", State: "available", Creator: m.ID})
+		w.Plan = append(w.Plan, Node{ID: "K1", Title: "Timers", State: "todo"})
+		w.Members = append(w.Members, Member{ID: "worker", Name: "Worker", Session: "worker-session", Lifetime: "resident", State: "available", Creator: m.ID, Node: "K1"})
 		return nil
 	})
 	if e != nil {
@@ -37,7 +38,7 @@ func TestTurnCarriesAtMostOneAsk(t *testing.T) {
 	if _, e := s.Send("lead-session", "worker", "answer", "Main moved; rebase first", "", "", ""); e != nil {
 		t.Fatal(e)
 	}
-	a, e := s.Assign("lead-session", "worker", "Build timers", "task-1")
+	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "task-1")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -76,16 +77,16 @@ func TestTurnCarriesAtMostOneAsk(t *testing.T) {
 func TestWaitingSetSettlesWhenAMemberIsEnded(t *testing.T) {
 	s, w := fixture(t)
 	if err := s.Mutate("lead-session", true, func(w *Workspace, _ *Member) error {
-		w.Members = append(w.Members, Member{ID: "other", Session: "other-session", State: "available", Lifetime: "resident"})
+		w.Members = append(w.Members, Member{ID: "other", Session: "other-session", State: "available", Lifetime: "resident", Node: "K1"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.Assign("lead-session", "worker", "Review", "")
+	a, err := s.Assign("lead-session", "worker", "", "", "Review", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.Assign("lead-session", "other", "Review", "")
+	b, err := s.Assign("lead-session", "other", "", "", "Review", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +102,9 @@ func TestWaitingSetSettlesWhenAMemberIsEnded(t *testing.T) {
 	if err = s.EndMember("lead-session", "other", false); err != nil {
 		t.Fatal(err)
 	}
+	// The result, and the nudge that K1 is active with nobody on it.
 	got, err := s.Next("lead-session")
-	if err != nil || len(got) != 1 || got[0].Assignment != a.ID {
+	if err != nil || len(got) != 2 || got[0].Assignment != a.ID || got[1].Sender != "wash" || !strings.Contains(got[1].Body, "K1") {
 		t.Fatalf("held after the set settled: %+v %v", got, err)
 	}
 	if lead := GetMember(s.View("lead-session"), w.Lead); len(lead.WaitingOn) != 0 {
@@ -112,7 +114,7 @@ func TestWaitingSetSettlesWhenAMemberIsEnded(t *testing.T) {
 
 func TestInboxAcrossIdleAndRecovery(t *testing.T) {
 	s, w := fixture(t)
-	a, e := s.Assign("lead-session", "worker", "Build timers", "task-1")
+	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "task-1")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -205,7 +207,7 @@ func TestConcurrentRetryAndRecipientIsolation(t *testing.T) {
 func TestStopRetainsMailAndEphemeralCompletionIsExplicit(t *testing.T) {
 	s, _ := fixture(t)
 	_ = s.Mutate("worker-session", false, func(_ *Workspace, m *Member) error { m.Lifetime = "ephemeral"; return nil })
-	a, e := s.Assign("lead-session", "worker", "Review", "request")
+	a, e := s.Assign("lead-session", "worker", "", "", "Review", "request")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -261,13 +263,13 @@ func TestDelegateEndingCancelsItsDecisionsAndRoutesChildResultToLead(t *testing.
 	s, w := fixture(t)
 	if err := s.Mutate("lead-session", true, func(w *Workspace, _ *Member) error {
 		GetMember(w, "worker").CanSpawn = true
-		w.Members = append(w.Members, Member{ID: "child", Session: "child-session", State: "available", Lifetime: "ephemeral"})
+		w.Members = append(w.Members, Member{ID: "child", Session: "child-session", State: "available", Lifetime: "ephemeral", Node: "K1"})
 		_, err := AddMessage(w, "worker", "human", "decision_request", "Need a decision", "", "", "")
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assignment, err := s.Assign("worker-session", "child", "Review", "request")
+	assignment, err := s.Assign("worker-session", "child", "", "", "Review", "request")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +363,7 @@ func TestReportsToTheOrchestratorAreSummaries(t *testing.T) {
 	if _, err := s.Send("lead-session", "worker", "instruction", long, "", "", ""); err != nil {
 		t.Fatal("orchestrator brief capped", err)
 	}
-	a, err := s.Assign("lead-session", "worker", "Do it", "")
+	a, err := s.Assign("lead-session", "worker", "", "", "Do it", "")
 	if err != nil {
 		t.Fatal(err)
 	}

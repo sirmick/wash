@@ -1,9 +1,14 @@
 # Bulk workspace MCP contract
 
-Implemented API 3.3.0, 2026-09-24. This supersedes the incremental v1 catalog in
-[the original design](AGENT_SWARM.md). New discovery advertises exactly eleven
-tools. Removed v1 operations return Unknown tool; there are no hidden aliases or
+Implemented API 4.0.0, 2026-09-26. This supersedes the incremental v1 catalog in
+[the original design](AGENT_SWARM.md). Discovery advertises fourteen tools.
+Removed operations and fields return errors; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
+
+API 4 makes the plan the workspace's backbone (section "The plan") and QA a directory of
+thread files (section "QA"). Removed, not aliased: `workspace_configure.plan` (items and
+order), `packages`, `document`, `qa_document`; a member's, a QA thread's and
+`member_control`'s `package` (now `node`).
 
 API 3 removed `inbox_ack` and `member_update.acknowledge`: a message is delivered when the
 turn carrying it ends cleanly, so acknowledging was an extra full-context request per wake-up.
@@ -48,19 +53,22 @@ A slot is a model only: a reviewer that must not write says `capability:"reviewe
 `model`, and only Claude Code enforces that (about.permissions); elsewhere a reviewer is
 read-only by instruction. The per-workspace `profiles` map and `default_profile` are gone.
 
-## Eleven tools
+## Fourteen tools
 
 | Tool | Responsibility |
 | --- | --- |
-| `workspace_get` | Compact team view by default; `view:state` full JSON; `view:about` discovery; `view:qa` threads/generated Markdown |
-| `workspace_configure` | Atomic setup/patch: catalog, settings, keyed member reservations, plan, document |
-| `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history; `workspace_id` ends a stale workspace |
-| `member_control` | Orchestrator only: pause/resume/interrupt/end IDs, keys or a package; `configure` of live settings; per-member outcomes |
+| `workspace_get` | Compact team view by default (with plan state counts); `view:state` full JSON; `view:about` discovery; `view:qa` the thread index, or one thread's events |
+| `workspace_configure` | Atomic setup/patch: catalog, settings, legend, QA directory, plan file, keyed member reservations |
+| `workspace_end` | End children/detach sidebar; preserve owning conversation, files and history; refused while nodes are active unless `confirm:true`; `workspace_id` ends a stale workspace |
+| `plan_get` | The plan, one line per node; a node's detail |
+| `plan_set` | Upsert/delete nodes by id; load a plan file |
+| `plan_accept` | Orchestrator only: set a node done; its merge commit trailers and files to stage |
+| `member_control` | Orchestrator only: pause/resume/interrupt/end IDs, keys or everyone on a node; `configure` of live settings; per-member outcomes |
 | `member_update` | Atomic own status/emoji/waiting, results and QA updates |
 | `message_send` | One message or an atomic batch; optional QA opening/thread linkage |
 | `inbox_read` | Paginated caller inbox history |
 | `message_retry` | Explicit reconciliation/retry of uncertain delivery |
-| `assignment_update` | Atomic create/complete/fail batch |
+| `assignment_update` | Atomic create/complete/fail batch; every assignment is on a node |
 | `decision_request` | Actual human choice, optionally linked to QA |
 | `flash_message` | Attributed desktop notification |
 
@@ -78,13 +86,17 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
   "workspace":{"name":"Project","project_root":"/data/project"},
   "catalog":"openai-pro",
   "members":{
-    "K5-impl":{"name":"K5 implementer","model":"coding","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"implementer","instructions":"Implement K5. Wait for assignments."},
-    "K5-red":{"name":"K5 red","model":"small","effort":"high","cwd":"/data/project-worktree","lifetime":"resident","package":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
-  "plan":{"items":{"K5":{"text":"Accept K5","state":"active"}}},
-  "document":{"path":"/data/project/docs/BUILD-PLAN.md","title":"Build plan"},
-  "qa_dir":".wash/qa"
+    "K5-impl":{"name":"K5 implementer","model":"coding","cwd":"/data/project-worktree","lifetime":"resident","node":"K5","role":"implementer","instructions":"Implement K5. Wait for assignments."},
+    "K5-red":{"name":"K5 red","model":"small","effort":"high","cwd":"/data/project-worktree","lifetime":"resident","node":"K5","role":"reviewer","instructions":"Review the package defensively; do not edit. Wait for assignments."}},
+  "qa_dir":".wash/qa",
+  "plan_file":".wash/plan.toml",
+  "legend":"🔴 blocked on the owner; 🧪 in review"
 }
 ```
+
+A member's `node` must already be in the plan (`plan_set` first); a member on no node is
+the team's (an Architect). A member's `task` is an assignment on its node, so it needs a
+node whose needs are done.
 
 - Omitted fields stay. A member's `model` names a slot of the workspace catalog, or a
   model id that must come from provider choices. An adapter's own list (`anthropic`)
@@ -97,8 +109,10 @@ plan and QA summaries; transcript bodies are read explicitly with pagination.
   end/replacement with a new key. No implicit restart or termination. The exception
   is a member whose launch failed before it had a session: its key takes a corrected
   definition in place (same member ID), and it holds no name.
-- Keyed plan objects patch individual fields, null removes; optional order must list
-  every remaining ID exactly once. document:null detaches the live Markdown document.
+- `plan_file` is where Wash writes the plan (TOML) as it changes; set on a workspace with
+  no plan, it resumes the plan the file holds. Wash never overwrites a file it did not
+  write. `plan_file:null` stops writing. `legend` says what the orchestrator's emojis and
+  states mean; `plan_get` returns it.
 - `expected_revision` guards workspace edits (0 may guard initial setup). A conflict
   requires fresh state and reconciliation. QA has separate per-thread revisions.
 - `preview:true` validates/stages without writing or launching. It does not prove
@@ -122,12 +136,66 @@ and member_control. Keys `conversation`, `plan`, `qa` and `orchestrator` are res
 is orchestrator-only; CanSpawn grants assignment authority, not config
 ownership. All members can communicate. Process control retains existing authority checks.
 
+## The plan
+
+The plan is a graph of nodes. A node: `id`, one-line `title`, `emoji`, `template`
+(`milestone`, `package`, `step`, `note`; only how it is drawn, except that a milestone with
+no children is a sketch), `parent`, `needs` (node IDs done, or QA thread IDs resolved,
+before work on it or anything inside it starts), `body` (at most 2000 bytes; link to
+pages), `state` (`todo`, `active`, `reported`, `done`, `failed`, or a short lower-case word
+of the orchestrator's own), a per-node `revision`, and `overrides`. At most 500 nodes; ids
+unique; parents and needs point at nodes; no cycles; a node cannot need its own ancestor or
+descendant.
+
+```json
+{"nodes":{
+  "M1":{"title":"Plan","template":"milestone","state":"active"},
+  "M2":{"title":"Build","template":"milestone","needs":["M1"]},
+  "K7":{"title":"Timer split","parent":"M2","needs":["K6"],"body":"docs/plan/m1.md#k7"},
+  "OLD":null}}
+```
+
+`plan_set` upserts by id: omitted fields stay, `null` deletes (refused while the node has
+open assignments, children, members, or is needed). A node may carry `expected_revision`;
+an automatic state change on one node does not invalidate an edit to another. `from`
+loads a plan file (`[[node]]` tables), replacing the plan while no work is open. Only the
+orchestrator changes started nodes; the Architect (`role:"architect"`) may add and edit
+nodes that are `todo` with nothing open, and leave them `todo`.
+
+What Wash enforces: every assignment names a node (its member's by default); creating one
+on a node whose needs (its own and its ancestors') are not done is refused unless the call
+gives `override:"<reason>"`, recorded on the node with who and when; creating one makes the
+node `active`; the last result on it makes it `reported` (`failed` on failure); only the
+orchestrator sets `done`, and only with nothing open on the node; `workspace_end` needs
+`confirm:true` while nodes are active or reported.
+
+`plan_accept {node, gates:[{command, exit_code}]}` sets the node done and returns its
+trailer block for the merge commit, and the plan and thread files to stage with it:
+
+```
+Plan-Node: K7
+QA: K7-scan, K7-pid-pool
+Gates: go test ./... 0
+Reviewed-by: Red team: OK, no findings
+```
+
+`Reviewed-by` is each reviewer's first result line on the node (or inside it). Wash never
+runs git.
+
+Nudges reach the orchestrator once each, as lifecycle messages: every node in a milestone
+is done; a done milestone's successor is still a sketch; a node is active with nobody on it
+(its member ended with work open).
+
+`plan_get` returns one line per node in tree order (`id · state · title · needs … · on:
+Member (activity)`), the legend and the revision; `node` or `detail:true` adds bodies,
+assignments and threads. The orchestrator answers status questions from it.
+
 ## Resident package workflow
 
 The orchestrator and Architect stay resident. Each active package keeps its implementer
 and defensive/simplifier/editor reviewers resident through repeated review/fix assignments.
 Completing an assignment leaves residents available. Ephemeral members retire after their
-assignment and turn finish. Explicit `member_control` ends package residents at acceptance
+assignment and turn finish. Explicit `member_control` (by IDs, or `node`) ends package residents at acceptance
 or abandonment. Limits count idle residents; they do not consume model turns while waiting.
 
 `member_update` can complete assignments, update status and set
@@ -177,7 +245,7 @@ and rewrites a file removed behind its back.
 Open and deliver atomically:
 
 ```json
-{"request_id":"q-open","recipient":"architect","type":"question","body":"Which approved bound applies?","qa":{"action":"open","id":"K5-clock","package":"K5","title":"Clock bound","blocking":true}}
+{"request_id":"q-open","recipient":"architect","type":"question","body":"Which approved bound applies?","qa":{"action":"open","id":"K5-clock","node":"K5","title":"Clock bound","blocking":true}}
 ```
 
 Use `thread_id` on later messages and `reply_to` for correlation. Wash supplies event IDs,
@@ -185,17 +253,18 @@ author and timestamp. QA updates through `member_update.qa_updates` support:
 
 | Action | Requirement |
 | --- | --- |
-| open | Unique id, package, title, body, active assignee (message_send defaults recipient) |
+| open | Unique id, node (a plan node), title, body, active assignee (message_send defaults recipient) |
 | reply | Body; append without revision guard |
 | assign | expected_revision, next assignee |
 | block | expected_revision; marks blocking |
-| resolve | expected_revision, evidence; only the orchestrator, or the reviewer whose package is the thread's |
+| resolve | expected_revision, evidence; only the orchestrator, or a reviewer on the thread's node (or a node it sits inside) |
 | reopen | expected_revision, reason in body; the thread returns to the orchestrator until reassigned |
 
 Transitions also accept decision_refs and blocking where applicable. Only the creator,
-assignee, orchestrator or the reviewer whose package is the thread's may transition;
-resolution is stricter: the orchestrator, or the reviewer whose package is the thread's.
-A reviewer assigned to review every package is not that reviewer for any of them.
+assignee, orchestrator or a reviewer on the thread's node may transition; resolution is
+stricter: the orchestrator, or a reviewer on the thread's node. A reviewer on no node is
+not that reviewer for any thread. A thread's ID can be a node's need: the node waits for
+it to be resolved.
 There is no delete/edit-history operation. A resolved thread must be reopened before replies.
 A thread resumed from a QA directory is the new orchestrator's. A resolved one is marked
 `resumed` (its view says "Resolved in an earlier workspace"): its evidence is about the earlier
@@ -212,8 +281,8 @@ formal project decisions/specifications, links them through decision_refs and ro
 implementation back. Package reviewers verify evidence before closure. Project acceptance
 policy requires no unresolved blocking QA; Wash does not infer whether a git merge satisfies it.
 
-`workspace_get({"view":"qa"})` returns the index: one row per thread (id, package, title,
-state, assignee, revision); `package` filters it. `thread_id` selects a thread's events,
+`workspace_get({"view":"qa"})` returns the index: one row per thread (id, node, title,
+state, assignee, revision); `node` filters it (to the node and inside it). `thread_id` selects a thread's events,
 paginated with after/limit. General state and reporting receipts omit QA event bodies.
 Limits: 500 threads/workspace, 1,000 events/thread, 2000 bytes per body/evidence, 100
 items/batch; idempotency storage is capped at 10,000 retained receipts. Commit the thread

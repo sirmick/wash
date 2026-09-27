@@ -136,8 +136,9 @@ type RowWorkspace struct {
 	Orchestrator bool   `json:"orchestrator,omitempty"`
 	Member       string `json:"member"`
 	Role         string `json:"role,omitempty"`
-	Package      string `json:"package,omitempty"`
-	PackageTitle string `json:"package_title,omitempty"`
+	// Node and NodeTitle are the plan node the member works on.
+	Node      string `json:"node,omitempty"`
+	NodeTitle string `json:"node_title,omitempty"`
 }
 
 // Mode is one approval/sandbox preset an agent offers.

@@ -45,15 +45,15 @@ export function rosterTeams(rows: agentproto.Row[]): { top: string[]; teams: Map
   const teams = new Map<string, TeamEntry[]>();
   for (const [lead, list] of members) {
     list.sort((a, b) =>
-      (a.workspace!.package ?? '').localeCompare(b.workspace!.package ?? '') ||
+      (a.workspace!.node ?? '').localeCompare(b.workspace!.node ?? '') ||
       a.workspace!.member.localeCompare(b.workspace!.member) ||
       a.key.localeCompare(b.key));
     const entries: TeamEntry[] = [];
     let pkg = '';
     for (const r of list) {
-      const code = r.workspace!.package ?? '';
+      const code = r.workspace!.node ?? '';
       if (code && code !== pkg) {
-        const title = r.workspace!.package_title;
+        const title = r.workspace!.node_title;
         entries.push({ pkg: code, label: title ? `${code} · ${title}` : code });
       }
       pkg = code;

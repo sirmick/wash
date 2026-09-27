@@ -18,8 +18,9 @@ type QAEvent struct {
 	Created int64  `json:"created_at"`
 }
 type QAThread struct {
-	ID           string   `json:"id"`
-	Package      string   `json:"package"`
+	ID string `json:"id"`
+	// Node is the plan node the thread is about.
+	Node         string   `json:"node"`
 	Title        string   `json:"title"`
 	Creator      string   `json:"creator"`
 	Assignee     string   `json:"assignee"`
@@ -39,7 +40,7 @@ type QAThread struct {
 type QAUpdate struct {
 	ID           string   `json:"id"`
 	Action       string   `json:"action"`
-	Package      string   `json:"package,omitempty"`
+	Node         string   `json:"node,omitempty"`
 	Title        string   `json:"title,omitempty"`
 	Assignee     string   `json:"assignee,omitempty"`
 	Body         string   `json:"body,omitempty"`
@@ -47,6 +48,11 @@ type QAUpdate struct {
 	Expected     *int64   `json:"expected_revision,omitempty"`
 	DecisionRefs []string `json:"decision_refs,omitempty"`
 	Evidence     string   `json:"evidence,omitempty"`
+}
+
+// nodeReviewer is a reviewer on the thread's node or a node it sits inside.
+func nodeReviewer(w *Workspace, m *Member, q *QAThread) bool {
+	return m.Role == "reviewer" && m.Node != "" && Within(w, q.Node, m.Node)
 }
 
 func QA(w *Workspace, id string) *QAThread {
@@ -110,8 +116,8 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 		switch {
 		case len(w.QA) >= 500:
 			return nil, errors.New("QA thread limit (500) reached")
-		case !ValidProfileName(u.Package):
-			return nil, errors.New("opening a QA thread needs package: letters, digits, - or _")
+		case PlanNode(w, u.Node) == nil:
+			return nil, fmt.Errorf("opening a QA thread needs node: a plan node it is about (%q is not one)", u.Node)
 		case !ValidText(u.Title, 500):
 			return nil, errors.New("opening a QA thread needs a title of at most 500 bytes")
 		case !ValidText(u.Body, ReportLimit):
@@ -121,7 +127,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 		if assignee == nil || assignee.State == "ended" {
 			return nil, errors.New("QA requires an active assignee")
 		}
-		w.QA = append(w.QA, QAThread{ID: u.ID, Package: u.Package, Title: u.Title, Creator: m.ID, Assignee: assignee.ID, State: "open", DecisionRefs: u.DecisionRefs, Events: []QAEvent{}})
+		w.QA = append(w.QA, QAThread{ID: u.ID, Node: u.Node, Title: u.Title, Creator: m.ID, Assignee: assignee.ID, State: "open", DecisionRefs: u.DecisionRefs, Events: []QAEvent{}})
 		q = &w.QA[len(w.QA)-1]
 		if u.Blocking != nil {
 			q.Blocking = *u.Blocking
@@ -134,8 +140,8 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 			if u.Expected == nil || *u.Expected != q.Revision {
 				return nil, fmt.Errorf("QA revision conflict: read thread %s (revision %d)", q.ID, q.Revision)
 			}
-			if m.ID != w.Lead && m.ID != q.Creator && m.ID != q.Assignee && !(m.Role == "reviewer" && m.Package == q.Package) {
-				return nil, fmt.Errorf("QA thread %s is package %s's: only the orchestrator, the thread's creator or assignee, or the reviewer of package %s may %s it", q.ID, q.Package, q.Package, u.Action)
+			if m.ID != w.Lead && m.ID != q.Creator && m.ID != q.Assignee && !nodeReviewer(w, m, q) {
+				return nil, fmt.Errorf("QA thread %s is node %s's: only the orchestrator, the thread's creator or assignee, or a reviewer on node %s may %s it", q.ID, q.Node, q.Node, u.Action)
 			}
 		}
 		switch u.Action {
@@ -146,7 +152,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 			if strings.TrimSpace(u.Body) == "" {
 				return nil, errors.New("QA reply requires body")
 			}
-			if u.Package != "" || u.Title != "" || u.Assignee != "" || u.Blocking != nil || u.DecisionRefs != nil || u.Evidence != "" {
+			if u.Node != "" || u.Title != "" || u.Assignee != "" || u.Blocking != nil || u.DecisionRefs != nil || u.Evidence != "" {
 				return nil, errors.New("reply only appends body; use guarded actions for state changes")
 			}
 		case "assign":
@@ -169,8 +175,8 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 			if pendingQADecision(w, q.ID) {
 				return nil, errors.New("QA awaits a human decision")
 			}
-			if m.ID != w.Lead && !(m.Role == "reviewer" && m.Package == q.Package) {
-				return nil, fmt.Errorf("QA thread %s is package %s's: only the orchestrator or the reviewer of package %s may resolve it; reply with your verdict instead", q.ID, q.Package, q.Package)
+			if m.ID != w.Lead && !nodeReviewer(w, m, q) {
+				return nil, fmt.Errorf("QA thread %s is node %s's: only the orchestrator or a reviewer on node %s may resolve it; reply with your verdict instead", q.ID, q.Node, q.Node)
 			}
 			if strings.TrimSpace(u.Evidence) == "" {
 				return nil, errors.New("QA resolution requires evidence")
@@ -348,12 +354,12 @@ func WriteQAThread(out io.Writer, q QAThread, name func(string) string, bounded 
 	clean := func(s string) string {
 		return strings.NewReplacer("\n", " ", "\r", " ", "#", "", "<", "&lt;", ">", "&gt;").Replace(s)
 	}
-	fmt.Fprintf(b, "\n## %s · %s — %s\n\nStatus: **%s** · Assigned to: %s · Revision: %d\n", clean(q.Package), q.ID, clean(q.Title), q.State, clean(name(q.Assignee)), q.Revision)
+	fmt.Fprintf(b, "\n## %s · %s — %s\n\nStatus: **%s** · Assigned to: %s · Revision: %d\n", clean(q.Node), q.ID, clean(q.Title), q.State, clean(name(q.Assignee)), q.Revision)
 	if q.Resumed {
 		b.WriteString("\n*Resolved in an earlier workspace; reopen it if the code has changed since.*\n")
 	}
 	if q.Blocking {
-		b.WriteString("\n**Blocks package work.**\n")
+		b.WriteString("\n**Blocks work on its node.**\n")
 	}
 	if len(q.DecisionRefs) > 0 {
 		fmt.Fprintf(b, "\nDecision references: %s\n", strings.Join(q.DecisionRefs, ", "))
@@ -386,22 +392,31 @@ func WriteQAThread(out io.Writer, q QAThread, name func(string) string, bounded 
 	return b.err
 }
 
-// ClaimQADir takes a QA directory over from ended workspaces, which otherwise
-// keep retrying their last exports into it. The caller runs this inside
-// configuration's staged transaction.
-func (s *Store) ClaimQADir(session string) error {
+// ClaimFiles takes the QA directory and plan file over from ended
+// workspaces, which otherwise keep retrying their last writes into them. The
+// caller runs this inside configuration's staged transaction.
+func (s *Store) ClaimFiles(session string) error {
 	return s.change(func(st *State) error {
 		w, _ := find(st, session)
-		if w == nil || w.QADir == "" {
+		if w == nil {
 			return nil
 		}
 		for i := range st.Workspaces {
 			old := &st.Workspaces[i]
-			if old.ID != w.ID && old.QADir == w.QADir {
+			if old.ID == w.ID {
+				continue
+			}
+			if w.QADir != "" && old.QADir == w.QADir {
 				if old.State != "ended" {
 					return fmt.Errorf("QA directory belongs to active workspace %s (%q); if its orchestrator is not running, end it with workspace_end {\"workspace_id\":%q}", old.ID, old.Name, old.ID)
 				}
 				old.QADir = ""
+			}
+			if w.PlanFile != "" && old.PlanFile == w.PlanFile {
+				if old.State != "ended" {
+					return fmt.Errorf("plan file belongs to active workspace %s (%q)", old.ID, old.Name)
+				}
+				old.PlanFile = ""
 			}
 		}
 		return nil

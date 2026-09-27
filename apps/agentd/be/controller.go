@@ -161,7 +161,7 @@ func rowWorkspaces() map[string]*agentproto.RowWorkspace {
 			}
 			out[m.Session] = &agentproto.RowWorkspace{
 				ID: w.ID, Name: w.Name, LeadSession: lead, Orchestrator: m.ID == w.Lead,
-				Member: m.Name, Role: m.Role, Package: m.Package, PackageTitle: w.Packages[m.Package].Title,
+				Member: m.Name, Role: m.Role, Node: m.Node, NodeTitle: nodeTitle(&w, m.Node),
 			}
 		}
 	}
@@ -400,4 +400,12 @@ func detachLostController(key string) {
 	h.detached = true
 	hostedMu.Unlock()
 	h.republish()
+}
+
+// nodeTitle is a plan node's title, or "" when there is none.
+func nodeTitle(w *swarm.Workspace, id string) string {
+	if n := swarm.PlanNode(w, id); n != nil {
+		return n.Title
+	}
+	return ""
 }

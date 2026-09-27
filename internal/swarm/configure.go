@@ -7,12 +7,13 @@ import (
 )
 
 // ConfigurePatch changes a workspace's settings. Omitted fields are
-// preserved; a null package deletes it.
+// preserved.
 type ConfigurePatch struct {
-	Name       *string             `json:"name"`
-	MaxActive  *int                `json:"max_active"`
-	MaxMembers *int                `json:"max_members"`
-	Packages   map[string]*Package `json:"packages"`
+	Name       *string `json:"name"`
+	MaxActive  *int    `json:"max_active"`
+	MaxMembers *int    `json:"max_members"`
+	// Legend says what the orchestrator's emojis and states mean.
+	Legend *string `json:"legend"`
 	// Catalog names the catalog members' models come from. agentd checks
 	// that it exists; the store only keeps the name.
 	Catalog  *string `json:"catalog"`
@@ -100,24 +101,11 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		if w.MaxMembers < live {
 			return errors.New("max_members cannot be below current membership")
 		}
-		for code, pkg := range p.Packages {
-			if !ValidProfileName(code) {
-				return errors.New("package code must be 1–80 ASCII letters, digits, underscores or hyphens")
+		if p.Legend != nil {
+			if len(*p.Legend) > ReportLimit {
+				return fmt.Errorf("legend is at most %d bytes", ReportLimit)
 			}
-			if pkg == nil {
-				delete(w.Packages, code)
-				continue
-			}
-			if !ValidText(pkg.Title, 120) {
-				return fmt.Errorf("package %q: title must contain 1–120 bytes", code)
-			}
-			if w.Packages == nil {
-				w.Packages = map[string]Package{}
-			}
-			w.Packages[code] = *pkg
-		}
-		if len(w.Packages) > 64 {
-			return errors.New("maximum 64 packages")
+			w.Legend = *p.Legend
 		}
 		if p.Catalog != nil {
 			w.Catalog = *p.Catalog

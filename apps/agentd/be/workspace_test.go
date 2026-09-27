@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -22,8 +21,7 @@ func TestWorkspacePlanPatchAndAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.Setup("lead", "codex", t.TempDir(), "Team", "", []swarm.Item{{ID: "k5", Text: "Timer", State: "pending", Emoji: "⏳"}, {ID: "r2", Text: "Handoff", State: "pending"}})
-	if err != nil {
+	if _, err = s.Setup("lead", "codex", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	ws := &workspaceService{store: s}
@@ -32,21 +30,25 @@ func TestWorkspacePlanPatchAndAccess(t *testing.T) {
 		_, e := ws.call(context.Background(), h, workspacemcp.Call{Name: name, Arguments: json.RawMessage(args)})
 		return e
 	}
-	if err = call("workspace_configure", `{"plan":{"items":{"k5":{"state":"active"}}},"expected_revision":1}`); err != nil {
+	if err = call("plan_set", `{"nodes":{"k5":{"title":"Timer","emoji":"⏳"},"r2":{"title":"Handoff","needs":["k5"]}}}`); err != nil {
+		t.Fatal(err)
+	}
+	if err = call("plan_set", `{"nodes":{"k5":{"state":"active","expected_revision":2}}}`); err != nil {
 		t.Fatal(err)
 	}
 	w := s.View("lead")
-	if w.Items[0].Text != "Timer" || w.Items[0].Emoji != "⏳" || w.Items[1].State != "pending" {
-		t.Fatal(w.Items)
+	if k5 := swarm.PlanNode(w, "k5"); k5.Title != "Timer" || k5.Emoji != "⏳" || k5.State != "active" || swarm.PlanNode(w, "r2").State != "todo" {
+		t.Fatal(w.Plan)
 	}
 	before := s.Snapshot()
 	for _, args := range []string{
-		`{"expected_revision":1,"plan":{"items":{"k5":{"state":"done"}}}}`,
-		`{"plan":{"items":{"missing":{"emoji":"x"}}}}`,
-		`{"plan":{"order":["k5","k5"]}}`,
-		`{"plan":{"items":{"broken":{"text":"bad","state":"nonsense"}}}}`,
+		`{"nodes":{"k5":{"state":"done","expected_revision":1}}}`,
+		`{"nodes":{"missing":null}}`,
+		`{"nodes":{"k5":{"needs":["r2"]}}}`,
+		`{"nodes":{"broken":{"title":"bad","state":"Not A State"}}}`,
+		`{"nodes":{"k5":null}}`,
 	} {
-		if call("workspace_configure", args) == nil {
+		if call("plan_set", args) == nil {
 			t.Fatalf("accepted %s", args)
 		}
 	}
@@ -58,7 +60,7 @@ func TestWorkspacePlanPatchAndAccess(t *testing.T) {
 		return nil
 	})
 	h.sessionID = "worker"
-	if call("workspace_configure", `{"plan":{"items":{"k5":{"state":"done"}}}}`) == nil {
+	if call("plan_set", `{"nodes":{"k5":{"state":"done"}}}`) == nil {
 		t.Fatal("child edited shared plan")
 	}
 	if err = call("member_update", `{"status":"Checking timers","emoji":"🔎"}`); err != nil {
@@ -108,11 +110,11 @@ func TestWorkspaceArgumentUnknownField(t *testing.T) {
 }
 
 func TestWorkspacePatchIsSmallAndNeedsSameWorkspace(t *testing.T) {
-	before := []byte(`{"kind":"workspace_state","key":"k","workspace":{"id":"w","revision":1,"items":[{"id":"a","text":"unchanged","state":"pending"},{"id":"b","text":"changing","state":"pending"}]},"document_text":"large document stays local"}`)
-	after := []byte(strings.Replace(strings.Replace(string(before), `"revision":1`, `"revision":2`, 1), `"text":"changing","state":"pending"`, `"text":"changing","state":"done"`, 1))
+	before := []byte(`{"kind":"workspace_state","key":"k","workspace":{"id":"w","revision":1,"plan":[{"id":"a","title":"unchanged","state":"todo"},{"id":"b","title":"changing","state":"todo"}]},"qa_markdown":"large QA view stays local"}`)
+	after := []byte(strings.Replace(strings.Replace(string(before), `"revision":1`, `"revision":2`, 1), `"title":"changing","state":"todo"`, `"title":"changing","state":"done"`, 1))
 	patch := workspacePatch(before, after, 2, 3)
 	b, _ := json.Marshal(patch)
-	if strings.Contains(string(b), "unchanged") || strings.Contains(string(b), "large document") || !strings.Contains(string(b), "changing") {
+	if strings.Contains(string(b), "unchanged") || strings.Contains(string(b), "large QA view") || !strings.Contains(string(b), "changing") {
 		t.Fatal(string(b))
 	}
 	if workspacePatch(before, []byte(strings.Replace(string(after), `"id":"w"`, `"id":"new"`, 1)), 2, 3) != nil {
@@ -125,7 +127,7 @@ func TestWorkspaceInboxPagingAndToolSpecificArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +156,7 @@ func TestWorkspaceInboxPagingAndToolSpecificArguments(t *testing.T) {
 	if page["messages"].([]swarm.Message)[0].Body != "third" || page["has_more"] != false {
 		t.Fatal(page)
 	}
-	for _, call := range []workspacemcp.Call{{Name: "member_update", Arguments: json.RawMessage(`{"status":"ok","member_id":"someone-else"}`)}, {Name: "workspace_configure", Arguments: json.RawMessage(`{"plan":{"items":{"bad":{"state":"invalid"}}}}`)}} {
+	for _, call := range []workspacemcp.Call{{Name: "member_update", Arguments: json.RawMessage(`{"status":"ok","member_id":"someone-else"}`)}, {Name: "plan_set", Arguments: json.RawMessage(`{"nodes":{"bad":{"title":"x","state":"Invalid State"}}}`)}} {
 		if _, err = ws.call(context.Background(), h, call); err == nil {
 			t.Fatalf("accepted invalid call %s", call.Name)
 		}
@@ -166,7 +168,7 @@ func TestWorkspaceConcurrentDecisionReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Setup("lead", "codex", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err = s.Setup("lead", "codex", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	ws := &workspaceService{store: s}
@@ -203,36 +205,12 @@ func TestWorkspaceConcurrentDecisionReceipts(t *testing.T) {
 	}
 }
 
-func TestWorkspaceDocumentRejectsSymlinkAndOversize(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "PLAN.md")
-	if err := os.WriteFile(path, []byte("# Plan"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := readWorkspaceDocument(path); err != nil || got != "# Plan" {
-		t.Fatal(got, err)
-	}
-	link := filepath.Join(dir, "link.md")
-	if err := os.Symlink(path, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readWorkspaceDocument(link); err == nil {
-		t.Fatal("live view followed replacement symlink")
-	}
-	if err := os.WriteFile(path, make([]byte, 256*1024+1), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readWorkspaceDocument(path); err == nil {
-		t.Fatal("oversized document accepted")
-	}
-}
-
 func TestWorkspaceDispatchWaitsForSessionLoadAndResumeIsCoalesced(t *testing.T) {
 	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Setup("lead", "codex", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err = s.Setup("lead", "codex", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
@@ -277,7 +255,7 @@ func TestWorkspaceReplayPreservesVerifiedProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +293,7 @@ func TestLeadResumesItselfAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +345,7 @@ func TestAutoApprovalIsBoundedByTheLauncherAndSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	w, err := s.Setup("lead", "claude", root, "Team", root, nil)
+	w, err := s.Setup("lead", "claude", root, "Team", root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,13 +401,13 @@ func TestTeamViewShowsWhoIsWaitingOnWhat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
 		w.Members = append(w.Members,
-			swarm.Member{ID: "impl", Key: "K5-implementer", Name: "K5 scheduler — implementer", Package: "K5", State: "available", Lifetime: "resident", AutoApprove: true},
+			swarm.Member{ID: "impl", Key: "K5-implementer", Name: "K5 scheduler — implementer", Node: "K5", State: "available", Lifetime: "resident", AutoApprove: true},
 			swarm.Member{ID: "gone", Name: "Old", State: "ended", Lifetime: "resident"})
 		w.Assignments = append(w.Assignments,
 			swarm.Assignment{ID: "a1", Member: "impl", State: "assigned", Text: "Implement the tie rule\nthen the bench case"},
@@ -483,13 +461,14 @@ func TestWaitingSetDeliversOneBatchAndStaleTasksAreDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Plan = []swarm.Node{{ID: "K5", Title: "Timer", State: "todo", Revision: 1}}
 		for _, id := range []string{"r1", "r2", "r3"} {
-			w.Members = append(w.Members, swarm.Member{ID: id, Session: id + "-s", State: "available", Lifetime: "resident"})
+			w.Members = append(w.Members, swarm.Member{ID: id, Session: id + "-s", State: "available", Lifetime: "resident", Node: "K5"})
 		}
 		return nil
 	}); err != nil {
@@ -497,7 +476,7 @@ func TestWaitingSetDeliversOneBatchAndStaleTasksAreDropped(t *testing.T) {
 	}
 	var ids []string
 	for _, r := range []string{"r1", "r2", "r3"} {
-		a, err := s.Assign("lead", r, "Review", "")
+		a, err := s.Assign("lead", r, "", "", "Review", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -572,19 +551,20 @@ func TestResultCCIsANonWakingCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Plan = []swarm.Node{{ID: "K5", Title: "Timer", State: "todo", Revision: 1}}
 		w.Members = append(w.Members,
-			swarm.Member{ID: "red", Key: "K5-red", Session: "red-s", State: "available", Lifetime: "resident"},
-			swarm.Member{ID: "impl", Key: "K5-implementer", Session: "impl-s", State: "available", Lifetime: "resident"})
+			swarm.Member{ID: "red", Key: "K5-red", Session: "red-s", State: "available", Lifetime: "resident", Node: "K5"},
+			swarm.Member{ID: "impl", Key: "K5-implementer", Session: "impl-s", State: "available", Lifetime: "resident", Node: "K5"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.Assign("lead", "red", "Review", "")
+	a, err := s.Assign("lead", "red", "", "", "Review", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,13 +599,14 @@ func TestAssignmentBatchNamesTheFailingUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Plan = []swarm.Node{{ID: "K5", Title: "Timer", State: "todo", Revision: 1}}
 		w.Members = append(w.Members,
-			swarm.Member{ID: "red", Key: "K5-red", Session: "red-s", State: "available", Lifetime: "resident"},
-			swarm.Member{ID: "impl", Key: "K5-implementer", Session: "impl-s", State: "available", Lifetime: "resident"})
+			swarm.Member{ID: "red", Key: "K5-red", Session: "red-s", State: "available", Lifetime: "resident", Node: "K5"},
+			swarm.Member{ID: "impl", Key: "K5-implementer", Session: "impl-s", State: "available", Lifetime: "resident", Node: "K5"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -647,7 +628,7 @@ func TestAssignmentBatchNamesTheFailingUpdate(t *testing.T) {
 	if got := s.View("lead").Assignments; len(got) != 0 {
 		t.Fatalf("a failed batch kept assignments: %+v", got)
 	}
-	if _, err = s.Assign("lead", "red", "Review", ""); err != nil {
+	if _, err = s.Assign("lead", "red", "", "", "Review", ""); err != nil {
 		t.Fatal(err)
 	}
 	err = assign(create("K5-implementer", "Build"), create("K5-red", "Review again"))
@@ -669,7 +650,7 @@ func TestFlashMessageReturnsTheCreatedMessageID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err = s.Setup("lead", "claude", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	ws := &workspaceService{store: s}
@@ -731,7 +712,7 @@ func TestMailDoesNotStaleTheConfigurationRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "claude", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -771,7 +752,7 @@ func TestOrchestratorYoloReachesMembersWithoutTheirOwnApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	w, err := s.Setup("lead", "claude", root, "Team", root, nil)
+	w, err := s.Setup("lead", "claude", root, "Team", root)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -461,6 +461,7 @@ Ask is one question waiting for a human.
 | `id` | `string` |  |
 | `assigner` | `string` |  |
 | `member_id` | `string` |  |
+| `node?` | `string` | Node is the plan node the work is on. |
 | `text` | `string` |  |
 | `state` | `string` |  |
 | `result?` | `string` |  |
@@ -573,13 +574,6 @@ Detach tells a session's controller window that the session was detached elsewhe
 |---|---|---|
 | `key` | `string` |  |
 
-#### Document
-
-| Field | Type | |
-|---|---|---|
-| `path` | `string` |  |
-| `title` | `string` |  |
-
 #### Event
 
 Event is one line in a transcript.
@@ -636,16 +630,6 @@ HistoryPruned answers AgentPrune: how many sessions went.
 | Field | Type | |
 |---|---|---|
 | `deleted` | `number` |  |
-
-#### Item
-
-| Field | Type | |
-|---|---|---|
-| `id` | `string` |  |
-| `text` | `string` |  |
-| `emoji?` | `string` |  |
-| `state` | `string` |  |
-| `revision` | `number` |  |
 
 #### KeySaved
 
@@ -706,7 +690,7 @@ No fields.
 | Field | Type | |
 |---|---|---|
 | `key?` | `string` |  |
-| `package?` | `string` |  |
+| `node?` | `string` | Node is the plan node the member works on; empty is the team (the orchestrator, an Architect). |
 | `role?` | `string` |  |
 | `instructions?` | `string` |  |
 | `initial_task?` | `string` |  |
@@ -761,6 +745,23 @@ Mode is one approval/sandbox preset an agent offers.
 | `name` | `string` |  |
 | `description?` | `string` |  |
 
+#### Node
+
+Node is one plan node.
+
+| Field | Type | |
+|---|---|---|
+| `id` | `string` |  |
+| `title` | `string` |  |
+| `emoji?` | `string` |  |
+| `template?` | `string` | Template is how the node is drawn: milestone, package, step or note. Wash gives it no other meaning, except that a milestone with no children is a sketch. |
+| `parent?` | `string` | Parent is the node this one sits inside. |
+| `needs?` | `string[]` | Needs are node IDs that must be done, or QA thread IDs that must be resolved, before work on this node (or anything inside it) starts. |
+| `body?` | `string` |  |
+| `state` | `string` | State is todo, active, reported, done, failed, or a short word of the orchestrator's own. |
+| `revision` | `number` |  |
+| `overrides?` | `string[]` | Overrides record each start with needs unmet, and why. |
+
 #### Notify
 
 Notify brings something to the person's attention.
@@ -779,14 +780,6 @@ OpenSession opens a window showing a session.
 | Field | Type | |
 |---|---|---|
 | `key` | `string` |  |
-
-#### Package
-
-Package is the human-facing description of a package code.
-
-| Field | Type | |
-|---|---|---|
-| `title` | `string` |  |
 
 #### PreviewPatch
 
@@ -819,7 +812,7 @@ PromptAttachment is one attachment on its way to an ACP content block.
 
 #### QADocumentStatus
 
-QADocumentStatus is where the workspace's QA file stands on disk.
+QADocumentStatus is where a file (or directory) Wash writes for the workspace stands on disk: the QA thread files, the plan file.
 
 | Field | Type | |
 |---|---|---|
@@ -844,7 +837,7 @@ QADocumentStatus is where the workspace's QA file stands on disk.
 | Field | Type | |
 |---|---|---|
 | `id` | `string` |  |
-| `package` | `string` |  |
+| `node` | `string` | Node is the plan node the thread is about. |
 | `title` | `string` |  |
 | `creator` | `string` |  |
 | `assignee` | `string` |  |
@@ -916,8 +909,8 @@ RowWorkspace is one session's place in a workspace team.
 | `orchestrator?` | `boolean` |  |
 | `member` | `string` |  |
 | `role?` | `string` |  |
-| `package?` | `string` |  |
-| `package_title?` | `string` |  |
+| `node?` | `string` | Node and NodeTitle are the plan node the member works on. |
+| `node_title?` | `string` |  |
 
 #### Rule
 
@@ -1115,7 +1108,6 @@ UsageRow is one row's counters.
 | `qa_dir?` | `string` | QADir is the directory holding one file per QA thread (<thread>.md), written by Wash as threads change. |
 | `qa` | `QAThread[] \| null` |  |
 | `approvals?` | `Rule[]` | Approvals apply to every member of this workspace, whatever its cwd. Members work in worktrees the orchestrator chooses, and those are as often siblings of project_root as children of it, so a path-scoped rule cannot cover a fleet. Membership is the scope instead: these rules carry no Cwd, and agentpolicy's matcher is reused verbatim. |
-| `packages?` | `Record<string, Package>` | Packages names each package code ("CT1") for people: the sidebar groups members and questions under "CT1 · Console input-flood test" instead of a bare code, and member names can shrink to their role. |
 | `catalog?` | `string` | Catalog is where members' models come from (a slot name in a member's `model` resolves against it): the orchestrator's own catalog at setup, changeable with workspace_configure.catalog for later launches. |
 | `id` | `string` |  |
 | `name` | `string` |  |
@@ -1123,11 +1115,13 @@ UsageRow is one row's counters.
 | `orchestrator` | `string` |  |
 | `state` | `string` |  |
 | `revision` | `number` |  |
-| `plan_revision` | `number` |  |
 | `max_active` | `number` |  |
 | `max_members` | `number` |  |
-| `items` | `Item[] \| null` |  |
-| `document?` | `Document` |  |
+| `plan` | `Node[] \| null` | Plan is the workspace's node graph; PlanRevision counts its changes. |
+| `plan_revision` | `number` |  |
+| `plan_file?` | `string` | PlanFile is where Wash writes the plan as it changes (TOML). |
+| `legend?` | `string` | Legend says what the orchestrator's emojis and states mean. |
+| `nudged?` | `string[]` | Nudged are the lifecycle nudges already sent, so each goes once. |
 | `members` | `Member[] \| null` |  |
 | `assignments` | `Assignment[] \| null` |  |
 | `messages` | `Message[] \| null` |  |
@@ -1164,19 +1158,9 @@ WorkspaceApproval is a member's question waiting for the human.
 | `tool` | `string` |  |
 | `subject` | `string` |  |
 
-#### WorkspaceItemsPatch
-
-WorkspaceItemsPatch changes the plan: items replaced or added, ids removed, and the new order when it changed.
-
-| Field | Type | |
-|---|---|---|
-| `upsert` | `Item[] \| null` |  |
-| `remove` | `string[] \| null` |  |
-| `order?` | `string[]` |  |
-
 #### WorkspacePatch
 
-WorkspacePatch changes a WorkspaceState: the frame fields and workspace fields that changed (null removes one), and the plan items by id.
+WorkspacePatch changes a WorkspaceState: the frame fields and workspace fields that changed (null removes one), and the plan's nodes by id.
 
 | Field | Type | |
 |---|---|---|
@@ -1184,8 +1168,18 @@ WorkspacePatch changes a WorkspaceState: the frame fields and workspace fields t
 | `base` | `number` |  |
 | `sequence` | `number` |  |
 | `frame` | `Record<string, unknown> \| null` | Frame holds changed WorkspaceState fields by their JSON name. |
-| `workspace` | `Record<string, unknown> \| null` | Workspace holds changed swarm.Workspace fields, except items. |
-| `items?` | `WorkspaceItemsPatch` |  |
+| `workspace` | `Record<string, unknown> \| null` | Workspace holds changed swarm.Workspace fields, except the plan. |
+| `plan?` | `WorkspacePlanPatch` |  |
+
+#### WorkspacePlanPatch
+
+WorkspacePlanPatch changes the plan: nodes replaced or added, ids removed, and the new order when it changed.
+
+| Field | Type | |
+|---|---|---|
+| `upsert` | `Node[] \| null` |  |
+| `remove` | `string[] \| null` |  |
+| `order?` | `string[]` |  |
 
 #### WorkspaceRefresh
 
@@ -1222,8 +1216,7 @@ WorkspaceState is the whole sidebar frame for an orchestrator's (or a member's) 
 | `approvals?` | `WorkspaceApproval[]` | Approvals are the members' questions waiting for the human. |
 | `qa_markdown?` | `string` | QAMarkdown is the QA document as it is written to disk. |
 | `qa_document_status?` | `QADocumentStatus` |  |
-| `document_text?` | `string` | DocumentText is the registered plan document's text, or DocumentError why it could not be read. |
-| `document_error?` | `string` |  |
+| `plan_file_status?` | `QADocumentStatus` | PlanFileStatus is where the plan file stands on disk. |
 
 #### WorkspaceTranscript
 

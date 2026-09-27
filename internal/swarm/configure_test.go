@@ -22,7 +22,7 @@ func TestConfigureAtomicPersistenceAndAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Setup("lead", "codex", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err = s.Setup("lead", "codex", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	revision, err := s.Configure("lead", configPatch(t, `{"catalog":"openai-budget","expected_revision":1}`))
@@ -67,13 +67,13 @@ func TestConfigureAtomicPersistenceAndAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := recovered.View("lead"); got.Catalog != "openai-pro" || !reflect.DeepEqual(got.Packages, w.Packages) {
+	if got := recovered.View("lead"); got.Catalog != "openai-pro" || got.Name != w.Name {
 		t.Fatal("configuration not persisted", got)
 	}
 }
 func TestConfigureConcurrentRevision(t *testing.T) {
 	s, _ := Open(filepath.Join(t.TempDir(), "workspace.json"))
-	if _, err := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil); err != nil {
+	if _, err := s.Setup("lead", "codex", t.TempDir(), "Team", ""); err != nil {
 		t.Fatal(err)
 	}
 	patch := configPatch(t, `{"expected_revision":1,"name":"Winner"}`)
@@ -97,7 +97,7 @@ func TestConfigureConcurrentRevision(t *testing.T) {
 }
 func TestSuccessfulConversationTurnPreservesConfigurationRevision(t *testing.T) {
 	s, _ := Open(filepath.Join(t.TempDir(), "workspace.json"))
-	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "", nil)
+	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,29 +136,6 @@ func TestApprovalProfileValidatesAndResolves(t *testing.T) {
 	}
 }
 
-func TestPackagesNameCodesAndPatchByKey(t *testing.T) {
-	s, _ := Open(filepath.Join(t.TempDir(), "state.json"))
-	if _, err := s.Setup("lead", "claude", t.TempDir(), "Team", "", nil); err != nil {
-		t.Fatal(err)
-	}
-	title := func(t string) *Package { return &Package{Title: t} }
-	if _, err := s.Configure("lead", ConfigurePatch{Packages: map[string]*Package{"CT1": title("Console input-flood test"), "G1": title("Clear review debt")}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Configure("lead", ConfigurePatch{Packages: map[string]*Package{"G1": nil}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := s.View("lead").Packages; len(got) != 1 || got["CT1"].Title != "Console input-flood test" {
-		t.Fatalf("packages = %+v", got)
-	}
-	for _, bad := range []map[string]*Package{{"has space": title("x")}, {"CT1": title("")}} {
-		if _, err := s.Configure("lead", ConfigurePatch{Packages: bad}); err == nil {
-			t.Errorf("accepted %+v", bad)
-		}
-	}
-}
-
-// Overlay is how a catalog slot takes a member's explicit settings.
 func TestOverlay(t *testing.T) {
 	base := AgentProfile{Provider: "claude", Connection: "claude@openrouter", Model: "sonnet", Capability: "reviewer", Configs: map[string]string{"a": "1"}}
 	got, err := Overlay(base, AgentProfile{Model: "haiku", Configs: map[string]string{"b": "2"}})

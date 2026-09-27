@@ -1,8 +1,10 @@
 # Agent swarms through MCP
 
-Status: original implementation/design, 2026-09-22. The implemented API 2 bulk
-interface, resident package workflow and first-class QA are specified in
-[AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md); it defines the only supported tool surface. Removed v1 tools are rejected.
+Status: original implementation/design, 2026-09-22; the plan graph replaced the
+keyed progress list and the registered document on 2026-09-26 (API 4). The
+implemented bulk interface, the plan tools and first-class QA are specified in
+[AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md); it defines the only supported tool
+surface. Removed tools are rejected.
 
 See the [validation notes](AGENT_SWARM_VALIDATION.md) for what was run while
 building this, and the [Redoubt project example](examples/redoubt-workspace.md)
@@ -24,10 +26,9 @@ appear in the same window, preserving its conversation and composer.
 
 The current agent becomes the orchestrator. It keeps an architect resident,
 launches implementers for packages, creates temporary reviewers, receives their
-messages and results, and updates keyed progress items as milestones pass. The
-user sees the team and live progress through a right-hand column in the Agent
-window. A registered Markdown document optionally supplies the detailed plan,
-acceptance criteria, and rationale.
+messages and results, and keeps the plan: a graph of nodes that every
+assignment and member hangs off. The user sees the team in a right-hand column
+and the plan in a Plan tab beside the conversation.
 
 The reference is `/data/redoubt/docs/SWARM.md`, `.pi/agents/`, and
 `.pi/workflows/`. These supply the example workflow, not executable instructions
@@ -40,8 +41,8 @@ project's JSON, TOML, Markdown, or other instructions and configure the workspac
 through those tools. Wash does not need a project workflow parser in this version.
 
 `workspace_configure` receives concrete settings derived by the agent: a name,
-project root, initial progress items, and optional concurrency/member limits.
-`workspace_configure.document` registers the optional Markdown document separately. Source-file
+project root, the QA directory and plan file, and optional concurrency/member
+limits. The plan itself is `plan_set`'s. Source-file
 references remain in project instructions and explicit member role messages;
 Wash does not interpret their format. `workspace_get` returns the compact team view by default; `view:"state"` returns the workspace as JSON, including configuration, revisions,
 the catalog, members, launch snapshots, plan, assignments, pending decisions, delivery
@@ -54,11 +55,13 @@ Reading a project file alone does not activate workspace UI.
 history, detach workspace state, and remove the sidebar. The top-level session
 continues as an ordinary Agent conversation and can set up another workspace later.
 
-The orchestrator interprets dependencies, allocates package worktrees using its
+The orchestrator decides the plan's shape, allocates worktrees using its
 ordinary tools, coordinates reviews, decides acceptance, integrates changes, and
 maintains the plan. Wash owns membership, session lifetimes, message delivery,
-runtime state, and the GUI. A workflow instruction is not a runtime-enforced gate
-unless a corresponding primitive explicitly implements that gate.
+runtime state, the GUI, and the plan's truth: every assignment is on a node,
+work starts only when the node's needs are done (or the start records why not),
+and only the orchestrator sets a node done. A workflow instruction beyond that is
+not a runtime-enforced gate unless a corresponding primitive implements it.
 
 Resident and ephemeral describe lifetime, not speed: an ephemeral implementer
 may work for hours and wait for several replies before its assignment completes.
@@ -85,8 +88,8 @@ the agent-to-agent transport.
 
 ## 4. Runtime model
 
-A swarm has a stable ID, project root, name, orchestrator member ID, ordered
-progress items, optional document registration, members, assignments, and messages.
+A swarm has a stable ID, project root, name, orchestrator member ID, a plan
+(nodes), members, assignments, QA threads and messages.
 Initially a session belongs to at most
 one active swarm. Multiple independent swarms may exist on a host.
 
@@ -95,9 +98,10 @@ instructions, working directory, lifetime, and a binding to a hosted session.
 Role names describe responsibilities; they do not grant permissions by themselves.
 Transient `acp:<n>` roster keys must not serve as durable member IDs.
 
-An assignment has an ID, assigner, assignee, description, state, and optional
-result. This is a correlation and completion record, not a package dependency
-scheduler. The orchestrator decides which assignment can start next.
+An assignment has an ID, assigner, assignee, plan node, description, state,
+and optional result. It is a correlation and completion record on a node; the
+node's needs gate its start, and its result moves the node to reported. The
+orchestrator decides which assignment starts next.
 
 Separate these dimensions:
 
@@ -288,10 +292,9 @@ agentd's attachment state; browser-local UI state does not activate a workspace.
 Windows opened for members of an active workspace also receive its context. The
 sidebar contains:
 
-- Plan navigation: completion count and an entry opening the ordered keyed items in a main-panel tab.
-- Optional document entry: name and path of the registered Markdown file.
-- Members: name, role, lifetime, activity, waiting reason, and the member's own
-  status text and emoji, refreshed live.
+- Plan navigation: nodes done out of the total, opening the Plan tab.
+- Members, grouped by plan node: name, role, lifetime, activity, waiting reason,
+  and the member's own status text and emoji, refreshed live.
 - Pending decisions and recent message/result activity.
 
 ### Flash messages
@@ -313,11 +316,10 @@ request a decision; `decision_request` handles questions requiring an answer.
 Verify visibility with another app focused and with the Agent window closed,
 correct source attribution, and click-through to the appropriate member.
 
-### Member and document inspection
+### Member inspection and the Plan tab
 
-The sidebar is navigation and status. Clicking Plan or its registered document
-opens a Plan tab in the main panel, with keyed progress and live Markdown.
-Clicking a teammate opens a named tab containing assignments, transcript preview,
+The sidebar is navigation and status. The Plan tab stands beside Conversation
+for the life of the workspace. Clicking a teammate opens a named tab containing assignments, transcript preview,
 recovery controls, and a human inbox message field. Selecting the window's own
 member returns to Conversation. Tabs are reused, closeable, and keyboard
 navigable (arrow keys, Home/End, Delete to close).
@@ -335,60 +337,29 @@ A transcript preview is a subscriber, not another controller. A swarm-scoped
 subscription sends membership/message updates without subscribing every window
 to the entire host roster. Fetch transcript history only for the selected member.
 
-### Keyed progress list
+### The plan
 
-The default progress surface is an ordered list maintained through MCP. Each item
-has a stable `id`, short `text`, optional `emoji`, and explicit `state`:
-`pending`, `active`, `blocked`, or `done`. IDs are independent of wording or
-position; emojis are presentation and do not determine the state. Flat items are
-sufficient for the first version.
+The plan is a graph of nodes, barely structured: each has a stable `id`, a
+one-line `title`, optional `emoji`, a `template` saying how it is drawn
+(`milestone`, `package`, `step`, `note`), an optional `parent`, `needs` (node or
+QA thread IDs done first), a short `body` (links to pages for detail), a `state`
+(`todo`, `active`, `reported`, `done`, `failed`, or a word of the orchestrator's
+own), a per-node revision, and recorded overrides. A milestone with nothing in it
+is a sketch: three milestones, the first called "Plan", is a fine start, and the
+orchestrator expands each as it is reached.
 
-For example:
+`plan_get` reads it (one line per node); `plan_set` upserts nodes by id in one
+call and loads a plan file; `plan_accept` sets a node done and returns its merge
+commit trailers. The Architect may plan nodes that have not started. Every change
+is written to the plan file (`.wash/plan.toml` by convention), and a workspace
+set up on that file resumes the plan.
 
-```json
-{
-  "items": [
-    {"id": "k5", "text": "Implement timer handling", "emoji": "🛠️", "state": "active"},
-    {"id": "r2", "text": "Complete production handoff", "emoji": "⏳", "state": "pending"}
-  ]
-}
-```
-
-Use `workspace_configure.plan.items` to create or patch entries by stable key:
-
-```json
-{"plan":{"items":{"k5":{"text":"Timer handling implemented and reviewed","emoji":"✅","state":"done"}}}}
-```
-
-Only supplied fields change. New IDs require text and default to pending. Null removes
-an existing ID; plan.order lists every remaining ID exactly once. Guard mutations with
-the workspace's expected_revision from workspace_get. Validation and configuration
-commit atomically. The orchestrator owns plan writes. Read current items through
-workspace_get; there is no separate plan tool surface.
-
-Persist the latest items/order in agentd. Publish item changes to subscribed GUIs
-as small patches, with a full snapshot on initial subscription or resynchronization.
-Keep scroll position and selection stable as other rows change. Updating a row
-does not wake agents or modify assignments automatically.
-
-### Optional live Markdown document
-
-A workspace may use the progress list, a document, or both. The list records
-frequently changing package/milestone progress; the document holds detailed
-design, acceptance criteria, decisions, and explanations. There is no automatic
-two-way synchronization or mandatory Markdown rewrite for an item update.
-
-The Markdown file is authoritative for the document view. `workspace_configure.document` validates
-and registers the path; ordinary file edits update the document. Reuse filesystem
-watching and the shared Markdown renderer. Watch the parent directory so atomic
-file replacement is detected; debounce reads, retain scroll position, and show
-missing/unreadable states. Refresh after reconnect. Follow the existing safe
-Markdown/link handling and session file-access rules.
-
-The orchestrator owns progress and document edits in the Redoubt workflow. Runtime
-assignment completion does not automatically mark a progress item done or check a
-Markdown box: the orchestrator evaluates acceptance and updates the appropriate
-artifact. Changes to the document by a human editor also refresh.
+The Plan tab draws it left to right: top-level nodes as columns in the order
+their needs put them, each milestone's nodes in layers inside it, edges from
+each need to what needs it, steps listed inside their package. A node shows its
+state, its members with their live activity, and a "needs you" badge; a member
+opens its tab, whose breadcrumb leads back. Changes reach the window as patches
+of the changed nodes. See AGENT_SWARM_BULK.md for the tools and rules.
 
 ## 8. Lifetime, persistence, and recovery
 
@@ -396,11 +367,12 @@ Closing an Agent window leaves swarm execution in agentd. `workspace_end`
 is a separate operation: stop accepting assignments/spawns, pause dispatch,
 terminate child sessions, resolve pending assignments/decisions as cancelled,
 retain history, and leave the top-level conversation available. Release workspace
-subscriptions and document watches and remove the sidebar when teardown finishes.
+subscriptions and remove the sidebar when teardown finishes.
 Return the tool result to the still-running top-level session. Revoke child
 credentials and remove the lead's workspace authority while retaining its MCP
-bridge for future setup. Teardown preserves project files, the Markdown document,
-and worktrees; it uninstalls the active workspace from the conversation.
+bridge for future setup. Teardown preserves project files, the plan file, QA
+thread files and worktrees; it uninstalls the active workspace from the
+conversation. Ending with nodes still active needs `confirm:true`.
 
 Setup and teardown retries must not create duplicate teams or double-stop members.
 An active workspace must be explicitly torn down before setting up a different one
@@ -411,10 +383,10 @@ An orchestrator may explicitly end members sooner. An orchestrator failure pause
 new automatic dispatch across the swarm after current turns settle and surfaces
 the failure; it must not silently delete the team.
 
-Persist swarm/member/assignment identities, progress items/order/revisions,
-document registration, messages, and delivery transitions in host state alongside
-existing agent history. Retain the final list in archived workspace history after
-teardown. Project files retain the human-readable workflow and detailed plan.
+Persist swarm/member/assignment identities, the plan and its revisions,
+messages, and delivery transitions in host state alongside existing agent
+history. The plan file and the QA thread files carry the plan and the record of
+why into the project, where a later workspace resumes them.
 Do not store bridge credentials
 in the project or transcript.
 
@@ -429,8 +401,8 @@ Automatic crash recovery and retry of work are later extensions.
 1. An ordinary Agent window initially shows only its existing conversation UI.
    Its agent reads Redoubt's instructions and invokes `workspace_configure`; the
    sidebar appears in that same window without replacing the session.
-2. It creates keyed progress items, optionally registers the detailed Markdown
-   plan, and creates one resident architect.
+2. It plans three milestones with plan_set, the first called Plan, and creates
+   one resident architect; reaching Build, it expands it into packages.
 3. It launches two ephemeral implementers in already-allocated package worktrees.
 4. One implementer asks the architect a question and yields; the other continues.
 5. The architect answers in its existing session. The waiting implementer resumes.
@@ -439,10 +411,9 @@ Automatic crash recovery and retry of work are later extensions.
    human attribution while unrelated work remains possible.
 8. Implementation results wake the orchestrator. It launches temporary reviewers
    against the relevant package checkout and receives their separate results.
-9. After evaluating acceptance, the orchestrator marks the package's keyed item
-   done through MCP; only that row changes. When the detailed plan needs an edit,
-   the optional document view refreshes without reopening or losing the reading
-   position. Neither update requires retransmitting the entire plan to the agent.
+9. After evaluating acceptance, the orchestrator accepts the package's node with
+   plan_accept and puts the trailers on its merge commit; only that node changes
+   in the Plan tab, and the plan is never retransmitted to the agent.
 10. Reviewers retire after completion; the architect remains waiting. Reloading
     the browser or closing/reopening the window retains the running team.
 11. On request, the orchestrator calls `workspace_end`. Children end, the
@@ -575,25 +546,27 @@ declarative workflow engine are outside the initial slice.
   connect it to a private local Unix socket, and are revoked with the session.
 - `apps/agentd/be/workspace*.go` injects the MCP server before ACP new/load,
   serializes inbox delivery with ordinary turns, publishes sequenced view deltas,
-  watches document directories, and routes authenticated human actions.
-- `apps/ai/fe/src/WorkspaceSidebar.tsx` renders the team, keyed plan, document,
-  decisions, member preview and human message controls. Previewing retains the
-  current controller and shows the latest 300 transcript events. Plan changes
-  travel as keyed upserts/removals; a missing sequence triggers resynchronization.
+  writes the plan and QA files, and routes authenticated human actions.
+- `apps/ai/fe/src/WorkspaceSidebar.tsx` renders the team, decisions and the
+  links to the Plan and Questions tabs; `WorkspacePlanGraph.tsx` draws the plan
+  (laid out by `plan-layout.ts`); `WorkspacePanels.tsx` the member preview and
+  human message controls. Previewing retains the current controller and shows
+  the latest 300 transcript events. Plan changes travel as upserts/removals of
+  nodes; a missing sequence triggers resynchronization.
 - `workspace_get` adds JSON configuration, launch snapshots and live adapter settings;
   `workspace_configure` persists atomic configuration patches. `workspace_get` reports
   members, plan, assignments, pending decisions and delivery
   counts. It avoids replaying the whole inbox. `inbox_read` accepts `after` and
   `limit` (default 50, maximum 100), returning messages, cursor and has_more.
-- Document views are bounded to 256 KiB and must remain regular files. Tool
-  arguments are bounded to 1 MiB; individual messages to 32 KiB, plan items to
-  500, and messages to 10,000 per workspace. This initial store rewrites its
+- Tool arguments are bounded to 1 MiB; individual messages to 32 KiB, plan
+  nodes to 500, and messages to 10,000 per workspace. This initial store rewrites its
   atomic JSON snapshot on mutations; it is intended for project coordination,
   not high-throughput event ingestion.
 - The runtime rechecks idle members without spending model turns. After a service
   restart, it restores paused state and marks interrupted deliveries uncertain.
-  Resume is deliberate. Worktree allocation, package dependencies, test gates,
-  merge policy, and role-based read-only behavior remain agent instructions.
+  Resume is deliberate. Worktree allocation, test gates, merge policy, and
+  role-based read-only behavior remain agent instructions; dependencies are the
+  plan's needs, which gate the start of work.
 - A real Codex adapter called the injected tool both before and after session
   reload. Claude session creation succeeded, but its prompt failed with expired
   OAuth credentials. A real Claude tool round trip remains unverified.

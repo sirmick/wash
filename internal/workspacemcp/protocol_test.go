@@ -95,8 +95,8 @@ func TestInitializationAndAboutShareOperatingInstructions(t *testing.T) {
 
 func TestRemovedToolsAreRejectedBeforeDispatch(t *testing.T) {
 	removed := []string{"inbox_ack", "no_such_tool"}
-	if len(Tools()) != 11 {
-		t.Fatalf("want exactly eleven tools, got %d", len(Tools()))
+	if len(Tools()) != 14 {
+		t.Fatalf("want exactly fourteen tools, got %d", len(Tools()))
 	}
 	for _, name := range removed {
 		t.Run(name, func(t *testing.T) {

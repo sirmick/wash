@@ -15,24 +15,25 @@ const member = (o: Partial<agentproto.Member> & { id: string; name: string }): a
 const message = (o: Partial<agentproto.Message> & { id: string }): agentproto.Message =>
  ({ swarm_id: 'w', sender: '', recipient: '', type: 'progress', body: '', delivery: 'queued', created_at: 0, ...o });
 const thread = (o: Partial<agentproto.QAThread> & { id: string }): agentproto.QAThread =>
- ({ package: '', title: '', assignee: '', creator: '', state: 'open', blocking: false, revision: 1, decision_refs: [], events: [], ...o });
+ ({ node: '', title: '', assignee: '', creator: '', state: 'open', blocking: false, revision: 1, decision_refs: [], events: [], ...o });
 const workspace = (o: Partial<agentproto.Workspace> & { id: string; name: string }): agentproto.Workspace =>
  ({ qa: [], project_root: '/project', orchestrator: '', state: 'active', revision: 1, plan_revision: 1,
-    max_active: 4, max_members: 16, items: [], members: [], assignments: [], messages: [], ...o });
+    max_active: 4, max_members: 16, plan: [], members: [], assignments: [], messages: [], ...o });
 const noWorkspace: agentproto.WorkspaceState = { kind: 'workspace_state', key: '', sequence: 0, workspace: null };
 const frame = (): agentproto.WorkspaceState => ({kind:'workspace_state', key:'acp:1', sequence:1, workspace: workspace({
  id:'w', name:'Timer team', state:'active',revision:1,orchestrator:'lead',
- items:[{id:'timer',text:'Build timer',state:'active',revision:1}],
+ plan:[{id:'M1',title:'Build',template:'milestone',state:'active',revision:1},{id:'timer',title:'Build timer',parent:'M1',state:'active',revision:1,body:'Use a monotonic clock.'}],
  members:[member({id:'lead',name:'Architect',session_id:'s',provider:'codex',lifetime:'resident',state:'available',emoji:'🔎',status:'Reviewing'})],
- assignments:[],messages:[],document:{path:'/project/PLAN.md',title:'Design notes'},
-}),activity:{lead:'working'},document_text:'# Timer design\nA monotonic clock.'});
+ assignments:[],messages:[],
+}),activity:{lead:'working'}});
 
-test('document and member inspection preserve the conversation and send distinct human actions', async () => {
+test('the Plan tab and member inspection preserve the conversation and send distinct human actions', async () => {
  const onAction=vi.fn(); render(() => <WorkspaceLayout frame={frame()} onAction={onAction}>Conversation</WorkspaceLayout>);
+ expect(screen.getByRole('tab',{name:'Plan'})).toBeTruthy();
  await fireEvent.click(screen.getByTestId('workspace-plan-link'));
- expect(screen.getByTestId('workspace-item-timer').textContent).toContain('active');
- await fireEvent.click(screen.getByRole('button', {name:'Design notes'}));
- expect(screen.getByTestId('workspace-document').textContent).toContain('monotonic');
+ expect(screen.getByTestId('workspace-plan-state-timer').textContent).toBe('active');
+ await fireEvent.click(screen.getByTestId('workspace-plan-node-timer'));
+ expect(screen.getByTestId('workspace-plan-detail').textContent).toContain('monotonic');
  await fireEvent.click(screen.getByTestId('workspace-member-lead'));
  expect(onAction).toHaveBeenCalledWith('member_inspect',{member_id:'lead'});
  expect(onAction).not.toHaveBeenCalledWith('member_open',expect.anything());
@@ -42,20 +43,38 @@ test('document and member inspection preserve the conversation and send distinct
  expect(onAction).toHaveBeenCalledWith('member_message',{recipient:'lead',body:'Check the clock'});
 });
 
-test('plan and document update live while selection and a human draft survive', async () => {
+test('the plan updates live while selection and a human draft survive', async () => {
  const [value,setValue]=createSignal(frame());
  render(() => <WorkspaceLayout frame={value()} onAction={()=>{}}>Conversation</WorkspaceLayout>);
  await fireEvent.click(screen.getByTestId('workspace-member-lead'));
  await fireEvent.input(screen.getByLabelText('Message Architect'),{target:{value:'Unsaved feedback'}});
- setValue({...value(),workspace:{...value().workspace!,revision:2,items:[{id:'timer',text:'Build timer',state:'done',revision:2}]}});
-
+ setValue({...value(),workspace:{...value().workspace!,revision:2,plan:value().workspace!.plan!.map((n)=>n.id==='timer'?{...n,state:'done',revision:2}:n)}});
  expect((screen.getByLabelText('Message Architect') as HTMLTextAreaElement).value).toBe('Unsaved feedback');
- await fireEvent.click(screen.getByRole('button', {name:'Design notes'}));
- setValue({...value(),document_text:'# New design\nClock verified.'});
- expect(screen.getByTestId('workspace-document').textContent).toContain('Clock verified');
- expect(screen.getByTestId('workspace-item-timer').textContent).toContain('done');
+ await fireEvent.click(screen.getByRole('tab', {name:'Plan'}));
+ expect(screen.getByTestId('workspace-plan-state-timer').textContent).toBe('done');
  await fireEvent.click(screen.getByRole('tab', {name:/Architect/}));
  expect((screen.getByLabelText('Message Architect') as HTMLTextAreaElement).value).toBe('Unsaved feedback');
+});
+
+// A member on a node shows it on the graph, live, and the graph opens its
+// tab; the tab's breadcrumb leads back to the node.
+test('the graph navigates to a member and the breadcrumb back to its node', async () => {
+ const f=frame();
+ f.workspace!.members!.push(member({id:'impl',name:'Implementer',node:'timer',session_id:'s2',state:'available'}));
+ f.activity={...f.activity,impl:'needs-input'};
+ const onAction=vi.fn();
+ render(() => <WorkspaceLayout frame={f} onAction={onAction}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByRole('tab',{name:'Plan'}));
+ expect(screen.getByTestId('workspace-plan-needs-you-timer')).toBeTruthy();
+ expect(screen.getByTestId('workspace-plan-member-impl').textContent).toContain('Needs you');
+ await fireEvent.click(screen.getByTestId('workspace-plan-member-impl'));
+ expect(onAction).toHaveBeenLastCalledWith('member_inspect',{member_id:'impl'});
+ const crumb=screen.getByTestId('workspace-member-breadcrumb');
+ expect(crumb.textContent).toContain('M1');
+ expect(crumb.textContent).toContain('timer');
+ await fireEvent.click(screen.getByRole('button',{name:/timer/}));
+ expect(screen.getByRole('tab',{name:'Plan'}).getAttribute('aria-selected')).toBe('true');
+ expect(screen.getByTestId('workspace-plan-node-timer').getAttribute('data-selected')).toBe('true');
 });
 
 test('decisions and paused member recovery have explicit controls', async () => {
@@ -100,7 +119,8 @@ test('tabs deduplicate, keep conversation mounted and reset only when the worksp
  expect(onAction).toHaveBeenLastCalledWith('member_inspect',{member_id:''});
  await fireEvent.click(screen.getByTestId('workspace-member-lead'));
  await fireEvent.click(screen.getByTestId('workspace-member-lead'));
- expect(screen.getAllByRole('tab')).toHaveLength(2);
+ // Conversation, the Plan tab beside it, and the member once.
+ expect(screen.getAllByRole('tab')).toHaveLength(3);
  expect(screen.getByTestId('workspace-sidebar').querySelector('[data-testid="workspace-member-detail"]')).toBeNull();
  expect(screen.getByTestId('workspace-main').contains(screen.getByTestId('workspace-member-detail'))).toBe(true);
  expect(screen.queryByTestId('agent-composer')).toBeNull();
@@ -108,7 +128,7 @@ test('tabs deduplicate, keep conversation mounted and reset only when the worksp
  await fireEvent.click(screen.getByTestId('workspace-plan-link'));
  expect(onAction).toHaveBeenLastCalledWith('member_inspect',{member_id:''});
  expect(screen.getByTestId('workspace-sidebar').querySelector('[data-testid="workspace-plan"]')).toBeNull();
- await fireEvent.keyDown(screen.getByRole('tab',{name:/Plan/}),{key:'ArrowLeft'});
+ await fireEvent.keyDown(screen.getByRole('tab',{name:/Plan/}),{key:'ArrowRight'});
  expect(screen.getByRole('tab',{name:/Architect/}).getAttribute('aria-selected')).toBe('true');
  expect((screen.getByLabelText('Message Architect') as HTMLTextAreaElement).value).toBe('Member draft');
  await fireEvent.click(screen.getByTestId('workspace-member-owner'));
@@ -124,7 +144,7 @@ test('tabs deduplicate, keep conversation mounted and reset only when the worksp
  expect(screen.getByLabelText('Conversation draft')).toBe(input);
  expect(input.value).toBe('Keep my work');
  setValue({...f,workspace:{...f.workspace!,id:'another'}});
- expect(screen.getAllByRole('tab')).toHaveLength(1);
+ expect(screen.getAllByRole('tab')).toHaveLength(2);
  await fireEvent.click(screen.getByTestId('workspace-member-lead'));
  expect((screen.getByLabelText('Message Architect') as HTMLTextAreaElement).value).toBe('');
  setValue({...value(),workspace:{...value().workspace!,members:[]}});
@@ -149,7 +169,7 @@ test('sidebar width is keyboard resizable, bounded and remembered', async () => 
 });
 
 test('QA opens in the main panel, refreshes live and approval controls address the selected teammate', async () => {
- const f=frame();f.workspace!.qa=[thread({id:'q1',package:'K5',title:'Wakeup bound',assignee:'lead',state:'open',blocking:true,revision:1})];f.qa_markdown='# Workspace QA\n\n## K5 · q1 — Wakeup bound\n\nAwaiting architect.';
+ const f=frame();f.workspace!.qa=[thread({id:'q1',node:'K5',title:'Wakeup bound',assignee:'lead',state:'open',blocking:true,revision:1})];f.qa_markdown='# Workspace QA\n\n## K5 · q1 — Wakeup bound\n\nAwaiting architect.';
  f.workspace!.qa_dir='/data/project/.wash/qa';
  f.preview={member_id:'lead',events:[],asks:[{id:'approval-1',agent:'claude',row_key:'acp:1',tool:'Read',subject:'workspace_get',age_ms:0}]};
  const [value,setValue]=createSignal(f);const onAction=vi.fn(),onAnswer=vi.fn();
@@ -190,15 +210,15 @@ test('attention shows unselected teammate approvals, owner decisions and save fa
  expect(screen.queryByTestId('workspace-attention')).toBeNull();
 });
 
-// Two levels instead of bare codes: members group under their package's
-// title, unpackaged ones first, and a role-only name gets its code on the tab.
-test('the team groups members under named packages', async () => {
+// Two levels instead of bare codes: members group under their node's title,
+// members on no node first, and a role-only name gets its node on the tab.
+test('the team groups members under their plan nodes', async () => {
  const f = frame();
- f.workspace!.packages = {CT1: {title: 'Console input-flood test'}};
+ f.workspace!.plan!.push({id:'CT1',title:'Console input-flood test',state:'active',revision:1});
  f.workspace!.members!.push(
-  member({id:'ct1-impl',name:'Implementer',package:'CT1',role:'implementer',session_id:'s2',provider:'claude',lifetime:'resident',state:'available'}),
-  member({id:'g1-red',name:'Red team',package:'G1',role:'reviewer',session_id:'s3',provider:'claude',lifetime:'resident',state:'available'}));
- f.workspace!.qa = [thread({id:'q',package:'CT1',title:'Flake budget?',assignee:'lead',state:'open',blocking:false,revision:1})];
+  member({id:'ct1-impl',name:'Implementer',node:'CT1',role:'implementer',session_id:'s2',provider:'claude',lifetime:'resident',state:'available'}),
+  member({id:'g1-red',name:'Red team',node:'G1',role:'reviewer',session_id:'s3',provider:'claude',lifetime:'resident',state:'available'}));
+ f.workspace!.qa = [thread({id:'q',node:'CT1',title:'Flake budget?',assignee:'lead',state:'open',blocking:false,revision:1})];
  render(() => <WorkspaceLayout frame={f} onAction={vi.fn()}>Conversation</WorkspaceLayout>);
  const sections = [...screen.getByTestId('workspace-sidebar').querySelectorAll('section[data-testid^="workspace-team-"]')].map(s => s.getAttribute('data-testid'));
  expect(sections).toEqual(['workspace-team-coordination', 'workspace-team-CT1', 'workspace-team-G1']);
@@ -240,7 +260,7 @@ test('a member waiting on a decision says the message box answers it', async () 
 
 test('a decision asked on a QA thread needs the owner once, not twice', () => {
  const f=frame();
- f.workspace!.qa=[thread({id:'Q1',package:'K5',title:'Clock source',assignee:'lead',state:'awaiting-owner',blocking:false,revision:2}),thread({id:'Q2',package:'K5',title:'Tick rate',assignee:'lead',state:'awaiting-owner',blocking:false,revision:2})];
+ f.workspace!.qa=[thread({id:'Q1',node:'K5',title:'Clock source',assignee:'lead',state:'awaiting-owner',blocking:false,revision:2}),thread({id:'Q2',node:'K5',title:'Tick rate',assignee:'lead',state:'awaiting-owner',blocking:false,revision:2})];
  f.workspace!.messages=[message({id:'d',sender:'lead',recipient:'human',type:'decision_request',body:'Which clock?',delivery:'recorded',thread_id:'Q1'})];
  render(()=> <WorkspaceLayout frame={f} onAction={()=>{}}>Conversation</WorkspaceLayout>);
  expect(screen.getAllByTestId('workspace-decision')).toHaveLength(1);

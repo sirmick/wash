@@ -2,35 +2,10 @@ import type { agentproto } from '@wash/ui';
 import { For, Show, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
 import { AgentSession, Button, Markdown, Splitter, tokens } from '@wash/ui';
+import { planPath, planStateColor } from './WorkspacePlanGraph';
 
 export type WorkspaceAction = (name: string, args: agentproto.WorkspaceActionArgs) => void;
 const heading = { font: tokens.type.titleSm, padding: `${tokens.spaceSm}px 0` };
-
-export const WorkspacePlan: Component<{ frame: agentproto.WorkspaceState }> = (props) => {
-  const w = () => props.frame.workspace!;
-  return <section data-testid="workspace-plan" style={{ height: '100%', overflow: 'auto', padding: `${tokens.spaceMd}px`, 'box-sizing': 'border-box' }}>
-      <Show when={(w().items ?? []).length}>
-        <div style={heading}>Plan</div>
-        <ol style={{ margin: 0, padding: 0, 'list-style': 'none' }}>
-          <For each={(w().items ?? [])}>{(item) => (
-            <li data-testid={`workspace-item-${item.id}`} style={{ padding: `${tokens.spaceSm}px 0`, display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'baseline' }}>
-              <span aria-hidden="true">{item.emoji || ({ pending: '○', active: '◉', blocked: '⏳', done: '✓' }[item.state])}</span>
-              <span style={{ flex: 1, 'overflow-wrap': 'anywhere' }}>{item.text}</span>
-              <small style={{ color: tokens.fgMuted }}>{item.state}</small>
-            </li>
-          )}</For>
-        </ol>
-      </Show>
-      <Show when={w().document}>
-        <section data-testid="workspace-document" style={{ 'overflow-wrap': 'anywhere' }}>
-          <div style={heading}>{w().document?.title || w().document?.path}</div>
-          <Show when={!props.frame.document_error} fallback={<div role="alert">{props.frame.document_error}</div>}>
-            <Markdown text={props.frame.document_text ?? ''} />
-          </Show>
-        </section>
-      </Show>
-  </section>;
-};
 
 // The member pane's divider between its brief (task, results) and its turns,
 // as a percentage of the pane's height; one setting for every member.
@@ -49,6 +24,8 @@ export const WorkspaceMemberPanel: Component<{
   frame: agentproto.WorkspaceState; result?: agentproto.WorkspaceResult; memberID: string;
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
   draft: string; onDraft: (draft: string) => void; onAction: WorkspaceAction;
+  /** Opens the Plan tab on a node: the breadcrumb's destination. */
+  onOpenNode?: (id: string) => void;
 }> = (props) => {
   const w = () => props.frame.workspace!;
   const member = () => (w().members ?? []).find((m) => m.id === props.memberID);
@@ -75,6 +52,16 @@ export const WorkspaceMemberPanel: Component<{
             'grid-template-rows': `minmax(0, ${split()}fr) 5px minmax(0, ${100 - split()}fr)`,
           }}>
           <div data-testid="workspace-member-brief" style={{ overflow: 'auto', 'min-height': 0, 'overflow-wrap': 'anywhere' }}>
+          {/* Where this member sits in the plan; each step opens the Plan tab there. */}
+          <Show when={planPath(w().plan, m().node).length}>
+            <nav data-testid="workspace-member-breadcrumb" aria-label="Plan node" style={{ font: tokens.type.textSm, color: tokens.fgMuted }}>
+              <For each={planPath(w().plan, m().node)}>{(n, i) => <>
+                {i() ? ' › ' : ''}
+                <button data-wash-hit type="button" onClick={() => props.onOpenNode?.(n.id)} title={`${n.title} · ${n.state}`}
+                  style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit', color: planStateColor(n.state) }}>{n.emoji} {n.id}</button>
+              </>}</For>
+            </nav>
+          </Show>
           <div style={heading}>{m().name} · {m().lifetime}</div>
           <Show when={m().launch_settings}>
             <p data-testid="workspace-member-launch" style={{ color: tokens.fgMuted, 'overflow-wrap': 'anywhere' }}>

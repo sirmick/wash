@@ -24,6 +24,18 @@ func qaFileCall(t *testing.T, ws *workspaceService, h *hosted, name string, args
 	return ws.call(context.Background(), h, workspacemcp.Call{Name: name, Arguments: raw})
 }
 
+// addNodes puts plan nodes in the caller's workspace for threads and work to be on.
+func addNodes(t *testing.T, ws *workspaceService, h *hosted, ids ...string) {
+	t.Helper()
+	nodes := map[string]any{}
+	for _, id := range ids {
+		nodes[id] = map[string]any{"title": "Node " + id}
+	}
+	if _, err := qaFileCall(t, ws, h, "plan_set", map[string]any{"nodes": nodes}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func readThread(t *testing.T, dir, id string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(dir, id+".md"))
@@ -57,8 +69,9 @@ func TestQADirWritesOneFilePerThreadAndRecovers(t *testing.T) {
 	if got := s.View("lead").QADir; got != qa {
 		t.Fatalf("qa_dir = %q, want %q", got, qa)
 	}
+	addNodes(t, ws, h, "K5")
 	for _, id := range []string{"q", "other"} {
-		open := map[string]any{"recipient": "orchestrator", "type": "question", "body": "Question " + id, "qa": map[string]any{"id": id, "action": "open", "package": "K5", "title": "Question " + id}}
+		open := map[string]any{"recipient": "orchestrator", "type": "question", "body": "Question " + id, "qa": map[string]any{"id": id, "action": "open", "node": "K5", "title": "Question " + id}}
 		if _, err = qaFileCall(t, ws, h, "message_send", open); err != nil {
 			t.Fatal(err)
 		}
@@ -146,7 +159,8 @@ func TestQADirLeavesOtherFilesAloneAndReportsWriteFailure(t *testing.T) {
 	if _, err = qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Project"}, "qa_dir": "."}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": "orchestrator", "type": "question", "body": "Retain this question", "qa": map[string]any{"id": "q", "action": "open", "package": "K5", "title": "Question"}})
+	addNodes(t, ws, h, "K5")
+	result, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": "orchestrator", "type": "question", "body": "Retain this question", "qa": map[string]any{"id": "q", "action": "open", "node": "K5", "title": "Question"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,8 +208,9 @@ func TestQADirResumesWithoutStoreAndRetainsDecisions(t *testing.T) {
 	if _, err := qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
 		t.Fatal(err)
 	}
+	addNodes(t, ws, h, "K5")
 	lead := s.View(h.sessionID).Lead
-	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": lead, "type": "question", "body": "Keep evidence", "qa": map[string]any{"id": "q", "action": "open", "package": "K5", "title": "Decision"}}); err != nil {
+	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": lead, "type": "question", "body": "Keep evidence", "qa": map[string]any{"id": "q", "action": "open", "node": "K5", "title": "Decision"}}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := qaFileCall(t, ws, h, "decision_request", map[string]any{"text": "Use A?", "thread_id": "q"})
@@ -281,12 +296,13 @@ func TestQADirFinalFailureRetriesUntilClaimed(t *testing.T) {
 	if _, err := qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
 		t.Fatal(err)
 	}
+	addNodes(t, ws, h, "K5")
 	before := s.View(h.sessionID)
 	// A directory in the file's place prevents the atomic replacement.
 	if err := os.Mkdir(filepath.Join(qa, "q.md"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := qaFileCall(t, ws, h, "member_update", map[string]any{"qa_updates": []any{map[string]any{"id": "q", "action": "open", "package": "K5", "title": "Final", "body": "Newest durable evidence", "assignee": before.Lead}}}); err != nil {
+	if _, err := qaFileCall(t, ws, h, "member_update", map[string]any{"qa_updates": []any{map[string]any{"id": "q", "action": "open", "node": "K5", "title": "Final", "body": "Newest durable evidence", "assignee": before.Lead}}}); err != nil {
 		t.Fatal(err)
 	}
 	end, err := qaFileCall(t, ws, h, "workspace_end", map[string]any{})
@@ -403,7 +419,8 @@ func TestResumedResolvedThreadIsAHeaderUntilReopened(t *testing.T) {
 	if _, err := qaFileCall(t, ws, h, "workspace_configure", setup); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": "orchestrator", "type": "question", "body": "Overflow in " + dir + "/record.go?", "qa": map[string]any{"id": "q", "action": "open", "package": "REC", "title": "Overflow"}}); err != nil {
+	addNodes(t, ws, h, "REC")
+	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": "orchestrator", "type": "question", "body": "Overflow in " + dir + "/record.go?", "qa": map[string]any{"id": "q", "action": "open", "node": "REC", "title": "Overflow"}}); err != nil {
 		t.Fatal(err)
 	}
 	rev := s.View(h.sessionID).QA[0].Revision
@@ -464,11 +481,25 @@ func TestQABodiesAreCapped(t *testing.T) {
 	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Project"}}); err != nil {
 		t.Fatal(err)
 	}
+	addNodes(t, ws, h, "K5")
 	long := strings.Repeat("x", swarm.ReportLimit+1)
-	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": "orchestrator", "type": "question", "body": long, "qa": map[string]any{"id": "q", "action": "open", "package": "K5", "title": "Plan"}}); err == nil || !strings.Contains(err.Error(), "file") {
+	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": "orchestrator", "type": "question", "body": long, "qa": map[string]any{"id": "q", "action": "open", "node": "K5", "title": "Plan"}}); err == nil || !strings.Contains(err.Error(), "file") {
 		t.Fatalf("a long thread message was accepted: %v", err)
 	}
-	if _, err := qaFileCall(t, ws, h, "member_update", map[string]any{"qa_updates": []any{map[string]any{"id": "q", "action": "open", "package": "K5", "title": "Plan", "body": long, "assignee": "orchestrator"}}}); err == nil || !strings.Contains(err.Error(), "file") {
+	if _, err := qaFileCall(t, ws, h, "member_update", map[string]any{"qa_updates": []any{map[string]any{"id": "q", "action": "open", "node": "K5", "title": "Plan", "body": long, "assignee": "orchestrator"}}}); err == nil || !strings.Contains(err.Error(), "file") {
 		t.Fatalf("a long thread body was accepted: %v", err)
+	}
+}
+
+// seedPlan puts nodes straight into a workspace set up with Store.Setup.
+func seedPlan(t *testing.T, s *swarm.Store, session string, ids ...string) {
+	t.Helper()
+	if err := s.Mutate(session, false, func(w *swarm.Workspace, _ *swarm.Member) error {
+		for _, id := range ids {
+			w.Plan = append(w.Plan, swarm.Node{ID: id, Title: "Node " + id, State: "todo", Revision: 1})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

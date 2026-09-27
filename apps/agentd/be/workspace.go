@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"maps"
 	"net"
@@ -17,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
@@ -29,6 +27,7 @@ import (
 type workspaceService struct {
 	qaMu      sync.Mutex
 	qaFiles   map[string]*qaDirState
+	planFiles map[string]*planFileState
 	store     *swarm.Store
 	conn      *sdk.Conn
 	mu        sync.Mutex
@@ -36,7 +35,6 @@ type workspaceService struct {
 	socket    string
 	kick      chan struct{}
 	done      chan struct{}
-	watcher   *fsnotify.Watcher
 	publishMu sync.Mutex
 	views     map[string][]byte
 	sequences map[string]int64
@@ -69,13 +67,7 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 		os.RemoveAll(dir)
 		return err
 	}
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		listener.Close()
-		os.RemoveAll(dir)
-		return err
-	}
-	ws := &workspaceService{store: store, conn: c, tokens: map[string]*hosted{}, socket: socket, kick: make(chan struct{}, 1), done: make(chan struct{}), watcher: watcher, views: map[string][]byte{}, sequences: map[string]int64{}, previews: map[string]string{}, sessions: map[string]string{}}
+	ws := &workspaceService{store: store, conn: c, tokens: map[string]*hosted{}, socket: socket, kick: make(chan struct{}, 1), done: make(chan struct{}), views: map[string][]byte{}, sequences: map[string]int64{}, previews: map[string]string{}, sessions: map[string]string{}}
 	workspaces = ws
 	server := &http.Server{Handler: http.HandlerFunc(ws.serve), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 	go func() {
@@ -84,7 +76,7 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 		}
 	}()
 	go ws.loop()
-	sdk.OnTerminate(func() { close(ws.done); _ = server.Close(); _ = watcher.Close(); _ = os.RemoveAll(dir) })
+	sdk.OnTerminate(func() { close(ws.done); _ = server.Close(); _ = os.RemoveAll(dir) })
 	sdk.HandleFromVoid(bus, "workspace_refresh", func(c *sdk.Conn, _ string, req agentproto.WorkspaceRefresh, from wire.Sender) error {
 		if controls(from, req.Key) {
 			ws.publish(true)
@@ -259,7 +251,7 @@ func (ws *workspaceService) serve(w http.ResponseWriter, r *http.Request) {
 
 type workspaceArgs struct {
 	Thread          string `json:"thread_id"`
-	Package         string `json:"package"`
+	Node            string `json:"node"`
 	View            string `json:"view"`
 	ID              string `json:"id"`
 	Member          string `json:"member_id"`
@@ -272,6 +264,7 @@ type workspaceArgs struct {
 	IncludeMessages bool   `json:"include_messages"`
 	Limit           int    `json:"limit"`
 	Workspace       string `json:"workspace_id"`
+	Confirm         bool   `json:"confirm"`
 }
 
 func parseWorkspaceArgs(raw json.RawMessage) (workspaceArgs, error) {
@@ -314,13 +307,13 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		// between turns, and full state (configuration, launch snapshots,
 		// every live session's adapter options) is several times its size.
 		if a.View == "" || a.View == "team" {
-			if a.Thread != "" || a.Package != "" || a.IncludeMessages || a.After != "" || a.Limit != 0 {
+			if a.Thread != "" || a.Node != "" || a.IncludeMessages || a.After != "" || a.Limit != 0 {
 				return nil, errors.New("view=team (the default) takes no other options; message history needs view=state, threads view=qa")
 			}
 			return teamView(w), nil
 		}
-		if a.Thread != "" || a.Package != "" {
-			return nil, errors.New("thread_id/package require view=qa")
+		if a.Thread != "" || a.Node != "" {
+			return nil, errors.New("thread_id/node require view=qa")
 		}
 		qaSummary(w)
 		counts := map[string]int{}
@@ -362,6 +355,14 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		hostedMu.Unlock()
 		return map[string]any{"workspace": w, "approvals": workspaceApprovals(w), "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
 	case "workspace_end":
+		// Ending with work in flight is a decision, not an accident.
+		if a.Workspace == "" && !a.Confirm {
+			if w := ws.store.View(sid); w != nil {
+				if active := swarm.ActiveNodes(w); len(active) > 0 {
+					return nil, fmt.Errorf("nodes still active or reported: %s. Finish or accept them, or end anyway with confirm:true", strings.Join(active, ", "))
+				}
+			}
+		}
 		if a.Workspace != "" {
 			lead, err := ws.staleLead(sid, a.Workspace)
 			if err != nil {
@@ -576,9 +577,15 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		// every later inbox turn, under the same concurrency limits.
 		assignment := ""
 		if member.InitialTask != "" {
-			task := swarm.Assignment{ID: swarm.ID(), Assigner: v.Creator, Member: v.ID, Text: member.InitialTask, State: "assigned"}
-			w.Assignments = append(w.Assignments, task)
-			initialAssignment = &task
+			by := swarm.GetMember(w, v.Creator)
+			if by == nil {
+				by = swarm.GetMember(w, w.Lead)
+			}
+			task, err := swarm.NewAssignment(w, by, v, "", "", member.InitialTask)
+			if err != nil {
+				return fmt.Errorf("initial task: %w", err)
+			}
+			initialAssignment = task
 			assignment = task.ID
 		}
 		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", memberBrief(member, assignment), "", assignment, "")
@@ -1004,52 +1011,11 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (*agentproto
 	}
 	return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Note: "Archived conversation; reopen through Agent History to resume."}, nil
 }
-func readWorkspaceDocument(path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New("document must remain a regular file")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, 256*1024+1))
-	if err != nil {
-		return "", err
-	}
-	if len(b) > 256*1024 {
-		return "", errors.New("document exceeds 256 KiB live-view limit")
-	}
-	return string(b), nil
-}
 func (ws *workspaceService) publish(force bool) {
 	ws.syncQADocuments()
+	ws.syncPlanFiles()
 	ws.publishMu.Lock()
 	defer ws.publishMu.Unlock()
-	if ws.watcher != nil {
-		wanted := map[string]bool{}
-		for _, w := range ws.store.Snapshot().Workspaces {
-			if w.State != "ended" && w.Document != nil {
-				wanted[filepath.Dir(w.Document.Path)] = true
-			}
-		}
-		for _, path := range ws.watcher.WatchList() {
-			if !wanted[path] {
-				_ = ws.watcher.Remove(path)
-			} else {
-				delete(wanted, path)
-			}
-		}
-		for path := range wanted {
-			if err := ws.watcher.Add(path); err != nil {
-				log.Printf("agentd: document watch: %v", err)
-			}
-		}
-	}
 	controllerState.Lock()
 	targets := map[string]string{}
 	for key, instance := range controllerState.byKey {
@@ -1082,12 +1048,9 @@ func (ws *workspaceService) publish(force bool) {
 			status := ws.qaDocumentStatus(w)
 			frame.QADocumentStatus = &status
 			qaSummary(w)
-			if w.Document != nil {
-				text, err := readWorkspaceDocument(w.Document.Path)
-				frame.DocumentText = text
-				if err != nil {
-					frame.DocumentError = err.Error()
-				}
+			if w.PlanFile != "" {
+				status := ws.planFileStatus(w)
+				frame.PlanFileStatus = &status
 			}
 		}
 		// Compared and diffed without a sequence: two frames that say the
@@ -1141,7 +1104,7 @@ func (ws *workspaceService) publish(force bool) {
 }
 func (ws *workspaceService) loop() {
 	// This ticks runtime state, never an agent/model. Mail delivery also has an
-	// immediate wake channel. The tick covers provider exits and watcher changes.
+	// immediate wake channel. The tick covers provider exits and file retries.
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
@@ -1150,14 +1113,6 @@ func (ws *workspaceService) loop() {
 			return
 		case <-ws.kick:
 		case <-tick.C:
-		case _, ok := <-ws.watcher.Events:
-			if !ok {
-				return
-			}
-		case _, ok := <-ws.watcher.Errors:
-			if !ok {
-				return
-			}
 		}
 		ws.dispatch()
 		ws.publish(false)
@@ -1497,7 +1452,7 @@ func teamView(w *swarm.Workspace) map[string]any {
 			}
 		}
 		row := map[string]any{"id": m.ID, "key": m.Key, "name": m.Name, "state": m.State, "activity": activity[m.ID]}
-		for k, v := range map[string]string{"package": m.Package, "role": m.Role, "catalog": m.Catalog, "model": m.Model, "status": m.Status, "waiting": m.Waiting, "activity_detail": detail[m.ID]} {
+		for k, v := range map[string]string{"node": m.Node, "role": m.Role, "catalog": m.Catalog, "model": m.Model, "status": m.Status, "waiting": m.Waiting, "activity_detail": detail[m.ID]} {
 			if v != "" {
 				row[k] = v
 			}
@@ -1523,6 +1478,13 @@ func teamView(w *swarm.Workspace) map[string]any {
 		members = append(members, row)
 	}
 	header := map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "revision": w.Revision}
+	if len(w.Plan) > 0 {
+		states := map[string]int{}
+		for _, n := range w.Plan {
+			states[n.State]++
+		}
+		header["plan"] = map[string]any{"revision": w.PlanRevision, "nodes": states, "read": "plan_get"}
+	}
 	if w.Catalog != "" {
 		header["catalog"] = w.Catalog
 	}

@@ -22,6 +22,10 @@ type assignmentChange struct {
 	Text    string `json:"text,omitempty"`
 	Body    string `json:"body,omitempty"`
 	Request string `json:"request_id,omitempty"`
+	// Node is the plan node the work is on (the member's own by default);
+	// Override says why it starts before what the node needs is done.
+	Node     string `json:"node,omitempty"`
+	Override string `json:"override,omitempty"`
 	// CC copies a complete/fail result, as progress (which wakes nobody), to
 	// these members: a reviewer's findings reach the implementer they concern
 	// without the orchestrator retyping them into the fix assignment.
@@ -71,7 +75,7 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 			if err != nil {
 				return fail(i, fmt.Errorf("member %q: %w", u.Member, err))
 			}
-			a, err := s.Assign(h.sessionID, member, u.Text, u.Request)
+			a, err := s.Assign(h.sessionID, member, u.Node, u.Override, u.Text, u.Request)
 			if err != nil {
 				if j, ok := created[member]; ok && errors.Is(err, swarm.ErrActiveAssignment) {
 					err = fmt.Errorf("%w: update %d of this batch created it", err, j)
@@ -112,8 +116,9 @@ func (ws *workspaceService) call(ctx context.Context, h *hosted, c workspacemcp.
 	if err != nil || options.Preview {
 		return result, err
 	}
-	if c.Name != "workspace_get" && c.Name != "inbox_read" {
+	if c.Name != "workspace_get" && c.Name != "inbox_read" && c.Name != "plan_get" {
 		ws.syncQADocuments()
+		ws.syncPlanFiles()
 	}
 	w := ws.store.View(h.sessionID)
 	if w != nil && w.QADir != "" && result != nil {
@@ -145,11 +150,21 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 	switch c.Name {
 	case "workspace_configure":
 		return ws.configureBulk(ctx, h, c.Arguments)
+	case "plan_get":
+		w := ws.store.View(h.sessionID)
+		if w == nil {
+			return nil, errors.New("no workspace; call workspace_configure")
+		}
+		return ws.planGet(w, c.Arguments)
+	case "plan_set":
+		return ws.planSet(ctx, h, c.Arguments)
+	case "plan_accept":
+		return ws.planAccept(h, c.Arguments)
 	case "member_control":
 		var p struct {
 			Action  string            `json:"action"`
 			Members []string          `json:"member_ids"`
-			Package string            `json:"package,omitempty"`
+			Node    string            `json:"node,omitempty"`
 			Configs map[string]string `json:"configs,omitempty"`
 		}
 		if err := decodeWorkspace(c.Arguments, &p); err != nil {
@@ -168,12 +183,12 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 		if lead := swarm.GetMember(w, w.Lead); lead == nil || lead.Session != h.sessionID {
 			return nil, errors.New("orchestrator operation")
 		}
-		if p.Package != "" {
+		if p.Node != "" {
 			if len(p.Members) > 0 {
-				return nil, errors.New("select member_ids or package")
+				return nil, errors.New("select member_ids or node")
 			}
 			for _, m := range w.Members {
-				if m.Package == p.Package && m.State != "ended" {
+				if m.Node != "" && swarm.Within(w, m.Node, p.Node) && m.State != "ended" {
 					p.Members = append(p.Members, m.ID)
 				}
 			}

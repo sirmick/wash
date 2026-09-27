@@ -392,6 +392,8 @@ export interface Assignment {
   id: string;
   assigner: string;
   member_id: string;
+  /** Node is the plan node the work is on. */
+  node?: string;
   text: string;
   state: string;
   result?: string;
@@ -521,11 +523,6 @@ export interface Detach {
   key: string;
 }
 
-export interface Document {
-  path: string;
-  title: string;
-}
-
 /**
  * Event is one line in a transcript.
  * 
@@ -610,14 +607,6 @@ export interface HistoryPruned {
   deleted: number;
 }
 
-export interface Item {
-  id: string;
-  text: string;
-  emoji?: string;
-  state: string;
-  revision: number;
-}
-
 /** KeySaved answers AgentSetKey. */
 export interface KeySaved {
   kind: 'key_saved';
@@ -678,7 +667,11 @@ export interface ManagerSubscribe {
 
 export interface Member {
   key?: string;
-  package?: string;
+  /**
+   * Node is the plan node the member works on; empty is the team (the
+   * orchestrator, an Architect).
+   */
+  node?: string;
   role?: string;
   instructions?: string;
   initial_task?: string;
@@ -754,6 +747,35 @@ export interface Mode {
   description?: string;
 }
 
+/** Node is one plan node. */
+export interface Node {
+  id: string;
+  title: string;
+  emoji?: string;
+  /**
+   * Template is how the node is drawn: milestone, package, step or note.
+   * Wash gives it no other meaning, except that a milestone with no
+   * children is a sketch.
+   */
+  template?: string;
+  /** Parent is the node this one sits inside. */
+  parent?: string;
+  /**
+   * Needs are node IDs that must be done, or QA thread IDs that must be
+   * resolved, before work on this node (or anything inside it) starts.
+   */
+  needs?: string[];
+  body?: string;
+  /**
+   * State is todo, active, reported, done, failed, or a short word of the
+   * orchestrator's own.
+   */
+  state: string;
+  revision: number;
+  /** Overrides record each start with needs unmet, and why. */
+  overrides?: string[];
+}
+
 /**
  * Notify brings something to the person's attention. With a Key, activating
  * the notification sends wash.focus for that session.
@@ -775,11 +797,6 @@ export interface Notify {
 export interface OpenSession {
   kind: 'open_session';
   key: string;
-}
-
-/** Package is the human-facing description of a package code. */
-export interface Package {
-  title: string;
 }
 
 /**
@@ -814,7 +831,10 @@ export interface PromptAttachment {
   name?: string;
 }
 
-/** QADocumentStatus is where the workspace's QA file stands on disk. */
+/**
+ * QADocumentStatus is where a file (or directory) Wash writes for the
+ * workspace stands on disk: the QA thread files, the plan file.
+ */
 export interface QADocumentStatus {
   path: string;
   /** State is unconfigured | pending | saved | error. */
@@ -834,7 +854,8 @@ export interface QAEvent {
 
 export interface QAThread {
   id: string;
-  package: string;
+  /** Node is the plan node the thread is about. */
+  node: string;
   title: string;
   creator: string;
   assignee: string;
@@ -989,8 +1010,9 @@ export interface RowWorkspace {
   orchestrator?: boolean;
   member: string;
   role?: string;
-  package?: string;
-  package_title?: string;
+  /** Node and NodeTitle are the plan node the member works on. */
+  node?: string;
+  node_title?: string;
 }
 
 /** Rule is one line of the table. */
@@ -1324,12 +1346,6 @@ export interface Workspace {
    */
   approvals?: Rule[];
   /**
-   * Packages names each package code ("CT1") for people: the sidebar groups
-   * members and questions under "CT1 · Console input-flood test" instead of
-   * a bare code, and member names can shrink to their role.
-   */
-  packages?: Record<string, Package>;
-  /**
    * Catalog is where members' models come from (a slot name in a
    * member's `model` resolves against it): the orchestrator's own catalog
    * at setup, changeable with workspace_configure.catalog for later
@@ -1342,11 +1358,17 @@ export interface Workspace {
   orchestrator: string;
   state: string;
   revision: number;
-  plan_revision: number;
   max_active: number;
   max_members: number;
-  items: Item[] | null;
-  document?: Document;
+  /** Plan is the workspace's node graph; PlanRevision counts its changes. */
+  plan: Node[] | null;
+  plan_revision: number;
+  /** PlanFile is where Wash writes the plan as it changes (TOML). */
+  plan_file?: string;
+  /** Legend says what the orchestrator's emojis and states mean. */
+  legend?: string;
+  /** Nudged are the lifecycle nudges already sent, so each goes once. */
+  nudged?: string[];
   members: Member[] | null;
   assignments: Assignment[] | null;
   messages: Message[] | null;
@@ -1391,18 +1413,8 @@ export interface WorkspaceApproval {
 }
 
 /**
- * WorkspaceItemsPatch changes the plan: items replaced or added, ids
- * removed, and the new order when it changed.
- */
-export interface WorkspaceItemsPatch {
-  upsert: Item[] | null;
-  remove: string[] | null;
-  order?: string[];
-}
-
-/**
  * WorkspacePatch changes a WorkspaceState: the frame fields and workspace
- * fields that changed (null removes one), and the plan items by id. It
+ * fields that changed (null removes one), and the plan's nodes by id. It
  * applies to the frame with sequence Base; a frontend holding another asks
  * for the whole frame again (workspace_refresh).
  */
@@ -1413,9 +1425,19 @@ export interface WorkspacePatch {
   sequence: number;
   /** Frame holds changed WorkspaceState fields by their JSON name. */
   frame: Record<string, unknown> | null;
-  /** Workspace holds changed swarm.Workspace fields, except items. */
+  /** Workspace holds changed swarm.Workspace fields, except the plan. */
   workspace: Record<string, unknown> | null;
-  items?: WorkspaceItemsPatch;
+  plan?: WorkspacePlanPatch;
+}
+
+/**
+ * WorkspacePlanPatch changes the plan: nodes replaced or added, ids
+ * removed, and the new order when it changed.
+ */
+export interface WorkspacePlanPatch {
+  upsert: Node[] | null;
+  remove: string[] | null;
+  order?: string[];
 }
 
 /** WorkspaceRefresh asks for the session's workspace frame again. */
@@ -1464,12 +1486,8 @@ export interface WorkspaceState {
   /** QAMarkdown is the QA document as it is written to disk. */
   qa_markdown?: string;
   qa_document_status?: QADocumentStatus;
-  /**
-   * DocumentText is the registered plan document's text, or
-   * DocumentError why it could not be read.
-   */
-  document_text?: string;
-  document_error?: string;
+  /** PlanFileStatus is where the plan file stands on disk. */
+  plan_file_status?: QADocumentStatus;
 }
 
 /**

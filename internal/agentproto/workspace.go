@@ -61,10 +61,8 @@ type WorkspaceState struct {
 	// QAMarkdown is the QA document as it is written to disk.
 	QAMarkdown       string            `json:"qa_markdown,omitempty"`
 	QADocumentStatus *QADocumentStatus `json:"qa_document_status,omitempty"`
-	// DocumentText is the registered plan document's text, or
-	// DocumentError why it could not be read.
-	DocumentText  string `json:"document_text,omitempty"`
-	DocumentError string `json:"document_error,omitempty"`
+	// PlanFileStatus is where the plan file stands on disk.
+	PlanFileStatus *QADocumentStatus `json:"plan_file_status,omitempty"`
 }
 
 // WorkspaceTranscript is a member's recent transcript: the selected
@@ -87,7 +85,8 @@ type WorkspaceApproval struct {
 	Subject  string `json:"subject"`
 }
 
-// QADocumentStatus is where the workspace's QA file stands on disk.
+// QADocumentStatus is where a file (or directory) Wash writes for the
+// workspace stands on disk: the QA thread files, the plan file.
 type QADocumentStatus struct {
 	Path string `json:"path"`
 	// State is unconfigured | pending | saved | error.
@@ -97,7 +96,7 @@ type QADocumentStatus struct {
 }
 
 // WorkspacePatch changes a WorkspaceState: the frame fields and workspace
-// fields that changed (null removes one), and the plan items by id. It
+// fields that changed (null removes one), and the plan's nodes by id. It
 // applies to the frame with sequence Base; a frontend holding another asks
 // for the whole frame again (workspace_refresh).
 type WorkspacePatch struct {
@@ -106,15 +105,15 @@ type WorkspacePatch struct {
 	Sequence int64  `json:"sequence"`
 	// Frame holds changed WorkspaceState fields by their JSON name.
 	Frame map[string]json.RawMessage `json:"frame"`
-	// Workspace holds changed swarm.Workspace fields, except items.
+	// Workspace holds changed swarm.Workspace fields, except the plan.
 	Workspace map[string]json.RawMessage `json:"workspace"`
-	Items     *WorkspaceItemsPatch       `json:"items,omitempty"`
+	Plan      *WorkspacePlanPatch        `json:"plan,omitempty"`
 }
 
-// WorkspaceItemsPatch changes the plan: items replaced or added, ids
+// WorkspacePlanPatch changes the plan: nodes replaced or added, ids
 // removed, and the new order when it changed.
-type WorkspaceItemsPatch struct {
-	Upsert []swarm.Item `json:"upsert"`
+type WorkspacePlanPatch struct {
+	Upsert []swarm.Node `json:"upsert"`
 	Remove []string     `json:"remove"`
 	Order  []string     `json:"order,omitempty"`
 }

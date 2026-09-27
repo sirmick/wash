@@ -20,10 +20,10 @@ func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 		}
 		index := []map[string]any{}
 		for _, q := range w.QA {
-			if a.Package != "" && q.Package != a.Package {
+			if a.Node != "" && !swarm.Within(w, q.Node, a.Node) {
 				continue
 			}
-			row := map[string]any{"id": q.ID, "package": q.Package, "title": q.Title, "state": q.State, "assignee": q.Assignee, "revision": q.Revision}
+			row := map[string]any{"id": q.ID, "node": q.Node, "title": q.Title, "state": q.State, "assignee": q.Assignee, "revision": q.Revision}
 			if q.Blocking {
 				row["blocking"] = true
 			}
@@ -35,7 +35,7 @@ func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 		return map[string]any{"threads": index}, nil
 	}
 	q := swarm.QA(w, a.Thread)
-	if q == nil || a.Package != "" && q.Package != a.Package {
+	if q == nil || a.Node != "" && !swarm.Within(w, q.Node, a.Node) {
 		return nil, errors.New("unknown QA thread")
 	}
 	thread := *q
