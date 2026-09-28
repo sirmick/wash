@@ -91,7 +91,7 @@ export const WorkspacePlanGraph: Component<{
           <For each={layout().boxes}>{(box) => {
             const node = () => byId().get(box.id)!;
             const group = box.kind === 'group';
-            return <div data-testid={`workspace-plan-node-${box.id}`} data-state={node()?.state} data-selected={selected() === box.id ? 'true' : 'false'}
+            return <div data-wash-hit="subtle" data-testid={`workspace-plan-node-${box.id}`} data-state={node()?.state} data-selected={selected() === box.id ? 'true' : 'false'}
               role="button" tabIndex={0} aria-label={`${box.id} ${node()?.title}, ${node()?.state}`}
               onClick={(ev) => { ev.stopPropagation(); setSelected(box.id); }}
               onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setSelected(box.id); } }}
