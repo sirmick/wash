@@ -302,8 +302,9 @@ point there; the tab and the node carry a dot). Asked on `thread_id`, the questi
 answers are both thread events, word for word, and the thread is awaiting-owner until then.
 An answer does not resolve QA. Ask the owner this way, never with questions in prose.
 When a member asks, the orchestrator gets a `note` ("<member> asked the owner and waits
-for the answer: …"). A note never wakes anyone: it goes out with the next turn something
-else starts. The Architect writes
+for the answer: …"). A note wakes nobody busy: it goes out with the next turn something
+else starts. It does wake an orchestrator idle in a plain wait (`waiting` without
+`until_assignments`), which would otherwise never hear; a waiting set keeps its one wake-up. The Architect writes
 formal project decisions/specifications, links them through decision_refs and routes the
 implementation back. Package reviewers verify evidence before closure. Project acceptance
 policy requires no unresolved blocking QA; Wash does not infer whether a git merge satisfies it.
