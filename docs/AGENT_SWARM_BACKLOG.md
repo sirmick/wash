@@ -292,8 +292,8 @@ except where noted.
   passing the action directly (the `"member_"+action` strings are v1
   leftovers). The GUI's `member_resume` should call the extracted function
   instead of going through `ws.call` and decoding outcomes back out of JSON.
-- **Session settings helpers:** three copies of "copy configs under
-  `hostedMu`" plus the `SetConfigOption` closure.
+- **Session settings helpers:** the `SetConfigOption` closure is repeated
+  three times (the configs copy is `hosted.configsSnapshot`).
 - **One "who am I in this workspace" lookup:** `find()` already returns the
   calling member, but `View` discards it and about seven callers re-scan.
 - **Look up live sessions once per render:** `workspaceRuntime`,

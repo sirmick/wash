@@ -1074,9 +1074,9 @@ func TestAwaitStderrWaitsForTheLastWordsButNotForEver(t *testing.T) {
 	h := &hosted{stderrDone: make(chan struct{})}
 	go func() {
 		time.Sleep(30 * time.Millisecond)
-		h.tailMu.Lock()
+		h.mu.Lock()
 		h.tail = []byte("fatal: token expired")
-		h.tailMu.Unlock()
+		h.mu.Unlock()
 		close(h.stderrDone)
 	}()
 	h.awaitStderr()
@@ -1094,10 +1094,10 @@ func TestAwaitStderrWaitsForTheLastWordsButNotForEver(t *testing.T) {
 	}
 }
 
-// journal reads the title through shownTitle, which takes hostedMu; the
-// first version held that lock across the call and deadlocked agentd on
-// its first session. This must return, and must say what it noted.
-func TestJournalDoesNotHoldHostedMuAcrossShownTitle(t *testing.T) {
+// journal reads the title through shownTitle, which takes the session's
+// lock; an early version held a lock across the call and deadlocked agentd
+// on its first session. This must return, and must say what it noted.
+func TestJournalDoesNotHoldALockAcrossShownTitle(t *testing.T) {
 	old := noteActivity
 	var got []wire.EvtActivityNote
 	noteActivity = func(_ *sdk.Conn, n wire.EvtActivityNote) error { got = append(got, n); return nil }

@@ -105,12 +105,7 @@ func sameQuestions(a, b []agentproto.PendingQuestion) bool {
 // answer. ok is false when the question went unanswered (stopped, session
 // ended, adapter gone).
 func (h *hosted) askQuestions(ctx context.Context, source string, set swarm.QuestionSet) (questionReply, bool) {
-	h.turnMu.Lock()
-	h.activityAsks++
-	h.turnMu.Unlock()
-	defer func() { h.turnMu.Lock(); h.activityAsks--; h.turnMu.Unlock() }()
-	h.setState("needs-input", "question")
-	defer h.narrated()
+	defer h.awaitingHuman("question")()
 	questionsMu.Lock()
 	questionSeq++
 	p := &pendingQuestion{

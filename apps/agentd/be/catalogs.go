@@ -418,16 +418,15 @@ func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error)
 	// mode setting.
 	if req.Mode != "" {
 		if err := h.client.SetMode(ctx, h.sessionID, req.Mode); err != nil {
+			h.mu.Lock()
+			offered := modeIDs(h.modes)
+			h.mu.Unlock()
 			h.retire()
-			return nil, fmt.Errorf("%s: mode %q: %w; it offers %s", p.Provider, req.Mode, err, modeIDs(h.modes))
+			return nil, fmt.Errorf("%s: mode %q: %w; it offers %s", p.Provider, req.Mode, err, offered)
 		}
-		hostedMu.Lock()
-		h.mode = req.Mode
-		hostedMu.Unlock()
+		h.setMode(req.Mode)
 	}
-	hostedMu.Lock()
-	options := append([]acp.ConfigOption(nil), h.configs...)
-	hostedMu.Unlock()
+	options := h.configsSnapshot()
 	effective, err := configureWorkspaceSession(p, options, func(id, value string) ([]acp.ConfigOption, error) {
 		res, e := h.client.SetConfigOption(ctx, h.sessionID, id, value)
 		if e == nil {
@@ -447,8 +446,11 @@ func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error)
 	// What the adapter reports now, not what was asked: the two are checked
 	// equal above, and this is the line to read when a session "ran on the
 	// wrong model".
+	h.mu.Lock()
+	mode := h.mode
+	h.mu.Unlock()
 	log.Printf("agentd: session settings key=%s catalog=%s model=%s connection=%s adapter=%s mode=%s yolo=%v effective=%v",
-		h.key, launch.catalog, launch.model, launch.connection, p.Provider, h.mode, req.Yolo, effective)
+		h.key, launch.catalog, launch.model, launch.connection, p.Provider, mode, req.Yolo, effective)
 	return h, nil
 }
 

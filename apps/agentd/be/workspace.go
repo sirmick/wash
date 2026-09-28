@@ -347,19 +347,15 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 			w.Messages = decisions
 		}
 		sessions := map[string]any{}
-		hostedMu.Lock()
 		for _, member := range w.Members {
-			for _, live := range hostedAll {
-				if live.sessionID == member.Session && live.sessionReady.Load() {
-					options := append([]acp.ConfigOption(nil), live.configs...)
-					for i := range options {
-						options[i].Options = append([]acp.ConfigOptionValue(nil), options[i].Options...)
-					}
-					sessions[member.ID] = map[string]any{"provider": live.agent, "config_options": options}
+			if live := hostedBySession(member.Session); live != nil && live.sessionReady.Load() {
+				options := live.configsSnapshot()
+				for i := range options {
+					options[i].Options = append([]acp.ConfigOptionValue(nil), options[i].Options...)
 				}
+				sessions[member.ID] = map[string]any{"provider": live.agent, "config_options": options}
 			}
 		}
-		hostedMu.Unlock()
 		return map[string]any{"workspace": w, "approvals": workspaceApprovals(w), "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
 	case "workspace_end":
 		// Ending with work in flight is a decision, not an accident.
@@ -512,9 +508,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, sessionLaunch{connection: settings.Connection, catalog: member.Catalog, model: member.Model, capability: settings.Capability, member: true, noSubagents: settings.Subagents == "deny"})
 	var initialConfigs map[string]string
 	if err == nil {
-		hostedMu.Lock()
-		options := append([]acp.ConfigOption(nil), child.configs...)
-		hostedMu.Unlock()
+		options := child.configsSnapshot()
 		initialConfigs, err = configureWorkspaceSession(settings, options, func(id, value string) ([]acp.ConfigOption, error) {
 			res, e := child.client.SetConfigOption(ctx, child.sessionID, id, value)
 			if e == nil {
@@ -546,9 +540,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 	// (and one the human is told about in every member's transcript).
 	// "ask" opts a member out; a reviewer never inherits, as it cannot be
 	// granted auto explicitly either.
-	hostedMu.Lock()
-	launcherYolo := parent.yolo
-	hostedMu.Unlock()
+	launcherYolo := parent.autoApproved()
 	autoApprove := settings.Approval == "auto" || settings.Approval == "" && launcherYolo && settings.Capability != "reviewer"
 	if autoApprove {
 		why := "launched with approval \"auto\""
@@ -723,9 +715,7 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 			// settings before the member is available, so no turn runs on the
 			// wrong model. Best effort: a setting the adapter no longer offers
 			// is logged rather than stranding a resident that loaded fine.
-			hostedMu.Lock()
-			options := append([]acp.ConfigOption(nil), target.configs...)
-			hostedMu.Unlock()
+			options := target.configsSnapshot()
 			settings := memberSettings(*m)
 			skipped, cerr := restoreWorkspaceSession(settings, options, func(id, value string) ([]acp.ConfigOption, error) {
 				res, e := target.client.SetConfigOption(ctx, target.sessionID, id, value)
@@ -792,9 +782,7 @@ func (ws *workspaceService) configureMember(ctx context.Context, h *hosted, id s
 	}
 	applied := map[string]string{}
 	if target := hostedBySession(m.Session); target != nil && target.sessionReady.Load() {
-		hostedMu.Lock()
-		options := append([]acp.ConfigOption(nil), target.configs...)
-		hostedMu.Unlock()
+		options := target.configsSnapshot()
 		var err error
 		applied, err = configureWorkspaceSession(swarm.AgentProfile{Configs: configs}, options, func(cid, value string) ([]acp.ConfigOption, error) {
 			res, e := target.client.SetConfigOption(ctx, target.sessionID, cid, value)
@@ -832,13 +820,13 @@ func (ws *workspaceService) interrupt(id string, m *swarm.Member) (any, error) {
 	if target == nil || !target.sessionReady.Load() {
 		return nil, errors.New("member is not running")
 	}
-	target.turnMu.Lock()
+	target.mu.Lock()
 	live := target.busy()
 	if target.turnLive {
-		target.interrupted.Store(true)
+		target.interrupted = true
 	}
 	mail := target.turnMail
-	target.turnMu.Unlock()
+	target.mu.Unlock()
 	if !live {
 		return map[string]any{"interrupted": false, "reason": "no turn running"}, nil
 	}
@@ -847,7 +835,9 @@ func (ws *workspaceService) interrupt(id string, m *swarm.Member) (any, error) {
 	log.Printf("agentd: workspace interrupt member=%s key=%s", id, target.key)
 	_, abandoned, err := target.cancelTurn()
 	if err != nil {
-		target.interrupted.Store(false)
+		target.mu.Lock()
+		target.interrupted = false
+		target.mu.Unlock()
 		return nil, err
 	}
 	if !abandoned {
@@ -1098,11 +1088,11 @@ func (ws *workspaceService) dispatch() {
 				continue
 			}
 			if h := hostedBySession(m.Session); h != nil {
-				h.turnMu.Lock()
+				h.mu.Lock()
 				if h.busy() {
 					active++
 				}
-				h.turnMu.Unlock()
+				h.mu.Unlock()
 			}
 		}
 		for _, m := range w.Members {
@@ -1110,36 +1100,35 @@ func (ws *workspaceService) dispatch() {
 			if h == nil {
 				continue
 			}
-			h.turnMu.Lock()
-			// Never into a turn the agent started itself: the prompt is
-			// swallowed (agent_turn.go). Its idle signals the loop.
-			if h.closing.Load() || !h.sessionReady.Load() || h.turnLive || h.agentRunning {
-				h.turnMu.Unlock()
+			if h.closing.Load() || !h.sessionReady.Load() {
 				continue
 			}
 			if m.Retire {
-				h.turnMu.Unlock()
-				if err := ws.store.EndMember(workspaceLeadSession(w), m.ID, false); err == nil {
-					h.retire()
+				if !h.isBusy() {
+					if err := ws.store.EndMember(workspaceLeadSession(w), m.ID, false); err == nil {
+						h.retire()
+					}
 				}
 				continue
 			}
 			if m.ID != w.Lead && active >= w.MaxActive {
-				h.turnMu.Unlock()
+				continue
+			}
+			// Claimed before the store is asked, and released if there is
+			// nothing: store.Next writes the state file, which must not run
+			// under the session's lock, and nothing else may start a turn
+			// in between.
+			if !h.claim() {
 				continue
 			}
 			batch, err := ws.store.Next(m.Session)
 			if err != nil {
-				h.turnMu.Unlock()
 				log.Printf("agentd: inbox persist: %v", err)
-				continue
 			}
 			if len(batch) == 0 {
-				h.turnMu.Unlock()
+				h.release()
 				continue
 			}
-			h.turnLive = true
-			h.turnMu.Unlock()
 			if m.ID != w.Lead {
 				active++
 			}
@@ -1392,19 +1381,15 @@ func workspaceHistoryPage(messages []swarm.Message, after string, limit int) ([]
 func teamView(w *swarm.Workspace) map[string]any {
 	activity, detail, usage := workspaceRuntime(w)
 	settings := map[string]map[string]string{}
-	hostedMu.Lock()
 	for _, m := range w.Members {
-		for _, live := range hostedAll {
-			if m.Session != "" && live.sessionID == m.Session && live.sessionReady.Load() {
-				cur := map[string]string{}
-				for _, c := range live.configs {
-					cur[c.ID] = c.CurrentValue
-				}
-				settings[m.ID] = cur
+		if live := hostedBySession(m.Session); live != nil && live.sessionReady.Load() {
+			cur := map[string]string{}
+			for _, c := range live.configsSnapshot() {
+				cur[c.ID] = c.CurrentValue
 			}
+			settings[m.ID] = cur
 		}
 	}
-	hostedMu.Unlock()
 	members := []map[string]any{}
 	for _, m := range w.Members {
 		if m.State == "ended" {

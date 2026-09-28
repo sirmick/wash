@@ -72,9 +72,10 @@ func (h *hosted) SDKMessage(_ context.Context, n acp.SDKMessageNotification) {
 // way idle is when a held prompt goes.
 func (h *hosted) agentState(running bool) {
 	log.Printf("agentd: acp agent state key=%s running=%t", h.key, running)
-	h.turnMu.Lock()
+	h.mu.Lock()
 	h.agentRunning = running
 	var next turn
+	started, ended := false, false
 	switch {
 	case h.turnLive:
 	case running && !h.ownTurn:
@@ -82,21 +83,30 @@ func (h *hosted) agentState(running bool) {
 		h.turnEnd = make(chan struct{})
 		h.activityPhase = "working"
 		h.activityTools = map[string]string{}
-		h.setState("working", "")
-		h.journal("agent.turn", "turn started by the agent")
+		h.rowState, h.rowReason = "working", ""
+		started = true
 	case !running:
 		if h.ownTurn {
-			h.endOwnTurn("")
-			h.journal("agent.turn", "turn done (started by the agent)")
+			h.endOwnTurnLocked("")
+			ended = true
 		}
 		if len(h.pending) > 0 {
 			next, h.pending = h.pending[0], h.pending[1:]
-			h.queued.Store(int32(len(h.pending)))
 			h.turnLive = true
-			h.setState("working", "")
+			h.rowState, h.rowReason = "working", ""
 		}
 	}
-	h.turnMu.Unlock()
+	h.mu.Unlock()
+	if ended {
+		flushTranscript(h.key)
+	}
+	h.publishRow()
+	switch {
+	case started:
+		h.journal("agent.turn", "turn started by the agent")
+	case ended:
+		h.journal("agent.turn", "turn done (started by the agent)")
+	}
 	if !next.empty() {
 		log.Printf("agentd: acp prompt released key=%s: the agent is idle", h.key)
 		h.run(next)
@@ -106,17 +116,17 @@ func (h *hosted) agentState(running bool) {
 	}
 }
 
-// endOwnTurn closes the agent's own turn. Caller holds turnMu.
-func (h *hosted) endOwnTurn(reason string) {
+// endOwnTurnLocked closes the agent's own turn. Caller holds mu, and
+// flushes the transcript and publishes the row after unlocking.
+func (h *hosted) endOwnTurnLocked(reason string) {
 	h.ownTurn = false
 	close(h.turnEnd)
 	h.turnEnd = nil
-	flushTranscript(h.key)
-	h.setState("done", reason)
+	h.rowState, h.rowReason = "done", reason
 }
 
 // busy reports a turn in progress, Wash's or the agent's own. Caller holds
-// turnMu.
+// mu.
 func (h *hosted) busy() bool { return h.turnLive || h.ownTurn }
 
 // cancelTurn asks the agent to stop its turn and waits for the turn to end.
@@ -125,9 +135,9 @@ func (h *hosted) busy() bool { return h.turnLive || h.ownTurn }
 // forgets the agent's own turn, so what is queued can go. running reports
 // whether there was a turn to cancel.
 func (h *hosted) cancelTurn() (running, abandoned bool, err error) {
-	h.turnMu.Lock()
+	h.mu.Lock()
 	end := h.turnEnd
-	h.turnMu.Unlock()
+	h.mu.Unlock()
 	if end == nil {
 		return false, false, nil
 	}
@@ -139,21 +149,26 @@ func (h *hosted) cancelTurn() (running, abandoned bool, err error) {
 		return true, false, nil
 	case <-time.After(cancelDeadline):
 	}
-	h.turnMu.Lock()
+	h.mu.Lock()
 	if h.turnEnd != end {
-		h.turnMu.Unlock()
+		h.mu.Unlock()
 		return true, false, nil
 	}
 	own, abort := h.ownTurn, h.turnAbort
 	if own {
 		h.agentRunning = false
-		h.endOwnTurn("cancelled")
+		h.endOwnTurnLocked("cancelled")
+	} else if abort != nil {
+		h.abandoned = true
 	}
-	h.turnMu.Unlock()
+	h.mu.Unlock()
+	if own {
+		flushTranscript(h.key)
+		h.publishRow()
+	}
 	log.Printf("agentd: acp turn abandoned key=%s own=%t: no end within %s of cancel", h.key, own, cancelDeadline)
 	h.journal("agent.turn", "turn abandoned: the agent did not end it within "+cancelDeadline.String()+" of a cancel")
 	if !own && abort != nil {
-		h.abandoned.Store(true)
 		abort()
 		<-end
 	}

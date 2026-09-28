@@ -126,9 +126,9 @@ func (s *supervisor) runtime(m swarm.Member, h *hosted, procs map[int][2]uint64)
 		return memberRuntime{}
 	}
 	r := memberRuntime{live: true, heard: time.UnixMilli(h.heard.Load()), bgWork: h.background() != ""}
-	h.turnMu.Lock()
+	h.mu.Lock()
 	r.busy, r.tool, r.asks = h.busy(), len(h.activityTools) > 0, h.activityAsks > 0
-	h.turnMu.Unlock()
+	h.mu.Unlock()
 	if h.pid > 0 && procs != nil {
 		ticks := treeTicks(procs, h.pid)
 		if prev, ok := s.cpu[m.Session]; ok && ticks >= prev+busyTicks {

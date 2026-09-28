@@ -357,14 +357,8 @@ func registerControllerHandlers(bus *sdk.Bus) {
 			_ = agentproto.Send(conn, wire.Recipient{InstanceID: owner}, agentproto.Raise{Key: req.Key})
 			return agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.ClaimDenied{Key: req.Key})
 		}
-		hostedMu.Lock()
-		h := hostedAll[req.Key]
-		if h != nil {
-			h.detached = false
-		}
-		hostedMu.Unlock()
-		if h != nil {
-			h.republish()
+		if h := lookupHosted(req.Key); h != nil {
+			h.setDetached(false)
 		}
 		_ = agentproto.Send(conn, wire.Recipient{InstanceID: from.InstanceID}, agentproto.SessionClaimed{Key: req.Key})
 		if workspaces != nil {
@@ -401,10 +395,7 @@ func detachLostController(key string) {
 	if h == nil {
 		return
 	}
-	hostedMu.Lock()
-	h.detached = true
-	hostedMu.Unlock()
-	h.republish()
+	h.setDetached(true)
 }
 
 // nodeTitle is a plan node's title, or "" when there is none.

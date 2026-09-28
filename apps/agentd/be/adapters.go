@@ -496,11 +496,13 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	}
 	blocks = append(blocks, t.blocks...)
 	res, err := h.client.Prompt(ctx, h.sessionID, blocks...)
-	abandoned := h.abandoned.Swap(false)
+	h.mu.Lock()
+	abandoned, interrupted := h.abandoned, h.interrupted
+	h.abandoned, h.interrupted = false, false
+	h.mu.Unlock()
 	if workspaces != nil {
 		workspaces.captureUsage(h)
 		var end error
-		interrupted := h.interrupted.Swap(false)
 		if abandoned {
 			end = workspaces.store.TurnAbandoned(h.sessionID, t.mailIDs)
 		} else if err == nil && res.StopReason == acp.StopCancelled && !interrupted {

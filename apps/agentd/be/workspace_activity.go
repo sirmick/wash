@@ -11,8 +11,8 @@ import (
 )
 
 func (h *hosted) observeWorkspaceActivity(u acp.SessionUpdate) {
-	h.turnMu.Lock()
-	defer h.turnMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if !h.busy() {
 		return
 	} // Late events must not resurrect a finished turn.
@@ -48,18 +48,18 @@ func workspaceMemberActivity(m swarm.Member, h *hosted, decision bool) (string, 
 	if h == nil {
 		return "offline", ""
 	}
-	h.turnMu.Lock()
-	defer h.turnMu.Unlock()
 	if h.closing.Load() {
 		return "ended", ""
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.activityAsks > 0 || decision {
 		return "needs-input", ""
 	}
 	if !h.busy() {
 		// Work left running in the background outlives the turn: the
 		// member is waiting on it, not idle.
-		if bg := h.background(); bg != "" {
+		if bg := backgroundLabel(h.bgTasks); bg != "" {
 			return "background", bg
 		}
 		if m.Waiting != "" {
@@ -95,9 +95,9 @@ func workspaceRuntime(w *swarm.Workspace) (map[string]string, map[string]string,
 			usage[m.ID] = *m.Usage
 		}
 		if h != nil {
-			hostedMu.Lock()
+			h.mu.Lock()
 			used, size := h.used, h.size
-			hostedMu.Unlock()
+			h.mu.Unlock()
 			if used > 0 || size > 0 {
 				usage[m.ID] = swarm.Usage{Used: used, Size: size}
 			}
@@ -106,9 +106,9 @@ func workspaceRuntime(w *swarm.Workspace) (map[string]string, map[string]string,
 	return activity, detail, usage
 }
 func (ws *workspaceService) captureUsage(h *hosted) {
-	hostedMu.Lock()
+	h.mu.Lock()
 	used, size := h.used, h.size
-	hostedMu.Unlock()
+	h.mu.Unlock()
 	if used == 0 && size == 0 {
 		return
 	}

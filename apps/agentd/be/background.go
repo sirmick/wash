@@ -47,7 +47,8 @@ func (h *hosted) trackAsyncTask(raw json.RawMessage) {
 	if what == "" {
 		what = u.TaskType
 	}
-	h.bgMu.Lock()
+	h.mu.Lock()
+	prior := backgroundLabel(h.bgTasks)
 	if h.bgTasks == nil {
 		h.bgTasks = map[string]string{}
 	}
@@ -67,11 +68,10 @@ func (h *hosted) trackAsyncTask(raw json.RawMessage) {
 		}
 	}
 	label := backgroundLabel(h.bgTasks)
-	h.bgMu.Unlock()
-	if prior, _ := h.bgLabel.Load().(string); prior != label {
-		h.bgLabel.Store(label)
+	h.mu.Unlock()
+	if prior != label {
 		log.Printf("agentd: acp background key=%s task=%s %s state=%s now=%q", h.key, u.ID, u.Kind, u.State, label)
-		h.republish()
+		h.publishRow()
 		if workspaces != nil {
 			workspaces.signal()
 		}
@@ -98,6 +98,7 @@ func backgroundLabel(tasks map[string]string) string {
 
 // background is what the session is running in the background, or "".
 func (h *hosted) background() string {
-	v, _ := h.bgLabel.Load().(string)
-	return v
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return backgroundLabel(h.bgTasks)
 }

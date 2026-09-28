@@ -72,7 +72,7 @@ func TestARowChangeStillPublishes(t *testing.T) {
 
 	// A structural row change still publishes.
 	h.detached = true
-	h.republish()
+	h.publishRow()
 	if *pushes == before {
 		t.Error("a structural row change published nothing")
 	}

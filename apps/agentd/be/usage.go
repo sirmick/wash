@@ -35,9 +35,9 @@ var (
 // A later structural roster push therefore includes the newest counters even
 // if it overtakes the coalesced patch.
 func (h *hosted) setUsage(used, size int64) {
-	hostedMu.Lock()
+	h.mu.Lock()
 	h.used, h.size = used, size
-	hostedMu.Unlock()
+	h.mu.Unlock()
 
 	now := time.Now()
 	mutateStateIf(func(s *agentproto.State) bool {

@@ -27,7 +27,7 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 			}
 		}
 	}
-	hostedMu.Lock()
+	h.mu.Lock()
 	mode, yolo := h.mode, h.yolo
 	optionsJSON, _ := json.Marshal(h.configs)
 	var options []acp.ConfigOption
@@ -36,7 +36,7 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 	for _, c := range h.configs {
 		settings[c.ID] = c.CurrentValue
 	}
-	hostedMu.Unlock()
+	h.mu.Unlock()
 	pol := hostedPolicy()
 	caller["config_options"] = options
 	result["caller"] = caller

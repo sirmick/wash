@@ -85,11 +85,11 @@ func renameSession(key, sessionID, title string, now time.Time) (string, error) 
 		h = hostedBySession(sessionID)
 	}
 	if h != nil {
-		hostedMu.Lock()
+		h.mu.Lock()
 		h.userTitle = title
+		h.mu.Unlock()
 		sessionID = h.sessionID
-		hostedMu.Unlock()
-		h.republish()
+		h.publishRow()
 	}
 	if sessionID == "" {
 		return "", fmt.Errorf("no session to rename")

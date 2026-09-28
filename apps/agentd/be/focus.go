@@ -104,6 +104,6 @@ func focusHosted(conn *sdk.Conn, key string) {
 	restoreDetached(key)
 	openHosted(conn, key)
 	if h := lookupHosted(key); h != nil {
-		h.republish()
+		h.publishRow()
 	}
 }

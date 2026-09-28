@@ -370,8 +370,12 @@ New `apps/agentd/be/acp.go`:
 - **`session/update` → the existing four wire states**
   (`running | working | needs-input | done`). Deliberate: the pivot must be
   invisible in the sidebar on day one.
-  - **Narration only implies `working` inside an open turn** (`hosted.turnMu`
-    / `beginTurn` / `endTurn` / `narrated`). The ACP conn hands a response
+  - **Narration only implies `working` inside an open turn** (`hosted.mu`,
+    `rowState` / `beginTurn` / `endTurn` / `narrated` / `publishRow`). Each
+    session's state is under one leaf lock, `hosted.mu`: decisions are made
+    under it, and roster writes, transcripts, the journal and the store run
+    after it. Every roster write reads the state decided last, so racing
+    writes converge on it. The ACP conn hands a response
     straight from the read loop while notifications go through an ordering
     queue, so the response that ends a turn routinely overtakes the tail of
     that turn's own `session/update` stream. An unconditional

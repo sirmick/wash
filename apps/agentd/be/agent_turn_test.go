@@ -4,9 +4,11 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentproto"
 )
 
@@ -34,20 +36,14 @@ func newTurnSession(t *testing.T, key string) (*hosted, *scriptedAdapter) {
 func waitRunning(t *testing.T, h *hosted, want bool) {
 	t.Helper()
 	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
-		h.turnMu.Lock()
+		h.mu.Lock()
 		got := h.agentRunning
-		h.turnMu.Unlock()
+		h.mu.Unlock()
 		if got == want {
 			return
 		}
 	}
 	t.Fatalf("agentRunning never became %t", want)
-}
-
-func (h *hosted) isBusy() bool {
-	h.turnMu.Lock()
-	defer h.turnMu.Unlock()
-	return h.busy()
 }
 
 // A background task finishing wakes Claude Code into a turn of its own. A
@@ -224,4 +220,61 @@ func TestClaudeStateMetaKeepsWhatWasThere(t *testing.T) {
 	if claudeStateMeta(nil)["claudeCode"] == nil {
 		t.Error("nil meta got nothing")
 	}
+}
+
+// A chunk that arrives as its turn ends must not leave the row working:
+// whichever write lands last, it publishes the decision made last.
+func TestLateNarrationCannotResurrectAFinishedTurn(t *testing.T) {
+	withStateDir(t)
+	reset()
+	withState(t, 1)
+	h := &hosted{key: "acp:late", agent: "claude", sessionID: "sess-late", cwd: t.TempDir()}
+	h.register()
+	for range 200 {
+		h.mu.Lock()
+		h.turnLive = true
+		h.mu.Unlock()
+		done := make(chan struct{})
+		go func() { h.narrated(); close(done) }()
+		h.endTurn("done", "end_turn")
+		<-done
+		h.publishRow()
+		r := waitRow(t, h.key, func(agentproto.Row) bool { return true })
+		if r.State != "done" {
+			t.Fatalf("row = %s after the turn ended", r.State)
+		}
+	}
+}
+
+// Everything a roster row shows is read under the session's lock, however
+// many writers there are (run with -race).
+func TestRowFieldsAreReadUnderTheSessionLock(t *testing.T) {
+	withStateDir(t)
+	reset()
+	withState(t, 1)
+	h := &hosted{key: "acp:rw", agent: "claude", sessionID: "sess-rw", cwd: t.TempDir()}
+	h.register()
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range 50 {
+				switch (i + j) % 5 {
+				case 0:
+					h.setMode("plan")
+				case 1:
+					h.setYolo(j%2 == 0, "test")
+				case 2:
+					h.applyConfigs([]acp.ConfigOption{{ID: "model", CurrentValue: "m" + itoa(uint64(j))}})
+				case 3:
+					h.setDetached(j%2 == 0)
+				default:
+					h.setUsage(int64(j), 100)
+				}
+				h.publishRow()
+			}
+		}()
+	}
+	wg.Wait()
 }

@@ -95,9 +95,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	if len(p.Members) > 64 {
 		return nil, errors.New("maximum 64 member entries")
 	}
-	hostedMu.Lock()
-	callerAuto := h.yolo
-	hostedMu.Unlock()
+	callerAuto := h.autoApproved()
 	// Validate paths before committing. No process starts during validation/preview.
 	root := h.cwd
 	approvedRoot := ""
