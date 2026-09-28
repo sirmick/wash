@@ -19,6 +19,8 @@ import (
 
 	"github.com/sirmick/wash/internal/agentclient"
 	"github.com/sirmick/wash/internal/agentproto"
+	wfs "github.com/sirmick/wash/internal/fs"
+	"github.com/sirmick/wash/internal/pathlink"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
 )
@@ -26,6 +28,9 @@ import (
 var (
 	agentMu sync.Mutex
 	agent   *agentclient.Client
+	// owner is the Agent window this editor belongs to, once one has sent
+	// editor.show: told when this window closes (tellOwnerClosing).
+	owner string
 	// pending maps a start's req_id to the FE tab waiting for it. Without
 	// it two tabs started in quick succession cannot tell whose session
 	// arrived — and a FAILED start carries no key at all, so there would
@@ -101,6 +106,45 @@ type agentStartReq struct {
 	// Cwd is optional: empty means the folder the editor has open, which
 	// is the point of hosting an agent here.
 	Cwd string `json:"cwd,omitempty"`
+}
+
+// agentWindowAppID is the Agent window, the one app allowed to drive this
+// editor with editor.show: each Agent window keeps one editor as its own.
+const agentWindowAppID = "com.wash.ai"
+
+// editorShowReq brings this window forward and, with a path, opens that
+// file at the line.
+type editorShowReq struct {
+	Path string `json:"path,omitempty"`
+	Line int    `json:"line,omitempty"`
+	Col  int    `json:"col,omitempty"`
+}
+
+// tellOwnerClosing tells the Agent window that owns this editor that it is
+// closing. The router's instance.gone says the same, but only once the
+// process is reaped, and a file clicked in between would be sent here and
+// lost; the owner opens a new editor for it instead.
+func tellOwnerClosing(c *sdk.Conn) {
+	agentMu.Lock()
+	to := owner
+	agentMu.Unlock()
+	if to == "" {
+		return
+	}
+	if err := c.SendAppMsgTo(wire.Recipient{InstanceID: to}, map[string]any{"kind": "editor.closing"}); err != nil {
+		log.Printf("edit: tell owner %s closing: %v", to, err)
+	}
+}
+
+// pathProbeReq asks which of an agent tab's path-shaped tokens are files
+// under the folder the tab's session works in.
+type pathProbeReq struct {
+	Base  string   `json:"base"`
+	Paths []string `json:"paths"`
+}
+
+type pathProbeReply struct {
+	Hits []pathlink.Hit `json:"hits"`
 }
 
 type agentKeyReq struct {
@@ -180,6 +224,37 @@ func registerAgentHandlers(b *sdk.Bus) {
 			cl.Forget(req.Key)
 		}
 		return nil
+	})
+	// editor.show comes from the Agent window this editor belongs to: a
+	// file named in its transcript was clicked, or its Editor button. The
+	// sender is router-attested, and the path is confined here as any other.
+	sdk.HandleFromVoid(b, "editor.show", func(c *sdk.Conn, _ string, req editorShowReq, from wire.Sender) error {
+		if from.AppID != agentWindowAppID {
+			return nil
+		}
+		agentMu.Lock()
+		owner = from.InstanceID
+		agentMu.Unlock()
+		if err := c.Raise(); err != nil {
+			log.Printf("edit: raise for %s: %v", from.InstanceID, err)
+		}
+		if req.Path == "" {
+			return nil
+		}
+		abs, err := editFS.Confine(req.Path)
+		if err != nil {
+			return sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+		}
+		return bus.Emit("cmd.open_file", editorShowReq{Path: abs, Line: req.Line, Col: req.Col})
+	})
+	// agent.path_probe: which tokens in an agent tab's transcript are files
+	// under the session's folder, so only those become links.
+	sdk.Handle(b, "agent.path_probe", func(_ *sdk.Conn, _ string, req pathProbeReq) (pathProbeReply, error) {
+		base, err := editFS.Confine(req.Base)
+		if err != nil {
+			return pathProbeReply{}, sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+		}
+		return pathProbeReply{Hits: pathlink.Probe(base, req.Paths)}, nil
 	})
 	// agent.stop ends the session for good — the other answer to "what do
 	// I do with the agent when its tab closes".

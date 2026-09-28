@@ -3,6 +3,7 @@ import { render, cleanup, fireEvent } from '@solidjs/testing-library';
 import { createSignal } from 'solid-js';
 import { AgentSession } from './agent-session.tsx';
 import type * as agentproto from './agent-protocol.gen';
+import type { PathHit, PathLinks } from './path-links';
 
 beforeEach(() => {
   HTMLElement.prototype.scrollTo = () => {};
@@ -172,9 +173,9 @@ test('a drag the composer does not understand is left to the browser', async () 
 });
 
 // docs/Review-findings.md P2 → agent: "diffs the agent made are not
-// viewable" — the tool row was a one-liner and the Agent app passed no
-// onOpenTool, so nothing about an edit could be seen or opened.
-test('a tool row shows the diff the call made, foldable, and opens its path', () => {
+// viewable" — the tool row was a one-liner and the Agent app could not open
+// what it named, so nothing about an edit could be seen or opened.
+test('a tool row shows the diff the call made, foldable, and opens its path', async () => {
   const events: agentproto.Event[] = [{
     seq: 1,
     kind: 'tool',
@@ -185,11 +186,14 @@ test('a tool row shows the diff the call made, foldable, and opens its path', ()
     diff: '--- a/w/proj/notes.md\n+++ b/w/proj/notes.md\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n',
     at_ms: 0,
   }];
-  const opened: string[] = [];
+  const opened: PathHit[] = [];
+  const links: PathLinks = {
+    probe: async (toks) => toks.filter((t) => t === '/w/proj/notes.md').map((t) => ({ token: t, path: t })),
+    open: (h) => opened.push(h),
+  };
 
-  const { container } = render(() => (
-    <AgentSession events={() => events} onOpenTool={(e) => opened.push(e.path ?? '')} />
-  ));
+  const { container } = render(() => <AgentSession events={() => events} links={links} />);
+  await settle();
 
   const diff = container.querySelector('[data-testid="agent-tool-diff"]');
   expect(diff?.textContent).toContain('-b');
@@ -202,7 +206,53 @@ test('a tool row shows the diff the call made, foldable, and opens its path', ()
   // The row opens the file; folding the diff must not have.
   expect(opened).toEqual([]);
   (container.querySelector('[data-testid="agent-tool-row"]') as HTMLElement).click();
-  expect(opened).toEqual(['/w/proj/notes.md']);
+  expect(opened.map((h) => h.path)).toEqual(['/w/proj/notes.md']);
+});
+
+test('a tool row whose path the host cannot open is not a link', async () => {
+  const events: agentproto.Event[] = [{
+    seq: 1, kind: 'tool', tool_kind: 'read', title: 'Read', status: 'completed', path: '/etc/passwd', at_ms: 0,
+  }];
+  const opened: PathHit[] = [];
+  const links: PathLinks = { probe: async () => [], open: (h) => opened.push(h) };
+  const { container } = render(() => <AgentSession events={() => events} links={links} />);
+  await settle();
+  const row = container.querySelector('[data-testid="agent-tool-row"]') as HTMLElement;
+  expect(row.getAttribute('role')).toBeNull();
+  row.click();
+  expect(opened).toEqual([]);
+});
+
+test("files named in the agent's prose are links, with their line", async () => {
+  const events: agentproto.Event[] = [{
+    seq: 1,
+    kind: 'message',
+    text: 'Changed `apps/x/main.go:42` and web/app.ts, not missing.go. See https://example.com/a.go too.',
+    at_ms: 0,
+  }];
+  const asked: string[] = [];
+  const opened: PathHit[] = [];
+  const links: PathLinks = {
+    probe: async (toks) => {
+      asked.push(...toks);
+      return toks.filter((t) => t !== 'missing.go').map((t) => {
+        const m = /^(.*?)(?::(\d+))?$/.exec(t)!;
+        return { token: t, path: '/w/' + m[1], ...(m[2] ? { line: Number(m[2]) } : {}) };
+      });
+    },
+    open: (h) => opened.push(h),
+  };
+  const { container } = render(() => <AgentSession events={() => events} links={links} />);
+  await settle();
+
+  // One probe for the message, and never for the URL.
+  expect(asked.sort()).toEqual(['apps/x/main.go:42', 'missing.go', 'web/app.ts']);
+  const found = [...container.querySelectorAll('[data-testid="agent-path-link"]')] as HTMLElement[];
+  expect(found.map((a) => a.textContent)).toEqual(['apps/x/main.go:42', 'web/app.ts']);
+  // Inline code keeps its code box around the link.
+  expect(found[0].closest('code')).not.toBeNull();
+  found[0].click();
+  expect(opened).toEqual([{ token: 'apps/x/main.go:42', path: '/w/apps/x/main.go', line: 42 }]);
 });
 
 test('a tool row with no diff renders no diff box', () => {

@@ -12,9 +12,11 @@ agent's own ACP terminals as tabs — the same tab-kind work, tracked in
 ## 1. Why the bottom pane, and not the editor pane
 
 The justification for hosting an agent inside the editor at all is
-`AgentSession`'s `onOpenTool` — "the host decides what that opens". In the
-standalone Agent app a tool row naming a file is a dead end; in the editor it
-opens that file in the buffer next to the transcript. That only works if the
+`AgentSession`'s `links` — the host decides which files the transcript names
+and where they open (`web/lib/src/path-links.tsx`). In the editor a tool row
+or a `path:line` in the agent's prose opens that file in the buffer next to
+the transcript. (The standalone Agent app now does the same through an
+editor window of its own; see `apps/ai/be/editor.go`.) That only works if the
 transcript and the buffer are visible **at the same time**, which rules out
 the editor pane: an agent tab there would be a buffer tab, and opening the
 file would swap the transcript out. The one feature that justifies the work
@@ -110,7 +112,7 @@ kind: `<Terminal/>` or `<AgentSession/>`. The `+` button becomes a small menu �
 *New terminal* / *New agent ▸* (adapters come from the roster subscription;
 `apps/ai/be/app.go:162` shows the probe).
 
-`onOpenTool` opens the referenced file in the editor. That is the payoff.
+`links` opens the referenced file in the editor, at its line. That is the payoff.
 
 ## 7. Decisions still open
 

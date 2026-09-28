@@ -27,6 +27,7 @@ import { tokens } from './tokens';
 import { washCopyText } from './clipboard';
 import { highlightSpans, syntaxLang } from './syntax';
 import type { SyntaxRole } from './syntax';
+import { PathLink, PathText, codeToken, useHits, usePathLinks } from './path-links';
 
 type Block =
   | { t: 'p'; lines: string[] }
@@ -324,28 +325,49 @@ const codeStyle: JSX.CSSProperties = {
   padding: '1px 4px',
 };
 
+// A Markdown link. Rendered as text plus its target rather than an anchor:
+// the href comes from model output, and a transcript is not a place to hand
+// it a click — unless the target is a file the host vouches for (see
+// path-links.tsx), in which case the label opens that file.
+const LinkSpan: Component<{ label: string; href: string }> = (p) => {
+  const linked = !!usePathLinks();
+  const hits = useHits(() => (linked ? codeToken(p.href) : []));
+  const hit = () => hits().get(p.href.trim());
+  return (
+    <Show
+      when={hit()}
+      fallback={
+        <>
+          <span style={{ color: tokens.accentBlue }}>{p.label}</span>
+          <span style={{ color: tokens.fgDim, font: tokens.type.monoSm }}>
+            {' '}
+            ({p.href})
+          </span>
+        </>
+      }
+    >
+      <PathLink hit={hit()!}>{p.label}</PathLink>
+    </Show>
+  );
+};
+
+// Every span's text goes through PathText, so a file named in prose, in
+// bold or in backticks is a link when the host can open it.
 const Inline: Component<{ text: string }> = (p) => (
   <For each={parseInline(p.text)}>
     {(s) => (
-      <Show when={s.t !== 'text'} fallback={<>{(s as { s: string }).s}</>}>
+      <Show when={s.t !== 'text'} fallback={<PathText text={s.s} />}>
         <Show when={s.t === 'code'}>
-          <code style={codeStyle}>{s.s}</code>
+          <code style={codeStyle}><PathText text={s.s} code /></code>
         </Show>
         <Show when={s.t === 'strong'}>
-          <strong style={{ 'font-weight': '600' }}>{s.s}</strong>
+          <strong style={{ 'font-weight': '600' }}><PathText text={s.s} /></strong>
         </Show>
         <Show when={s.t === 'em'}>
-          <em>{s.s}</em>
+          <em><PathText text={s.s} /></em>
         </Show>
         <Show when={s.t === 'link'}>
-          {/* Rendered as text plus its target rather than an anchor: the
-              href comes from model output, and a transcript is not a place
-              to hand it a click. */}
-          <span style={{ color: tokens.accentBlue }}>{s.s}</span>
-          <span style={{ color: tokens.fgDim, font: tokens.type.monoSm }}>
-            {' '}
-            ({(s as { href: string }).href})
-          </span>
+          <LinkSpan label={s.s} href={(s as { href: string }).href} />
         </Show>
       </Show>
     )}

@@ -16,7 +16,7 @@ import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
 import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Tab, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { InsertedDraft } from '@wash/ui';
-import type { AgentStatus, TerminalAPI, agentproto } from '@wash/ui';
+import type { AgentStatus, PathHit, PathLinks, TerminalAPI, agentproto } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
 
 // One roster row as agentd publishes it; only the fields this pane reads.
@@ -207,6 +207,8 @@ interface PersistedState {
   // cursor selection + scroll. Wins over `paths` on restore.
   tabs?: PersistedTab[];
   active_idx?: number;
+  // Dotfiles in the sidebar tree and quick open. Per window, like fm's.
+  show_hidden?: boolean;
 }
 
 // TermTab is one terminal session. Local id is assigned eagerly;
@@ -225,6 +227,9 @@ interface TermTab {
   // Agent tabs: the agentd session key, once it has started.
   agentKey?: string;
   agentName?: string;
+  // The folder the session works in: the tree root when it started. Paths
+  // in its transcript resolve against it, and only files below it link.
+  agentCwd?: string;
   // Map state, not class members — xterm is imperative so we
   // keep references outside Solid's reactive system. Filled in
   // by mountTerm.
@@ -409,6 +414,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [agentRoster, setAgentRoster] = createSignal<{ rows?: agentproto.Row[]; asks?: agentproto.Ask[]; adapters?: { id: string; name?: string }[] }>({});
   const [agentMenu, setAgentMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [termOpen, setTermOpen] = createSignal(false);
+  // Dotfiles in the sidebar tree and quick open (View → Show Hidden Files).
+  const [showHidden, setShowHidden] = createSignal(false);
   const [editPct, setEditPct] = createSignal(70);
   // Pending term.open requests waiting for term.opened so we can
   // pair channelID with the FE's local term id. Keyed by reply id.
@@ -654,7 +661,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       qoFindID = `qo-${qoSeq}`;
       setQoFiles(null);
       setQoTruncated(false);
-      send({ kind: 'find', id: qoFindID, path: root(), limit: 5000 });
+      send({ kind: 'find', id: qoFindID, path: root(), limit: 5000, hidden: showHidden() });
     }
   };
   const closeQuickOpen = () => {
@@ -703,7 +710,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // openInTab focuses an existing tab for `path`, or reads the
   // file and creates a fresh tab if there isn't one. Same tab
   // can't appear twice — opening twice converges on a single tab.
-  const openInTab = async (path: string) => {
+  // `source` opens a new Markdown tab in source rather than WYSIWYG.
+  const openInTab = async (path: string, source = false) => {
     captureActiveState();
     const existing = tabs().find((t) => t.path === path);
     if (existing) {
@@ -734,7 +742,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       eol: blocked ? undefined : detectEol(raw),
       indent: blocked ? undefined : detectedIndent(toBuffer(raw)),
       readOnlyFile: reply.writable === false,
-      mode: !blocked && isMarkdownPath(path) ? 'wysiwyg' : 'source',
+      mode: !blocked && !source && isMarkdownPath(path) ? 'wysiwyg' : 'source',
     };
     setTabs([...tabs(), tab]);
     setActiveID(tab.id);
@@ -743,6 +751,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // per dir and is independent of the sidebar's fsWatch, whose subs
     // get torn down on tree-collapse.
     fileWatch.watch(parentPath(path));
+  };
+
+  // openAt opens path and puts the caret on line (1-based) and col, centred.
+  // A line is a place in the source, so a Markdown file opens in source for
+  // it — a new tab directly, since a trip through WYSIWYG re-serialises the
+  // file and would leave it looking edited; an open WYSIWYG tab switches.
+  // An open tab being brought back must not have its remembered scroll win
+  // over the line asked for.
+  const openAt = async (path: string, line?: number, col?: number) => {
+    if (line) {
+      const existing = tabs().find((t) => t.path === path);
+      if (existing && existing.id !== activeID() && existing.scrollTop) {
+        setTabs(tabs().map((x) => x.id === existing.id ? { ...x, scrollTop: undefined } : x));
+      }
+    }
+    await openInTab(path, !!line);
+    const t = activeTab();
+    if (!line || !t || t.path !== path || t.blocked) return;
+    if (t.mode === 'wysiwyg') toggleWysiwyg();
+    if (!editorView) return;
+    const doc = editorView.state.doc;
+    const ln = doc.line(Math.min(Math.max(line, 1), doc.lines));
+    const pos = Math.min(ln.from + Math.max((col ?? 1) - 1, 0), ln.to);
+    editorView.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
+    editorView.focus();
   };
 
   // openDiffTab reads `otherPath` from disk and creates a tab that
@@ -1303,6 +1336,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         edit_pct: editPct(),
         tabs: tabList,
         active_idx: activeIdx >= 0 ? activeIdx : undefined,
+        show_hidden: showHidden() || undefined,
       };
       if (editorView) {
         const q = getSearchQuery(editorView.state);
@@ -1362,6 +1396,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // don't survive process exit so re-spawning silently would
     // surprise them.
     if (typeof s.term_open === 'boolean') setTermOpen(s.term_open);
+    if (typeof s.show_hidden === 'boolean') setShowHidden(s.show_hidden);
     // Prefer the richer `tabs` array (cursor/scroll/untitled
     // content); fall back to the legacy `paths` list for older
     // saved blobs that pre-date this shape.
@@ -1706,9 +1741,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // to drive the editor without keyboard/mouse synthesis. The BE
     // forwards anything kind=cmd.* straight to the FE; the FE does
     // the actual UI work below.
+    // cmd.open_file also carries a position: the Agent window this editor
+    // belongs to sends one for a `file.go:42` clicked in its transcript.
     if (m.kind === 'cmd.open_file') {
       const path = String(m.path ?? '');
-      if (path) void openInTab(path);
+      const line = Number(m.line) || undefined;
+      const col = Number(m.col) || undefined;
+      if (path) void openAt(path, line, col);
       return;
     }
     // The router asked to close the window and the BE vetoed on our
@@ -1866,6 +1905,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     send({ kind: 'term.open', id: replyID, cols: 80, rows: 24 });
   };
 
+  // agentLinks makes an agent tab's file references links: the BE says
+  // which are files under the session's folder (internal/pathlink), and a
+  // click opens one here, at its line.
+  const agentLinks = (cwd: string): PathLinks => ({
+    probe: async (paths) => {
+      const reply = await sendWithReply({ kind: 'agent.path_probe', base: cwd, paths });
+      return reply.kind === 'agent.path_probe_ok' ? (reply.hits ?? []) as PathHit[] : [];
+    },
+    open: (hit) => void openAt(hit.path, hit.line, hit.col),
+  });
+
   // openAgentTab starts a coding-agent session in the pane, in the folder
   // the editor already has open — the reason hosting one here beats the
   // standalone Agent app, where the first question is always "which
@@ -1874,12 +1924,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     setTermOpen(true);
     nextTermLocalID += 1;
     const localID = `t-${nextTermLocalID}`;
+    const cwd = root();
     setTermTabs([...termTabs(), {
       id: localID, channelID: 0, kind: 'agent',
-      agentName: agentID, title: `${agentID}…`,
+      agentName: agentID, title: `${agentID}…`, agentCwd: cwd,
     }]);
     setActiveTermID(localID);
-    send({ kind: 'agent.start', tab: localID, agent: agentID });
+    send({ kind: 'agent.start', tab: localID, agent: agentID, cwd });
   };
 
   // ---- send to agent ----
@@ -2330,17 +2381,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // visibleRows flattens the tree into render-able rows. The recursive
   // walk lives in @wash/fs-client's flattenTree (unit-tested, shared with
-  // fm). edit always sorts name-asc with hidden filtered — exactly the
-  // {key:'name', desc:false, showHidden:false} the comparator produces —
-  // and has no in-flight fallback bridge, so cur:'' skips it. flattenTree
-  // also computes childCount, which edit'\''s rows simply ignore. Passing
-  // the store proxies in keeps the memo reactive (synchronous read).
+  // fm). edit always sorts name-asc, with dotfiles shown only when the
+  // View menu says so, and has no in-flight fallback bridge, so cur:''
+  // skips it. flattenTree also computes childCount, which edit's rows
+  // simply ignore. Passing the store proxies in keeps the memo reactive
+  // (synchronous read).
   type EditRow = { entry: Entry; path: string; depth: number };
   const flatRows = createMemo<EditRow[]>(() =>
     flattenTree<Entry>({
       listings,
       expanded,
-      sort: { key: 'name', desc: false, showHidden: false },
+      sort: { key: 'name', desc: false, showHidden: showHidden() },
       start: root(),
       cur: '',
     }),
@@ -3469,6 +3520,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               data-testid="edit-menu-source"
             />
             <MenuSeparator />
+            {/* The sidebar tree and quick open both follow it; .git
+                stays out of quick open either way. */}
+            <MenuItem
+              label="Show Hidden Files"
+              trailing={showHidden() ? <span style={menuCheckStyle}><Check size={12} /></span> : undefined}
+              onClick={run(() => { setShowHidden(!showHidden()); persist(); })}
+              data-testid="edit-menu-show-hidden"
+            />
+            <MenuSeparator />
             {/* On-save cleanups. Desktop-wide (they live in prefs, not
                 in the window's state) and off by default: silently
                 rewriting somebody's file on save is only welcome when
@@ -3901,10 +3961,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   >
                     <Show when={t.kind === 'agent'}>
                       {/* The transcript, in the pane the terminals live in.
-                          onOpenTool is why hosting an agent HERE is worth
-                          doing at all: a tool row naming a file opens that
-                          file in the buffer above, which the standalone
-                          Agent app cannot do. */}
+                          Its file links are why hosting an agent HERE is
+                          worth doing: a file the agent names opens in the
+                          buffer above, at its line. */}
                       <AgentSession
                         insertDraft={() => agentDrafts()[t.id]}
                         events={() => agentEvents()[t.agentKey ?? ''] ?? []}
@@ -3916,10 +3975,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                         onCancel={() => send({ kind: 'agent.cancel', key: t.agentKey })}
                         onSetMode={(mode) => send({ kind: 'agent.set_mode', key: t.agentKey, mode })}
                         onSetConfig={(id, value) => send({ kind: 'agent.set_config', key: t.agentKey, id, value })}
-                        onOpenTool={(e) => {
-                          const path = (e.title ?? '').trim();
-                          if (path) void openInTab(path.startsWith('/') ? path : joinPath(root(), path));
-                        }}
+                        links={agentLinks(t.agentCwd ?? root())}
                       />
                     </Show>
                     <Show when={t.kind !== 'agent' && t.channelID > 0}>

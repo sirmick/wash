@@ -47,6 +47,8 @@ export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
 export { Markdown, parseBlocks, parseInline } from './markdown';
 export type { MarkdownProps, Align } from './markdown';
+export { looksLikePath, pathTokens } from './path-links';
+export type { PathHit, PathLinks } from './path-links';
 export { AgentSession } from './agent-session';
 export { QuestionPanel } from './question-panel';
 export type { QuestionAnswers, QuestionPanelProps } from './question-panel';
