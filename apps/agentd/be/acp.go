@@ -609,13 +609,10 @@ func (h *hosted) watchExit() {
 	h.releaseOwned(ReasonAgentExited)
 	h.noteSession("exited", time.Now())
 	releaseTranscript(h.key)
-	// The history write happens INSIDE the state lock: this goroutine is
-	// not the bus goroutine, and the history slice and its dirty flag are
-	// otherwise only touched from there or under Mutate.
 	mutateState(func(s *agentproto.State) {
 		s.Recent = publishHistory()
-		saveHistory()
 	})
+	saveHistory()
 }
 
 // releaseOwned cancels the session's questions, stops its adapter and

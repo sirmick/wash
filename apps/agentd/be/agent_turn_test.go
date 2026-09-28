@@ -254,6 +254,8 @@ func TestRowFieldsAreReadUnderTheSessionLock(t *testing.T) {
 	withState(t, 1)
 	h := &hosted{key: "acp:rw", agent: "claude", sessionID: "sess-rw", cwd: t.TempDir()}
 	h.register()
+	// setUsage starts the usage-patch timer; it must not fire after the test.
+	t.Cleanup(stopUsagePatches)
 	var wg sync.WaitGroup
 	for i := range 4 {
 		wg.Add(1)

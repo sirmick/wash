@@ -133,6 +133,7 @@ func TestMemberLaunchKeepsTheConnection(t *testing.T) {
 // stack keeps the one recorded.
 func TestResumeTargetKeepsTheConnection(t *testing.T) {
 	withStateDir(t)
+	withState(t, 1)
 	old := history
 	t.Cleanup(func() { history = old })
 	history = nil

@@ -13,7 +13,6 @@ import (
 func resetHistory() {
 	history = nil
 	historyDirty = false
-	historySaved = time.Time{}
 }
 
 // The list is "what could I put back", most recent first.
@@ -94,6 +93,7 @@ func TestPublishHistoryMarksLiveSessions(t *testing.T) {
 func TestHistoryRoundTripsThroughDisk(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
+	withState(t, 1)
 	resetHistory()
 	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/home/mick/wash", "", t0)
 	rememberSession(launchRecord{Agent: "codex"}, "s-2", "/tmp", "", t0.Add(time.Minute))
@@ -128,25 +128,21 @@ func TestHistoryRoundTripsThroughDisk(t *testing.T) {
 	}
 }
 
-// The write is debounced so keepalives don't hammer the disk, but a change
-// still lands within the flush window.
-func TestFlushHistoryDebounces(t *testing.T) {
+// A change is written; an unchanged list is not written again, and the
+// list is read under the state lock that guards it.
+func TestSaveHistorySoonWritesOnlyAChange(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
+	withState(t, 1)
 	resetHistory()
 	rememberSession(launchRecord{Agent: "claude"}, "s-1", "/w", "", t0)
 	historyDirty = true
-	historySaved = time.Now()
 
-	flushHistory(time.Now())
+	saveHistorySoon()
 	path := filepath.Join(dir, "wash", "agent-sessions.json")
-	if _, err := os.Stat(path); err == nil {
-		t.Error("flushed inside the debounce window")
-	}
-	flushHistory(time.Now().Add(historyFlush + time.Second))
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("not flushed past the window: %v", err)
+		t.Fatalf("a change was not written: %v", err)
 	}
 	var out []agentproto.Session
 	if err := json.Unmarshal(data, &out); err != nil || len(out) != 1 {
@@ -154,6 +150,13 @@ func TestFlushHistoryDebounces(t *testing.T) {
 	}
 	if historyDirty {
 		t.Error("still dirty after a successful save")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	saveHistorySoon()
+	if _, err := os.Stat(path); err == nil {
+		t.Error("an unchanged list was written again")
 	}
 }
 
@@ -259,6 +262,7 @@ func TestRosterIndexTreatsAnExitedRowAsNotLive(t *testing.T) {
 // carries what a resume needs, so it is the fallback.
 func TestResumeResolvesFromTheStoreWhenHistoryMisses(t *testing.T) {
 	withStateDir(t)
+	withState(t, 1)
 	history = nil
 	t.Cleanup(func() { history = nil })
 
