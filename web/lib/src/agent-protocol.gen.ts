@@ -1363,6 +1363,34 @@ export interface Subscribe {
 }
 
 /**
+ * Supervisor tunes the watchdog that tells the orchestrator when work has
+ * stalled (agentd workspace_supervisor.go). Empty fields take its defaults.
+ */
+export interface Supervisor {
+  off?: boolean;
+  /**
+   * Quiet is how long a turn may go without a word, a tool or a busy
+   * process before its member counts as wedged.
+   */
+  quiet?: string;
+  /**
+   * Idle is how long a member may sit idle with open work, or the whole
+   * team idle with the plan unfinished, before the orchestrator hears.
+   */
+  idle?: string;
+  /**
+   * Repeat is the wait before the same finding is sent again; it
+   * doubles each time.
+   */
+  repeat?: string;
+  /**
+   * MaxPrompts is how many times the same finding is sent before the
+   * owner is told instead.
+   */
+  max_prompts?: number;
+}
+
+/**
  * TranscriptEvent is one new or changed event. An event with Append set is
  * a delta to the one with its Seq.
  */
@@ -1477,6 +1505,8 @@ export interface Workspace {
    * use is reported to the orchestrator, once; 0 is the default.
    */
   context_warn?: number;
+  /** Supervisor tunes the stall watchdog. */
+  supervisor: Supervisor;
   /** Nudged are the lifecycle nudges already sent, so each goes once. */
   nudged?: string[];
   members: Member[] | null;

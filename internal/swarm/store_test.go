@@ -204,6 +204,7 @@ func TestConcurrentRetryAndRecipientIsolation(t *testing.T) {
 		t.Fatal("delivery changed the sender's lifecycle or skipped dispatch")
 	}
 }
+
 // An abandoned turn's mail may never have reached the model: it is
 // uncertain, and the member stays as it was.
 func TestAbandonedTurnLeavesMailUncertain(t *testing.T) {

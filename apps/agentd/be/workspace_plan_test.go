@@ -126,6 +126,10 @@ plan_file = ".wash/plan.toml"
 legend = "🧪 in review"
 context_warn = 0.5
 
+[supervisor]
+quiet = "90s"
+max_prompts = 2
+
 [roles.implementer]
 instructions = "Write one line; report with member_update."
 
@@ -155,7 +159,7 @@ instructions = "Plan the next milestone when asked."
 		t.Fatal(err)
 	}
 	w = s.View("lead")
-	if w.Name != "Shakedown" || w.MaxActive != 3 || w.MaxMembers != 6 || w.Legend != "🧪 in review" || w.ContextWarn != 0.5 || w.Roles["implementer"] == "" || !strings.HasSuffix(w.QADir, filepath.Join(".wash", "qa")) || !strings.HasSuffix(w.PlanFile, "plan.toml") {
+	if w.Name != "Shakedown" || w.MaxActive != 3 || w.MaxMembers != 6 || w.Legend != "🧪 in review" || w.ContextWarn != 0.5 || w.Supervisor.Quiet != "90s" || w.Supervisor.MaxPrompts != 2 || w.Roles["implementer"] == "" || !strings.HasSuffix(w.QADir, filepath.Join(".wash", "qa")) || !strings.HasSuffix(w.PlanFile, "plan.toml") {
 		t.Fatalf("workspace from file: %+v", w)
 	}
 	addNodes(t, ws, h, "A")

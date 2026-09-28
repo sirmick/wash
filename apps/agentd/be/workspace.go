@@ -40,6 +40,8 @@ type workspaceService struct {
 	sequences map[string]int64
 	previews  map[string]string
 	sessions  map[string]string
+	// sup is the stall watchdog's state; only loop touches it.
+	sup *supervisor
 }
 
 var workspaces *workspaceService
@@ -1091,6 +1093,7 @@ func (ws *workspaceService) loop() {
 		}
 		ws.dispatch()
 		ws.contextNudges()
+		ws.supervise(time.Now())
 		ws.publish(false)
 	}
 }

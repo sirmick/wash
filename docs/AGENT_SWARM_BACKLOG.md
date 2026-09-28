@@ -130,10 +130,12 @@ found these.
   Return `qa_resumed: {open: [ids], resolved: n}` from `workspace_configure`,
   and have `plan_get` list open threads on no node, so stale ones get
   triaged rather than carried forward.
-- **A stopped member with an open assignment goes unnoticed (S, low).** In
-  DOC1 an implementer's session dropped mid-step; the lifecycle message
-  reached the orchestrator but nobody was watching for hours. A flash to the
-  owner, or a re-notify after a configurable delay, would shorten that.
+- **Report the swallowed prompt upstream (S, low).** claude-agent-acp 0.81.2
+  loses a `session/prompt` sent while Claude Code runs a turn of its own
+  (reproduction: a background `sleep`, then a prompt during the woken
+  turn's foreground tool). Wash no longer sends into such a turn
+  (AGENT_APP.md, "Turns the agent starts itself"); the adapter should still
+  settle or refuse it.
 
 # Earlier backlog, kept for reference
 

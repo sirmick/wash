@@ -374,7 +374,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, connection: launch.connection, catalog: launch.catalog, model: launch.model, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
+	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, connection: launch.connection, catalog: launch.catalog, model: launch.model, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{}), pid: cmd.Process.Pid}
 
 	// Only the injected coordination server is available to restricted reviewers.
 	if capability == "reviewer" {

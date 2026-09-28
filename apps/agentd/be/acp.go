@@ -178,6 +178,11 @@ type hosted struct {
 	turnMail     []string
 	// abandoned marks a turn Wash stopped waiting for (cancelTurn).
 	abandoned atomic.Bool
+	// heard is when the agent last sent anything (unix ms), and pid is the
+	// adapter's process: what the supervisor reads to tell a quiet turn
+	// from a busy one (workspace_supervisor.go).
+	heard atomic.Int64
+	pid   int
 	// Transient activity is guarded by turnMu and never inferred from a saved
 	// transcript. Concurrent tools stay active until each reports completion.
 	activityPhase string
@@ -271,6 +276,7 @@ func (h *hosted) beginTurn(t turn, abort context.CancelFunc) {
 	}
 	h.turnAbort = abort
 	h.turnMail = t.mailIDs
+	h.heard.Store(time.Now().UnixMilli())
 	h.activityPhase = "working"
 	h.activityTools = map[string]string{}
 	h.setState("working", "")
@@ -803,6 +809,7 @@ func sameRow(a, b agentproto.Row) bool {
 // consumes the same notifications in M4; this milestone renders none of
 // them, which is what makes it testable without a frontend.
 func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
+	h.heard.Store(time.Now().UnixMilli())
 	h.observeWorkspaceActivity(n.Update)
 	// The transcript first: it is what the app renders, and it must record
 	// what the agent said even for variants the roster ignores.

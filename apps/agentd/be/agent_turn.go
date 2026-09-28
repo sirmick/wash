@@ -53,6 +53,7 @@ func claudeStateMeta(meta map[string]any) map[string]any {
 
 // SDKMessage follows Claude Code's run state (acp.SDKMessages).
 func (h *hosted) SDKMessage(_ context.Context, n acp.SDKMessageNotification) {
+	h.heard.Store(time.Now().UnixMilli())
 	var m struct {
 		Type    string `json:"type"`
 		Subtype string `json:"subtype"`
@@ -70,6 +71,7 @@ func (h *hosted) SDKMessage(_ context.Context, n acp.SDKMessageNotification) {
 // of Wash's, running opens the agent's own turn and idle closes it; either
 // way idle is when a held prompt goes.
 func (h *hosted) agentState(running bool) {
+	log.Printf("agentd: acp agent state key=%s running=%t", h.key, running)
 	h.turnMu.Lock()
 	h.agentRunning = running
 	var next turn

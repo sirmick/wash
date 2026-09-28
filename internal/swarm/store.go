@@ -161,6 +161,8 @@ type Workspace struct {
 	// ContextWarn is the share of its context window at which a member's
 	// use is reported to the orchestrator, once; 0 is the default.
 	ContextWarn float64 `json:"context_warn,omitempty"`
+	// Supervisor tunes the stall watchdog.
+	Supervisor Supervisor `json:"supervisor,omitzero"`
 	// Nudged are the lifecycle nudges already sent, so each goes once.
 	Nudged      []string     `json:"nudged,omitempty"`
 	Members     []Member     `json:"members"`

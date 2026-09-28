@@ -1113,6 +1113,18 @@ Subscribe asks for the whole roster, now and on every change.
 
 No fields.
 
+#### Supervisor
+
+Supervisor tunes the watchdog that tells the orchestrator when work has stalled (agentd workspace_supervisor.go).
+
+| Field | Type | |
+|---|---|---|
+| `off?` | `boolean` |  |
+| `quiet?` | `string` | Quiet is how long a turn may go without a word, a tool or a busy process before its member counts as wedged. |
+| `idle?` | `string` | Idle is how long a member may sit idle with open work, or the whole team idle with the plan unfinished, before the orchestrator hears. |
+| `repeat?` | `string` | Repeat is the wait before the same finding is sent again; it doubles each time. |
+| `max_prompts?` | `number` | MaxPrompts is how many times the same finding is sent before the owner is told instead. |
+
 #### TranscriptEvent
 
 TranscriptEvent is one new or changed event.
@@ -1195,6 +1207,7 @@ UsageRow is one row's counters.
 | `legend?` | `string` | Legend says what the orchestrator's emojis and states mean. |
 | `roles?` | `Record<string, string>` | Roles are instruction templates by member role, put before a new member's own instructions (workspace.toml [roles.<role>]). |
 | `context_warn?` | `number` | ContextWarn is the share of its context window at which a member's use is reported to the orchestrator, once; 0 is the default. |
+| `supervisor` | `Supervisor` | Supervisor tunes the stall watchdog. |
 | `nudged?` | `string[]` | Nudged are the lifecycle nudges already sent, so each goes once. |
 | `members` | `Member[] \| null` |  |
 | `assignments` | `Assignment[] \| null` |  |

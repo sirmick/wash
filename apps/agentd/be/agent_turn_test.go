@@ -27,6 +27,23 @@ func newTurnSession(t *testing.T, key string) (*hosted, *scriptedAdapter) {
 	return h, a
 }
 
+// waitRunning waits until the agent's run state has landed. A response
+// overtakes the notifications before it (turnMu), so a test that sends a
+// state and then ends the turn must wait in between; the real CLI reports
+// running long before a turn's result.
+func waitRunning(t *testing.T, h *hosted, want bool) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		h.turnMu.Lock()
+		got := h.agentRunning
+		h.turnMu.Unlock()
+		if got == want {
+			return
+		}
+	}
+	t.Fatalf("agentRunning never became %t", want)
+}
+
 func (h *hosted) isBusy() bool {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
@@ -68,6 +85,7 @@ func TestRunStateDuringOurTurnChangesNothing(t *testing.T) {
 	h.submitPrompt(turn{text: "one"})
 	p := a.next(t)
 	a.state("running")
+	waitRunning(t, h, true)
 	a.end(p, "max_tokens")
 	waitRow(t, h.key, func(r agentproto.Row) bool { return r.State == "done" && r.Reason == "max_tokens" })
 	waitIdle(t, h)
@@ -90,6 +108,7 @@ func TestPromptBeforeTheIdleGoesAtTheIdle(t *testing.T) {
 	h.submitPrompt(turn{text: "one"})
 	p := a.next(t)
 	a.state("running")
+	waitRunning(t, h, true)
 	a.end(p, "end_turn")
 	waitIdle(t, h)
 	if !h.submitPrompt(turn{text: "two"}) {

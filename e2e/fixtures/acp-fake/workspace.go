@@ -81,6 +81,10 @@ func workspaceCall(name string, args any) (any, error) {
 	}
 	return result, err
 }
+
+// hangTurn is workspaceScript's answer for a turn that must never end.
+const hangTurn = "\x00hang"
+
 func workspaceScript(raw string) (string, bool) {
 	if os.Getenv("WASH_FAKE_WORKSPACE") != "1" {
 		return "", false
@@ -120,6 +124,14 @@ func workspaceScript(raw string) (string, bool) {
 		for _, msg := range batch {
 			if msg.Body == "ASK_PERMISSION" {
 				return "", false
+			}
+			// An assignment that hangs, or wakes its member into a turn of
+			// its own afterwards (runTurn).
+			if msg.Assignment != "" && msg.Type == "instruction" && strings.Contains(msg.Body, "HANG_TURN") {
+				return hangTurn, true
+			}
+			if msg.Assignment != "" && msg.Type == "instruction" && strings.Contains(msg.Body, "SELF_TURN") {
+				selfTurnNext.Store(true)
 			}
 			// ASK_OWNER: ask the owner two structured questions and wait
 			// (the call blocks this member); the answers arrive as the

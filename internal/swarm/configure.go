@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ConfigurePatch changes a workspace's settings. Omitted fields are
@@ -21,8 +22,46 @@ type ConfigurePatch struct {
 	ContextWarn *float64 `json:"context_warn"`
 	// Catalog names the catalog members' models come from. agentd checks
 	// that it exists; the store only keeps the name.
-	Catalog  *string `json:"catalog"`
-	Expected *int64  `json:"expected_revision"`
+	Catalog *string `json:"catalog"`
+	// Supervisor tunes the watchdog. It replaces the whole setting; {}
+	// restores the defaults.
+	Supervisor *Supervisor `json:"supervisor"`
+	Expected   *int64      `json:"expected_revision"`
+}
+
+// Supervisor tunes the watchdog that tells the orchestrator when work has
+// stalled (agentd workspace_supervisor.go). Empty fields take its defaults.
+type Supervisor struct {
+	Off bool `json:"off,omitempty"`
+	// Quiet is how long a turn may go without a word, a tool or a busy
+	// process before its member counts as wedged.
+	Quiet string `json:"quiet,omitempty"`
+	// Idle is how long a member may sit idle with open work, or the whole
+	// team idle with the plan unfinished, before the orchestrator hears.
+	Idle string `json:"idle,omitempty"`
+	// Repeat is the wait before the same finding is sent again; it
+	// doubles each time.
+	Repeat string `json:"repeat,omitempty"`
+	// MaxPrompts is how many times the same finding is sent before the
+	// owner is told instead.
+	MaxPrompts int `json:"max_prompts,omitempty"`
+}
+
+// Validate checks the durations and limits.
+func (s Supervisor) Validate() error {
+	for name, d := range map[string]string{"quiet": s.Quiet, "idle": s.Idle, "repeat": s.Repeat} {
+		if d == "" {
+			continue
+		}
+		v, err := time.ParseDuration(d)
+		if err != nil || v < 10*time.Second || v > 24*time.Hour {
+			return fmt.Errorf("supervisor.%s is a duration from 10s to 24h, e.g. \"2m\"", name)
+		}
+	}
+	if s.MaxPrompts < 0 || s.MaxPrompts > 20 {
+		return errors.New("supervisor.max_prompts is 0–20")
+	}
+	return nil
 }
 
 // RoleTemplate is a role's instructions, put before every new member's own.
@@ -149,6 +188,12 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		}
 		if p.Catalog != nil {
 			w.Catalog = *p.Catalog
+		}
+		if p.Supervisor != nil {
+			if err := p.Supervisor.Validate(); err != nil {
+				return err
+			}
+			w.Supervisor = *p.Supervisor
 		}
 		// The revision counts configuration changes only: bumped by every
 		// mutation, an expected_revision read moments earlier went stale
