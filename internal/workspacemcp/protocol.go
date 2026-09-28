@@ -77,7 +77,13 @@ func ValidateCall(call Call) error {
 // Serve implements the MCP stdio lifecycle over the listed tools; tool errors are
 // tool results rather than transport failures. Newline framing and stdout
 // purity are required by MCP.
-func Serve(in io.Reader, out io.Writer, tools []Tool, invoke func(context.Context, Call) (any, error)) error {
+//
+// A member gets MemberTools and MemberInstructions; anyone else the full set.
+func Serve(in io.Reader, out io.Writer, member bool, invoke func(context.Context, Call) (any, error)) error {
+	tools := Tools()
+	if member {
+		tools = MemberTools()
+	}
 	scan := bufio.NewScanner(in)
 	scan.Buffer(make([]byte, 4096), MaxBytes)
 	enc := json.NewEncoder(out)
@@ -114,7 +120,7 @@ func Serve(in io.Reader, out io.Writer, tools []Tool, invoke func(context.Contex
 				p.Version = "2025-11-25"
 			}
 			initialized = true
-			result = map[string]any{"protocolVersion": p.Version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": ServerName, "version": APIVersion}, "instructions": Instructions}
+			result = map[string]any{"protocolVersion": p.Version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": ServerName, "version": APIVersion}, "instructions": Instructions(member)}
 		case "ping":
 			result = map[string]any{}
 		case "tools/list":
@@ -184,11 +190,7 @@ func Run() int {
 	}}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 90 * time.Second}
-	tools := Tools()
-	if os.Getenv(MemberEnv) != "" {
-		tools = MemberTools()
-	}
-	err := Serve(os.Stdin, os.Stdout, tools, func(ctx context.Context, call Call) (any, error) {
+	err := Serve(os.Stdin, os.Stdout, os.Getenv(MemberEnv) != "", func(ctx context.Context, call Call) (any, error) {
 		b, _ := json.Marshal(call)
 		req, err := http.NewRequestWithContext(ctx, "POST", "http://workspace/call", strings.NewReader(string(b)))
 		if err != nil {
@@ -200,9 +202,12 @@ func Run() int {
 			return nil, err
 		}
 		defer res.Body.Close()
+		// The result passes through as agentd wrote it: decoded into any it
+		// became a map, and a map re-encodes with its keys sorted, which put
+		// about's guide after everything else.
 		var v struct {
-			Result any    `json:"result"`
-			Error  string `json:"error"`
+			Result json.RawMessage `json:"result"`
+			Error  string          `json:"error"`
 		}
 		if err = json.NewDecoder(io.LimitReader(res.Body, MaxBytes)).Decode(&v); err != nil {
 			return nil, err

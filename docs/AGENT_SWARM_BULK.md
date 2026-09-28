@@ -398,11 +398,15 @@ member tab, where existing human controls answer the request.
 
 ## Injected instructions
 
-`internal/workspacemcp/about.go` owns the concise Instructions string shared by MCP
-initialization and about. It covers discovery, bulk reconciliation, keyed launches, resident
-lifetimes, QA, human decisions/approvals, waiting, uncertain delivery and deliberate teardown.
-Children additionally receive, as one first message, their supplied role instructions, a short
-membership suffix and their initial task (or, without one, an instruction to wait for it);
-every inbox turn has a server-authored identity prefix and serialized attributed message.
+`internal/workspacemcp/about.go` owns what agents are told, by role. The server
+instructions sit in every hosted session's system prompt on every turn, and most sessions
+never lead a team, so they are a few lines (about 430 bytes): an orchestrator's say a team
+exists and to read `workspace_get {"view":"about"}` when the owner wants one; a member's say
+how a member works. `about` then leads with a numbered guide for the caller's role, then the
+rules everyone keeps, then the caller, and (for an orchestrator) the reference for setting up
+and the permissions detail. A member's first message is its role instructions, "How you work"
+(the same member guide, numbered, with its key and node), and its initial task (or, without
+one, an instruction to wait for it); every inbox turn has a server-authored identity prefix
+and serialized attributed message.
 Children have fresh provider context, not the parent's transcript or launcher default prompt.
 See [Redoubt's complete operating example](examples/redoubt-workspace.md).

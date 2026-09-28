@@ -74,12 +74,16 @@ func workspaceCall(name string, args any) (any, error) {
 	if len(envelope.Result.Content) == 0 {
 		return nil, fmt.Errorf("no MCP response")
 	}
-	var result any
-	err = json.Unmarshal([]byte(envelope.Result.Content[0].Text), &result)
+	text := envelope.Result.Content[0].Text
 	if envelope.Result.IsError {
-		return nil, fmt.Errorf("MCP: %v", result)
+		return nil, fmt.Errorf("MCP: %s", text)
 	}
-	return result, err
+	// Passed on as written: decoded into any it would re-encode with its
+	// keys sorted, and the order is part of what agents are shown.
+	if !json.Valid([]byte(text)) {
+		return nil, fmt.Errorf("MCP result is not JSON: %s", text)
+	}
+	return json.RawMessage(text), nil
 }
 
 // hangTurn is workspaceScript's answer for a turn that must never end.

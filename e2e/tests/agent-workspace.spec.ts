@@ -132,9 +132,10 @@ test('MCP reads workspace JSON and launches members from a catalog with model-de
  const about = await tool('workspace_get', {view:'about'});
  expect(about.server).toBe('wash_workspace');
  expect(about.caller.role).toBe('unattached');
- expect(about.instructions).toContain('END YOUR TURN');
- expect(about.capabilities.bulk_workspace_configuration).toBe(true);
- expect(about.capabilities.catalogs).toBe(true);
+ // The guide comes first, and says how to wait.
+ expect(Object.keys(about)[0]).toBe('guide');
+ expect(about.guide.join(' ')).toContain('end your turn');
+ expect(about.reference.workspace_file).toContain('.wash/workspace.toml');
  expect(about.permissions.filesystem_enforcement).toMatch(/^unknown:/);
  expect(await tool('workspace_get')).toBeNull();
  await expect(app.locator('[data-testid="workspace-sidebar"]')).toHaveCount(0);

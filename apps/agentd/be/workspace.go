@@ -615,23 +615,35 @@ func memberSettings(m swarm.Member) swarm.AgentProfile {
 	return settings
 }
 
-// memberBrief is a member's first message: its role, how a workspace member
-// works, and its initial task (assignment), or, without one, to wait for it.
+// memberBrief is a member's first message: its role, how a member works
+// (the same guide about gives it), and its initial task (assignment), or,
+// without one, to wait for it. Members run on cheap models: short,
+// numbered, one thing per line.
 func memberBrief(m swarm.Member, assignment string) string {
-	brief := m.Instructions + "\n\nYou are member " + m.ID + " in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Once you report an assignment complete, stop changing its files: others are now checking that tree. If a later message shows the work needs a change, reply saying what you would change and wait for a new assignment. Resident package workers remain available for fixes until the orchestrator ends them."
+	var b strings.Builder
+	b.WriteString(m.Instructions)
+	b.WriteString("\n\n## How you work\n\nYou are " + memberRef(m) + ", a member of a Wash workspace")
+	if m.Node != "" {
+		b.WriteString(", on plan node " + m.Node)
+	}
+	b.WriteString(". The orchestrator is \"orchestrator\".\n")
+	for i, step := range workspacemcp.MemberGuide {
+		b.WriteString("\n" + itoa(uint64(i+1)) + ". " + step)
+	}
 	if m.Handoff != "" {
-		brief += "\n\n## Handoff from the member you replace\n\n" + m.Handoff
+		b.WriteString("\n\n## Handoff from the member you replace\n\n" + m.Handoff)
 	}
 	if assignment == "" {
-		idle := brief + "\n\nYou have no assignment yet. Do not start work: set waiting with member_update and end your turn. Your assignment arrives as a message."
+		b.WriteString("\n\nYou have no assignment yet. Do not start work: set waiting with member_update and end your turn. Your assignment arrives as a message.")
 		// A plan-mode member with nothing to plan wrote an empty plan and asked
 		// to leave plan mode, which woke the orchestrator to approve nothing.
 		if memberSettings(m).Configs["mode"] == "plan" {
-			idle += " You are in plan mode: member_update waiting is all that is needed. Do not write a plan or call ExitPlanMode until you have an assignment."
+			b.WriteString(" You are in plan mode: member_update waiting is all that is needed. Do not write a plan or call ExitPlanMode until you have an assignment.")
 		}
-		return idle
+		return b.String()
 	}
-	return brief + "\n\n## Your assignment (" + assignment + ")\n\nFollow it as written, including any limit it sets on what to do first.\n\n" + m.InitialTask
+	b.WriteString("\n\n## Your assignment (" + assignment + ")\n\nFollow it as written, including any limit it sets on what to do first.\n\n" + m.InitialTask)
+	return b.String()
 }
 
 func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id string) (any, error) {
