@@ -45,17 +45,17 @@
     "openrouter-pro": {
       "name": "OpenRouter pro",
       "slots": {
-        "frontier": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "effort": "high"},
-        "coding": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/z-ai/glm-5.3", "effort": "high"},
-        "small": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/qwen/qwen3.8-flash", "effort": "low"}
+        "frontier": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/moonshotai/kimi-k3", "effort": "high"},
+        "coding": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "effort": "high"},
+        "small": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/minimax/minimax-m3"}
       }
     },
     "openrouter-budget": {
       "name": "OpenRouter budget",
       "slots": {
-        "frontier": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/qwen/qwen3.8-27b", "effort": "high"},
-        "coding": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4-pro-0813", "effort": "high"},
-        "small": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/~deepseek/deepseek-v4-flash-latest", "effort": "low"}
+        "frontier": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4-pro-0813", "effort": "high"},
+        "coding": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "effort": "high"},
+        "small": {"provider": "opencode", "connection": "opencode@openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "effort": "low"}
       }
     }
   }
