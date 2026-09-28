@@ -18,6 +18,8 @@ import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { agentStateColor, agentStateLabel } from './agent-status';
 import { HighlightedCode, Markdown } from './markdown';
+import { PathLinksProvider, hitTitle, looksLikePath, pathResolver, useHits, usePathLinks } from './path-links';
+import type { PathLinks } from './path-links';
 import { Terminal } from './terminal';
 import { WASH_SCROLL_CLASS } from './scrollbars';
 import {
@@ -140,8 +142,11 @@ export interface AgentSessionProps {
   insertDraft?: () => InsertedDraft | undefined;
   /** Answer a pending question. `rule` is set when the user chose "always". */
   onAnswer?: (id: string, decision: 'allow' | 'deny', rule?: string, scope?: 'workspace') => void;
-  /** Click on a tool row — the host decides what that opens. */
-  onOpenTool?: (e: agentproto.Event) => void;
+  /** Makes the files the transcript names links: tool rows, and paths in
+   *  the agent's prose. The host resolves them against the session's
+   *  folder and decides where they open (path-links.tsx). Absent, nothing
+   *  is a link. */
+  links?: PathLinks;
   /** Abort the running turn. Absent means the session cannot be stopped. */
   onCancel?: () => void;
   /** Switch the agent's approval preset. Absent hides the control. */
@@ -229,8 +234,20 @@ function baseName(path: string): string {
  *  the whole reason to watch an agent rather than run one. agentd renders
  *  it (apps/agentd/be/diff.go) so the wire carries hunks rather than two
  *  whole copies of the file, and it arrives here as text to colour. */
-const ToolRow: Component<{ e: agentproto.Event; onOpen?: (e: agentproto.Event) => void }> = (p) => {
-  const clickable = () => !!p.onOpen;
+const ToolRow: Component<{ e: agentproto.Event }> = (p) => {
+  // The file a row names is its path, or a title that is itself one (some
+  // adapters report no path). A link only when the host says it is a file
+  // it can open.
+  const token = () => {
+    if (p.e.path) return p.e.path;
+    const t = (p.e.title ?? '').trim();
+    return looksLikePath(t) ? t : '';
+  };
+  const links = usePathLinks();
+  const hits = useHits(() => (token() ? [{ start: 0, end: token().length, token: token() }] : []));
+  const hit = () => hits().get(token());
+  const clickable = () => !!hit();
+  const openHit = () => { const h = hit(); if (h) links?.open(h); };
   // Expanded by default: a diff nobody opened is a diff nobody read, and
   // the box is height-capped so even a big one costs a scroll, not a
   // transcript.
@@ -243,12 +260,12 @@ const ToolRow: Component<{ e: agentproto.Event; onOpen?: (e: agentproto.Event) =
       data-wash-hit={clickable() ? '' : undefined}
       role={clickable() ? 'button' : undefined}
       tabindex={clickable() ? 0 : undefined}
-      title={p.e.path || undefined}
-      onClick={() => p.onOpen?.(p.e)}
+      title={hit() ? hitTitle(hit()!) : p.e.path || undefined}
+      onClick={openHit}
       onKeyDown={(ev) => {
         if (clickable() && (ev.key === 'Enter' || ev.key === ' ')) {
           ev.preventDefault();
-          p.onOpen?.(p.e);
+          openHit();
         }
       }}
       style={{
@@ -810,7 +827,12 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     });
   };
 
+  // One resolver per session view: its cache is what keeps a streaming
+  // reply from re-probing the same paths on every chunk.
+  const resolver = props.links ? pathResolver(props.links) : undefined;
+
   return (
+    <PathLinksProvider resolver={resolver}>
     <div
       // Esc anywhere in the session — the composer, an ask row's buttons,
       // the transcript — is Stop. Handled here rather than on the textarea
@@ -945,7 +967,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               when={e.kind !== 'tool' && e.kind !== 'image' && e.kind !== 'terminal' && e.kind !== 'decision'}
               fallback={
                 <Show when={e.kind === 'tool'} fallback={<Show when={e.kind === 'decision'}><DecisionRow e={e} /></Show>}>
-                  <ToolRow e={e} onOpen={props.onOpenTool} />
+                  <ToolRow e={e} />
                 </Show>
               }
             >
@@ -1478,5 +1500,6 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
         </Show>
       </div>
     </div>
+    </PathLinksProvider>
   );
 };

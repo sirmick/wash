@@ -158,7 +158,8 @@ export interface MenuItemProps {
    *  with a popup rather than a button, which is what it is */
   popup?: { expanded: boolean };
   'data-testid'?: string;
-  onClick: () => void;
+  /** The event is there for a row that opens something beside itself. */
+  onClick: (ev: MouseEvent) => void;
 }
 
 export const MenuItem: Component<MenuItemProps> = (props) => {
@@ -177,8 +178,8 @@ export const MenuItem: Component<MenuItemProps> = (props) => {
       role={props.popup ? 'menuitem' : undefined}
       aria-haspopup={props.popup ? 'menu' : undefined}
       aria-expanded={props.popup ? (props.popup.expanded ? 'true' : 'false') : undefined}
-      onClick={() => {
-        if (!props.disabled) props.onClick();
+      onClick={(ev) => {
+        if (!props.disabled) props.onClick(ev);
       }}
       style={{
         display: 'flex',

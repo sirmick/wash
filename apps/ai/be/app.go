@@ -10,7 +10,8 @@
 // it is keyed to a session this window is not showing. What the backend
 // does itself is the window's business: which session it shows (bind,
 // restore), its title and taskbar attention, closing it (detach or stop),
-// saving a transcript, and opening an app in the session's folder.
+// saving a transcript, opening an app in the session's folder, and its own
+// editor (editor.go).
 //
 // And ONE message this app accepts from an app that is not agentd:
 //
@@ -95,7 +96,7 @@ func init() {
 			Accent:          "violet",
 			Instancing:      sdk.InstancingMulti,
 			Hidden:          true,
-			Capabilities:    []string{sdk.CapOpen, sdk.CapSpawn},
+			Capabilities:    []string{sdk.CapSpawn},
 			// 600, not 720: the composer grew a row (Attach…) and the
 			// status bar grew root chips, and a window as tall as a
 			// 720-line screen left both under the 40px taskbar. Sized so
@@ -108,6 +109,8 @@ func init() {
 		OnAppMsg:         onAppMsg,
 		OnAppMsgFrom:     onAppMsgFrom,
 		OnCloseRequested: onCloseRequested,
+		OnSpawnResult:    onSpawnResult,
+		OnInstanceGone:   onInstanceGone,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-ai",
@@ -128,7 +131,7 @@ func init() {
 			ProtocolVersion: sdk.ProtocolVersion, Element: "wash-app-agents",
 			Surface: sdk.SurfaceWindow, Icon: aiIcon, Accent: "violet",
 			Instancing:   sdk.InstancingSingleton,
-			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
+			Capabilities: []string{sdk.CapSpawn},
 			Window:       &sdk.WindowHints{DefaultWidth: 760, DefaultHeight: 600},
 		},
 		Assets: sub,
@@ -219,6 +222,9 @@ func firstAvailableAgent() string {
 var session struct {
 	key   string
 	title string
+	// cwd is the session's folder, from its roster row: what the editor is
+	// rooted at and what transcript paths resolve against.
+	cwd string
 	// attention mirrors what we last told the router, so a roster push
 	// every second doesn't become a wire frame every second (docs/
 	// AGENT_UX.md N6).
@@ -297,6 +303,9 @@ func followRoster(c *sdk.Conn, state agentproto.State) {
 		if r.Key == session.key && r.Title != "" && r.Title != session.title {
 			session.title = r.Title
 			_ = c.SetTitle(r.Title)
+		}
+		if r.Key == session.key && r.Cwd != "" {
+			session.cwd = r.Cwd
 		}
 	}
 	waiting := false
@@ -426,20 +435,17 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 			log.Printf("wash-ai: spawn %s %s: %v", target, abs, err)
 		}
 
-	case "open_path":
-		// A tool row was clicked. The path is the agent's own report of
-		// what it touched, so it is confined to this app's root before
-		// the router is asked for anything, and the router — not this
-		// app — decides which app handles the type (CapOpen).
-		raw := str(m["path"])
-		abs, err := aiFS.Confine(raw)
-		if err != nil {
-			log.Printf("wash-ai: open %q: %v", raw, err)
-			return
+	case "path_probe":
+		var paths []string
+		if raw, ok := m["paths"].([]any); ok {
+			for _, p := range raw {
+				paths = append(paths, str(p))
+			}
 		}
-		if err := c.OpenPath(abs); err != nil {
-			log.Printf("wash-ai: open %s: %v", abs, err)
-		}
+		probePaths(c, str(m["id"]), paths)
+
+	case "editor_show":
+		showEditor(c, str(m["token"]))
 	}
 }
 
@@ -463,6 +469,12 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		}
 		log.Printf("wash-ai: draft from=%s bytes=%d", from.AppID, len(text))
 		c.SendAppMsg(draftMsg{Kind: "draft", Text: text})
+		return
+	}
+	// This window's editor, closing: forget it now rather than when the
+	// router reaps it (editor.go).
+	if from.AppID == editAppID && str(m["kind"]) == "editor.closing" {
+		onInstanceGone(c, from.AppID, from.InstanceID)
 		return
 	}
 	if from.AppID != agentdAppID {

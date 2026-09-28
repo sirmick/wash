@@ -89,7 +89,11 @@ test.describe('agent handoff', () => {
         const win = await startAgentIn(page, router.url, dir);
         if (surface === 'controller') await win.getByTestId('ai-menubar-session').click();
         else await page.locator('wash-app-agents [data-testid="agents-running-pane"] [data-testid="agents-verbs-btn"]').first().click();
-        const action = page.getByTestId(`${surface === 'controller' ? 'ai' : 'agents'}-menu-open-${target}`);
+        // The controller's editor is its own (agent-editor.spec.ts): Show
+        // editor opens it on the project folder the first time.
+        const action = page.getByTestId(surface === 'controller'
+          ? (target === 'text-editor' ? 'ai-menu-show-editor' : `ai-menu-open-${target}`)
+          : `agents-menu-open-${target}`);
         await expect(action).toBeEnabled();
         await action.click();
         if (target === 'file-manager') {

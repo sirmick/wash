@@ -33,7 +33,7 @@ func seedTree(t *testing.T) string {
 
 func TestWalkFilesSkipsHiddenAndDependencyDirs(t *testing.T) {
 	root := seedTree(t)
-	files, truncated := walkFiles(context.Background(), root, 100)
+	files, truncated := walkFiles(context.Background(), root, 100, false)
 	want := []string{"README.md", "main.go", "src/app.ts", "src/util/paths.ts"}
 	if !reflect.DeepEqual(files, want) {
 		t.Fatalf("files = %v, want %v", files, want)
@@ -43,15 +43,26 @@ func TestWalkFilesSkipsHiddenAndDependencyDirs(t *testing.T) {
 	}
 }
 
+// Show Hidden Files lists dot-entries, but version-control metadata and
+// dependency trees stay out either way.
+func TestWalkFilesHiddenKeepsVCSOut(t *testing.T) {
+	root := seedTree(t)
+	files, _ := walkFiles(context.Background(), root, 100, true)
+	want := []string{"README.md", "main.go", ".hidden/secret.txt", "src/app.ts", "src/.cache/x", "src/util/paths.ts"}
+	if !reflect.DeepEqual(files, want) {
+		t.Fatalf("files = %v, want %v", files, want)
+	}
+}
+
 func TestWalkFilesHonoursLimitAndCancel(t *testing.T) {
 	root := seedTree(t)
-	files, truncated := walkFiles(context.Background(), root, 2)
+	files, truncated := walkFiles(context.Background(), root, 2, false)
 	if len(files) != 2 || !truncated {
 		t.Fatalf("limit: files=%v truncated=%v", files, truncated)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	files, _ = walkFiles(ctx, root, 100)
+	files, _ = walkFiles(ctx, root, 100, false)
 	if len(files) != 0 {
 		t.Fatalf("cancelled walk listed %v", files)
 	}

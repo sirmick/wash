@@ -23,6 +23,11 @@
 //	                                writable }
 //	             { kind: "write_ok", id?, path, bytes }
 //	             { kind: "<op>_err", id?, path?, code, msg }
+//
+// And one message from another app: the Agent window that opened this
+// editor sends { kind: "editor.show", path?, line?, col? } to bring it
+// forward and open a file its transcript named, and is told
+// { kind: "editor.closing" } when this window closes (agent.go).
 package edit
 
 import (
@@ -294,6 +299,7 @@ func registerHandlers(b *sdk.Bus) {
 	// confirm_close(allow=true) runs the same teardown as a confirmed
 	// titlebar click — the term app's pattern (WIRE.md §10).
 	sdk.HandleVoid(b, "close_window_confirmed", func(c *sdk.Conn, _ string, _ struct{}) error {
+		tellOwnerClosing(c)
 		return c.ConfirmClose(c.WindowID(), true)
 	})
 

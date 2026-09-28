@@ -2,7 +2,7 @@ package edit
 
 // Recursive file listing for the quick-open palette (Ctrl+P).
 //
-//	FE → BE  : { kind: "find", id, path, limit? }
+//	FE → BE  : { kind: "find", id, path, limit?, hidden? }
 //	           { kind: "find_cancel", id }
 //	BE → FE  : { kind: "find_ok", id, path, files: [rel…], truncated, cancelled }
 //	           { kind: "find_err", id, code, msg }
@@ -34,9 +34,10 @@ const (
 	findBudget       = 5 * time.Second
 )
 
-// findSkipDirs are never descended into. Hidden directories (a leading
-// dot) are skipped too, in the walk itself.
+// findSkipDirs are never descended into. Other hidden entries (a leading
+// dot) are skipped too unless the request asks for them.
 var findSkipDirs = map[string]bool{
+	".git": true, ".hg": true, ".svn": true,
 	"node_modules": true, "vendor": true, "__pycache__": true,
 	"target": true, "dist": true, "build": true, "out": true,
 }
@@ -44,6 +45,9 @@ var findSkipDirs = map[string]bool{
 type findReq struct {
 	Path  string `json:"path"`
 	Limit int    `json:"limit"`
+	// Hidden lists dotfiles and descends dot-directories, following the
+	// sidebar's Show Hidden Files.
+	Hidden bool `json:"hidden"`
 }
 
 type findCancelReq struct {
@@ -91,7 +95,7 @@ func registerFindHandlers(b *sdk.Bus) {
 					findMu.Unlock()
 				}
 			}()
-			files, truncated := walkFiles(ctx, abs, limit)
+			files, truncated := walkFiles(ctx, abs, limit, req.Hidden)
 			cancelled := ctx.Err() == context.Canceled
 			out := map[string]any{
 				"path":      abs,
@@ -124,8 +128,8 @@ func registerFindHandlers(b *sdk.Bus) {
 // relative to it, breadth-ish: each directory's own files are emitted
 // before its subdirectories are descended, so shallow paths lead. Stops
 // at limit (truncated=true), on the context, or on an unreadable
-// directory (skipped, not fatal).
-func walkFiles(ctx context.Context, root string, limit int) (files []string, truncated bool) {
+// directory (skipped, not fatal). hidden includes dot-entries.
+func walkFiles(ctx context.Context, root string, limit int, hidden bool) (files []string, truncated bool) {
 	files = []string{}
 	var walk func(dir, rel string) bool
 	walk = func(dir, rel string) bool {
@@ -140,7 +144,7 @@ func walkFiles(ctx context.Context, root string, limit int) (files []string, tru
 		var subdirs []fs.DirEntry
 		for _, e := range entries {
 			name := e.Name()
-			if strings.HasPrefix(name, ".") {
+			if !hidden && strings.HasPrefix(name, ".") {
 				continue
 			}
 			if e.IsDir() {

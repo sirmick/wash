@@ -188,11 +188,13 @@ test.describe('managed agent sessions', () => {
     const win = await openAgent(page, router.url, 'say something');
     await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
 
-    // Session: one group per setting the agent exposes, current marked.
+    // Session: one row per setting the agent exposes, saying its value;
+    // its values pop out beside the menu.
     await win.locator('[data-testid="ai-menubar-session"]').click();
     const sessionMenu = page.locator('[data-testid="ai-menu-session"]');
     await expect(sessionMenu).toBeVisible();
-    await sessionMenu.locator('[data-testid="ai-menu-config-model-smart"]').click();
+    await sessionMenu.locator('[data-testid="ai-menu-config-model"]').click();
+    await page.locator('[data-testid="ai-config-model-smart"]').click();
     await expect(win.locator('[data-testid="agent-config-model"]')).toHaveValue('smart', { timeout: 15_000 });
 
     // Edit: copying the transcript is a real action, not a stub.

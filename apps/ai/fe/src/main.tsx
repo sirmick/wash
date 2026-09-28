@@ -15,13 +15,14 @@ import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
 import { isManagerElement } from './role.ts';
 import type { Component } from 'solid-js';
+import { FilePen } from 'lucide-solid';
 import {
-  AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
+  AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuPicker, MenuSeparator,
   Overlay, Select, Splitter, Tab,
   agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
 import type {
-  AgentStatus, QuestionAnswers,
+  AgentStatus, PathHit, PathLinks, QuestionAnswers,
 } from '@wash/ui';
 
 /** What this window's backend sends besides agentd's pushes, which it
@@ -32,6 +33,7 @@ type WindowMessage =
   | { kind: 'started'; key: string }
   | { kind: 'restore_failed' }
   | { kind: 'draft'; text: string }
+  | { kind: 'path_probe_ok'; id: string; hits: PathHit[] }
   | { kind: 'confirm_close' };
 type Incoming = agentproto.AgentdPush | WindowMessage;
 
@@ -43,7 +45,10 @@ type WindowRequest =
   | { kind: 'terminate' }
   | { kind: 'save_transcript'; path: string; text: string }
   | { kind: 'open_terminal' | 'open_file_manager' | 'open_text_editor'; cwd: string }
-  | { kind: 'open_path'; path: string }
+  // This window's own editor (apps/ai/be/editor.go): the transcript's file
+  // links, resolved against the session's folder, and where they open.
+  | { kind: 'path_probe'; id: string; paths: string[] }
+  | { kind: 'editor_show'; token?: string }
   | { kind: 'open_agents' };
 
 /** The roster as this window holds it: empty until agentd's first push. */
@@ -247,6 +252,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setSessionKey('');
         setEvents([]);
         break;
+      case 'path_probe_ok':
+        probeWaiters.get(m.id)?.(m.hits ?? []);
+        probeWaiters.delete(m.id);
+        break;
       case 'draft':
         // Another app sent a selection here (agent_draft). It lands in
         // the composer, not on the wire: what someone does with it — add
@@ -393,6 +402,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // (closing, saving, opening an app in the session's folder).
   const sendAgentd = (msg: agentproto.AgentdRequest) => send(msg);
   const sendLocal = (msg: WindowRequest) => send(msg);
+
+  // The transcript's file links. The backend decides which tokens are files
+  // under the session's folder and, on a click, resolves the token again
+  // and shows it in this window's editor — opened the first time, brought
+  // forward after.
+  const probeWaiters = new Map<string, (hits: PathHit[]) => void>();
+  let probeSeq = 0;
+  const links: PathLinks = {
+    probe: (paths) => new Promise((resolve) => {
+      const id = `p${++probeSeq}`;
+      probeWaiters.set(id, resolve);
+      sendLocal({ kind: 'path_probe', id, paths });
+    }),
+    open: (hit) => sendLocal({ kind: 'editor_show', token: hit.token }),
+  };
+  const showEditor = () => sendLocal({ kind: 'editor_show' });
   // An answer remembers a rule when it names one.
   const answer = (id: string, decision: string, rule?: string, scope?: string) =>
     sendAgentd({ kind: 'agent_answer', id, decision, remember: !!rule, rule: rule ?? '', ...(scope ? { scope } : {}) });
@@ -522,6 +547,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const configs = () => row()?.configs ?? [];
+  // The setting whose values are popped out beside the Session menu, and
+  // where. By id, so the list follows the roster while it is open.
+  const [configPicker, setConfigPicker] = createSignal<{ id: string; x: number; y: number } | null>(null);
+  const pickerConfig = () => configs().find((c) => c.id === configPicker()?.id);
 
   // The menus advertise these, so they have to exist. A menu that shows a
   // shortcut it does not implement is worse than one that shows none.
@@ -628,6 +657,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const menubar = (
     <MenuBar
       testidPrefix="ai-menubar"
+      trailing={
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!row()?.cwd}
+          title={row()?.cwd ? `Editor for ${row()!.cwd} — this session's files open here` : 'The session has no folder yet'}
+          onClick={showEditor}
+          data-testid="ai-show-editor"
+        >
+          <span style={{ display: 'inline-flex', 'align-items': 'center', gap: `${tokens.spaceXs}px` }}>
+            <FilePen size={14} /> Editor
+          </span>
+        </Button>
+      }
       menus={[
         {
           id: 'file',
@@ -697,35 +740,37 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 onClick={() => { close(); sendLocal({ kind: 'open_file_manager', cwd: row()?.cwd ?? '' }); }}
                 data-testid="ai-menu-open-file-manager"
               />
+              {/* Not a new editor each time: this window's own, rooted at
+                  the project folder, where its file links open too. */}
               <MenuItem
-                label="Open text editor in project folder"
+                label="Show editor"
                 disabled={!row()?.cwd}
-                onClick={() => { close(); sendLocal({ kind: 'open_text_editor', cwd: row()?.cwd ?? '' }); }}
-                data-testid="ai-menu-open-text-editor"
+                onClick={() => { close(); showEditor(); }}
+                data-testid="ai-menu-show-editor"
               />
               <MenuSeparator />
               <Show when={configs().length === 0}>
                 <MenuItem label="No settings offered" disabled onClick={() => {}} />
               </Show>
-              {/* One group per setting the agent exposes — the same
-                  generic block the status bar renders, with room for the
-                  names and the tick. */}
+              {/* One row per setting the agent exposes, saying what it is
+                  set to; its values pop out beside the menu. Inline, a
+                  model list through OpenRouter — hundreds long — made this
+                  menu unusable. */}
               <For each={configs()}>
-                {(cfg, ci) => (
-                  <>
-                    <Show when={ci() > 0}><MenuSeparator /></Show>
-                    <MenuItem label={cfg.name} disabled onClick={() => {}} />
-                    <For each={cfg.values ?? []}>
-                      {(v) => (
-                        <MenuItem
-                          label={'   ' + v.name}
-                          trailing={v.value === cfg.current ? <span>✓</span> : undefined}
-                          onClick={() => { close(); sendAgentd({ kind: 'agent_set_config', key: sessionKey(), id: cfg.id, value: v.value }); }}
-                          data-testid={`ai-menu-config-${cfg.id}-${v.value}`}
-                        />
-                      )}
-                    </For>
-                  </>
+                {(cfg) => (
+                  <MenuItem
+                    label={`${cfg.name}: ${cfg.values?.find((v) => v.value === cfg.current)?.name ?? cfg.current ?? '—'}`}
+                    title={cfg.description}
+                    disabled={(cfg.values ?? []).length === 0}
+                    popup={{ expanded: false }}
+                    trailing={<span style={{ color: tokens.fgMuted }}>▸</span>}
+                    onClick={(ev) => {
+                      const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+                      close();
+                      setConfigPicker({ id: cfg.id, x: r.right, y: r.top });
+                    }}
+                    data-testid={`ai-menu-config-${cfg.id}`}
+                  />
                 )}
               </For>
             </Menu>
@@ -1146,6 +1191,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const sessionView = (
     <>
     {closeDialog}
+    <Show when={configPicker() && pickerConfig()}>
+      <MenuPicker
+        x={configPicker()!.x}
+        y={configPicker()!.y}
+        title={pickerConfig()!.name}
+        options={(pickerConfig()!.values ?? []).map((v) => ({ value: v.value, label: v.name, description: v.description }))}
+        current={pickerConfig()!.current}
+        onPick={(value) => sendAgentd({ kind: 'agent_set_config', key: sessionKey(), id: pickerConfig()!.id, value })}
+        onDismiss={() => setConfigPicker(null)}
+        data-testid={`ai-config-${pickerConfig()!.id}`}
+      />
+    </Show>
 
     {renameDialog}
     {attachPicker}
@@ -1211,16 +1268,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               onCancel={() => sendAgentd({ kind: 'agent_cancel', key: sessionKey() })}
               onSetMode={(mode) => sendAgentd({ kind: 'agent_set_mode', key: sessionKey(), mode })}
               onSetConfig={(id, value) => sendAgentd({ kind: 'agent_set_config', key: sessionKey(), id, value })}
-              onOpenTool={(e) => {
-                // A tool row names a file; clicking it opens that file in
-                // whatever app registered for the type (the router's own
-                // open routing, so this app does not have to know that
-                // .png goes to imageview and .go goes to edit). Standalone
-                // Agent had no onOpenTool at all, so every row was inert —
-                // only wash-edit's agent tab could act on one.
-                const path = e.path || (e.title ?? '').trim();
-                if (path) sendLocal({ kind: 'open_path', path });
-              }}
+              links={links}
             />
           </Show>
         </WorkspaceLayout>

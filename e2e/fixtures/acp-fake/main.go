@@ -254,6 +254,15 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		return
 	}
 
+	if strings.Contains(text, "mentionfiles") {
+		// Prose that names files the way an agent does: a path with a line
+		// in backticks, a bare relative path, and one outside any project.
+		// The transcript links the ones under the session's folder.
+		notify(out, chunk("See `notes.md:2` and src/app.go, not /etc/hosts."))
+		reply(out, id, map[string]any{"stopReason": "end_turn"})
+		return
+	}
+
 	if strings.Contains(text, "echoblocks") {
 		// Report the SHAPE of the prompt that arrived — one entry per
 		// content block, type first. A composer that says it attached
