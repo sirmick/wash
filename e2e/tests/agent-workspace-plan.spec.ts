@@ -264,3 +264,54 @@ test('a member\'s own turn holds its mail; a hung turn is reported and freed', a
   for (const sid of members) await expect(row(sid)).toHaveAttribute('data-depth', '1', { timeout: 15_000 });
   await expect(row(lead)).toHaveAttribute('data-depth', '0');
 });
+
+// A member's assignment and result wrap to the pane, and the pane scrolls
+// when they are longer than it: a long line, an unbroken token or a wide
+// code block must not push the pane sideways past the window.
+test('the assignment pane wraps and scrolls', async ({ page, router }) => {
+  test.setTimeout(90_000);
+  const project = join(router.xdgConfigHome, 'wrap');
+  mkdirSync(project, { recursive: true });
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+  const started = await router.controlRequest({ t: 'launch', app_id: 'com.wash.ai' });
+  await router.controlRequest({ t: 'msg', instance_id: String(started.instance_id), data: { kind: 'agent_start', claim: true, agent: 'codex', cwd: project, prompt: '' } });
+  const app = page.locator('wash-app-ai');
+  const composer = app.locator('[data-testid="agent-composer"]').first();
+  const outputs = app.locator('[data-testid="agent-transcript"]').first().locator('pre');
+  await expect(composer).toBeEnabled();
+  const tool = async (name: string, args: object = {}) => {
+    const tab = app.getByRole('tab', { name: /^Conversation/ });
+    if (await tab.count()) await tab.click();
+    const count = await outputs.count();
+    await composer.fill(`workspace ${name} ${JSON.stringify(args)}`); await composer.press('Enter');
+    await expect(outputs).toHaveCount(count + 1, { timeout: 30_000 });
+  };
+  const state = () => JSON.parse(readFileSync(join(router.xdgStateHome, 'wash/workspaces.json'), 'utf8')).workspaces.at(-1);
+
+  const task = [
+    'A long paragraph: ' + 'words that should wrap at the pane edge '.repeat(60),
+    'An unbroken token: ' + 'x'.repeat(600),
+    '```',
+    'a code line ' + '0123456789'.repeat(60),
+    '```',
+    ...Array.from({ length: 80 }, (_, i) => `- step ${i}`),
+  ].join('\n');
+  await tool('workspace_configure', { workspace: { name: 'Wrap', project_root: project } });
+  await tool('plan_set', { nodes: { W: { title: 'Wrap' } } });
+  await tool('workspace_configure', { members: { w: { name: 'Wrapper', node: 'W', lifetime: 'resident', instructions: 'Work.', task } } });
+  await expect.poll(() => state().plan.find((n: any) => n.id === 'W').state).toBe('reported');
+  await app.getByTestId(`workspace-member-${state().members.find((m: any) => m.key === 'w').id}`).click();
+
+  const brief = app.getByTestId('workspace-member-brief');
+  await expect(brief).toContainText('A long paragraph');
+  const box = await brief.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, right: el.getBoundingClientRect().right }));
+  const panel = await app.getByTestId('workspace-member-detail').evaluate((el) => el.getBoundingClientRect().right);
+  expect(box.right, 'the pane stays inside the member panel').toBeLessThanOrEqual(panel + 1);
+  expect(box.scrollWidth, 'nothing pushes the pane sideways').toBeLessThanOrEqual(box.clientWidth + 1);
+  expect(box.scrollHeight, 'the brief is longer than the pane').toBeGreaterThan(box.clientHeight);
+  await brief.hover();
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => brief.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await tool('workspace_end', { confirm: true });
+});
