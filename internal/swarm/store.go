@@ -161,6 +161,8 @@ type Workspace struct {
 	// ContextWarn is the share of its context window at which a member's
 	// use is reported to the orchestrator, once; 0 is the default.
 	ContextWarn float64 `json:"context_warn,omitempty"`
+	// Supervisor tunes the stall watchdog.
+	Supervisor Supervisor `json:"supervisor,omitzero"`
 	// Nudged are the lifecycle nudges already sent, so each goes once.
 	Nudged      []string     `json:"nudged,omitempty"`
 	Members     []Member     `json:"members"`
@@ -308,25 +310,11 @@ func (s *Store) Mutate(session string, lead bool, fn func(*Workspace, *Member) e
 }
 func ValidText(s string, max int) bool { return strings.TrimSpace(s) != "" && len(s) <= max }
 
-type Limits struct{ MaxActive, MaxMembers int }
-
 // OrchestratorKey is the orchestrator's key, reserved for it: members
 // address it by this rather than by its random ID.
 const OrchestratorKey = "orchestrator"
 
-func (s *Store) Setup(session, provider, cwd, name, root string, limits ...Limits) (*Workspace, error) {
-	cap := Limits{MaxActive: 4, MaxMembers: 16}
-	if len(limits) > 0 {
-		if limits[0].MaxActive != 0 {
-			cap.MaxActive = limits[0].MaxActive
-		}
-		if limits[0].MaxMembers != 0 {
-			cap.MaxMembers = limits[0].MaxMembers
-		}
-	}
-	if cap.MaxActive < 1 || cap.MaxActive > 16 || cap.MaxMembers < 1 || cap.MaxMembers > 64 || cap.MaxActive > cap.MaxMembers {
-		return nil, errors.New("invalid limits: max_active 1–16, max_members 1–64, active <= members")
-	}
+func (s *Store) Setup(session, provider, cwd, name, root string) (*Workspace, error) {
 	if !ValidText(name, 160) {
 		return nil, errors.New("name must contain 1–160 bytes")
 	}
@@ -344,7 +332,7 @@ func (s *Store) Setup(session, provider, cwd, name, root string, limits ...Limit
 			return errors.New("teardown current workspace first")
 		}
 		lead := Member{ID: ID(), Key: OrchestratorKey, Name: "Orchestrator", Provider: provider, Cwd: cwd, Session: session, Lifetime: "resident", State: "available", CanSpawn: true}
-		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Plan: []Node{}, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}, QA: []QAThread{}}
+		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: 4, MaxMembers: 16, Plan: []Node{}, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}, QA: []QAThread{}}
 		st.Workspaces = append(st.Workspaces, w)
 		return nil
 	})
@@ -553,7 +541,7 @@ func (s *Store) Complete(session, id, body string, failed bool) error {
 			if a.State == state && a.Result == body {
 				return nil
 			}
-			if a.State != "active" && a.State != "assigned" && a.State != "blocked" {
+			if !a.Open() {
 				return errors.New("assignment already resolved")
 			}
 			a.State = state
@@ -742,6 +730,23 @@ func (s *Store) TurnStopped(session string, messageIDs []string) error {
 	return s.turnEnded(session, messageIDs, true, true)
 }
 
+// TurnAbandoned records a turn Wash stopped waiting for: the agent did not
+// end it after a cancel. Its mail is uncertain (it may never have reached
+// the model); the member's state is left to whoever cancelled it.
+func (s *Store) TurnAbandoned(session string, messageIDs []string) error {
+	if len(messageIDs) == 0 || s.View(session) == nil {
+		return nil
+	}
+	return s.Mutate(session, false, func(w *Workspace, _ *Member) error {
+		for i := range w.Messages {
+			if v := &w.Messages[i]; slices.Contains(messageIDs, v.ID) && v.State == "dispatched" {
+				v.State = "uncertain"
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped bool) error {
 	// An ordinary successful turn changes no durable workspace state.
 	if !failed && len(messageIDs) == 0 {
@@ -818,6 +823,32 @@ func idleNudge(w *Workspace, m *Member) {
 	}
 }
 
+// Parents maps every member session, in every workspace including ended
+// ones, to the session that launched it: its creator's, or the
+// orchestrator's when the creator is gone.
+func (s *Store) Parents() map[string]string {
+	out := map[string]string{}
+	for _, w := range s.Snapshot().Workspaces {
+		lead := ""
+		if m := GetMember(&w, w.Lead); m != nil {
+			lead = m.Session
+		}
+		for _, m := range w.Members {
+			if m.ID == w.Lead || m.Session == "" {
+				continue
+			}
+			parent := lead
+			if c := GetMember(&w, m.Creator); c != nil && c.Session != "" && c.Session != m.Session {
+				parent = c.Session
+			}
+			if parent != "" {
+				out[m.Session] = parent
+			}
+		}
+	}
+	return out
+}
+
 // NudgeOnce sends the orchestrator one lifecycle message per key.
 func NudgeOnce(w *Workspace, key, body string) { nudge(w, key, body) }
 
@@ -859,7 +890,7 @@ func (s *Store) EndMember(session, id string, notify bool) error {
 			if a.Member == id && a.Open() {
 				a.State = "cancelled"
 				if n := PlanNode(w, a.Node); n != nil && n.State == "active" && len(OpenOn(w, a.Node)) == 0 {
-					nudge(w, "idle:"+a.ID, "Node "+n.ID+" ("+n.Title+") is active with nobody on it: "+m.Name+" ended with assignment "+a.ID+" open. Assign it again, or set the node's state.")
+					nudge(w, "unstaffed:"+a.ID, "Node "+n.ID+" ("+n.Title+") is active with nobody on it: "+m.Name+" ended with assignment "+a.ID+" open. Assign it again, or set the node's state.")
 				}
 			}
 		}

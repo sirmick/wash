@@ -428,7 +428,7 @@ func TestUpdate(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if p := Load(path); p.Launch == nil || p.Launch.ModeFor("claude") != "acceptEdits" || !p.Launch.Yolo || p.Launch.ModeFor("codex") != "" {
+	if p := Load(path); p.Launch == nil || p.Launch.Mode["claude"] != "acceptEdits" || !p.Launch.Yolo || p.Launch.Mode["codex"] != "" {
 		t.Fatalf("after update: %+v", p.Launch)
 	}
 	// The rest of the file survives a later update.

@@ -658,4 +658,14 @@ const (
 	MethodTerminalWait      = "terminal/wait_for_exit"
 	MethodTerminalKill      = "terminal/kill"
 	MethodTerminalRelease   = "terminal/release"
+	// MethodClaudeSDKMessage is claude-agent-acp's extension notification
+	// carrying a raw Claude Code message, sent for the types a session asked
+	// for in _meta.claudeCode.emitRawSDKMessages.
+	MethodClaudeSDKMessage = "_claude/sdkMessage"
 )
+
+// SDKMessageNotification is the params of MethodClaudeSDKMessage.
+type SDKMessageNotification struct {
+	SessionID string          `json:"sessionId"`
+	Message   json.RawMessage `json:"message"`
+}

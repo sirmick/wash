@@ -67,10 +67,6 @@ type hosted struct {
 	// adapterInfo is how the adapter introduced itself at initialize:
 	// its package name and version (adapter memory, reviewer contract).
 	adapterInfo acp.Implementation
-	// interrupted marks a cancel the orchestrator asked for: the turn ends
-	// as a normal one and the member stays available, rather than being
-	// paused like a turn the human stopped.
-	interrupted atomic.Bool
 	// conn is the service connection, used to push transcript events to
 	// the windows watching this session.
 	conn *sdk.Conn
@@ -90,6 +86,13 @@ type hosted struct {
 	// session/load resumes.
 	sessionID string
 	stop      func()
+
+	// mu guards the fields from here to the lifecycle signals. It is a leaf
+	// lock: nothing that takes another lock or talks to another subsystem
+	// (the roster state, transcripts, the workspace store, the bus, the
+	// journal) runs while it is held. Decide under it, act after it. The
+	// roster state lock may take it (publishRow), never the reverse.
+	mu sync.Mutex
 	// used / size are the agent's context accounting; title is its own
 	// name for the session. Both arrive as session/update variants that
 	// nothing else consumes.
@@ -130,17 +133,62 @@ type hosted struct {
 	// detached means no window is pointing at this session. It keeps
 	// running; the roster row is how the user gets back to it.
 	detached bool
-	// closing is set the moment retire starts, before the adapter is
-	// killed, so the exit watcher can tell "we ended it" from "it died".
+	// tail is the adapter's last stderr bytes (see stderrTail).
+	tail []byte
+	// rowState and rowReason are the roster state this session has decided
+	// on. Every roster write reads them (publishRow), so the latest decision
+	// wins however the writes interleave: the response that ends a turn can
+	// overtake the tail of that turn's own session/update stream, and a late
+	// chunk's write must not put a finished row back to working.
+	rowState, rowReason string
+	// turnLive is a prompt of Wash's in flight. Working is only inferred
+	// from narration while a turn is open: late chunks still land in the
+	// transcript, they no longer claim the agent is busy.
+	turnLive bool
+	// agentRunning is the agent's own run state, as Claude Code reports it;
+	// ownTurn is a turn it started itself, with no prompt of Wash's open
+	// (agent_turn.go). turnEnd closes when the current turn, either kind, is
+	// over; turnAbort gives up Wash's session/prompt call and turnMail is
+	// the mail it carries.
+	agentRunning bool
+	ownTurn      bool
+	turnEnd      chan struct{}
+	turnAbort    context.CancelFunc
+	turnMail     []string
+	// interrupted marks a cancel the orchestrator asked for: the turn ends
+	// as a normal one and the member stays available, rather than being
+	// paused like a turn the human stopped. abandoned marks a turn Wash
+	// stopped waiting for (cancelTurn).
+	interrupted, abandoned bool
+	// Transient activity, never inferred from a saved transcript.
+	// Concurrent tools stay active until each reports completion.
+	activityPhase string
+	activityTools map[string]string
+	activityAsks  int
+	// bgTasks is the background work the adapter reported still running
+	// (background.go), by task id.
+	bgTasks map[string]string
+	// pending are prompts typed while a turn was open, in order. They run
+	// one after another when the turn ends — messenger semantics — rather
+	// than as concurrent session/prompt calls, which the protocol does not
+	// allow.
+	pending []turn
+	// extraRoots are folders allowed beyond cwd (roots.go).
+	extraRoots []string
+
+	// Lock-free lifecycle signals, read by the exit watcher, dispatch and
+	// the supervisor. closing is set the moment retire starts, before the
+	// adapter is killed, so the exit watcher can tell "we ended it" from
+	// "it died". heard is when the agent last sent anything (unix ms).
 	closing      atomic.Bool
 	sessionReady atomic.Bool
-	// tail is the adapter's last stderr bytes (see stderrTail).
+	heard        atomic.Int64
+	// pid is the adapter's process (workspace_supervisor.go).
+	pid int
 	// stderrDone closes when the adapter's stderr reader has drained. The
 	// exit watcher wakes on stdout closing, which routinely beats the last
 	// stderr line — the crash reason — through the pipe.
 	stderrDone chan struct{}
-	tailMu     sync.Mutex
-	tail       []byte
 	// exited is closed when watchExit has finished its cleanup, and idle
 	// receives one value each time the turn goroutine returns. Both nil in
 	// production (nothing waits); tests set them so they can wait for the
@@ -148,46 +196,6 @@ type hosted struct {
 	// test's session outlives the test.
 	exited chan struct{}
 	idle   chan struct{}
-
-	// turnMu guards turnLive, and — crucially — is held ACROSS the
-	// state write that depends on it, so the two orderings below cannot
-	// interleave.
-	//
-	// The ACP conn delivers a response straight from the read loop while
-	// notifications go through an ordering queue, so the response that
-	// ends a turn can (and in practice does) overtake the tail of that
-	// turn's own session/update stream. Since "the agent said something"
-	// means working, those late chunks used to flip the row back to
-	// working AFTER the turn had finished — the session then sat on
-	// "working…" with a Stop button forever, until the next turn.
-	//
-	// So working is only inferred from narration while a turn is
-	// actually open. Late chunks still land in the transcript; they just
-	// no longer claim the agent is busy.
-	turnMu   sync.Mutex
-	turnLive bool
-	// Transient activity is guarded by turnMu and never inferred from a saved
-	// transcript. Concurrent tools stay active until each reports completion.
-	activityPhase string
-	activityTools map[string]string
-	activityAsks  int
-	// bgTasks is the background work the adapter reported still running
-	// (background.go), by task id; bgLabel says it in a line, readable
-	// without a lock because setState runs under turnMu.
-	bgMu    sync.Mutex
-	bgTasks map[string]string
-	bgLabel atomic.Value
-	// pending are prompts typed while a turn was open, in order. They run
-	// one after another when the turn ends — messenger semantics — rather
-	// than as concurrent session/prompt calls, which the protocol does not
-	// allow and which flipped beginTurn/endTurn out of order. Guarded by
-	// turnMu; queued mirrors len(pending) for the roster row, readable
-	// without the lock (setState runs UNDER turnMu from begin/endTurn).
-	pending []turn
-	queued  atomic.Int32
-	// extraRoots are folders allowed beyond cwd (roots.go). Guarded by
-	// hostedMu like everything else a roster push reads.
-	extraRoots []string
 	// mcp are the MCP servers this session was opened with (agents.json).
 	// Held so a RESUME offers the same set: session/load takes the list
 	// too, and a resumed session that silently lost its tools is worse
@@ -217,18 +225,64 @@ func (t turn) empty() bool { return t.text == "" && len(t.blocks) == 0 }
 // under the lock and runs. Claiming here — not in beginTurn — is what
 // stops two prompts arriving in the same instant from both seeing a
 // closed turn and both starting one.
+//
+// A prompt is also held while the agent is running a turn of its own, and
+// goes when the agent says it is idle (agent_turn.go).
 func (h *hosted) submitPrompt(t turn) (queued bool) {
-	h.turnMu.Lock()
-	if h.turnLive {
+	h.mu.Lock()
+	if h.turnLive || h.agentRunning {
 		h.pending = append(h.pending, t)
-		h.queued.Store(int32(len(h.pending)))
-		h.turnMu.Unlock()
-		log.Printf("agentd: acp prompt queued key=%s queued=%d", h.key, len(h.pending))
-		h.republish()
+		n := len(h.pending)
+		h.mu.Unlock()
+		log.Printf("agentd: acp prompt queued key=%s queued=%d", h.key, n)
+		h.publishRow()
 		return true
 	}
 	h.turnLive = true
-	h.turnMu.Unlock()
+	h.mu.Unlock()
+	h.run(t)
+	return false
+}
+
+// claim reserves the next turn for a caller that is about to fill it
+// (workspace dispatch). Refused while a turn is open or the agent is
+// running one of its own: a prompt sent into that is swallowed
+// (agent_turn.go).
+func (h *hosted) claim() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.turnLive || h.agentRunning {
+		return false
+	}
+	h.turnLive = true
+	return true
+}
+
+// release gives back a claim that found nothing to send. A prompt typed
+// meanwhile was queued behind the claim, and runs now.
+func (h *hosted) release() {
+	h.mu.Lock()
+	var next turn
+	if len(h.pending) > 0 {
+		next, h.pending = h.pending[0], h.pending[1:]
+	} else {
+		h.turnLive = false
+	}
+	h.mu.Unlock()
+	if !next.empty() {
+		h.run(next)
+	}
+}
+
+// isBusy is busy for a caller not holding mu.
+func (h *hosted) isBusy() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.busy()
+}
+
+// run runs a claimed turn and the queued prompts after it.
+func (h *hosted) run(t turn) {
 	go func() {
 		if h.idle != nil {
 			defer func() { h.idle <- struct{}{} }()
@@ -237,22 +291,30 @@ func (h *hosted) submitPrompt(t turn) (queued bool) {
 			next = promptHosted(h, next)
 		}
 	}()
-	return false
 }
 
-// beginTurn opens a turn: narration counts as "working" from here.
-func (h *hosted) beginTurn() {
-	h.turnMu.Lock()
-	defer h.turnMu.Unlock()
+// beginTurn opens a turn: narration counts as "working" from here. abort
+// gives up this prompt's call (cancelTurn).
+func (h *hosted) beginTurn(t turn, abort context.CancelFunc) {
+	h.mu.Lock()
 	h.turnLive = true
+	if h.turnEnd == nil {
+		h.turnEnd = make(chan struct{})
+	}
+	h.turnAbort = abort
+	h.turnMail = t.mailIDs
+	h.heard.Store(time.Now().UnixMilli())
 	h.activityPhase = "working"
 	h.activityTools = map[string]string{}
-	h.setState("working", "")
+	h.rowState, h.rowReason = "working", ""
+	h.mu.Unlock()
+	h.publishRow()
 }
 
-// endTurn closes a turn and records how it ended. Holding turnMu across
-// the write is what makes it final: a SessionUpdate racing this either
-// runs entirely before (and is overwritten here) or sees a closed turn.
+// endTurn closes a turn and records how it ended. The decision is made
+// under mu, so a SessionUpdate racing this either runs entirely before
+// (and is overwritten here) or sees a closed turn; publishRow then paints
+// whatever was decided last.
 //
 // It returns the next queued prompt, if the turn ended in a way that
 // should run one: a turn that finished normally hands over to the next
@@ -262,21 +324,29 @@ func (h *hosted) beginTurn() {
 // — and the transcript lists what was dropped so nothing typed is lost
 // from view.
 func (h *hosted) endTurn(state, reason string) (next turn) {
-	h.turnMu.Lock()
-	defer h.turnMu.Unlock()
+	h.mu.Lock()
 	clean := state == "done" && reason != "cancelled"
 	if clean && len(h.pending) > 0 {
 		next, h.pending = h.pending[0], h.pending[1:]
-		h.queued.Store(int32(len(h.pending)))
-		h.setState("working", "")
+		h.rowState, h.rowReason = "working", ""
+		h.mu.Unlock()
+		h.publishRow()
 		return next
 	}
 	dropped := h.pending
 	h.pending = nil
-	h.queued.Store(0)
 	wasLive := h.turnLive
 	h.turnLive = false
-	h.setState(state, reason)
+	h.turnAbort, h.turnMail = nil, nil
+	if h.turnEnd != nil && !h.ownTurn {
+		close(h.turnEnd)
+		h.turnEnd = nil
+	}
+	h.rowState, h.rowReason = state, reason
+	h.mu.Unlock()
+
+	flushTranscript(h.key)
+	h.publishRow()
 	if wasLive {
 		switch {
 		case state == "done":
@@ -305,13 +375,20 @@ func (h *hosted) endTurn(state, reason string) (next turn) {
 // narrated reports that the agent said or did something. It only moves the
 // row to working inside an open turn.
 func (h *hosted) narrated() {
-	h.turnMu.Lock()
-	defer h.turnMu.Unlock()
-	if h.turnLive {
-		h.setState("working", "")
+	h.mu.Lock()
+	busy := h.busy()
+	if busy {
+		h.rowState, h.rowReason = "working", ""
+	}
+	h.mu.Unlock()
+	if busy {
+		h.publishRow()
 	}
 }
 
+// hostedMu guards the registry only: which sessions exist, by key. A
+// session's own state is under its hosted.mu, and no session's lock is
+// taken while this one is held.
 var (
 	hostedMu  sync.Mutex
 	hostedAll = map[string]*hosted{}
@@ -323,10 +400,13 @@ var (
 // frontend guards improve the interaction, but this service is the final
 // authority that prevents two Agent windows from being spawned.
 func claimDetached(key string) *hosted {
-	hostedMu.Lock()
-	defer hostedMu.Unlock()
-	h := hostedAll[key]
-	if h == nil || !h.detached {
+	h := lookupHosted(key)
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.detached {
 		return nil
 	}
 	h.detached = false
@@ -335,15 +415,17 @@ func claimDetached(key string) *hosted {
 
 // restoreDetached makes a failed reattach actionable again in the rail.
 func restoreDetached(key string) {
-	hostedMu.Lock()
-	h := hostedAll[key]
-	if h != nil {
-		h.detached = true
+	if h := lookupHosted(key); h != nil {
+		h.setDetached(true)
 	}
-	hostedMu.Unlock()
-	if h != nil {
-		h.republish()
-	}
+}
+
+// setDetached records whether a window is pointing at this session.
+func (h *hosted) setDetached(on bool) {
+	h.mu.Lock()
+	h.detached = on
+	h.mu.Unlock()
+	h.publishRow()
 }
 
 // register puts a started session in the registry and on the roster.
@@ -363,13 +445,7 @@ func (h *hosted) journal(kind, line string) {
 	if h.conn == nil {
 		return
 	}
-	// shownTitle takes hostedMu itself: read the id under the lock, the
-	// title outside it. (Holding it across the call deadlocked agentd on
-	// its first session — no controller ever opened.)
-	hostedMu.Lock()
-	sid := h.sessionID
-	hostedMu.Unlock()
-	title := h.shownTitle()
+	sid, title := h.sessionID, h.shownTitle()
 	_ = noteActivity(h.conn, wire.EvtActivityNote{
 		Kind: kind, Title: title, Line: line,
 		Ref:    map[string]any{"session_id": sid, "row_key": h.key},
@@ -435,12 +511,12 @@ func (h *hosted) stderrTail() *tailWriter { return &tailWriter{h: h} }
 type tailWriter struct{ h *hosted }
 
 func (w *tailWriter) Write(p []byte) (int, error) {
-	w.h.tailMu.Lock()
+	w.h.mu.Lock()
 	w.h.tail = append(w.h.tail, p...)
 	if over := len(w.h.tail) - stderrTailBytes; over > 0 {
 		w.h.tail = append([]byte(nil), w.h.tail[over:]...)
 	}
-	w.h.tailMu.Unlock()
+	w.h.mu.Unlock()
 	return len(p), nil
 }
 
@@ -467,8 +543,8 @@ func (h *hosted) awaitStderr() {
 }
 
 func (h *hosted) stderrText() string {
-	h.tailMu.Lock()
-	defer h.tailMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return strings.TrimSpace(string(h.tail))
 }
 
@@ -533,13 +609,10 @@ func (h *hosted) watchExit() {
 	h.releaseOwned(ReasonAgentExited)
 	h.noteSession("exited", time.Now())
 	releaseTranscript(h.key)
-	// The history write happens INSIDE the state lock: this goroutine is
-	// not the bus goroutine, and the history slice and its dirty flag are
-	// otherwise only touched from there or under Mutate.
 	mutateState(func(s *agentproto.State) {
 		s.Recent = publishHistory()
-		saveHistory()
 	})
+	saveHistory()
 }
 
 // releaseOwned cancels the session's questions, stops its adapter and
@@ -584,28 +657,76 @@ func stopAllHosted() {
 	closeAllTerminals("agentd shutting down")
 }
 
-// setState upserts this session's roster row. Same four wire states the
-// terminal tier publishes, so the sidebar cannot tell the tiers apart —
-// which is the M3 acceptance criterion.
+// setState decides this session's roster state and publishes it. Same
+// wire states the terminal tier publishes, so the sidebar cannot tell the
+// tiers apart — which is the M3 acceptance criterion.
 func (h *hosted) setState(state, reason string) {
+	h.mu.Lock()
+	h.rowState, h.rowReason = state, reason
+	h.mu.Unlock()
+	h.publishRow()
+}
+
+// rowSnapshot is what a roster row says about this session, read in one
+// go under mu. Slices are copied, not aliased: a published row outlives
+// this call, and a later append would rewrite it from under its readers.
+type rowSnapshot struct {
+	state, reason     string
+	detached, yolo    bool
+	queued            int
+	used, size        int64
+	title, agentTitle string
+	mode              string
+	modes             []acp.SessionMode
+	configs           []acp.ConfigOption
+	commands          []acp.AvailableCommand
+	background        string
+	roots             []string
+}
+
+func (h *hosted) snapshot() rowSnapshot {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return rowSnapshot{
+		state: h.rowState, reason: h.rowReason,
+		detached: h.detached, yolo: h.yolo,
+		queued: len(h.pending),
+		used:   h.used, size: h.size,
+		title: h.shownTitleLocked(), agentTitle: h.title,
+		mode:       h.mode,
+		modes:      append([]acp.SessionMode(nil), h.modes...),
+		configs:    append([]acp.ConfigOption(nil), h.configs...),
+		commands:   append([]acp.AvailableCommand(nil), h.commands...),
+		background: backgroundLabel(h.bgTasks),
+		roots:      append([]string(nil), h.extraRoots...),
+	}
+}
+
+// publishRow writes this session's roster row from its current state. The
+// snapshot is taken inside the roster lock, so of two racing writes the
+// later one publishes the later decision. A session with no state yet
+// (not registered) or being ended has no row to write.
+func (h *hosted) publishRow() {
 	now := time.Now()
-	var wantGit string
+	var wantGit, state string
 	var changed bool
 	mutateStateIf(func(s *agentproto.State) bool {
+		snap := h.snapshot()
+		state = snap.state
 		r := rows[h.key]
 		if r == nil {
 			// A session being ended has had its row deleted by retire;
 			// the turn it killed then reports "failed" through endTurn
 			// and used to put the row straight back, where it lingered
 			// until the sweep. Ended is ended.
-			if h.closing.Load() {
+			if snap.state == "" || h.closing.Load() {
 				return false
 			}
 			r = &row{}
 			rows[h.key] = r
 		}
 		before := r.Row
-		if r.State != state || r.Reason != reason {
+		if r.State != snap.state || r.Reason != snap.reason {
 			r.stateSince = now
 			changed = true
 		}
@@ -613,31 +734,25 @@ func (h *hosted) setState(state, reason string) {
 		r.Stale = false
 		r.Key = h.key
 		r.Agent = h.agent
-		r.State = state
-		r.Reason = reason
+		r.State, r.Reason = snap.state, snap.reason
 		r.SessionID = h.sessionID
-		r.Detached = h.detached
-		r.Queued = int(h.queued.Load())
-		r.Used, r.Size = h.used, h.size
-		r.Title = h.shownTitle()
-		r.Mode, r.Modes = h.mode, publicModes(h.modes)
-		r.Yolo = h.yolo
-		r.Configs = publicConfigs(h.configs)
-		r.Commands = publicCommands(h.commands)
-		r.Background = h.background()
-		// Copied, not aliased: a snapshot outlives this callback, and a
-		// later append to h.extraRoots would otherwise rewrite a
-		// published row from under its readers (the shallow-snapshot
-		// footgun the race gate caught once already).
-		r.Roots = append([]string(nil), h.extraRoots...)
-
+		r.Detached = snap.detached
+		r.Queued = snap.queued
+		r.Used, r.Size = snap.used, snap.size
+		r.Title = snap.title
+		r.Mode, r.Modes = snap.mode, publicModes(snap.modes)
+		r.Yolo = snap.yolo
+		r.Configs = publicConfigs(snap.configs)
+		r.Commands = publicCommands(snap.commands)
+		r.Background = snap.background
+		r.Roots = snap.roots
 		if h.cwd != "" && h.cwd != r.Cwd {
 			r.Cwd = h.cwd
 			r.Dir = dirLabel(h.cwd)
 			r.Branch, r.Dirty = "", false
 			wantGit = h.cwd
 		}
-		remembered := rememberSession(h.record(), h.sessionID, h.cwd, h.title, now)
+		remembered := rememberSession(h.record(), h.sessionID, h.cwd, snap.agentTitle, now)
 		if remembered {
 			historyDirty = true
 		}
@@ -658,25 +773,31 @@ func (h *hosted) setState(state, reason string) {
 	if changed {
 		log.Printf("agentd: acp row key=%s agent=%s state=%s session=%s dir=%s",
 			h.key, h.agent, state, h.sessionID, dirLabel(h.cwd))
-	}
-	if wantGit != "" {
-		go resolveGit(wantGit)
-	}
-	if changed {
 		// Persist on every state change. Waiting for the session to end
 		// meant a detached session — or a reboot — was never remembered.
 		saveHistorySoon()
+	}
+	if wantGit != "" {
+		go resolveGit(wantGit)
 	}
 }
 
 // applyModes records what the agent will let us switch between.
 func (h *hosted) applyModes(m acp.SessionModes) {
-	hostedMu.Lock()
+	h.mu.Lock()
 	h.modes = m.AvailableModes
 	if m.CurrentModeID != "" {
 		h.mode = m.CurrentModeID
 	}
-	hostedMu.Unlock()
+	h.mu.Unlock()
+}
+
+// setMode records the mode in force and publishes it.
+func (h *hosted) setMode(mode string) {
+	h.mu.Lock()
+	h.mode = mode
+	h.mu.Unlock()
+	h.publishRow()
 }
 
 // applyConfigs records the agent's settings block. The agent's answer is
@@ -691,62 +812,44 @@ func (h *hosted) applyConfigs(in []acp.ConfigOption) {
 	if len(in) == 0 {
 		return
 	}
-	hostedMu.Lock()
+	h.mu.Lock()
 	before := map[string]string{}
 	for _, o := range h.configs {
 		before[o.ID] = o.CurrentValue
 	}
 	h.configs = in
-	hostedMu.Unlock()
+	h.mu.Unlock()
 	for _, o := range in {
 		if was, seen := before[o.ID]; seen && was != o.CurrentValue {
 			log.Printf("agentd: acp config changed key=%s %s=%s was=%s", h.key, o.ID, o.CurrentValue, was)
 		}
 	}
-	h.republish()
+	h.publishRow()
 }
 
-// republish refreshes this session's roster row without changing its
-// state — used when only the detached flag moved.
-func (h *hosted) republish() {
-	now := time.Now()
-	mutateStateIf(func(s *agentproto.State) bool {
-		r := rows[h.key]
-		if r == nil {
-			return false
-		}
-		before := r.Row
-		r.Detached = h.detached
-		r.Queued = int(h.queued.Load())
-		r.Used, r.Size = h.used, h.size
-		r.Title = h.shownTitle()
-		r.Mode, r.Modes = h.mode, publicModes(h.modes)
-		r.Yolo = h.yolo
-		r.Configs = publicConfigs(h.configs)
-		r.Commands = publicCommands(h.commands)
-		r.Background = h.background()
-		// Copied, not aliased, for the reason setState gives above.
-		// Republished HERE as well as there: allowing a folder changes no
-		// state, so setState never runs for it, and a row that only
-		// learned its roots on the next state change is a widening the
-		// person cannot see they made.
-		r.Roots = append([]string(nil), h.extraRoots...)
-		r.lastSeen = now
-		if sameRow(before, r.Row) {
-			return false
-		}
-		s.Rows = publish(now)
-		return true
-	})
+// configsSnapshot is the agent's settings block as it stands.
+func (h *hosted) configsSnapshot() []acp.ConfigOption {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]acp.ConfigOption(nil), h.configs...)
+}
+
+// autoApproved is whether host-side auto-approval (yolo) is on.
+func (h *hosted) autoApproved() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.yolo
 }
 
 // shownTitle is the title every surface renders: the person's name for
-// the session when they gave one, else the agent's own. Reads under
-// hostedMu — setState and republish run inside mutateStateIf, which is a
-// different lock, so the read here is the one that guards the fields.
+// the session when they gave one, else the agent's own.
 func (h *hosted) shownTitle() string {
-	hostedMu.Lock()
-	defer hostedMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.shownTitleLocked()
+}
+
+func (h *hosted) shownTitleLocked() string {
 	if h.userTitle != "" {
 		return h.userTitle
 	}
@@ -771,6 +874,7 @@ func sameRow(a, b agentproto.Row) bool {
 // consumes the same notifications in M4; this milestone renders none of
 // them, which is what makes it testable without a frontend.
 func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
+	h.heard.Store(time.Now().UnixMilli())
 	h.observeWorkspaceActivity(n.Update)
 	// The transcript first: it is what the app renders, and it must record
 	// what the agent said even for variants the roster ignores.
@@ -788,7 +892,7 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		// Anything the agent says or does means it is working — but only
 		// while a turn is open. A response can overtake the tail of its
 		// own notification stream, so an unconditional write here left
-		// finished sessions stuck on "working…" (see turnMu).
+		// finished sessions stuck on "working…" (see rowState).
 		h.narrated()
 	case acp.UpdateToolCall, acp.UpdateToolCallUpdate:
 		h.narrated()
@@ -811,10 +915,7 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		// policy), so the UI follows the wire rather than assuming the
 		// last set_mode stuck.
 		if n.Update.ModeID != "" {
-			hostedMu.Lock()
-			h.mode = n.Update.ModeID
-			hostedMu.Unlock()
-			h.republish()
+			h.setMode(n.Update.ModeID)
 		}
 
 	case acp.UpdateConfigOption:
@@ -824,10 +925,10 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		}
 
 	case acp.UpdateAvailableCommands:
-		hostedMu.Lock()
+		h.mu.Lock()
 		h.commands = n.Update.AvailableCommands
-		hostedMu.Unlock()
-		h.republish()
+		h.mu.Unlock()
+		h.publishRow()
 
 	case acp.UpdateSessionInfo:
 		// The agent names its own session once it works out what the work
@@ -838,19 +939,19 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 		// otherwise rename the window and the history entry after every
 		// exchange, which is precisely what makes a name useless. The
 		// session is named for what it set out to do.
-		hostedMu.Lock()
+		h.mu.Lock()
 		fresh := h.title == "" && n.Update.Title != ""
 		if fresh {
 			h.title = n.Update.Title
 		}
-		hostedMu.Unlock()
+		h.mu.Unlock()
 		if fresh {
-			h.republish()
+			h.publishRow()
 			// Remembered immediately: a title that only reached the
 			// history when the session ended would be missing from
 			// exactly the sessions you most want to find again.
 			mutateState(func(s *agentproto.State) {
-				if rememberSession(h.record(), h.sessionID, h.cwd, h.title, time.Now()) {
+				if rememberSession(h.record(), h.sessionID, h.cwd, n.Update.Title, time.Now()) {
 					historyDirty = true
 				}
 				s.Recent = publishHistory()
@@ -868,7 +969,7 @@ func (h *hosted) SessionUpdate(_ context.Context, n acp.SessionNotification) {
 
 func (h *hosted) toolMayChangeCheckout(u acp.SessionUpdate) bool {
 	kind := u.Kind
-	hostedMu.Lock()
+	h.mu.Lock()
 	if h.toolKinds == nil {
 		h.toolKinds = map[string]string{}
 	}
@@ -883,7 +984,7 @@ func (h *hosted) toolMayChangeCheckout(u acp.SessionUpdate) bool {
 	if terminal && u.ToolCallID != "" {
 		delete(h.toolKinds, u.ToolCallID)
 	}
-	hostedMu.Unlock()
+	h.mu.Unlock()
 
 	if !terminal {
 		return false
@@ -922,7 +1023,9 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	if h.workspaceMember && req.ToolCall.Kind == acp.ToolKindSwitchMode {
 		log.Printf("agentd: acp decide key=%s tool=%s decision=deny reason=plan-exit-is-orchestrators", h.key, preq.ToolName)
 		h.decision(DecisionDeny, "leaving plan mode is the orchestrator's call; wash sent it your plan", preq.ToolName, "")
-		h.interrupted.Store(true)
+		h.mu.Lock()
+		h.interrupted = true
+		h.mu.Unlock()
 		var in struct {
 			Plan string `json:"plan"`
 		}
@@ -960,10 +1063,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	// already made, and a convenience toggle must not quietly reverse it.
 	// Announced in the transcript every time, because an agent that is
 	// being auto-approved must not look like one that is being watched.
-	hostedMu.Lock()
-	yolo := h.yolo
-	hostedMu.Unlock()
-	if yolo {
+	if h.autoApproved() {
 		subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=yolo subject=%q",
 			h.key, preq.ToolName, subject)
@@ -1010,18 +1110,28 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 // askHuman puts one question in the desktop queue and waits for it.
 //
 // The shared half of every path that needs a person: the tool-call
+// awaitingHuman marks the session as waiting on a person (a permission ask
+// or a question) and returns what undoes it: back to working once
+// answered — through the turn gate, so an answer that lands after the turn
+// already ended cannot resurrect it.
+func (h *hosted) awaitingHuman(reason string) (done func()) {
+	h.mu.Lock()
+	h.activityAsks++
+	h.mu.Unlock()
+	h.setState("needs-input", reason)
+	return func() {
+		h.mu.Lock()
+		h.activityAsks--
+		h.mu.Unlock()
+		h.narrated()
+	}
+}
+
 // approval above, and "this path is outside every folder you gave me"
 // (roots.go). Returns the verdict rather than an ACP response, because
 // the two callers answer their agents in different protocols.
 func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
-	h.turnMu.Lock()
-	h.activityAsks++
-	h.turnMu.Unlock()
-	defer func() { h.turnMu.Lock(); h.activityAsks--; h.turnMu.Unlock() }()
-	h.setState("needs-input", "permission")
-	// Back to working once answered — but through the turn gate, so an
-	// answer that lands after the turn already ended cannot resurrect it.
-	defer h.narrated()
+	defer h.awaitingHuman("permission")()
 
 	answer := make(chan verdict, 1)
 	workspaceID, workspaceName, _ := workspaceApprovalPolicy(h.sessionID)
@@ -1082,10 +1192,7 @@ func (h *hosted) askOutside(ctx context.Context, tool, path string) bool {
 		h.narrateUnanswered(reasonAskOff, tool, path)
 		return false
 	}
-	hostedMu.Lock()
-	yolo := h.yolo
-	hostedMu.Unlock()
-	if yolo {
+	if h.autoApproved() {
 		h.decision(DecisionAllow, "yolo, outside this session's folders", tool, path)
 		return true
 	}
@@ -1358,11 +1465,8 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		if h == nil {
 			return nil
 		}
-		hostedMu.Lock()
-		h.detached = true
-		hostedMu.Unlock()
 		log.Printf("agentd: acp detached key=%s agent=%s session=%s", h.key, h.agent, h.sessionID)
-		h.republish()
+		h.setDetached(true)
 		// A detach requested from the desktop rail must also close the window.
 		// Only the controller owns this window. Transcript watchers may be
 		// editor tabs and must not be closed with it.
@@ -1379,7 +1483,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 			return nil
 		}
 		openHosted(conn, h.key)
-		h.republish()
+		h.publishRow()
 		return nil
 	})
 
@@ -1410,10 +1514,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		}
 		// Optimistic: current_mode_update confirms it if the agent sends
 		// one, and this is what the UI shows meanwhile.
-		hostedMu.Lock()
-		h.mode = req.Mode
-		hostedMu.Unlock()
-		h.republish()
+		h.setMode(req.Mode)
 		log.Printf("agentd: acp mode key=%s mode=%s", h.key, req.Mode)
 		return nil
 	})
@@ -1451,9 +1552,9 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// ends a cancelled turn as end_turn. Only with a turn running: Stop
 		// racing a turn that just ended paused an idle member and told the
 		// orchestrator it had failed.
-		h.turnMu.Lock()
+		h.mu.Lock()
 		live := h.turnLive
-		h.turnMu.Unlock()
+		h.mu.Unlock()
 		if workspaces != nil && live {
 			_ = workspaces.store.TurnStopped(h.sessionID, nil)
 		}
@@ -1463,7 +1564,14 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// rail stops asking about a turn that is over.
 		cancelAsksFor(h.key, ReasonTurnCancelled)
 		cancelQuestionsFor(h.key, ReasonTurnCancelled)
-		return h.client.Cancel(h.sessionID)
+		// Not waited for here: this is the bus handler's goroutine, and
+		// cancelTurn can take cancelDeadline.
+		go func() {
+			if _, _, err := h.cancelTurn(); err != nil {
+				log.Printf("agentd: acp cancel key=%s: %v", h.key, err)
+			}
+		}()
+		return nil
 	})
 
 	// agent_add_root / agent_remove_root: widen or narrow which folders a
@@ -1478,7 +1586,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		}
 		if h.addRoot(req.Path) {
 			h.note("Also allowed: " + req.Path)
-			h.republish()
+			h.publishRow()
 		}
 		return nil
 	})
@@ -1490,7 +1598,7 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		}
 		if h.removeRoot(req.Path) {
 			h.note("No longer allowed: " + req.Path)
-			h.republish()
+			h.publishRow()
 		}
 		return nil
 	})
@@ -1585,8 +1693,8 @@ func publicModes(in []acp.SessionMode) []agentproto.Mode {
 // Empty when the adapter exposes no model setting at all, which is a fact
 // about that agent and not an error.
 func (h *hosted) modelName() string {
-	hostedMu.Lock()
-	defer hostedMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for _, c := range h.configs {
 		if strings.EqualFold(c.ID, "model") {
 			return configLabel(c)
@@ -1616,9 +1724,9 @@ func configLabel(c acp.ConfigOption) string {
 // and title at the start, the ending at the end. The index reads the last
 // summary, so a session killed with the router still carries its model.
 func (h *hosted) noteSession(endReason string, now time.Time) {
-	hostedMu.Lock()
+	h.mu.Lock()
 	agent, sid, cwd, title, userTitle := h.agent, h.sessionID, h.cwd, h.title, h.userTitle
-	hostedMu.Unlock()
+	h.mu.Unlock()
 	if sid == "" {
 		return
 	}
@@ -1643,10 +1751,10 @@ func (h *hosted) noteSession(endReason string, now time.Time) {
 // names who turned it on for a session nobody toggled by hand. Reports
 // whether anything changed.
 func (h *hosted) setYolo(on bool, why string) bool {
-	hostedMu.Lock()
+	h.mu.Lock()
 	changed := h.yolo != on
 	h.yolo = on
-	hostedMu.Unlock()
+	h.mu.Unlock()
 	if !changed {
 		return false
 	}
@@ -1659,7 +1767,7 @@ func (h *hosted) setYolo(on bool, why string) bool {
 		msg += " (" + why + ")"
 	}
 	h.note(msg)
-	h.republish()
+	h.publishRow()
 	return true
 }
 
@@ -1694,7 +1802,7 @@ func (h *hosted) toggleYolo(on bool) {
 		return nil
 	})
 	for _, session := range followers {
-		if f := workspaceHosted(session); f != nil {
+		if f := hostedBySession(session); f != nil {
 			f.setYolo(on, "the orchestrator's auto-approval changed")
 		}
 	}

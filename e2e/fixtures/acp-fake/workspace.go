@@ -74,13 +74,21 @@ func workspaceCall(name string, args any) (any, error) {
 	if len(envelope.Result.Content) == 0 {
 		return nil, fmt.Errorf("no MCP response")
 	}
-	var result any
-	err = json.Unmarshal([]byte(envelope.Result.Content[0].Text), &result)
+	text := envelope.Result.Content[0].Text
 	if envelope.Result.IsError {
-		return nil, fmt.Errorf("MCP: %v", result)
+		return nil, fmt.Errorf("MCP: %s", text)
 	}
-	return result, err
+	// Passed on as written: decoded into any it would re-encode with its
+	// keys sorted, and the order is part of what agents are shown.
+	if !json.Valid([]byte(text)) {
+		return nil, fmt.Errorf("MCP result is not JSON: %s", text)
+	}
+	return json.RawMessage(text), nil
 }
+
+// hangTurn is workspaceScript's answer for a turn that must never end.
+const hangTurn = "\x00hang"
+
 func workspaceScript(raw string) (string, bool) {
 	if os.Getenv("WASH_FAKE_WORKSPACE") != "1" {
 		return "", false
@@ -120,6 +128,14 @@ func workspaceScript(raw string) (string, bool) {
 		for _, msg := range batch {
 			if msg.Body == "ASK_PERMISSION" {
 				return "", false
+			}
+			// An assignment that hangs, or wakes its member into a turn of
+			// its own afterwards (runTurn).
+			if msg.Assignment != "" && msg.Type == "instruction" && strings.Contains(msg.Body, "HANG_TURN") {
+				return hangTurn, true
+			}
+			if msg.Assignment != "" && msg.Type == "instruction" && strings.Contains(msg.Body, "SELF_TURN") {
+				selfTurnNext.Store(true)
 			}
 			// ASK_OWNER: ask the owner two structured questions and wait
 			// (the call blocks this member); the answers arrive as the

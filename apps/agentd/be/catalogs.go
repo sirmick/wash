@@ -56,19 +56,6 @@ type Catalog struct {
 
 func (c Catalog) auto() bool { return len(c.Slots) == 0 }
 
-// builtinCatalogs is catalogs.json's `catalogs`, decoded once. The file is
-// in the binary, so a malformed one is a build defect, not a runtime
-// condition.
-var builtinCatalogs = func() map[string]Catalog {
-	var d struct {
-		Catalogs map[string]Catalog `json:"catalogs"`
-	}
-	if err := json.Unmarshal(launchDataJSON, &d); err != nil {
-		panic("agentd: catalogs.json: " + err.Error())
-	}
-	return d.Catalogs
-}()
-
 // loadCatalogs is the built-in catalogs with agents.json's over them, by
 // id: an entry there replaces the whole catalog, so the file says exactly
 // what the Catalog tab showed when it was saved. A catalog that fails
@@ -76,7 +63,7 @@ var builtinCatalogs = func() map[string]Catalog {
 // can grey it with the reason instead of it silently vanishing.
 func loadCatalogs(pol agentpolicy.Policy) (map[string]Catalog, map[string]error) {
 	catalogs := map[string]Catalog{}
-	for id, c := range builtinCatalogs {
+	for id, c := range builtinLaunch.Catalogs {
 		catalogs[id] = Catalog{Name: c.Name, Adapter: c.Adapter, Connection: c.Connection, Slots: maps.Clone(c.Slots)}
 	}
 	bad := map[string]error{}
@@ -224,7 +211,7 @@ func publishCatalogs(pol agentpolicy.Policy, keys map[string]string) []agentprot
 	out := make([]agentproto.CatalogView, 0, len(ids))
 	for _, id := range ids {
 		c := catalogs[id]
-		_, builtin := builtinCatalogs[id]
+		_, builtin := builtinLaunch.Catalogs[id]
 		_, inPolicy := pol.Catalogs[id]
 		v := agentproto.CatalogView{ID: id, Name: c.Name, Adapter: c.Adapter, Connection: c.Connection, Available: true, Builtin: builtin, Overridden: builtin && inPolicy}
 		if v.Name == "" {
@@ -431,16 +418,15 @@ func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error)
 	// mode setting.
 	if req.Mode != "" {
 		if err := h.client.SetMode(ctx, h.sessionID, req.Mode); err != nil {
+			h.mu.Lock()
+			offered := modeIDs(h.modes)
+			h.mu.Unlock()
 			h.retire()
-			return nil, fmt.Errorf("%s: mode %q: %w; it offers %s", p.Provider, req.Mode, err, modeIDs(h.modes))
+			return nil, fmt.Errorf("%s: mode %q: %w; it offers %s", p.Provider, req.Mode, err, offered)
 		}
-		hostedMu.Lock()
-		h.mode = req.Mode
-		hostedMu.Unlock()
+		h.setMode(req.Mode)
 	}
-	hostedMu.Lock()
-	options := append([]acp.ConfigOption(nil), h.configs...)
-	hostedMu.Unlock()
+	options := h.configsSnapshot()
 	effective, err := configureWorkspaceSession(p, options, func(id, value string) ([]acp.ConfigOption, error) {
 		res, e := h.client.SetConfigOption(ctx, h.sessionID, id, value)
 		if e == nil {
@@ -460,8 +446,11 @@ func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error)
 	// What the adapter reports now, not what was asked: the two are checked
 	// equal above, and this is the line to read when a session "ran on the
 	// wrong model".
+	h.mu.Lock()
+	mode := h.mode
+	h.mu.Unlock()
 	log.Printf("agentd: session settings key=%s catalog=%s model=%s connection=%s adapter=%s mode=%s yolo=%v effective=%v",
-		h.key, launch.catalog, launch.model, launch.connection, p.Provider, h.mode, req.Yolo, effective)
+		h.key, launch.catalog, launch.model, launch.connection, p.Provider, mode, req.Yolo, effective)
 	return h, nil
 }
 

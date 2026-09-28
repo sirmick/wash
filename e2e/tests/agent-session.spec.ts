@@ -38,6 +38,16 @@ async function openAgent(page: Page, url: string, prompt: string) {
 }
 
 test.describe('managed agent sessions', () => {
+  // The save picker once lived in the Agents window's launcher, so File ›
+  // Save transcript in a session window opened nothing.
+  test('Save transcript opens its picker in the session window', async ({ page, router }) => {
+    const win = await openAgent(page, router.url, 'say something');
+    await expect(win.getByText('Hello from the fake agent.')).toBeVisible({ timeout: 20_000 });
+    await win.locator('[data-testid="ai-menubar-file"]').click();
+    await page.locator('[data-testid="ai-menu-save"]').click();
+    await expect(page.locator('[data-testid="ai-save-picker"]')).toBeVisible();
+  });
+
   test('a session streams its reply into the transcript', async ({ page, router }) => {
     const win = await openAgent(page, router.url, 'say something');
 

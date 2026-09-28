@@ -25,6 +25,10 @@ type SessionMeta struct {
 	// reader shows the name without knowing where it came from — and this
 	// field says it was theirs.
 	UserTitle string `json:"user_title,omitempty"`
+	// Parent is the session that launched this one: the orchestrator of
+	// its workspace, or the member that spawned it. Empty for a session a
+	// person started.
+	Parent    string `json:"parent,omitempty"`
 	StartedMS int64  `json:"started_ms,omitempty"`
 	EndedMS   int64  `json:"ended_ms,omitempty"`
 	EndReason string `json:"end_reason,omitempty"`
@@ -60,6 +64,10 @@ type AgentHistory struct {
 	Query string `json:"query,omitempty"`
 	// Limit bounds the answer; 0 and anything above 200 mean 200.
 	Limit int `json:"limit,omitempty"`
+	// All includes the sessions a workspace launched (its members). Without
+	// it the answer is top-level sessions only: one orchestrator can launch
+	// dozens of members, and they buried the conversations people started.
+	All bool `json:"all,omitempty"`
 }
 
 // History answers AgentHistory, newest first, each session stamped with

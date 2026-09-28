@@ -386,10 +386,7 @@ func TestAutoApprovalIsBoundedByTheLauncherAndSurvivesRestart(t *testing.T) {
 	if _, err := workspaces.call(context.Background(), h, workspacemcp.Call{Name: "member_control", Arguments: raw}); err != nil {
 		t.Fatal(err)
 	}
-	hostedMu.Lock()
-	yolo := h.yolo
-	hostedMu.Unlock()
-	if !yolo {
+	if !h.autoApproved() {
 		t.Fatal("auto-approval was not restored when the member resumed")
 	}
 }
@@ -783,11 +780,7 @@ func TestOrchestratorYoloReachesMembersWithoutTheirOwnApproval(t *testing.T) {
 		hostedMu.Unlock()
 		defer func() { hostedMu.Lock(); delete(hostedAll, h.key); hostedMu.Unlock() }()
 	}
-	yolo := func(session string) bool {
-		hostedMu.Lock()
-		defer hostedMu.Unlock()
-		return live[session].yolo
-	}
+	yolo := func(session string) bool { return live[session].autoApproved() }
 	live["lead"].toggleYolo(true)
 	got := s.View("lead")
 	if !yolo("s-follows") || !swarm.GetMember(got, "follows").AutoApprove {

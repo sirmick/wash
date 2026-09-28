@@ -40,7 +40,7 @@ func BenchmarkHistoryQueryRareTerm(b *testing.B) {
 	writeCorpus(b, filepath.Join(dir, "wash", "agent-transcripts"), 200, 300)
 
 	// Warm: the first query builds the index, which is the one-off cost.
-	if got := historyQuery("quokka", 0); len(got) != 1 {
+	if got := historyQuery("quokka", 0, nil, false); len(got) != 1 {
 		b.Fatalf("fixture wrong: %d hits", len(got))
 	}
 	var total int64
@@ -55,7 +55,7 @@ func BenchmarkHistoryQueryRareTerm(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if got := historyQuery("quokka", 0); len(got) != 1 {
+		if got := historyQuery("quokka", 0, nil, false); len(got) != 1 {
 			b.Fatalf("hits = %d", len(got))
 		}
 	}
@@ -104,7 +104,7 @@ func BenchmarkHistoryListOnly(b *testing.B) {
 	writeCorpus(b, filepath.Join(dir, "wash", "agent-transcripts"), 200, 300)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if got := historyQuery("", 0); len(got) != 200 {
+		if got := historyQuery("", 0, nil, false); len(got) != 200 {
 			b.Fatalf("listed %d", len(got))
 		}
 	}

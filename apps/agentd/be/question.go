@@ -105,12 +105,7 @@ func sameQuestions(a, b []agentproto.PendingQuestion) bool {
 // answer. ok is false when the question went unanswered (stopped, session
 // ended, adapter gone).
 func (h *hosted) askQuestions(ctx context.Context, source string, set swarm.QuestionSet) (questionReply, bool) {
-	h.turnMu.Lock()
-	h.activityAsks++
-	h.turnMu.Unlock()
-	defer func() { h.turnMu.Lock(); h.activityAsks--; h.turnMu.Unlock() }()
-	h.setState("needs-input", "question")
-	defer h.narrated()
+	defer h.awaitingHuman("question")()
 	questionsMu.Lock()
 	questionSeq++
 	p := &pendingQuestion{
@@ -237,7 +232,7 @@ func (ws *workspaceService) decisionQuestions(now time.Time) []agentproto.Pendin
 			}
 			q := agentproto.PendingQuestion{ID: msg.ID, Source: "decision", Set: *msg.Questions, WorkspaceName: w.Name, MemberID: msg.Sender, AgeMS: now.UnixMilli() - msg.Created}
 			if m := swarm.GetMember(&w, msg.Sender); m != nil {
-				if h := workspaceHosted(m.Session); h != nil {
+				if h := hostedBySession(m.Session); h != nil {
 					q.RowKey, q.Agent = h.key, h.agent
 				}
 			}
@@ -480,7 +475,7 @@ func questionsFor(rowKey, member string) []agentproto.PendingQuestion {
 func workspaceQuestions(w *swarm.Workspace) []agentproto.PendingQuestion {
 	members := map[string]string{}
 	for _, m := range w.Members {
-		if h := workspaceHosted(m.Session); h != nil {
+		if h := hostedBySession(m.Session); h != nil {
 			members[h.key] = m.ID
 		}
 	}

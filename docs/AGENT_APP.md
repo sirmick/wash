@@ -258,7 +258,7 @@ a pro and a budget catalog per vendor:
 
 The OpenRouter catalogs are open-weight models only, by the owner's choice:
 the vendors' own models are reached through their own catalogs. They were
-chosen by the evaluation in `apps/agentd/openrouter-eval` (NOTES.md,
+chosen by the evaluation in `tools/openrouter-eval` (NOTES.md,
 2026-09-27): a screen of 14 models on a small benchmark, then team runs of
 the workspace shakedown in a jail. Every shortlisted mix passed the
 shakedown; the orchestrator was 95–98% of each run's cost, the members cents.
@@ -370,8 +370,12 @@ New `apps/agentd/be/acp.go`:
 - **`session/update` → the existing four wire states**
   (`running | working | needs-input | done`). Deliberate: the pivot must be
   invisible in the sidebar on day one.
-  - **Narration only implies `working` inside an open turn** (`hosted.turnMu`
-    / `beginTurn` / `endTurn` / `narrated`). The ACP conn hands a response
+  - **Narration only implies `working` inside an open turn** (`hosted.mu`,
+    `rowState` / `beginTurn` / `endTurn` / `narrated` / `publishRow`). Each
+    session's state is under one leaf lock, `hosted.mu`: decisions are made
+    under it, and roster writes, transcripts, the journal and the store run
+    after it. Every roster write reads the state decided last, so racing
+    writes converge on it. The ACP conn hands a response
     straight from the read loop while notifications go through an ordering
     queue, so the response that ends a turn routinely overtakes the tail of
     that turn's own `session/update` stream. An unconditional
@@ -399,8 +403,23 @@ New `apps/agentd/be/acp.go`:
   (`background.go`). A session whose turn ended with work still running in
   the background carries it in `Row.background`; the status line and the
   roster say `background · <what>`, and a workspace member's activity is
-  `background`, instead of idle. To check live: whether a background Bash
-  finishing starts a new turn.
+  `background`, instead of idle.
+- **Turns the agent starts itself** (2026-09-28). A background Bash that
+  finishes wakes Claude Code into a turn of its own, with no
+  `session/prompt` open. claude-agent-acp 0.81.2 swallows a prompt sent
+  into that turn: it never reaches the model and never settles, and
+  `session/cancel` alone does not release it (reproduced live; the Redoubt
+  FMT1 hang). Claude sessions ask for Claude Code's `session_state_changed`
+  messages (`_meta.claudeCode.emitRawSDKMessages`, delivered as
+  `_claude/sdkMessage`); `running` with no prompt of Wash's open is the
+  agent's own turn (the row is working), and typed prompts and workspace
+  mail are held until it reports `idle` (`agent_turn.go`). Claude Code
+  reports `idle` right after a turn even with background Bash still
+  running, so holding does not wait on the background work.
+- **Stop has a deadline.** Stop, `interrupt` and `pause` give the agent
+  10 s to end the turn after `session/cancel`; then Wash ends it itself
+  (gives up the `session/prompt` call, or forgets the agent's own turn),
+  says so in the transcript, and marks the turn's mail uncertain.
 - **Liveness is real now.** We own the process, so exit is a fact rather
   than a 60s inference. The TTL sweep stays only as a backstop.
 - **Policy moves here.** The matcher from `apps/term/be/policy.go` and the

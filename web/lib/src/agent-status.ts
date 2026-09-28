@@ -25,8 +25,7 @@ import { tokens } from './tokens.ts';
  * be reported as `done`.
  *
  * `detached` is not in this union: it is orthogonal (a live session with
- * no window), carried on the row beside its state, and rendered by
- * `detachedLabel` below.
+ * no window), carried on the row beside its state.
  */
 export type AgentState =
   | 'running'
@@ -100,13 +99,6 @@ export function agentStateLabel(state: string, reason?: string): string {
 }
 
 /**
- * detachedLabel is what a live session with no window says about itself.
- * Orthogonal to state — a detached session is still running, working or
- * blocked — so it is a separate word rather than a seventh state.
- */
-export const detachedLabel = 'running, no window';
-
-/**
  * needsHuman reports whether a state is a claim on someone's attention.
  * This is the predicate the rail's badge counts and the taskbar pill
  * pulses for; keeping it here stops each surface inventing its own.
@@ -125,14 +117,6 @@ export function needsHuman(state: string): boolean {
  */
 export function isWorking(state: string): boolean {
   return state === 'working';
-}
-
-/**
- * isOver reports whether a session has ended, however it ended. Both
- * arms render dim; only the colour distinguishes them.
- */
-export function isOver(state: string): boolean {
-  return state === 'done' || state === 'failed';
 }
 
 

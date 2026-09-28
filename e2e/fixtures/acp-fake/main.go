@@ -145,6 +145,10 @@ func main() {
 			reply(out, id, nil)
 
 		case "session/prompt":
+			if selfRunning.Load() {
+				fmt.Fprintln(os.Stderr, "acp-fake: prompt swallowed: it arrived during the agent's own turn")
+				continue
+			}
 			go runTurn(out, m)
 
 		case "session/cancel":
@@ -160,7 +164,11 @@ func main() {
 
 var (
 	cancelled atomic.Bool
-	reqSeq    atomic.Int64
+	// selfRunning is a turn the agent started itself (selfTurn), and
+	// selfTurnNext asks for one after the current turn.
+	selfRunning  atomic.Bool
+	selfTurnNext atomic.Bool
+	reqSeq       atomic.Int64
 	// scriptN indexes into the ACP_FAKE_SCRIPT replies (see runTurn).
 	scriptN atomic.Int64
 )
@@ -219,6 +227,17 @@ func runTurn(out *bufio.Writer, m map[string]any) {
 		}()
 	}
 	if text, ok := workspaceScript(raw); ok {
+		// HANG_TURN: a turn that never ends and ignores a cancel, as the
+		// Redoubt member's did once claude-agent-acp swallowed its prompt.
+		if text == hangTurn {
+			notify(out, chunk("Working on it."))
+			return
+		}
+		// SELF_TURN: after this turn the agent wakes itself (a background
+		// task finished) and runs a turn of its own.
+		if selfTurnNext.Swap(false) {
+			defer func() { go selfTurn(out) }()
+		}
 		notify(out, update(map[string]any{"sessionUpdate": "usage_update", "used": 2048, "size": 32000}))
 		// Preserve JSON option names verbatim through the Markdown transcript.
 		if strings.HasPrefix(text, "WORKSPACE_") {
@@ -654,6 +673,24 @@ func reply(out *bufio.Writer, id any, result any) {
 func replyErr(out *bufio.Writer, id any, code int, msg string) {
 	write(out, map[string]any{"jsonrpc": "2.0", "id": id,
 		"error": map[string]any{"code": code, "message": msg}})
+}
+
+// selfTurn is a turn the agent starts itself: running, a few seconds of
+// narration, idle. A prompt that arrives meanwhile is swallowed, never
+// answered, as claude-agent-acp 0.81.2 does.
+func selfTurn(out *bufio.Writer) {
+	state := func(s string) {
+		write(out, map[string]any{"jsonrpc": "2.0", "method": "_claude/sdkMessage", "params": map[string]any{"sessionId": sessionID, "message": map[string]any{"type": "system", "subtype": "session_state_changed", "state": s}}})
+	}
+	time.Sleep(time.Second)
+	selfRunning.Store(true)
+	state("running")
+	for i := range 15 {
+		notify(out, chunk(fmt.Sprintf("Woken by my own background task (%d). ", i)))
+		time.Sleep(time.Second)
+	}
+	selfRunning.Store(false)
+	state("idle")
 }
 
 func notify(out *bufio.Writer, params any) {

@@ -7,7 +7,8 @@
 
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
-import { AgentRoster, rosterTeams, fmtAgo, fmtElapsed, stateColor, stateLabel } from './agent-roster.tsx';
+import { AgentRoster, rosterTeams, fmtAgo, fmtElapsed, stateLabel } from './agent-roster.tsx';
+import { agentStateColor } from './agent-status.ts';
 import type * as agentproto from './agent-protocol.gen';
 
 afterEach(cleanup);
@@ -96,11 +97,11 @@ test('clicking a row activates that session', () => {
 test('state language matches the terminal’s own tab dot', () => {
   // Distinct colours for the three states a user acts on, and stale is
   // visibly not one of them.
-  const colors = ['working', 'needs-input', 'done'].map(stateColor);
+  const colors = ['working', 'needs-input', 'done'].map(agentStateColor);
   expect(new Set(colors).size).toBe(3);
-  expect(stateColor('stale')).not.toBe(stateColor('working'));
+  expect(agentStateColor('stale')).not.toBe(agentStateColor('working'));
   // An unknown state still renders (a newer terminal can invent one).
-  expect(stateColor('teleporting')).toBeTruthy();
+  expect(agentStateColor('teleporting')).toBeTruthy();
 
   expect(stateLabel(row({ state: 'needs-input' }))).toBe('needs you');
   expect(stateLabel(row({ state: 'needs-input', reason: 'idle' }))).toBe('needs you · idle');

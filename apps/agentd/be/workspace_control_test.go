@@ -143,7 +143,10 @@ func TestARefusedPlanExitDoesNotPauseTheMember(t *testing.T) {
 	defer func() { workspaces = old }()
 	h := &hosted{key: "acp:p", agent: "claude", cwd: t.TempDir(), workspaceMember: true}
 	_, _ = h.RequestPermission(context.Background(), acp.RequestPermissionRequest{ToolCall: acp.ToolCall{Kind: acp.ToolKindSwitchMode, RawInput: json.RawMessage(`{"plan":"x"}`)}, Options: exitPlanOptions})
-	if !h.interrupted.Load() {
+	h.mu.Lock()
+	interrupted := h.interrupted
+	h.mu.Unlock()
+	if !interrupted {
 		t.Fatal("the turn the refusal ends would pause the member")
 	}
 }
@@ -256,7 +259,9 @@ func TestInterruptEndsTheTurnWithoutPausingTheMember(t *testing.T) {
 				}
 			}
 		}()
-		h.interrupted.Store(interrupted)
+		h.mu.Lock()
+		h.interrupted = interrupted
+		h.mu.Unlock()
 		promptHosted(h, turn{text: "Plan the loader", mailIDs: []string{msg.ID}})
 
 		v := s.View("lead")
@@ -267,7 +272,10 @@ func TestInterruptEndsTheTurnWithoutPausingTheMember(t *testing.T) {
 		if !interrupted && member != "paused" {
 			t.Fatalf("human stop: member %s, want paused", member)
 		}
-		if h.interrupted.Load() {
+		h.mu.Lock()
+		leftover := h.interrupted
+		h.mu.Unlock()
+		if leftover {
 			t.Fatal("interrupt flag outlived its turn")
 		}
 		h.client.Close()

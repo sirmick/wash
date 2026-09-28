@@ -10,7 +10,8 @@
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
 import type { agentproto } from '@wash/ui';
-import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, historySignature, sessionLabel } from './HistoryPanel.tsx';
+import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, historySignature, historyTree, sessionLabel } from './HistoryPanel.tsx';
+import { createSignal } from 'solid-js';
 
 afterEach(cleanup);
 
@@ -35,7 +36,6 @@ const panel = (over: {
   onResume?: (s: agentproto.SessionMeta) => void;
   onRestart?: (s: agentproto.SessionMeta) => void;
   onQuery?: (q: string) => void;
-  embedded?: boolean;
 } = {}) =>
   render(() => (
     <HistoryPanel
@@ -44,8 +44,6 @@ const panel = (over: {
       onQuery={over.onQuery ?? noop}
       onResume={over.onResume ?? noop}
       onRestart={over.onRestart}
-      onClose={noop}
-      embedded={over.embedded}
     />
   ));
 
@@ -100,9 +98,6 @@ test('the keyboard drives the list from the search box', () => {
   const rows = [sess({ session_id: 'a' }), sess({ session_id: 'b' }), sess({ session_id: 'c' })];
   const { getByTestId } = panel({ sessions: rows, onResume: (s) => resumed.push(s.session_id) });
   const input = getByTestId('ai-history-search') as HTMLInputElement;
-
-  // The panel opens focused: the first thing anyone does is type.
-  expect(document.activeElement).toBe(input);
 
   fireEvent.keyDown(input, { key: 'Enter' });
   expect(resumed).toEqual(['a']);
@@ -212,7 +207,6 @@ test('a running session does not act like one more thing to open', () => {
       query={() => ''}
       loading={() => false}
       onQuery={noop}
-      onClose={noop}
       onResume={(s) => clicked.push(s.session_id)}
     />
   ));
@@ -263,7 +257,6 @@ test('a row shows the matching line, with the term marked', () => {
       query={() => 'quokka'}
       loading={() => false}
       onQuery={noop}
-      onClose={noop}
       onResume={noop}
     />
   ));
@@ -278,22 +271,19 @@ test('a row with no snippet renders none — a metadata match quotes nothing bac
       query={() => 'codex'}
       loading={() => false}
       onQuery={noop}
-      onClose={noop}
       onResume={noop}
     />
   ));
   expect(queryByTestId('ai-history-snippet')).toBeNull();
 });
 
-test('embedded history shows a three-line transcript preview without modal controls', () => {
-  const { getByTestId, queryByTestId } = panel({
-    embedded: true,
+test('history shows a three-line transcript preview', () => {
+  const { getByTestId } = panel({
     sessions: [sess({ preview: 'first question\nfirst answer\nlatest detail\nnot visible' })],
   });
   const preview = getByTestId('ai-history-snippet');
   expect(preview.textContent).toContain('first question');
   expect(preview.style.getPropertyValue('-webkit-line-clamp')).toBe('3');
-  expect(queryByTestId('ai-history-close')).toBeNull();
 });
 
 // --- rename / delete / prune (docs/Review-findings.md P2 → agent) ---
@@ -310,7 +300,6 @@ test('a row offers Rename and Delete, and Delete is disabled while it runs', () 
       sessions={() => [sess({ session_id: 's-gone' }), sess({ session_id: 's-live', live: true, row_key: 'acp:1' })]}
       query={() => ''}
       onQuery={noop}
-      onClose={noop}
       onResume={noop}
       onRestart={(s) => restarted.push(s.session_id)}
       onRename={(s) => renamed.push(s.session_id)}
@@ -351,7 +340,7 @@ test('a panel whose host offers no verbs shows no ellipsis and no prune button',
 test('prune lives beside the count it acts on', () => {
   let pruned = 0;
   const { getByTestId } = render(() => (
-    <HistoryPanel sessions={() => [sess()]} query={() => ''} onQuery={noop} onClose={noop} onResume={noop}
+    <HistoryPanel sessions={() => [sess()]} query={() => ''} onQuery={noop} onResume={noop}
       onPrune={() => { pruned++; }} />
   ));
   fireEvent.click(getByTestId('ai-history-prune'));
@@ -367,4 +356,49 @@ test('historySignature moves with a row\'s facts, not with the roster\'s churn',
   expect(historySignature([sess({ session_id: 'a', title: 'renamed' })])).not.toBe(historySignature(base));
   expect(historySignature([sess({ session_id: 'a', title: 'one', live: true, row_key: 'acp:1' })])).not.toBe(historySignature(base));
   expect(historySignature([...base, sess({ session_id: 'b' })])).not.toBe(historySignature(base));
+});
+
+// Members sit under the session that launched them, newest first at each
+// level; one whose parent is not listed stands at the top rather than
+// vanishing, and a cycle cannot hide or repeat a row.
+test('historyTree lays sessions out as they were launched', () => {
+  const tree = historyTree([
+    sess({ session_id: 'impl', parent: 'lead' }),
+    sess({ session_id: 'lead' }),
+    sess({ session_id: 'solo' }),
+    sess({ session_id: 'sub', parent: 'impl' }),
+    sess({ session_id: 'red', parent: 'lead' }),
+    sess({ session_id: 'stray', parent: 'deleted' }),
+  ]);
+  expect(tree.map((r) => `${r.depth}:${r.s.session_id}`)).toEqual(['0:lead', '1:impl', '2:sub', '1:red', '0:solo', '0:stray']);
+  const cycle = historyTree([sess({ session_id: 'a', parent: 'b' }), sess({ session_id: 'b', parent: 'a' })]);
+  expect(cycle.map((r) => r.s.session_id).sort()).toEqual(['a', 'b']);
+});
+
+test('the members checkbox asks the host, and then the list is indented', async () => {
+  const [all, setAll] = createSignal(false);
+  const asked: boolean[] = [];
+  const { getByTestId, getAllByTestId } = render(() => (
+    <HistoryPanel
+      sessions={() => (all() ? [sess({ session_id: 'lead' }), sess({ session_id: 'impl', parent: 'lead' })] : [sess({ session_id: 'lead' })])}
+      query={() => ''}
+      onQuery={noop}
+      onResume={noop}
+      all={all}
+      onAll={(v) => { asked.push(v); setAll(v); }}
+    />
+  ));
+  const box = getByTestId('ai-history-all') as HTMLInputElement;
+  expect(box.checked).toBe(false);
+  expect(getAllByTestId('ai-history-row')).toHaveLength(1);
+  fireEvent.click(box);
+  expect(asked).toEqual([true]);
+  const rows = getAllByTestId('ai-history-row');
+  expect(rows.map((r) => r.getAttribute('data-depth'))).toEqual(['0', '1']);
+  expect(rows[1].style.marginLeft).toBe('24px');
+});
+
+test('a host that does not offer members shows no checkbox', () => {
+  panel();
+  expect(screen.queryByTestId('ai-history-all')).toBeNull();
 });

@@ -234,10 +234,6 @@ var session struct {
 // Messages this backend sends its own FE, besides relaying agentd's pushes
 // (the TypeScript twin is WindowMessage in main.tsx).
 type (
-	roleMsg struct {
-		Kind string `json:"kind"`
-		Role string `json:"role"`
-	}
 	autostartMsg struct {
 		Kind  string `json:"kind"`
 		Agent string `json:"agent"`
@@ -325,7 +321,6 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		parseFlags()
 	}
 	log.Printf("wash-ai ready instance=%s manager=%v", instanceID, managerMode)
-	c.SendAppMsg(roleMsg{Kind: "role", Role: map[bool]string{true: "manager", false: "session"}[managerMode]})
 	// The launcher picks a working directory with the shared
 	// <FilePicker mode="directory">, which talks to its own BE rather than
 	// a service. Typing a path into a text field was the placeholder, and

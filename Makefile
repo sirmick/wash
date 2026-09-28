@@ -1171,20 +1171,20 @@ shakedown:
 	  echo "Open an Agent window there (the orchestrator on a frontier model; the workspace catalog needs a small slot, e.g. anthropic-budget) and paste:" && \
 	  echo "    Read SCRIPT.md and run the shakedown."
 
-# model-screen: run a benchmark (apps/agentd/openrouter-eval/bench/<name>) against OpenRouter models,
-# each alone in OpenCode, and score them (apps/agentd/openrouter-eval/README.md). Spends real
+# model-screen: run a benchmark (tools/openrouter-eval/bench/<name>) against OpenRouter models,
+# each alone in OpenCode, and score them (tools/openrouter-eval/README.md). Spends real
 # money on the stored OpenRouter key, so it is never part of a test target.
 #   make model-screen MODELS=z-ai/glm-5.3,minimax/minimax-m3 [BENCH=easy] [BUDGET=1]
 BENCH ?= easy
 BUDGET ?= 1
 .PHONY: model-screen bench-selfcheck
 model-screen:
-	go run ./apps/agentd/openrouter-eval/screen -bench apps/agentd/openrouter-eval/bench/$(BENCH) -budget $(BUDGET) -models "$(MODELS)"
+	go run ./tools/openrouter-eval/screen -bench tools/openrouter-eval/bench/$(BENCH) -budget $(BUDGET) -models "$(MODELS)"
 
 # bench-selfcheck: every benchmark's hidden tests pass on its reference
 # solution, so a failing score is the model's and not the benchmark's.
 bench-selfcheck:
-	@for b in apps/agentd/openrouter-eval/bench/*/; do \
+	@for b in tools/openrouter-eval/bench/*/; do \
 	  dir=$$(mktemp -d) && cp "$$b"project/go.mod "$$b"project/*_test.go "$$b"hidden/*.go "$$b"reference/*.go "$$dir"/ && \
 	  (cd "$$dir" && go test ./... >/dev/null) && echo "ok   $$b" || { echo "FAIL $$b"; exit 1; }; \
 	done

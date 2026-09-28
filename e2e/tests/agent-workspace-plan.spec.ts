@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../fixtures/router';
+import { freshHistory } from '../fixtures/agents';
 
 // The shakedown (e2e/shakedown/SCRIPT.md), deterministic: the spec is the
 // orchestrator, typing tool calls; fake members follow keywords in their
@@ -197,4 +198,120 @@ test('an adapter question is answered in the panel, and background work shows', 
   await expect(app.getByTestId('agent-transcript')).toContainText('Started in the background.');
   await expect(app.getByText(/background · make bench/).first()).toBeVisible({ timeout: 10_000 });
   await expect(app.getByText(/background · make bench/)).toHaveCount(0, { timeout: 15_000 });
+});
+
+// The Redoubt hang and what now prevents and reports it. A member whose
+// agent wakes itself (a background task finished) is not sent mail until it
+// is idle again: the fake, like claude-agent-acp, swallows a prompt sent
+// into that turn. A turn that never ends is reported by the supervisor, and
+// an interrupt frees the member after the cancel deadline.
+test('a member\'s own turn holds its mail; a hung turn is reported and freed', async ({ page, router }) => {
+  test.setTimeout(150_000);
+  const project = join(router.xdgConfigHome, 'stuck');
+  mkdirSync(project, { recursive: true });
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+  const started = await router.controlRequest({ t: 'launch', app_id: 'com.wash.ai' });
+  await router.controlRequest({ t: 'msg', instance_id: String(started.instance_id), data: { kind: 'agent_start', claim: true, agent: 'codex', cwd: project, prompt: '' } });
+  const app = page.locator('wash-app-ai');
+  const composer = app.locator('[data-testid="agent-composer"]').first();
+  const outputs = app.locator('[data-testid="agent-transcript"]').first().locator('pre');
+  await expect(composer).toBeEnabled();
+  const tool = async (name: string, args: object = {}) => {
+    const tab = app.getByRole('tab', { name: /^Conversation/ });
+    if (await tab.count()) await tab.click();
+    const count = await outputs.count();
+    await composer.fill(`workspace ${name} ${JSON.stringify(args)}`); await composer.press('Enter');
+    await expect(outputs).toHaveCount(count + 1, { timeout: 30_000 });
+    const text = await outputs.last().innerText();
+    expect(text).toMatch(/^WORKSPACE_RESULT /);
+    return JSON.parse(text.slice('WORKSPACE_RESULT '.length));
+  };
+  const state = () => JSON.parse(readFileSync(join(router.xdgStateHome, 'wash/workspaces.json'), 'utf8')).workspaces.at(-1);
+  const member = (key: string) => state().members.find((m: any) => m.key === key);
+  const message = (id: string) => state().messages.find((m: any) => m.id === id);
+
+  await tool('workspace_configure', { workspace: { name: 'Stuck', project_root: project }, supervisor: { quiet: '10s' } });
+  await tool('plan_set', { nodes: { S: { title: 'Self' }, H: { title: 'Hang' } } });
+
+  // The agent's own turn: mail waits for its idle, then goes and is answered.
+  await tool('workspace_configure', { members: { self: { name: 'Self', node: 'S', lifetime: 'resident', instructions: 'Work.', task: 'SELF_TURN' } } });
+  await expect.poll(() => state().plan.find((n: any) => n.id === 'S').state).toBe('reported');
+  const selfId = member('self').id;
+  await expect.poll(async () => (await tool('workspace_get', { view: 'state' })).activity[selfId], { timeout: 10_000, intervals: [100] }).toMatch(/^(working|responding|thinking)$/);
+  const ping = await tool('message_send', { recipient: 'self', type: 'instruction', body: 'PING' });
+  expect(message(ping.id).delivery).toBe('queued');
+  await expect.poll(() => message(ping.id).delivery, { timeout: 20_000 }).toBe('delivered');
+
+  // A turn that never ends: the supervisor reports it, the interrupt frees it.
+  await tool('workspace_configure', { members: { hang: { name: 'Hang', node: 'H', lifetime: 'resident', instructions: 'Work.', task: 'HANG_TURN' } } });
+  await expect.poll(() => state().messages.some((m: any) => m.sender === 'wash' && m.body.includes('wedged: Hang (hang)')), { timeout: 45_000 }).toBe(true);
+  const freed = await tool('member_control', { action: 'interrupt', member_ids: ['hang'] });
+  expect(freed.outcomes[0].result.abandoned).toBe(true);
+  const after = await tool('message_send', { recipient: 'hang', type: 'instruction', body: 'PING' });
+  await expect.poll(() => message(after.id).delivery, { timeout: 20_000 }).toBe('delivered');
+
+  // History lists the orchestrator's conversation, not its members, until
+  // asked; then the members sit under it.
+  const lead = state().members.find((m: any) => m.id === state().orchestrator).session_id;
+  const members = [member('self').session_id, member('hang').session_id];
+  await tool('workspace_end', { confirm: true });
+  const history = await freshHistory(page);
+  const row = (sid: string) => history.locator(`[data-testid="ai-history-row"][data-session-id="${sid}"]`);
+  await expect(row(lead)).toBeVisible({ timeout: 15_000 });
+  for (const sid of members) await expect(row(sid)).toHaveCount(0);
+  await history.getByTestId('ai-history-all').check();
+  for (const sid of members) await expect(row(sid)).toHaveAttribute('data-depth', '1', { timeout: 15_000 });
+  await expect(row(lead)).toHaveAttribute('data-depth', '0');
+});
+
+// A member's assignment and result wrap to the pane, and the pane scrolls
+// when they are longer than it: a long line, an unbroken token or a wide
+// code block must not push the pane sideways past the window.
+test('the assignment pane wraps and scrolls', async ({ page, router }) => {
+  test.setTimeout(90_000);
+  const project = join(router.xdgConfigHome, 'wrap');
+  mkdirSync(project, { recursive: true });
+  await page.goto(router.url);
+  await expect(page.locator('wash-app-session')).toBeVisible();
+  const started = await router.controlRequest({ t: 'launch', app_id: 'com.wash.ai' });
+  await router.controlRequest({ t: 'msg', instance_id: String(started.instance_id), data: { kind: 'agent_start', claim: true, agent: 'codex', cwd: project, prompt: '' } });
+  const app = page.locator('wash-app-ai');
+  const composer = app.locator('[data-testid="agent-composer"]').first();
+  const outputs = app.locator('[data-testid="agent-transcript"]').first().locator('pre');
+  await expect(composer).toBeEnabled();
+  const tool = async (name: string, args: object = {}) => {
+    const tab = app.getByRole('tab', { name: /^Conversation/ });
+    if (await tab.count()) await tab.click();
+    const count = await outputs.count();
+    await composer.fill(`workspace ${name} ${JSON.stringify(args)}`); await composer.press('Enter');
+    await expect(outputs).toHaveCount(count + 1, { timeout: 30_000 });
+  };
+  const state = () => JSON.parse(readFileSync(join(router.xdgStateHome, 'wash/workspaces.json'), 'utf8')).workspaces.at(-1);
+
+  const task = [
+    'A long paragraph: ' + 'words that should wrap at the pane edge '.repeat(60),
+    'An unbroken token: ' + 'x'.repeat(600),
+    '```',
+    'a code line ' + '0123456789'.repeat(60),
+    '```',
+    ...Array.from({ length: 80 }, (_, i) => `- step ${i}`),
+  ].join('\n');
+  await tool('workspace_configure', { workspace: { name: 'Wrap', project_root: project } });
+  await tool('plan_set', { nodes: { W: { title: 'Wrap' } } });
+  await tool('workspace_configure', { members: { w: { name: 'Wrapper', node: 'W', lifetime: 'resident', instructions: 'Work.', task } } });
+  await expect.poll(() => state().plan.find((n: any) => n.id === 'W').state).toBe('reported');
+  await app.getByTestId(`workspace-member-${state().members.find((m: any) => m.key === 'w').id}`).click();
+
+  const brief = app.getByTestId('workspace-member-brief');
+  await expect(brief).toContainText('A long paragraph');
+  const box = await brief.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, right: el.getBoundingClientRect().right }));
+  const panel = await app.getByTestId('workspace-member-detail').evaluate((el) => el.getBoundingClientRect().right);
+  expect(box.right, 'the pane stays inside the member panel').toBeLessThanOrEqual(panel + 1);
+  expect(box.scrollWidth, 'nothing pushes the pane sideways').toBeLessThanOrEqual(box.clientWidth + 1);
+  expect(box.scrollHeight, 'the brief is longer than the pane').toBeGreaterThan(box.clientHeight);
+  await brief.hover();
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => brief.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await tool('workspace_end', { confirm: true });
 });

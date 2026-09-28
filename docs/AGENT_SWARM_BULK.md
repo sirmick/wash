@@ -24,7 +24,10 @@ always declined, before any policy rule or auto-approval. claude-agent-acp answe
 ending the turn, so wash treats the stop like `interrupt` (member available, mail delivered),
 saves the plan from the request under `$XDG_STATE_HOME/wash/workspace-plans/`, and wakes the
 orchestrator with a question carrying the plan's start, its path and the approving call. `interrupt` ends a member's current turn and leaves it
-available, with what the turn carried delivered; `pause` still also stops dispatch. A
+available, with what the turn carried delivered; `pause` still also stops dispatch. Both wait
+up to 10 s for the turn to end; an agent that does not end it is not waited for longer: Wash
+ends the turn itself, and `interrupt` returns `abandoned:true` with the turn's messages as
+`uncertain` (they may not have reached the model; `message_retry` them if they matter). A
 member `subagents:"deny"` removes Claude's own Agent/Task tool at launch and on resume; adapters
 wash cannot restrict fail to launch.
 
@@ -100,7 +103,7 @@ node whose needs are done.
 
 `from` reads the definition from a TOML file, usually `.wash/workspace.toml`: `name`,
 `max_active`, `max_members`, `catalog`, `qa_dir`, `plan_file`, `legend`, `context_warn`,
-`[roles.<role>] instructions` and `[members.<key>]` tables. Fields in the call win, and
+`[supervisor]`, `[roles.<role>] instructions` and `[members.<key>]` tables. Fields in the call win, and
 members merge by key, so a setup is one call and the definition is not transcribed from a
 template into every setup. An unknown key is an error naming it. A role's instructions
 are put before the instructions of every new member with that role. `context_warn`
@@ -212,7 +215,9 @@ or abandonment. Limits count idle residents; they do not consume model turns whi
 `assignment_update {updates, wait:{reason}}` creates assignments and sets the caller
 waiting on exactly those as one set, in the same call. `member_update {handoff}` writes the
 caller's handoff to `.wash/local/handoffs/<key>.md` (`.wash/local` keeps itself out of git);
-a member launched with `handoff_from:"<key>"` reads it in its first message. A member whose
+a member launched with `handoff_from:"<key>"` reads it in its first message. A hung member
+cannot write its own, so `handoff_file:"<path>"` launches from a file the orchestrator wrote
+instead (inside the project, at most 32 KiB; not with `handoff_from`). A member whose
 turn ends with its assignment active, no report and no waiting set is reminded once.
 
 `member_update` can complete assignments, update status and set
@@ -225,6 +230,30 @@ messages as one JSON array. A queued assignment instruction whose assignment the
 already resolved (it read the task early with inbox_read) is dropped, not re-delivered. Waiting returns immediately with an instruction to end
 the turn; actionable messages wake the member in a later turn. Never poll. Acknowledgment
 is not completion. question/answer/instruction wake; progress records without waking.
+
+## The supervisor
+
+Every other nudge fires on an event; the supervisor notices that time passed and nothing
+happened (`workspace_supervisor.go`). It is plain code on the workspace loop, checking every
+5 s what Wash already holds: each member's turn, open tools, questions, background tasks,
+when it last heard from the agent, and whether its adapter's process tree used CPU since the
+last check. It never prompts a member; it sends the orchestrator one waking `lifecycle`
+message listing what it found:
+
+| Finding | When |
+|---|---|
+| `wedged` | a member in a turn with nothing from it for `quiet` (default 2m): no output, no open tool, no question, no busy process. Reported at once, whatever the rest of the team is doing |
+| `stopped` | an open assignment on a member that is paused, failed, ended, or has no session |
+| `idle with work` | a member idle for `idle` (default 1m) with an active assignment, no report and no waiting set |
+| `undelivered` | mail queued for `quiet` for a member free to take it |
+| `reported`, `failed`, `ready`, `waiting` | the whole team idle for `idle` with the plan unfinished: reported nodes to accept, failed nodes with nobody on them, leaf nodes whose needs are met with nobody on them, and who is waiting on what. Not while a question waits on the owner |
+
+The same findings are sent again after `repeat` (default 5m), doubling; a finding that goes
+away and comes back is sent at once. After `max_prompts` (default 3) the owner gets a flash
+instead, and then nothing more until something changes. A wedged orchestrator is told to
+the owner directly. `supervisor:{off, quiet, idle, repeat, max_prompts}` in
+`workspace_configure` (or `[supervisor]` in `workspace.toml`) replaces the whole setting;
+durations are 10s to 24h.
 
 ## QA: one file per thread
 
@@ -369,11 +398,15 @@ member tab, where existing human controls answer the request.
 
 ## Injected instructions
 
-`internal/workspacemcp/about.go` owns the concise Instructions string shared by MCP
-initialization and about. It covers discovery, bulk reconciliation, keyed launches, resident
-lifetimes, QA, human decisions/approvals, waiting, uncertain delivery and deliberate teardown.
-Children additionally receive, as one first message, their supplied role instructions, a short
-membership suffix and their initial task (or, without one, an instruction to wait for it);
-every inbox turn has a server-authored identity prefix and serialized attributed message.
+`internal/workspacemcp/about.go` owns what agents are told, by role. The server
+instructions sit in every hosted session's system prompt on every turn, and most sessions
+never lead a team, so they are a few lines (about 430 bytes): an orchestrator's say a team
+exists and to read `workspace_get {"view":"about"}` when the owner wants one; a member's say
+how a member works. `about` then leads with a numbered guide for the caller's role, then the
+rules everyone keeps, then the caller, and (for an orchestrator) the reference for setting up
+and the permissions detail. A member's first message is its role instructions, "How you work"
+(the same member guide, numbered, with its key and node), and its initial task (or, without
+one, an instruction to wait for it); every inbox turn has a server-authored identity prefix
+and serialized attributed message.
 Children have fresh provider context, not the parent's transcript or launcher default prompt.
 See [Redoubt's complete operating example](examples/redoubt-workspace.md).

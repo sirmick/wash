@@ -45,11 +45,6 @@ const historyCap = 100
 // which searches transcripts and carries metadata a menu item cannot.
 const recentPublishCap = 15
 
-// historyFlush is the longest the on-disk copy lags memory. Keepalives
-// touch last-seen constantly; only a real change (a new session, a moved
-// directory) writes immediately.
-const historyFlush = 30 * time.Second
-
 // rosterState is what the roster knows about one stored session id.
 type rosterState struct {
 	Live     bool
@@ -88,7 +83,6 @@ func rosterIndex(rs []agentproto.Row) map[string]rosterState {
 var (
 	history      []agentproto.Session
 	historyDirty bool
-	historySaved time.Time
 )
 
 // launchRecord is what history keeps about how a session started: the
@@ -274,11 +268,19 @@ func resumeSession(c *sdk.Conn, sessionID string) {
 // leaves a permanently dead row, because the next click resolves from
 // the file again.
 func resolveResumeTarget(sessionID string) (agentproto.Session, bool) {
-	for i := range history {
-		if history[i].SessionID == sessionID {
-			s := history[i]
-			return s, s.Agent != ""
+	var found agentproto.Session
+	known := false
+	mutateStateIf(func(*agentproto.State) bool {
+		for _, s := range history {
+			if s.SessionID == sessionID {
+				found, known = s, true
+				break
+			}
 		}
+		return false
+	})
+	if known {
+		return found, found.Agent != ""
 	}
 	m, ok := readSessionMeta(transcriptPath(sessionID))
 	if !ok || m.SessionID != sessionID {
@@ -304,26 +306,29 @@ func resolveResumeTarget(sessionID string) (agentproto.Session, bool) {
 // (detached, or the box rebooted) would otherwise never be written at
 // all, which is exactly the case history exists for.
 func saveHistorySoon() {
-	if !historyDirty {
-		return
+	if data, ok := takeHistory(true); ok {
+		writeHistory(data)
 	}
-	saveHistory()
 }
 
 func forgetSession(sessionID string) {
 	changed := false
-	for i := range history {
-		if history[i].SessionID == sessionID {
-			history = append(history[:i], history[i+1:]...)
-			changed = true
-			break
+	mutateStateIf(func(st *agentproto.State) bool {
+		for i := range history {
+			if history[i].SessionID == sessionID {
+				history = append(history[:i], history[i+1:]...)
+				changed = true
+				break
+			}
 		}
+		if changed {
+			st.Recent = publishHistory()
+		}
+		return changed
+	})
+	if changed {
+		saveHistory()
 	}
-	if !changed {
-		return
-	}
-	mutateState(func(s *agentproto.State) { s.Recent = publishHistory() })
-	saveHistory()
 }
 
 // ---- persistence ----
@@ -367,13 +372,34 @@ func loadHistory() {
 
 // saveHistory writes the list atomically. Best-effort by design — losing
 // history is a papercut, and a service that dies over one would be worse.
+// Not from inside a state write: it takes the state lock to read the list.
 func saveHistory() {
+	if data, ok := takeHistory(false); ok {
+		writeHistory(data)
+	}
+}
+
+// takeHistory reads the remembered list under the state lock, which is
+// what guards it (rememberSession runs inside a state write), and clears
+// the dirty flag: the caller writes what it took. With onlyDirty, an
+// unchanged list is not taken.
+func takeHistory(onlyDirty bool) (data []byte, ok bool) {
+	mutateStateIf(func(*agentproto.State) bool {
+		if onlyDirty && !historyDirty {
+			return false
+		}
+		var err error
+		if data, err = json.MarshalIndent(history, "", "  "); err == nil {
+			historyDirty, ok = false, true
+		}
+		return false
+	})
+	return data, ok
+}
+
+func writeHistory(data []byte) {
 	path := historyPath()
 	if path == "" {
-		return
-	}
-	data, err := json.MarshalIndent(history, "", "  ")
-	if err != nil {
 		return
 	}
 	dir := filepath.Dir(path)
@@ -400,18 +426,5 @@ func saveHistory() {
 		log.Printf("agentd: history save: %v", err)
 		return
 	}
-	historyDirty = false
-	historySaved = time.Now()
 }
 
-// flushHistory persists when something changed and either the change was
-// structural or enough time has passed. Called from the sweep tick.
-func flushHistory(now time.Time) {
-	if !historyDirty {
-		return
-	}
-	if now.Sub(historySaved) < historyFlush {
-		return
-	}
-	saveHistory()
-}

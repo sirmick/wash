@@ -363,16 +363,16 @@ func TestMemberTierResolvesFromTheOrchestratorsStack(t *testing.T) {
 	if lead := swarm.GetMember(w, w.Lead); lead.LaunchSettings == nil || lead.LaunchSettings.Connection != "opencode@openrouter" {
 		t.Fatalf("orchestrator launch settings = %+v", lead.LaunchSettings)
 	}
-	want := builtinCatalogs["openrouter-budget"].Slots["small"]
+	want := builtinLaunch.Catalogs["openrouter-budget"].Slots["small"]
 	rev := swarm.GetMember(w, "rev")
 	if rev.Model != "small" || rev.Catalog != "openrouter-budget" || rev.LaunchSettings.Model != want.Model || rev.LaunchSettings.Connection != want.Connection || rev.Provider != "opencode" {
 		t.Fatalf("reviewer member = %q %+v", rev.Model, rev.LaunchSettings)
 	}
-	if impl := swarm.GetMember(w, "impl"); impl.LaunchSettings.Model != builtinCatalogs["openrouter-budget"].Slots["coding"].Model || impl.LaunchSettings.Effort != "max" {
+	if impl := swarm.GetMember(w, "impl"); impl.LaunchSettings.Model != builtinLaunch.Catalogs["openrouter-budget"].Slots["coding"].Model || impl.LaunchSettings.Effort != "max" {
 		t.Fatalf("explicit effort did not override the slot: %+v", impl.LaunchSettings)
 	}
 	// No model: the catalog's default slot.
-	if plain := swarm.GetMember(w, "plain"); plain.LaunchSettings.Provider != "opencode" || plain.LaunchSettings.Connection != "opencode@openrouter" || plain.LaunchSettings.Model != builtinCatalogs["openrouter-budget"].Slots["frontier"].Model {
+	if plain := swarm.GetMember(w, "plain"); plain.LaunchSettings.Provider != "opencode" || plain.LaunchSettings.Connection != "opencode@openrouter" || plain.LaunchSettings.Model != builtinLaunch.Catalogs["openrouter-budget"].Slots["frontier"].Model {
 		t.Fatalf("member without a model = %+v", plain.LaunchSettings)
 	}
 	// A member may name its own catalog, and a model id on it.

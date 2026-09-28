@@ -109,7 +109,7 @@ test.describe('catalogs', () => {
     await manager.locator('[data-testid="agents-tab-catalog"]').click();
     await card.locator('[data-testid="ai-catalog-reset-openrouter-budget"]').click();
     await expect(card.locator('[data-testid="ai-catalog-origin-openrouter-budget"]')).toHaveText('built in');
-    await expect(card.locator('[data-testid="ai-catalog-model-openrouter-budget-coding"]')).toHaveValue('openrouter/deepseek/deepseek-v4-pro-0813');
+    await expect(card.locator('[data-testid="ai-catalog-model-openrouter-budget-coding"]')).toHaveValue('openrouter/deepseek/deepseek-v4.1-flash');
     expect(JSON.parse(readFileSync(join(router.xdgConfigHome, 'wash', 'agents.json'), 'utf8')).catalogs ?? {}).toEqual({});
   });
 
@@ -126,7 +126,7 @@ test.describe('catalogs', () => {
     await stack.selectOption('openrouter-budget');
     await manager.locator('[data-testid="ai-model-select"]').selectOption('coding');
     await expect(manager.locator('[data-testid="ai-model-summary"]'))
-      .toHaveText('OpenCode · openrouter/deepseek/deepseek-v4-pro-0813 · effort high · via openrouter');
+      .toHaveText('OpenCode · openrouter/deepseek/deepseek-v4.1-flash · effort high · via openrouter');
 
     const before = await page.locator('wash-app-ai').count();
     const cursor = router.logCursor();
@@ -135,7 +135,7 @@ test.describe('catalogs', () => {
     // agentd applied the slot: the model only exists with the key, and the
     // effort only once that model is chosen.
     await router.waitForLog(
-      /agentd: session settings key=\S+ catalog=openrouter-budget model=coding connection=opencode@openrouter adapter=opencode mode=\S* yolo=false effective=map\[effort:high mode:build model:openrouter\/deepseek\/deepseek-v4-pro-0813\]/,
+      /agentd: session settings key=\S+ catalog=openrouter-budget model=coding connection=opencode@openrouter adapter=opencode mode=\S* yolo=false effective=map\[effort:high mode:build model:openrouter\/deepseek\/deepseek-v4\.1-flash\]/,
       25_000,
       cursor,
     );

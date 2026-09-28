@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -204,6 +205,32 @@ func TestConcurrentRetryAndRecipientIsolation(t *testing.T) {
 		t.Fatal("delivery changed the sender's lifecycle or skipped dispatch")
 	}
 }
+
+// An abandoned turn's mail may never have reached the model: it is
+// uncertain, and the member stays as it was.
+func TestAbandonedTurnLeavesMailUncertain(t *testing.T) {
+	s, _ := fixture(t)
+	if _, e := s.Send("lead-session", "worker", "instruction", "do it", "", "", ""); e != nil {
+		t.Fatal(e)
+	}
+	msg, _ := s.Next("worker-session")
+	if e := s.TurnAbandoned("worker-session", []string{msg[0].ID}); e != nil {
+		t.Fatal(e)
+	}
+	w := s.View("worker-session")
+	if w.Messages[0].State != "uncertain" {
+		t.Fatalf("message state = %s", w.Messages[0].State)
+	}
+	if m := GetMember(w, "worker"); m.State != "available" {
+		t.Fatalf("member state = %s", m.State)
+	}
+	for _, v := range w.Messages {
+		if v.Type == "lifecycle" {
+			t.Fatal("abandoning a turn woke the orchestrator")
+		}
+	}
+}
+
 func TestStopRetainsMailAndEphemeralCompletionIsExplicit(t *testing.T) {
 	s, _ := fixture(t)
 	_ = s.Mutate("worker-session", false, func(_ *Workspace, m *Member) error { m.Lifetime = "ephemeral"; return nil })
@@ -483,5 +510,51 @@ func TestANoteWakesAPlainWait(t *testing.T) {
 	wait()
 	if next, _ := s.Next("lead-session"); len(next) != 1 || next[0].Type != "note" || next[0].Recipient != w.Lead {
 		t.Fatalf("a plain wait was not woken by the note: %+v", next)
+	}
+}
+
+// Every member session names the session that launched it: its creator's,
+// so a member a member spawned sits under that member.
+func TestParentsFollowTheCreator(t *testing.T) {
+	s, w := fixture(t)
+	if e := s.Mutate("lead-session", true, func(w *Workspace, _ *Member) error {
+		w.Members = append(w.Members, Member{ID: "sub", Session: "sub-session", State: "available", Lifetime: "ephemeral", Creator: "worker"})
+		w.Members = append(w.Members, Member{ID: "orphan", Session: "orphan-session", State: "available", Lifetime: "resident", Creator: "gone"})
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	got := s.Parents()
+	want := map[string]string{"worker-session": "lead-session", "sub-session": "worker-session", "orphan-session": "lead-session"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parents = %v, want %v (lead %s)", got, want, w.Lead)
+	}
+}
+
+// The member's "report your assignment" reminder and the orchestrator's
+// "node left with nobody on it" are different nudges: the first must not
+// silence the second.
+func TestEndingARemindedMemberStillTellsTheOrchestrator(t *testing.T) {
+	s, _ := fixture(t)
+	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	msg, _ := s.Next("worker-session")
+	if e = s.TurnEnded("worker-session", []string{msg[0].ID}, false); e != nil {
+		t.Fatal(e)
+	}
+	if !slices.Contains(s.View("lead-session").Nudged, "idle:"+a.ID) {
+		t.Fatal("the member was not reminded")
+	}
+	if e = s.EndMember("lead-session", "worker", false); e != nil {
+		t.Fatal(e)
+	}
+	told := false
+	for _, m := range s.View("lead-session").Messages {
+		told = told || m.Sender == "wash" && strings.Contains(m.Body, "active with nobody on it")
+	}
+	if !told {
+		t.Fatal("the orchestrator was not told the node has nobody on it")
 	}
 }

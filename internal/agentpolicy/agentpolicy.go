@@ -82,14 +82,6 @@ type LaunchPrefs struct {
 	Yolo bool `json:"yolo,omitempty"`
 }
 
-// ModeFor is the remembered mode for one adapter, or "" for its default.
-func (l *LaunchPrefs) ModeFor(adapter string) string {
-	if l == nil {
-		return ""
-	}
-	return l.Mode[adapter]
-}
-
 // Rule is one line of the table.
 type Rule struct {
 	// Match is `Tool` or `Tool(pattern)`.

@@ -39,8 +39,8 @@ const maxExtraRoots = 8
 // roots returns every folder this session may reach: the cwd first, then
 // the extras in the order they were added.
 func (h *hosted) roots() []string {
-	hostedMu.Lock()
-	defer hostedMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	out := make([]string, 0, 1+len(h.extraRoots))
 	out = append(out, h.cwd)
 	return append(out, h.extraRoots...)
@@ -49,8 +49,8 @@ func (h *hosted) roots() []string {
 // extraRootsSnapshot is what the roster publishes: the added folders only,
 // because the cwd is already a column.
 func (h *hosted) extraRootsSnapshot() []string {
-	hostedMu.Lock()
-	defer hostedMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(h.extraRoots) == 0 {
 		return nil
 	}
@@ -70,8 +70,8 @@ func (h *hosted) addRoot(path string) bool {
 		return false
 	}
 	abs = filepath.Clean(abs)
-	hostedMu.Lock()
-	defer hostedMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(h.extraRoots) >= maxExtraRoots {
 		log.Printf("agentd: root refused key=%s path=%s: already at %d", h.key, abs, maxExtraRoots)
 		return false
@@ -95,8 +95,8 @@ func (h *hosted) removeRoot(path string) bool {
 		return false
 	}
 	abs = filepath.Clean(abs)
-	hostedMu.Lock()
-	defer hostedMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for i, r := range h.extraRoots {
 		if r == abs {
 			h.extraRoots = append(h.extraRoots[:i:i], h.extraRoots[i+1:]...)

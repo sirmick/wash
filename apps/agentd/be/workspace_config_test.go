@@ -200,18 +200,18 @@ func TestWorkspaceAboutBeforeSetupAndWithoutMutation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		about := got.(map[string]any)
+		about := got.(workspacemcp.Discovery)
 		wantRole := "unattached"
 		if attached {
 			wantRole = "orchestrator"
 		}
-		if about["caller"].(map[string]any)["role"] != wantRole {
+		if about.Caller["role"] != wantRole {
 			t.Fatal(about)
 		}
-		if about["instructions"] != workspacemcp.Instructions {
-			t.Fatal("discovery guidance drift")
+		if !reflect.DeepEqual(about.Guide, workspacemcp.OrchestratorGuide) || about.Reference == nil {
+			t.Fatal("an orchestrator's discovery has no guide or reference")
 		}
-		permissions := about["permissions"].(map[string]any)
+		permissions := about.Permissions
 		if permissions["adapter_mode"] != "read-only" || !strings.HasPrefix(permissions["filesystem_enforcement"].(string), "unknown:") {
 			t.Fatal(permissions)
 		}

@@ -11,9 +11,9 @@ import (
 )
 
 func (h *hosted) observeWorkspaceActivity(u acp.SessionUpdate) {
-	h.turnMu.Lock()
-	defer h.turnMu.Unlock()
-	if !h.turnLive {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.busy() {
 		return
 	} // Late events must not resurrect a finished turn.
 	switch u.SessionUpdate {
@@ -48,18 +48,18 @@ func workspaceMemberActivity(m swarm.Member, h *hosted, decision bool) (string, 
 	if h == nil {
 		return "offline", ""
 	}
-	h.turnMu.Lock()
-	defer h.turnMu.Unlock()
 	if h.closing.Load() {
 		return "ended", ""
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.activityAsks > 0 || decision {
 		return "needs-input", ""
 	}
-	if !h.turnLive {
+	if !h.busy() {
 		// Work left running in the background outlives the turn: the
 		// member is waiting on it, not idle.
-		if bg := h.background(); bg != "" {
+		if bg := backgroundLabel(h.bgTasks); bg != "" {
 			return "background", bg
 		}
 		if m.Waiting != "" {
@@ -89,15 +89,15 @@ func workspaceRuntime(w *swarm.Workspace) (map[string]string, map[string]string,
 		}
 	}
 	for _, m := range w.Members {
-		h := workspaceHosted(m.Session)
+		h := hostedBySession(m.Session)
 		activity[m.ID], detail[m.ID] = workspaceMemberActivity(m, h, decisions[m.ID])
 		if m.Usage != nil {
 			usage[m.ID] = *m.Usage
 		}
 		if h != nil {
-			hostedMu.Lock()
+			h.mu.Lock()
 			used, size := h.used, h.size
-			hostedMu.Unlock()
+			h.mu.Unlock()
 			if used > 0 || size > 0 {
 				usage[m.ID] = swarm.Usage{Used: used, Size: size}
 			}
@@ -106,9 +106,9 @@ func workspaceRuntime(w *swarm.Workspace) (map[string]string, map[string]string,
 	return activity, detail, usage
 }
 func (ws *workspaceService) captureUsage(h *hosted) {
-	hostedMu.Lock()
+	h.mu.Lock()
 	used, size := h.used, h.size
-	hostedMu.Unlock()
+	h.mu.Unlock()
 	if used == 0 && size == 0 {
 		return
 	}
@@ -141,7 +141,7 @@ func workspaceApprovals(w *swarm.Workspace) []agentproto.WorkspaceApproval {
 	}
 	byKey := map[string]string{}
 	for _, m := range w.Members {
-		if h := workspaceHosted(m.Session); h != nil {
+		if h := hostedBySession(m.Session); h != nil {
 			byKey[h.key] = m.ID
 		}
 	}

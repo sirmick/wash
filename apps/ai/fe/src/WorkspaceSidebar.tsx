@@ -1,6 +1,6 @@
-import { For, Show, createMemo } from 'solid-js';
+import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { Component } from 'solid-js';
-import { Button, tokens, agentActivityLabel, agentActivityColor, agentActivityPulses } from '@wash/ui';
+import { Button, Checkbox, tokens, agentActivityLabel, agentActivityColor, agentActivityPulses } from '@wash/ui';
 import type { agentproto } from '@wash/ui';
 
 export const WorkspaceSidebar: Component<{
@@ -19,7 +19,9 @@ export const WorkspaceSidebar: Component<{
   const needsAttention = () => (props.frame.approvals?.length ?? 0) + questions().length + ownerThreads().length + (props.frame.qa_document_status?.state === 'error' ? 1 : 0);
   const label = (id: string) => id === 'human' ? 'You' : (w().members ?? []).find((m) => m.id === id)?.name ?? id;
   const activity = (m: agentproto.Member) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
-  const usage = (m: agentproto.Member) => props.frame.usage?.[m.id] ?? m.usage;
+  // agentd's usage map already holds each member's checkpoint when its
+  // session is not reporting live.
+  const usage = (m: agentproto.Member) => props.frame.usage?.[m.id];
   const count = (n: number) => n.toLocaleString('en-US');
   // "CT1 · Console input-flood test": a plan node's id with its title; a
   // code alone is what made the sidebar cryptic.
@@ -28,15 +30,21 @@ export const WorkspaceSidebar: Component<{
   // one group per plan node in first-seen order. Groups are keyed by code
   // STRINGS and rows are the members' own objects, so a frame update keeps
   // the rendered rows (a live activity dot) rather than rebuilding them.
+  // Ended members are hidden unless asked for: a long run ends dozens, and
+  // they buried the team that is still working. Their conversations stay
+  // reachable here, and in History.
+  const [showEnded, setShowEnded] = createSignal(false);
+  const endedCount = () => (w().members ?? []).filter((m) => m.state === 'ended').length;
+  const team = () => (w().members ?? []).filter((m) => showEnded() || m.state !== 'ended');
   const teamCodes = createMemo(() => {
     const order: string[] = [];
-    for (const m of (w().members ?? [])) {
+    for (const m of team()) {
       const code = m.node ?? '';
       if (!order.includes(code)) order.push(code);
     }
     return order.sort((a, b) => (a === '' ? -1 : b === '' ? 1 : 0));
   }, undefined, { equals: (a, b) => a.length === b.length && a.every((c, i) => c === b[i]) });
-  const membersOf = (code: string) => (w().members ?? []).filter((m) => (m.node ?? '') === code);
+  const membersOf = (code: string) => team().filter((m) => (m.node ?? '') === code);
   const heading = { font: tokens.type.titleSm, padding: `${tokens.spaceSm}px 0` };
   return (
     <aside data-testid="workspace-sidebar" aria-label="Agent workspace" style={{
@@ -90,7 +98,14 @@ export const WorkspaceSidebar: Component<{
           <small style={{ display: 'block', color: tokens.fgMuted }}>{q.state} · {label(q.assignee)}</small>
         </button>
       )}</For>
-      <div style={heading}>Team</div>
+      <div style={{ ...heading, display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px` }}>
+        <span>Team</span>
+        <Show when={endedCount() > 0}>
+          <span style={{ 'margin-left': 'auto', font: tokens.type.textSm }}>
+            <Checkbox data-testid="workspace-show-ended" checked={showEnded()} onChange={setShowEnded} label={`Show ended (${endedCount()})`} />
+          </span>
+        </Show>
+      </div>
       <For each={teamCodes()}>{(code) => (
         <section data-testid={`workspace-team-${code || 'coordination'}`} aria-label={code ? pkg(code) : 'Coordination'}
           style={{ 'margin-left': code ? `${tokens.spaceMd}px` : '0' }}>

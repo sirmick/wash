@@ -141,15 +141,10 @@ func (a adapterDef) builtinEnv(cfg agentpolicy.AgentConfig) []string {
 	return []string{"CODEX_PATH=" + p}
 }
 
-// launch resolves how to actually start an adapter: its own binary if
-// installed, else npx with the package. Returns ok=false when neither is
-// possible, with a note a human can act on.
-func (a adapterDef) launch() (cmd string, args []string, note string, ok bool) {
-	return a.launchWith(agentpolicy.AgentConfig{})
-}
-
-// launchWith is launch with the user's agents.json entry applied. A
-// configured `command` replaces the built-in name outright and skips the
+// launchWith resolves how to start an adapter: its own binary if
+// installed, else npx with the package, with the user's agents.json entry
+// applied. Returns ok=false when neither is possible, with a note a human
+// can act on. A configured `command` replaces the built-in name outright and skips the
 // npx fallback: someone who named a binary meant that binary, and quietly
 // running a package from the registry instead would be the opposite of
 // what they asked for. It is still resolved through PATH, so a bare name
@@ -374,7 +369,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 	key := "acp:" + itoa(hostedSeq)
 	hostedMu.Unlock()
 
-	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, connection: launch.connection, catalog: launch.catalog, model: launch.model, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{})}
+	h := &hosted{capability: capability, workspaceMember: launch.member, key: key, agent: a.ID, connection: launch.connection, catalog: launch.catalog, model: launch.model, cwd: cwd, conn: svcConn, mcp: acpMCPServers(run.MCPServers), stderrDone: make(chan struct{}), pid: cmd.Process.Pid}
 
 	// Only the injected coordination server is available to restricted reviewers.
 	if capability == "reviewer" {
@@ -461,6 +456,9 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 		h.stop()
 		return nil, err
 	}
+	if res.AgentInfo.Name == claudeAdapter {
+		h.sessionMeta = claudeStateMeta(h.sessionMeta)
+	}
 	return h, nil
 }
 
@@ -486,7 +484,9 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	} else {
 		appendPrompt(h.key, text, time.Now())
 	}
-	h.beginTurn()
+	ctx, abort := context.WithCancel(context.Background())
+	defer abort()
+	h.beginTurn(t, abort)
 	// Text first, then the attachments: the sentence is what frames them,
 	// and an adapter reading the blocks in order should see the question
 	// before the screenshot it is about.
@@ -495,12 +495,17 @@ func promptHosted(h *hosted, t turn) (next turn) {
 		blocks = append(blocks, acp.Text(text))
 	}
 	blocks = append(blocks, t.blocks...)
-	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
+	res, err := h.client.Prompt(ctx, h.sessionID, blocks...)
+	h.mu.Lock()
+	abandoned, interrupted := h.abandoned, h.interrupted
+	h.abandoned, h.interrupted = false, false
+	h.mu.Unlock()
 	if workspaces != nil {
 		workspaces.captureUsage(h)
 		var end error
-		interrupted := h.interrupted.Swap(false)
-		if err == nil && res.StopReason == acp.StopCancelled && !interrupted {
+		if abandoned {
+			end = workspaces.store.TurnAbandoned(h.sessionID, t.mailIDs)
+		} else if err == nil && res.StopReason == acp.StopCancelled && !interrupted {
 			end = workspaces.store.TurnStopped(h.sessionID, t.mailIDs)
 		} else {
 			end = workspaces.store.TurnEnded(h.sessionID, t.mailIDs, err != nil)
@@ -511,6 +516,9 @@ func promptHosted(h *hosted, t turn) (next turn) {
 		defer workspaces.signal()
 	}
 	switch {
+	case abandoned:
+		h.note("Wash stopped waiting for this turn: the agent did not end it within " + cancelDeadline.String() + " of the cancel. What this turn was sent may not have reached it.")
+		return h.endTurn("done", "cancelled")
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
 		// "failed", not "done": a turn that died on an adapter error is
@@ -676,7 +684,7 @@ func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, l
 	h.applyConfigs(res.ConfigOptions)
 	// The replay has landed by the time LoadSession answers, so this is
 	// the moment the stored and replayed records can be settled.
-	reconcileResume(h.key, sessionID, agentID, h.cwd, time.Now())
+	reconcileResume(h.key, sessionID, h.record(), h.cwd, time.Now())
 	h.journal("agent.resume", "session resumed")
 	// Logged like the started path, so "resumed with settings" and
 	// "resumed without" are visible rather than inferred. A started

@@ -346,6 +346,20 @@ test('Stop is offered while a question is pending, and Esc is the same verb', ()
   expect(cancels).toBe(2);
 });
 
+// Alt+A answers the ask of the session it is pressed in. Agent windows
+// share one page, and a workspace keeps hidden sessions mounted: a
+// window-wide shortcut answered every session's ask at once.
+test('Alt+A answers only the session it is pressed in', () => {
+  const ask = (id: string) => [{ id, agent: 'claude', row_key: 'acp:' + id, tool: 'Bash', subject: 'ls', age_ms: 0 }];
+  const answered: string[] = [];
+  const one = render(() => <AgentSession events={() => []} asks={() => ask('one')} onSend={() => {}} onAnswer={(id, d) => answered.push(`${id}:${d}`)} />);
+  render(() => <AgentSession events={() => []} asks={() => ask('two')} onSend={() => {}} onAnswer={(id, d) => answered.push(`${id}:${d}`)} />);
+  fireEvent.keyDown(composerOf(one.container), { key: 'a', altKey: true });
+  expect(answered).toEqual(['one:allow']);
+  fireEvent.keyDown(document.body, { key: 'd', altKey: true });
+  expect(answered).toEqual(['one:allow']);
+});
+
 test('Esc does nothing when there is no turn to stop', () => {
   let cancels = 0;
   const { container } = render(() => (

@@ -13,13 +13,10 @@
 
 /**
  * True when a transcript frame belongs to a session this window is no
- * longer showing, and should be dropped.
- *
- * A frame with no key is trusted (it predates the key being sent), and so
- * is any frame arriving before this window knows what it is showing: the
- * guard exists to reject the WRONG session, never the only one we have.
+ * longer showing, and should be dropped. A frame arriving before this
+ * window knows what it is showing is kept: the guard exists to reject the
+ * WRONG session, never the only one we have.
  */
-export function isStaleTranscript(frameKey: unknown, sessionKey: string): boolean {
-  const key = typeof frameKey === 'string' ? frameKey : '';
-  return key !== '' && sessionKey !== '' && key !== sessionKey;
+export function isStaleTranscript(frameKey: string, sessionKey: string): boolean {
+  return sessionKey !== '' && frameKey !== sessionKey;
 }

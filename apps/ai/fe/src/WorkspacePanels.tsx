@@ -55,8 +55,12 @@ export const WorkspaceMemberPanel: Component<{
           <div ref={panes} data-testid="workspace-member-panes" style={{
             flex: 1, 'min-height': 0, display: 'grid',
             'grid-template-rows': `minmax(0, ${split()}fr) 5px minmax(0, ${100 - split()}fr)`,
+            // One column that may shrink: an implicit column is as wide as its
+            // widest content, so one long line stretched the pane past the
+            // window and nothing in it wrapped.
+            'grid-template-columns': 'minmax(0, 1fr)',
           }}>
-          <div data-testid="workspace-member-brief" style={{ overflow: 'auto', 'min-height': 0, 'overflow-wrap': 'anywhere' }}>
+          <div data-testid="workspace-member-brief" style={{ overflow: 'auto', 'min-height': 0, 'min-width': 0, 'overflow-wrap': 'anywhere' }}>
           {/* Where this member sits in the plan; each step opens the Plan tab there. */}
           <Show when={planPath(w().plan, m().node).length}>
             <nav data-testid="workspace-member-breadcrumb" aria-label="Plan node" style={{ font: tokens.type.textSm, color: tokens.fgMuted }}>
@@ -97,7 +101,7 @@ export const WorkspaceMemberPanel: Component<{
             }}>
             <Splitter container={panes} orientation="horizontal" thickness={5} min={MEMBER_MIN} max={MEMBER_MAX} onChange={setSplit} onCommit={persistSplit} />
           </div>
-          <div style={{ 'min-height': 0 }}><AgentSession events={events} asks={asks} onAnswer={props.onAnswer} questions={questions} onQuestionAnswer={props.onQuestionAnswer} hideComposer /></div>
+          <div style={{ 'min-height': 0, 'min-width': 0 }}><AgentSession events={events} asks={asks} onAnswer={props.onAnswer} questions={questions} onQuestionAnswer={props.onQuestionAnswer} hideComposer /></div>
           </div>
           <textarea aria-label={`Message ${m().name}`} value={draft()} onInput={(e) => setDraft(e.currentTarget.value)} style={{ width: '100%', 'box-sizing': 'border-box' }} />
           <Button disabled={!draft().trim() || m().state === 'ended'} onClick={() => { props.onAction('member_message', { recipient: m().id, body: draft() }); setDraft(''); }}>Send message</Button>

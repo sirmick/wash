@@ -260,6 +260,7 @@ AgentHistory searches the stored sessions: their metadata and, with a query, the
 |---|---|---|
 | `query?` | `string` |  |
 | `limit?` | `number` | Limit bounds the answer; 0 and anything above 200 mean 200. |
+| `all?` | `boolean` | All includes the sessions a workspace launched (its members). Without it the answer is top-level sessions only: one orchestrator can launch dozens of members, and they buried the conversations people started. |
 
 #### AgentProfile
 
@@ -1045,6 +1046,7 @@ SessionMeta is what the history panel lists.
 | `dir?` | `string` |  |
 | `title?` | `string` |  |
 | `user_title?` | `string` | UserTitle is the person's name for the session, when they gave one. Title above is then the SAME string — the effective title, so every reader shows the name without knowing where it came from — and this field says it was theirs. |
+| `parent?` | `string` | Parent is the session that launched this one: the orchestrator of its workspace, or the member that spawned it. Empty for a session a person started. |
 | `started_ms?` | `number` |  |
 | `ended_ms?` | `number` |  |
 | `end_reason?` | `string` |  |
@@ -1112,6 +1114,18 @@ SlotView is one slot of a curated catalog: a model on an adapter, with its effor
 Subscribe asks for the whole roster, now and on every change.
 
 No fields.
+
+#### Supervisor
+
+Supervisor tunes the watchdog that tells the orchestrator when work has stalled (agentd workspace_supervisor.go).
+
+| Field | Type | |
+|---|---|---|
+| `off?` | `boolean` |  |
+| `quiet?` | `string` | Quiet is how long a turn may go without a word, a tool or a busy process before its member counts as wedged. |
+| `idle?` | `string` | Idle is how long a member may sit idle with open work, or the whole team idle with the plan unfinished, before the orchestrator hears. |
+| `repeat?` | `string` | Repeat is the wait before the same finding is sent again; it doubles each time. |
+| `max_prompts?` | `number` | MaxPrompts is how many times the same finding is sent before the owner is told instead. |
 
 #### TranscriptEvent
 
@@ -1195,6 +1209,7 @@ UsageRow is one row's counters.
 | `legend?` | `string` | Legend says what the orchestrator's emojis and states mean. |
 | `roles?` | `Record<string, string>` | Roles are instruction templates by member role, put before a new member's own instructions (workspace.toml [roles.<role>]). |
 | `context_warn?` | `number` | ContextWarn is the share of its context window at which a member's use is reported to the orchestrator, once; 0 is the default. |
+| `supervisor` | `Supervisor` | Supervisor tunes the stall watchdog. |
 | `nudged?` | `string[]` | Nudged are the lifecycle nudges already sent, so each goes once. |
 | `members` | `Member[] \| null` |  |
 | `assignments` | `Assignment[] \| null` |  |

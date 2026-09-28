@@ -73,7 +73,7 @@ func TestIndexDeclinesTooShortRatherThanLying(t *testing.T) {
 	// And the query still works end to end through the scan path: "on"
 	// is in "reconnect" and in "stations", and nowhere in either
 	// session's metadata, so only the fallback scan can find both.
-	if got := historyQuery("on", 0); len(got) != 2 {
+	if got := historyQuery("on", 0, nil, false); len(got) != 2 {
 		t.Errorf("two-character query returned %v, want both sessions", ids(got))
 	}
 }
@@ -85,14 +85,14 @@ func TestIndexPicksUpAppendsToALiveSession(t *testing.T) {
 	withStateDir(t)
 	now := seedTwo(t)
 
-	if got := historyQuery("wombat", 0); len(got) != 0 {
+	if got := historyQuery("wombat", 0, nil, false); len(got) != 0 {
 		t.Fatalf("wombat matched before it was written: %v", ids(got))
 	}
 	appendPrompt("acp:1", "now about the wombat protocol", now.Add(time.Hour))
 	waitForTranscriptWrites()
 	// mtime has 1s granularity on some filesystems; the size changed
 	// either way, which is the check that matters here.
-	got := historyQuery("wombat", 0)
+	got := historyQuery("wombat", 0, nil, false)
 	if len(got) != 1 || got[0].SessionID != "s-reconnect" {
 		t.Errorf("after append, wombat = %v, want s-reconnect", ids(got))
 	}
@@ -170,7 +170,7 @@ func TestIndexFileIsNotMistakenForATranscript(t *testing.T) {
 	if _, err := os.Stat(indexPath()); err != nil {
 		t.Fatalf("cache missing: %v", err)
 	}
-	if got := historyQuery("", 0); len(got) != 2 {
+	if got := historyQuery("", 0, nil, false); len(got) != 2 {
 		t.Errorf("history lists %v, want exactly the two transcripts", ids(got))
 	}
 	if filepath.Ext(indexPath()) == ".jsonl" {

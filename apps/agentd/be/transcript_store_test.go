@@ -164,7 +164,7 @@ func TestReconcileResumeKeepsTheRicherRecord(t *testing.T) {
 	waitForTranscriptWrites()
 
 	// Resume: a new roster key, and an adapter that replayed nothing.
-	reconcileResume("acp:2", "sess-c", "codex", "/tmp", now)
+	reconcileResume("acp:2", "sess-c", launchRecord{Agent: "codex"}, "/tmp", now)
 
 	transMu.Lock()
 	got := append([]agentproto.Event(nil), trans["acp:2"].events...)
@@ -212,7 +212,7 @@ func TestReconcileResumePrefersAFullReplay(t *testing.T) {
 	bindTranscript("acp:2", "sess-d", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:2", "replayed one", now)
 	appendEvent("acp:2", agentproto.Event{Kind: agentproto.EventMessage, Text: "replayed two"}, now)
-	reconcileResume("acp:2", "sess-d", "codex", "/tmp", now)
+	reconcileResume("acp:2", "sess-d", launchRecord{Agent: "codex"}, "/tmp", now)
 	waitForTranscriptWrites()
 
 	got, err := loadTranscript("sess-d")
@@ -361,6 +361,8 @@ func TestStreamedMessagePersistsEveryChunk(t *testing.T) {
 			Content:       acp.Content{{Type: "text", Text: chunk}},
 		}, now)
 	}
+	// The turn ends with nothing after the message to close it.
+	flushTranscript("acp:1")
 	waitForTranscriptWrites()
 
 	got, err := loadTranscript("sess-h")
@@ -373,6 +375,56 @@ func TestStreamedMessagePersistsEveryChunk(t *testing.T) {
 	}
 	if got[0].Text != "Hello from the fake agent." {
 		t.Errorf("text = %q, want the whole sentence", got[0].Text)
+	}
+}
+
+// Each write of a streaming message is the whole message so far, so one
+// write per chunk grew the file with the square of the reply (Redoubt: one
+// reply written 187 times). It is written when it starts, at most once per
+// messageSaveEvery, and when it closes.
+func TestStreamedMessageIsNotWrittenPerChunk(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "sess-w", launchRecord{Agent: "codex"}, "/tmp", now)
+	chunk := func(text string, at time.Time) {
+		appendUpdate("acp:1", acp.SessionUpdate{
+			SessionUpdate: acp.UpdateAgentMessageChunk,
+			Content:       acp.Content{{Type: "text", Text: text}},
+		}, at)
+	}
+	for i := range 100 {
+		chunk("w ", now.Add(time.Duration(i)*time.Millisecond))
+	}
+	chunk("late ", now.Add(messageSaveEvery+time.Millisecond))
+	appendPrompt("acp:1", "next", now.Add(2*time.Second))
+	waitForTranscriptWrites()
+
+	raw, err := os.ReadFile(transcriptPath("sess-w"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Start, the timed save, the close, the prompt; plus the header.
+	if lines := strings.Count(string(raw), "\n"); lines > 5 {
+		t.Errorf("%d lines written for one message and a prompt", lines)
+	}
+	got, _ := loadTranscript("sess-w")
+	if len(got) != 2 || got[0].Text != strings.Repeat("w ", 100)+"late " {
+		t.Fatalf("loaded %+v", got)
+	}
+}
+
+// A tool row's status changes are written, so a reloaded transcript does
+// not show a finished tool as pending.
+func TestToolStatusReachesDisk(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "sess-t", launchRecord{Agent: "codex"}, "/tmp", now)
+	appendUpdate("acp:1", acp.SessionUpdate{SessionUpdate: acp.UpdateToolCall, ToolCall: acp.ToolCall{ToolCallID: "t1", Title: "Terminal", Status: acp.ToolStatusPending}}, now)
+	appendUpdate("acp:1", acp.SessionUpdate{SessionUpdate: acp.UpdateToolCallUpdate, ToolCall: acp.ToolCall{ToolCallID: "t1", Status: acp.ToolStatusCompleted}}, now)
+	waitForTranscriptWrites()
+	got, _ := loadTranscript("sess-t")
+	if len(got) != 1 || got[0].Status != acp.ToolStatusCompleted {
+		t.Fatalf("loaded %+v", got)
 	}
 }
 
@@ -528,36 +580,63 @@ func TestHistoryQuerySearchesContentAndMetadata(t *testing.T) {
 
 	// Content: the word appears only in the conversation, never in any
 	// metadata field.
-	got := historyQuery("banner race", 0)
+	got := historyQuery("banner race", 0, nil, false)
 	if len(got) != 1 || got[0].SessionID != "s-reconnect" {
 		t.Errorf("content search = %+v, want just s-reconnect", ids(got))
 	}
 	// Title.
-	if got := historyQuery("station list", 0); len(got) != 1 || got[0].SessionID != "s-radio" {
+	if got := historyQuery("station list", 0, nil, false); len(got) != 1 || got[0].SessionID != "s-radio" {
 		t.Errorf("title search = %v", ids(got))
 	}
 	// Agent, and model — both index fields, matched without opening a file.
-	if got := historyQuery("claude", 0); len(got) != 1 || got[0].SessionID != "s-radio" {
+	if got := historyQuery("claude", 0, nil, false); len(got) != 1 || got[0].SessionID != "s-radio" {
 		t.Errorf("agent search = %v", ids(got))
 	}
-	if got := historyQuery("gpt-5", 0); len(got) != 1 || got[0].SessionID != "s-reconnect" {
+	if got := historyQuery("gpt-5", 0, nil, false); len(got) != 1 || got[0].SessionID != "s-reconnect" {
 		t.Errorf("model search = %v", ids(got))
 	}
 	// Case-insensitive, because nobody types history queries carefully.
-	if got := historyQuery("SOMAFM", 0); len(got) != 1 {
+	if got := historyQuery("SOMAFM", 0, nil, false); len(got) != 1 {
 		t.Errorf("case-insensitive search = %v", ids(got))
 	}
 	// An empty query is "everything", newest first.
-	if got := historyQuery("", 0); len(got) != 2 || got[0].SessionID != "s-radio" {
+	if got := historyQuery("", 0, nil, false); len(got) != 2 || got[0].SessionID != "s-radio" {
 		t.Errorf("empty query = %v, want both newest-first", ids(got))
 	}
 	// A miss is empty, not everything.
-	if got := historyQuery("nothing matches this", 0); len(got) != 0 {
+	if got := historyQuery("nothing matches this", 0, nil, false); len(got) != 0 {
 		t.Errorf("miss = %v, want none", ids(got))
 	}
 	// The limit bounds the answer.
-	if got := historyQuery("", 1); len(got) != 1 {
+	if got := historyQuery("", 1, nil, false); len(got) != 1 {
 		t.Errorf("limit=1 returned %d", len(got))
+	}
+}
+
+// History lists the sessions people started; a workspace's members are
+// there only when asked for, carrying the session that launched them, and
+// never count against the limit when they are not.
+func TestHistoryHidesMembersUnlessAskedAndNamesTheirParent(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	for i, sid := range []string{"s-lead", "s-impl", "s-sub"} {
+		bindTranscript("acp:"+sid, sid, launchRecord{Agent: "claude"}, "/tmp", now.Add(time.Duration(i)*time.Second))
+		appendPrompt("acp:"+sid, "work", now.Add(time.Duration(i)*time.Second))
+	}
+	waitForTranscriptWrites()
+	parents := map[string]string{"s-impl": "s-lead", "s-sub": "s-impl"}
+
+	if got := historyQuery("", 1, parents, false); len(got) != 1 || got[0].SessionID != "s-lead" {
+		t.Fatalf("top level = %v, want the orchestrator only", ids(got))
+	}
+	got := historyQuery("", 0, parents, true)
+	if len(got) != 3 {
+		t.Fatalf("all = %v", ids(got))
+	}
+	for _, m := range got {
+		if m.Parent != parents[m.SessionID] {
+			t.Errorf("%s parent = %q, want %q", m.SessionID, m.Parent, parents[m.SessionID])
+		}
 	}
 }
 
@@ -570,7 +649,7 @@ func TestHistoryRowsCarryBoundedRecentTranscriptPreview(t *testing.T) {
 	appendPrompt("acp:1", "latest "+strings.Repeat("detail ", 80), now.Add(2*time.Second))
 	waitForTranscriptWrites()
 
-	got := historyQuery("", 0)
+	got := historyQuery("", 0, nil, false)
 	if len(got) != 1 {
 		t.Fatalf("history = %v, want one", ids(got))
 	}
@@ -595,7 +674,7 @@ func TestHistorySearchIgnoresImageBytes(t *testing.T) {
 	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventImage, Mime: "image/png", Text: "iVBORw0KGgoAAAANSUhEUg"}, now)
 	waitForTranscriptWrites()
 
-	if got := historyQuery("iVBORw0", 0); len(got) != 0 {
+	if got := historyQuery("iVBORw0", 0, nil, false); len(got) != 0 {
 		t.Errorf("matched base64 image bytes: %v", ids(got))
 	}
 }
@@ -626,17 +705,17 @@ func TestHistoryQueryRequiresEveryTermAcrossTheConversation(t *testing.T) {
 	appendPrompt("acp:2", "just a plain reconnect question", now.Add(time.Hour))
 	waitForTranscriptWrites()
 
-	got := historyQuery("reconnect race", 0)
+	got := historyQuery("reconnect race", 0, nil, false)
 	if len(got) != 1 || got[0].SessionID != "s-both" {
 		t.Errorf("two-term search = %v, want just s-both", ids(got))
 	}
 	// Order is not significance: the words are a set.
-	if got := historyQuery("race reconnect", 0); len(got) != 1 || got[0].SessionID != "s-both" {
+	if got := historyQuery("race reconnect", 0, nil, false); len(got) != 1 || got[0].SessionID != "s-both" {
 		t.Errorf("reversed terms = %v, want just s-both", ids(got))
 	}
 	// A term that appears nowhere rules the session out even though the
 	// other term matches.
-	if got := historyQuery("reconnect wombat", 0); len(got) != 0 {
+	if got := historyQuery("reconnect wombat", 0, nil, false); len(got) != 0 {
 		t.Errorf("unmatched term still returned %v", ids(got))
 	}
 }
@@ -651,7 +730,7 @@ func TestHistoryQueryReturnsTheLineThatMatched(t *testing.T) {
 	appendPrompt("acp:1", "the quokka protocol is what broke the parser", now.Add(time.Minute))
 	waitForTranscriptWrites()
 
-	got := historyQuery("quokka", 0)
+	got := historyQuery("quokka", 0, nil, false)
 	if len(got) != 1 {
 		t.Fatalf("search = %v, want one", ids(got))
 	}
@@ -673,7 +752,7 @@ func TestMetadataMatchCarriesNoSnippet(t *testing.T) {
 	appendPrompt("acp:1", "nothing relevant here", now)
 	waitForTranscriptWrites()
 
-	got := historyQuery("station", 0)
+	got := historyQuery("station", 0, nil, false)
 	if len(got) != 1 {
 		t.Fatalf("search = %v, want one", ids(got))
 	}
@@ -692,7 +771,7 @@ func TestSnippetIsOneTidyLine(t *testing.T) {
 	appendPrompt("acp:1", "```go\nfunc main() {\n\tprintln(\"quokka\")\n}\n```\n"+strings.Repeat("tail ", 200), now)
 	waitForTranscriptWrites()
 
-	got := historyQuery("quokka", 0)
+	got := historyQuery("quokka", 0, nil, false)
 	if len(got) != 1 {
 		t.Fatalf("search = %v", ids(got))
 	}
@@ -722,5 +801,21 @@ func TestExcerptDoesNotSplitRunes(t *testing.T) {
 	}
 	if !strings.Contains(out, "quokka") {
 		t.Errorf("excerpt lost the match: %q", out)
+	}
+}
+
+// A resume rewrites the file; its header is the launch record the next
+// resume reads back, so it keeps the connection, catalog and model.
+func TestResumeKeepsTheLaunchRecord(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "sess-l", launchRecord{Agent: "opencode", Connection: "opencode@openrouter", Catalog: "openrouter-budget", Model: "coding"}, "/tmp", now)
+	appendPrompt("acp:1", "hello", now)
+	waitForTranscriptWrites()
+	// A resume knows its connection but not its catalog.
+	reconcileResume("acp:2", "sess-l", launchRecord{Agent: "opencode", Connection: "opencode@openrouter"}, "/tmp", now.Add(time.Minute))
+	m, ok := readSessionMeta(transcriptPath("sess-l"))
+	if !ok || m.Connection != "opencode@openrouter" || m.Catalog != "openrouter-budget" || m.LaunchModel != "coding" || m.Agent != "opencode" {
+		t.Fatalf("after resume: %+v", m)
 	}
 }

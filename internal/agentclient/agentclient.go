@@ -176,11 +176,6 @@ func (cl *Client) Start(agent, cwd, prompt string) (reqID string, err error) {
 	return reqID, cl.send(agentproto.AgentStart{Agent: agent, Cwd: cwd, Prompt: prompt, ReqID: reqID})
 }
 
-// Resume reopens a session agentd has on disk; it arrives back as an attach.
-func (cl *Client) Resume(sessionID string) error {
-	return cl.send(agentproto.AgentResume{SessionID: sessionID})
-}
-
 // Watch registers a session key so Snapshot/Event for it reach this host, and
 // subscribes to its transcript. Called for a session this host just started
 // and for one it is attaching to.
