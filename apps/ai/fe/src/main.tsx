@@ -156,10 +156,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [historyQuery, setHistoryQuery] = createSignal('');
   const [historySessions, setHistorySessions] = createSignal<agentproto.SessionMeta[]>([]);
   const [historyLoading, setHistoryLoading] = createSignal(false);
+  // Top-level sessions unless asked: members are listed under their
+  // orchestrator when this is on.
+  const [historyAll, setHistoryAll] = createSignal(false);
   let historyTimer: ReturnType<typeof setTimeout> | undefined;
   const askHistory = (q: string) => {
     setHistoryLoading(true);
-    sendAgentd({ kind: 'agent_history', query: q });
+    sendAgentd({ kind: 'agent_history', query: q, ...(historyAll() ? { all: true } : {}) });
   };
   // Debounced: every keystroke would otherwise grep every transcript on
   // the machine.
@@ -831,6 +834,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       query={historyQuery}
       loading={historyLoading}
       onQuery={onHistoryQuery}
+      all={historyAll}
+      onAll={(v) => { setHistoryAll(v); askHistory(historyQuery()); }}
       onRename={(s) => openRename({ key: s.row_key, session_id: s.session_id, title: s.title })}
       onDelete={(s) => setDeleteFor(s)}
       onPrune={() => setPruning(true)}

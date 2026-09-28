@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../fixtures/router';
+import { freshHistory } from '../fixtures/agents';
 
 // The shakedown (e2e/shakedown/SCRIPT.md), deterministic: the spec is the
 // orchestrator, typing tool calls; fake members follow keywords in their
@@ -249,5 +250,17 @@ test('a member\'s own turn holds its mail; a hung turn is reported and freed', a
   expect(freed.outcomes[0].result.abandoned).toBe(true);
   const after = await tool('message_send', { recipient: 'hang', type: 'instruction', body: 'PING' });
   await expect.poll(() => message(after.id).delivery, { timeout: 20_000 }).toBe('delivered');
+
+  // History lists the orchestrator's conversation, not its members, until
+  // asked; then the members sit under it.
+  const lead = state().members.find((m: any) => m.id === state().orchestrator).session_id;
+  const members = [member('self').session_id, member('hang').session_id];
   await tool('workspace_end', { confirm: true });
+  const history = await freshHistory(page);
+  const row = (sid: string) => history.locator(`[data-testid="ai-history-row"][data-session-id="${sid}"]`);
+  await expect(row(lead)).toBeVisible({ timeout: 15_000 });
+  for (const sid of members) await expect(row(sid)).toHaveCount(0);
+  await history.getByTestId('ai-history-all').check();
+  for (const sid of members) await expect(row(sid)).toHaveAttribute('data-depth', '1', { timeout: 15_000 });
+  await expect(row(lead)).toHaveAttribute('data-depth', '0');
 });

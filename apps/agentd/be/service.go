@@ -73,7 +73,11 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		if limit <= 0 || limit > historyQueryCap {
 			limit = historyQueryCap
 		}
-		sessions := historyQuery(req.Query, limit)
+		var parents map[string]string
+		if workspaces != nil {
+			parents = workspaces.store.Parents()
+		}
+		sessions := historyQuery(req.Query, limit, parents, req.All)
 		if sessions == nil {
 			sessions = []agentproto.SessionMeta{}
 		}

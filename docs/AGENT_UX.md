@@ -21,7 +21,12 @@ There are now two explicit surfaces:
    live roster, history, and row-addressed administration. Its workspace
    keeps all three visible: compact New above History on the left, Running
    on the right. History rows carry a bounded three-line transcript preview;
-   history is no longer a menu or modal mode.
+   history is no longer a menu or modal mode. History lists the sessions
+   people started; "Show workspace members" adds the sessions workspaces
+   launched, indented under the orchestrator (or member) that launched
+   them. agentd leaves members out before the result limit, so dozens of
+   members cannot push the conversations people started off the list; the
+   parent link comes from the workspace store, which keeps ended workspaces.
 2. **`com.wash.ai` is one session controller.** It renders one transcript
    and composer and never re-points itself at another session. agentd holds
    an exclusive controller lease, so a session has zero or one such window.

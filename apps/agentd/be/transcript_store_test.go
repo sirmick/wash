@@ -580,36 +580,63 @@ func TestHistoryQuerySearchesContentAndMetadata(t *testing.T) {
 
 	// Content: the word appears only in the conversation, never in any
 	// metadata field.
-	got := historyQuery("banner race", 0)
+	got := historyQuery("banner race", 0, nil, false)
 	if len(got) != 1 || got[0].SessionID != "s-reconnect" {
 		t.Errorf("content search = %+v, want just s-reconnect", ids(got))
 	}
 	// Title.
-	if got := historyQuery("station list", 0); len(got) != 1 || got[0].SessionID != "s-radio" {
+	if got := historyQuery("station list", 0, nil, false); len(got) != 1 || got[0].SessionID != "s-radio" {
 		t.Errorf("title search = %v", ids(got))
 	}
 	// Agent, and model — both index fields, matched without opening a file.
-	if got := historyQuery("claude", 0); len(got) != 1 || got[0].SessionID != "s-radio" {
+	if got := historyQuery("claude", 0, nil, false); len(got) != 1 || got[0].SessionID != "s-radio" {
 		t.Errorf("agent search = %v", ids(got))
 	}
-	if got := historyQuery("gpt-5", 0); len(got) != 1 || got[0].SessionID != "s-reconnect" {
+	if got := historyQuery("gpt-5", 0, nil, false); len(got) != 1 || got[0].SessionID != "s-reconnect" {
 		t.Errorf("model search = %v", ids(got))
 	}
 	// Case-insensitive, because nobody types history queries carefully.
-	if got := historyQuery("SOMAFM", 0); len(got) != 1 {
+	if got := historyQuery("SOMAFM", 0, nil, false); len(got) != 1 {
 		t.Errorf("case-insensitive search = %v", ids(got))
 	}
 	// An empty query is "everything", newest first.
-	if got := historyQuery("", 0); len(got) != 2 || got[0].SessionID != "s-radio" {
+	if got := historyQuery("", 0, nil, false); len(got) != 2 || got[0].SessionID != "s-radio" {
 		t.Errorf("empty query = %v, want both newest-first", ids(got))
 	}
 	// A miss is empty, not everything.
-	if got := historyQuery("nothing matches this", 0); len(got) != 0 {
+	if got := historyQuery("nothing matches this", 0, nil, false); len(got) != 0 {
 		t.Errorf("miss = %v, want none", ids(got))
 	}
 	// The limit bounds the answer.
-	if got := historyQuery("", 1); len(got) != 1 {
+	if got := historyQuery("", 1, nil, false); len(got) != 1 {
 		t.Errorf("limit=1 returned %d", len(got))
+	}
+}
+
+// History lists the sessions people started; a workspace's members are
+// there only when asked for, carrying the session that launched them, and
+// never count against the limit when they are not.
+func TestHistoryHidesMembersUnlessAskedAndNamesTheirParent(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	for i, sid := range []string{"s-lead", "s-impl", "s-sub"} {
+		bindTranscript("acp:"+sid, sid, launchRecord{Agent: "claude"}, "/tmp", now.Add(time.Duration(i)*time.Second))
+		appendPrompt("acp:"+sid, "work", now.Add(time.Duration(i)*time.Second))
+	}
+	waitForTranscriptWrites()
+	parents := map[string]string{"s-impl": "s-lead", "s-sub": "s-impl"}
+
+	if got := historyQuery("", 1, parents, false); len(got) != 1 || got[0].SessionID != "s-lead" {
+		t.Fatalf("top level = %v, want the orchestrator only", ids(got))
+	}
+	got := historyQuery("", 0, parents, true)
+	if len(got) != 3 {
+		t.Fatalf("all = %v", ids(got))
+	}
+	for _, m := range got {
+		if m.Parent != parents[m.SessionID] {
+			t.Errorf("%s parent = %q, want %q", m.SessionID, m.Parent, parents[m.SessionID])
+		}
 	}
 }
 
@@ -622,7 +649,7 @@ func TestHistoryRowsCarryBoundedRecentTranscriptPreview(t *testing.T) {
 	appendPrompt("acp:1", "latest "+strings.Repeat("detail ", 80), now.Add(2*time.Second))
 	waitForTranscriptWrites()
 
-	got := historyQuery("", 0)
+	got := historyQuery("", 0, nil, false)
 	if len(got) != 1 {
 		t.Fatalf("history = %v, want one", ids(got))
 	}
@@ -647,7 +674,7 @@ func TestHistorySearchIgnoresImageBytes(t *testing.T) {
 	appendEvent("acp:1", agentproto.Event{Kind: agentproto.EventImage, Mime: "image/png", Text: "iVBORw0KGgoAAAANSUhEUg"}, now)
 	waitForTranscriptWrites()
 
-	if got := historyQuery("iVBORw0", 0); len(got) != 0 {
+	if got := historyQuery("iVBORw0", 0, nil, false); len(got) != 0 {
 		t.Errorf("matched base64 image bytes: %v", ids(got))
 	}
 }
@@ -678,17 +705,17 @@ func TestHistoryQueryRequiresEveryTermAcrossTheConversation(t *testing.T) {
 	appendPrompt("acp:2", "just a plain reconnect question", now.Add(time.Hour))
 	waitForTranscriptWrites()
 
-	got := historyQuery("reconnect race", 0)
+	got := historyQuery("reconnect race", 0, nil, false)
 	if len(got) != 1 || got[0].SessionID != "s-both" {
 		t.Errorf("two-term search = %v, want just s-both", ids(got))
 	}
 	// Order is not significance: the words are a set.
-	if got := historyQuery("race reconnect", 0); len(got) != 1 || got[0].SessionID != "s-both" {
+	if got := historyQuery("race reconnect", 0, nil, false); len(got) != 1 || got[0].SessionID != "s-both" {
 		t.Errorf("reversed terms = %v, want just s-both", ids(got))
 	}
 	// A term that appears nowhere rules the session out even though the
 	// other term matches.
-	if got := historyQuery("reconnect wombat", 0); len(got) != 0 {
+	if got := historyQuery("reconnect wombat", 0, nil, false); len(got) != 0 {
 		t.Errorf("unmatched term still returned %v", ids(got))
 	}
 }
@@ -703,7 +730,7 @@ func TestHistoryQueryReturnsTheLineThatMatched(t *testing.T) {
 	appendPrompt("acp:1", "the quokka protocol is what broke the parser", now.Add(time.Minute))
 	waitForTranscriptWrites()
 
-	got := historyQuery("quokka", 0)
+	got := historyQuery("quokka", 0, nil, false)
 	if len(got) != 1 {
 		t.Fatalf("search = %v, want one", ids(got))
 	}
@@ -725,7 +752,7 @@ func TestMetadataMatchCarriesNoSnippet(t *testing.T) {
 	appendPrompt("acp:1", "nothing relevant here", now)
 	waitForTranscriptWrites()
 
-	got := historyQuery("station", 0)
+	got := historyQuery("station", 0, nil, false)
 	if len(got) != 1 {
 		t.Fatalf("search = %v, want one", ids(got))
 	}
@@ -744,7 +771,7 @@ func TestSnippetIsOneTidyLine(t *testing.T) {
 	appendPrompt("acp:1", "```go\nfunc main() {\n\tprintln(\"quokka\")\n}\n```\n"+strings.Repeat("tail ", 200), now)
 	waitForTranscriptWrites()
 
-	got := historyQuery("quokka", 0)
+	got := historyQuery("quokka", 0, nil, false)
 	if len(got) != 1 {
 		t.Fatalf("search = %v", ids(got))
 	}

@@ -260,6 +260,7 @@ AgentHistory searches the stored sessions: their metadata and, with a query, the
 |---|---|---|
 | `query?` | `string` |  |
 | `limit?` | `number` | Limit bounds the answer; 0 and anything above 200 mean 200. |
+| `all?` | `boolean` | All includes the sessions a workspace launched (its members). Without it the answer is top-level sessions only: one orchestrator can launch dozens of members, and they buried the conversations people started. |
 
 #### AgentProfile
 
@@ -1045,6 +1046,7 @@ SessionMeta is what the history panel lists.
 | `dir?` | `string` |  |
 | `title?` | `string` |  |
 | `user_title?` | `string` | UserTitle is the person's name for the session, when they gave one. Title above is then the SAME string — the effective title, so every reader shows the name without knowing where it came from — and this field says it was theirs. |
+| `parent?` | `string` | Parent is the session that launched this one: the orchestrator of its workspace, or the member that spawned it. Empty for a session a person started. |
 | `started_ms?` | `number` |  |
 | `ended_ms?` | `number` |  |
 | `end_reason?` | `string` |  |

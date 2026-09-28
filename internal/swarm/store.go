@@ -837,6 +837,32 @@ func idleNudge(w *Workspace, m *Member) {
 	}
 }
 
+// Parents maps every member session, in every workspace including ended
+// ones, to the session that launched it: its creator's, or the
+// orchestrator's when the creator is gone.
+func (s *Store) Parents() map[string]string {
+	out := map[string]string{}
+	for _, w := range s.Snapshot().Workspaces {
+		lead := ""
+		if m := GetMember(&w, w.Lead); m != nil {
+			lead = m.Session
+		}
+		for _, m := range w.Members {
+			if m.ID == w.Lead || m.Session == "" {
+				continue
+			}
+			parent := lead
+			if c := GetMember(&w, m.Creator); c != nil && c.Session != "" && c.Session != m.Session {
+				parent = c.Session
+			}
+			if parent != "" {
+				out[m.Session] = parent
+			}
+		}
+	}
+	return out
+}
+
 // NudgeOnce sends the orchestrator one lifecycle message per key.
 func NudgeOnce(w *Workspace, key, body string) { nudge(w, key, body) }
 

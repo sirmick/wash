@@ -979,8 +979,20 @@ func matchesMeta(m agentproto.SessionMeta, terms []string) bool {
 
 // historyQuery lists stored sessions, newest first, optionally filtered.
 // limit <= 0 means every match.
-func historyQuery(q string, limit int) []agentproto.SessionMeta {
+//
+// parents names the session that launched each workspace member; members
+// are left out unless members is set, before the limit, so they cannot
+// crowd top-level sessions out of the answer.
+func historyQuery(q string, limit int, parents map[string]string, members bool) []agentproto.SessionMeta {
 	all := listSessionMeta()
+	kept := all[:0]
+	for _, m := range all {
+		m.Parent = parents[m.SessionID]
+		if members || m.Parent == "" {
+			kept = append(kept, m)
+		}
+	}
+	all = kept
 	terms := queryTerms(q)
 	if len(terms) == 0 {
 		if limit > 0 && len(all) > limit {

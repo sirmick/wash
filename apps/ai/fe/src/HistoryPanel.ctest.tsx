@@ -10,7 +10,8 @@
 import { test, expect, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen } from '@solidjs/testing-library';
 import type { agentproto } from '@wash/ui';
-import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, historySignature, sessionLabel } from './HistoryPanel.tsx';
+import { HistoryPanel, fmtAgo, fmtSpan, highlightParts, historyAction, historySignature, historyTree, sessionLabel } from './HistoryPanel.tsx';
+import { createSignal } from 'solid-js';
 
 afterEach(cleanup);
 
@@ -367,4 +368,50 @@ test('historySignature moves with a row\'s facts, not with the roster\'s churn',
   expect(historySignature([sess({ session_id: 'a', title: 'renamed' })])).not.toBe(historySignature(base));
   expect(historySignature([sess({ session_id: 'a', title: 'one', live: true, row_key: 'acp:1' })])).not.toBe(historySignature(base));
   expect(historySignature([...base, sess({ session_id: 'b' })])).not.toBe(historySignature(base));
+});
+
+// Members sit under the session that launched them, newest first at each
+// level; one whose parent is not listed stands at the top rather than
+// vanishing, and a cycle cannot hide or repeat a row.
+test('historyTree lays sessions out as they were launched', () => {
+  const tree = historyTree([
+    sess({ session_id: 'impl', parent: 'lead' }),
+    sess({ session_id: 'lead' }),
+    sess({ session_id: 'solo' }),
+    sess({ session_id: 'sub', parent: 'impl' }),
+    sess({ session_id: 'red', parent: 'lead' }),
+    sess({ session_id: 'stray', parent: 'deleted' }),
+  ]);
+  expect(tree.map((r) => `${r.depth}:${r.s.session_id}`)).toEqual(['0:lead', '1:impl', '2:sub', '1:red', '0:solo', '0:stray']);
+  const cycle = historyTree([sess({ session_id: 'a', parent: 'b' }), sess({ session_id: 'b', parent: 'a' })]);
+  expect(cycle.map((r) => r.s.session_id).sort()).toEqual(['a', 'b']);
+});
+
+test('the members checkbox asks the host, and then the list is indented', async () => {
+  const [all, setAll] = createSignal(false);
+  const asked: boolean[] = [];
+  const { getByTestId, getAllByTestId } = render(() => (
+    <HistoryPanel
+      sessions={() => (all() ? [sess({ session_id: 'lead' }), sess({ session_id: 'impl', parent: 'lead' })] : [sess({ session_id: 'lead' })])}
+      query={() => ''}
+      onQuery={noop}
+      onResume={noop}
+      all={all}
+      onAll={(v) => { asked.push(v); setAll(v); }}
+      embedded
+    />
+  ));
+  const box = getByTestId('ai-history-all') as HTMLInputElement;
+  expect(box.checked).toBe(false);
+  expect(getAllByTestId('ai-history-row')).toHaveLength(1);
+  fireEvent.click(box);
+  expect(asked).toEqual([true]);
+  const rows = getAllByTestId('ai-history-row');
+  expect(rows.map((r) => r.getAttribute('data-depth'))).toEqual(['0', '1']);
+  expect(rows[1].style.marginLeft).toBe('24px');
+});
+
+test('a host that does not offer members shows no checkbox', () => {
+  panel();
+  expect(screen.queryByTestId('ai-history-all')).toBeNull();
 });

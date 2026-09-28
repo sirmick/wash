@@ -511,3 +511,21 @@ func TestANoteWakesAPlainWait(t *testing.T) {
 		t.Fatalf("a plain wait was not woken by the note: %+v", next)
 	}
 }
+
+// Every member session names the session that launched it: its creator's,
+// so a member a member spawned sits under that member.
+func TestParentsFollowTheCreator(t *testing.T) {
+	s, w := fixture(t)
+	if e := s.Mutate("lead-session", true, func(w *Workspace, _ *Member) error {
+		w.Members = append(w.Members, Member{ID: "sub", Session: "sub-session", State: "available", Lifetime: "ephemeral", Creator: "worker"})
+		w.Members = append(w.Members, Member{ID: "orphan", Session: "orphan-session", State: "available", Lifetime: "resident", Creator: "gone"})
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	got := s.Parents()
+	want := map[string]string{"worker-session": "lead-session", "sub-session": "worker-session", "orphan-session": "lead-session"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parents = %v, want %v (lead %s)", got, want, w.Lead)
+	}
+}

@@ -114,6 +114,12 @@ export interface AgentHistory {
   query?: string;
   /** Limit bounds the answer; 0 and anything above 200 mean 200. */
   limit?: number;
+  /**
+   * All includes the sessions a workspace launched (its members). Without
+   * it the answer is top-level sessions only: one orchestrator can launch
+   * dozens of members, and they buried the conversations people started.
+   */
+  all?: boolean;
 }
 
 /** AgentProfile describes launch settings and an optional enforced capability profile. */
@@ -1217,6 +1223,12 @@ export interface SessionMeta {
    * field says it was theirs.
    */
   user_title?: string;
+  /**
+   * Parent is the session that launched this one: the orchestrator of
+   * its workspace, or the member that spawned it. Empty for a session a
+   * person started.
+   */
+  parent?: string;
   started_ms?: number;
   ended_ms?: number;
   end_reason?: string;
