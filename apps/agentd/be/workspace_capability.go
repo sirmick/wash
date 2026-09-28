@@ -32,7 +32,18 @@ import (
 // request's _meta, and re-creates the session when its fingerprint changed.
 var reviewerVerifiedVersions = []string{"0.81.1", "0.81.2"}
 
+// reviewerVerifiedOpenCode are the OpenCode versions whose configuration
+// layering and tool names opencodeReviewer was checked against. OpenCode's
+// restriction is its launch environment, so it needs no session metadata.
+var reviewerVerifiedOpenCode = []string{"1.18.32"}
+
 func reviewerMetadata(provider string, info acp.Implementation) (map[string]any, error) {
+	if provider == "opencode" {
+		if info.Name != "OpenCode" || !slices.Contains(reviewerVerifiedOpenCode, info.Version) {
+			return nil, fmt.Errorf("reviewer capability unsupported by %s %s: requires verified OpenCode %s", info.Name, info.Version, strings.Join(reviewerVerifiedOpenCode, " or "))
+		}
+		return nil, nil
+	}
 	if provider != "claude" || info.Name != "@agentclientprotocol/claude-agent-acp" || !slices.Contains(reviewerVerifiedVersions, info.Version) {
 		return nil, fmt.Errorf("reviewer capability unsupported by %s %s: requires verified claude-agent-acp %s; mode names are not read-only guarantees", info.Name, info.Version, strings.Join(reviewerVerifiedVersions, " or "))
 	}

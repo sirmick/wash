@@ -65,7 +65,7 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 		"host_auto_approval": yolo, "host_policy_enabled": pol.Enabled,
 		"approval_order":               "host policy rules, then session auto-approval, then human approval (or cancellation if unavailable/disabled)",
 		"filesystem_enforcement":       "unknown: provider-specific; not verified by Wash workspace discovery",
-		"reviewer_capability_profiles": map[string]any{"reviewer": map[string]any{"provider": "claude", "adapter": "@agentclientprotocol/claude-agent-acp", "verified_versions": reviewerVerifiedVersions, "tools": []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "enforcement": "provider tool allowlist plus host write/terminal denial; not an OS sandbox"}, "codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported", "opencode": "unsupported"},
+		"reviewer_capability_profiles": map[string]any{"reviewer": map[string]any{"provider": "claude", "adapter": "@agentclientprotocol/claude-agent-acp", "verified_versions": reviewerVerifiedVersions, "tools": []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "enforcement": "provider tool allowlist plus host write/terminal denial; not an OS sandbox"}, "codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported", "opencode": map[string]any{"adapter": "OpenCode", "verified_versions": reviewerVerifiedOpenCode, "tools": []string{"read", "glob", "grep", "todowrite", "scoped Wash coordination"}, "enforcement": "write, edit, patch, bash, task, webfetch and skill tools removed and denied by launch configuration; not an OS sandbox"}},
 		"active_capability":            h.capability,
 		"approval_profiles": map[string]any{
 			"values":   []string{"ask", "auto"},

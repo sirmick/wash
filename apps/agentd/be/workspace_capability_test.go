@@ -37,6 +37,17 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 	if _, err = startHostedCapability("codex", t.TempDir(), nil, sessionLaunch{capability: "reviewer", member: true}); err == nil {
 		t.Fatal("unsupported adapter launched")
 	}
+	// OpenCode's restriction is its launch configuration, not session
+	// metadata, and holds only for the version it was checked against.
+	oc := acp.Implementation{Name: "OpenCode", Version: "1.18.32"}
+	if meta, err := reviewerMetadata("opencode", oc); err != nil || meta != nil {
+		t.Fatal("verified OpenCode:", meta, err)
+	}
+	for _, v := range []acp.Implementation{{Name: "OpenCode", Version: "1.19.0"}, {Name: "opencode-fork", Version: "1.18.32"}} {
+		if _, err := reviewerMetadata("opencode", v); err == nil {
+			t.Fatal("unverified OpenCode accepted", v)
+		}
+	}
 	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
 	_, err = s.Setup("review-session", "claude", t.TempDir(), "Review", "")
 	if err != nil {
