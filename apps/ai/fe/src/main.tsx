@@ -17,7 +17,7 @@ import { isManagerElement } from './role.ts';
 import type { Component } from 'solid-js';
 import { FilePen } from 'lucide-solid';
 import {
-  AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuSeparator,
+  AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuPicker, MenuSeparator,
   Overlay, Select, Splitter, Tab,
   agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
@@ -547,6 +547,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   };
 
   const configs = () => row()?.configs ?? [];
+  // The setting whose values are popped out beside the Session menu, and
+  // where. By id, so the list follows the roster while it is open.
+  const [configPicker, setConfigPicker] = createSignal<{ id: string; x: number; y: number } | null>(null);
+  const pickerConfig = () => configs().find((c) => c.id === configPicker()?.id);
 
   // The menus advertise these, so they have to exist. A menu that shows a
   // shortcut it does not implement is worse than one that shows none.
@@ -748,25 +752,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               <Show when={configs().length === 0}>
                 <MenuItem label="No settings offered" disabled onClick={() => {}} />
               </Show>
-              {/* One group per setting the agent exposes — the same
-                  generic block the status bar renders, with room for the
-                  names and the tick. */}
+              {/* One row per setting the agent exposes, saying what it is
+                  set to; its values pop out beside the menu. Inline, a
+                  model list through OpenRouter — hundreds long — made this
+                  menu unusable. */}
               <For each={configs()}>
-                {(cfg, ci) => (
-                  <>
-                    <Show when={ci() > 0}><MenuSeparator /></Show>
-                    <MenuItem label={cfg.name} disabled onClick={() => {}} />
-                    <For each={cfg.values ?? []}>
-                      {(v) => (
-                        <MenuItem
-                          label={'   ' + v.name}
-                          trailing={v.value === cfg.current ? <span>✓</span> : undefined}
-                          onClick={() => { close(); sendAgentd({ kind: 'agent_set_config', key: sessionKey(), id: cfg.id, value: v.value }); }}
-                          data-testid={`ai-menu-config-${cfg.id}-${v.value}`}
-                        />
-                      )}
-                    </For>
-                  </>
+                {(cfg) => (
+                  <MenuItem
+                    label={`${cfg.name}: ${cfg.values?.find((v) => v.value === cfg.current)?.name ?? cfg.current ?? '—'}`}
+                    title={cfg.description}
+                    disabled={(cfg.values ?? []).length === 0}
+                    popup={{ expanded: false }}
+                    trailing={<span style={{ color: tokens.fgMuted }}>▸</span>}
+                    onClick={(ev) => {
+                      const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+                      close();
+                      setConfigPicker({ id: cfg.id, x: r.right, y: r.top });
+                    }}
+                    data-testid={`ai-menu-config-${cfg.id}`}
+                  />
                 )}
               </For>
             </Menu>
@@ -1187,6 +1191,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const sessionView = (
     <>
     {closeDialog}
+    <Show when={configPicker() && pickerConfig()}>
+      <MenuPicker
+        x={configPicker()!.x}
+        y={configPicker()!.y}
+        title={pickerConfig()!.name}
+        options={(pickerConfig()!.values ?? []).map((v) => ({ value: v.value, label: v.name, description: v.description }))}
+        current={pickerConfig()!.current}
+        onPick={(value) => sendAgentd({ kind: 'agent_set_config', key: sessionKey(), id: pickerConfig()!.id, value })}
+        onDismiss={() => setConfigPicker(null)}
+        data-testid={`ai-config-${pickerConfig()!.id}`}
+      />
+    </Show>
 
     {renameDialog}
     {attachPicker}

@@ -48,6 +48,8 @@ export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
 export { Markdown, parseBlocks, parseInline } from './markdown';
 export type { MarkdownProps, Align } from './markdown';
 export { looksLikePath, pathTokens } from './path-links';
+export { MenuPicker, filterOptions } from './menu-picker';
+export type { MenuPickerProps, PickerOption } from './menu-picker';
 export type { PathHit, PathLinks } from './path-links';
 export { AgentSession } from './agent-session';
 export { QuestionPanel } from './question-panel';
