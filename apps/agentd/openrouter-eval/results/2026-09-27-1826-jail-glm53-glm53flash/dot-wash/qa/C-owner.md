@@ -1,0 +1,40 @@
+<!-- wash-qa-thread: C-owner -->
+
+## C · C-owner — Gamma word
+
+Status: **open** · Assigned to: Orchestrator · Revision: 4
+
+### Orchestrator · Question
+
+Event: `a9fe45c74f5dc2b0084797a587b68398` · 2026-09-28T01:27:00Z
+
+> The owner's questions go on thread C-owner.
+
+### Implementer · Owner decision requested
+
+Event: `3e3d646cfae9f0672dd7d263a44b9666` · 2026-09-28T01:27:09Z
+
+> 1. Which word goes in words/gamma.txt?
+>    - gamma (recommended): Lowercase 'gamma' as the file's single line
+>    - GAMMA: Uppercase 'GAMMA' as the file's single line
+> 2. Anything to add?
+
+### Owner · Owner decision
+
+Event: `28eeeac649b9ff8ae7ba195045a08c71` · 2026-09-28T01:27:13Z
+
+> The owner answered:
+> 
+> 1. Which word goes in words/gamma.txt?
+>    → gamma
+> 2. Anything to add?
+>    → lower case, like alpha and beta
+
+### Orchestrator · Assigned
+
+Event: `af05fb06731262466a0edb73d3810d0f` · 2026-09-28T01:30:52Z
+
+> Resumed from the QA directory; the orchestrator assigns the current team.
+> Next responder: Orchestrator
+
+<!-- wash-qa-checkpoint-v2: eyJ0aHJlYWQiOnsiaWQiOiJDLW93bmVyIiwibm9kZSI6IkMiLCJ0aXRsZSI6IkdhbW1hIHdvcmQiLCJjcmVhdG9yIjoiMjU3YWQ5NjdlY2YwMDI0ZTI0N2YzMjkxMDc1YjkwZjciLCJhc3NpZ25lZSI6IjJkZjc5YzQ1YjFiYTFlMTEzZTlmZTMzNjdjMDIyZmM1Iiwic3RhdGUiOiJvcGVuIiwiYmxvY2tpbmciOmZhbHNlLCJyZXZpc2lvbiI6NCwiZGVjaXNpb25fcmVmcyI6bnVsbCwiZXZlbnRzIjpbeyJpZCI6ImE5ZmU0NWM3NGY1ZGMyYjAwODQ3OTdhNTg3YjY4Mzk4IiwiYXV0aG9yIjoiMjU3YWQ5NjdlY2YwMDI0ZTI0N2YzMjkxMDc1YjkwZjciLCJraW5kIjoib3BlbiIsImJvZHkiOiJUaGUgb3duZXIncyBxdWVzdGlvbnMgZ28gb24gdGhyZWFkIEMtb3duZXIuIiwibWVzc2FnZV9pZCI6Ijg2NDY5MmFlYWZlZmJkM2JkM2VkYzNjNWIwMWEwZjAxIiwiY3JlYXRlZF9hdCI6MTc5MDU1ODgyMDE1MH0seyJpZCI6IjNlM2Q2NDZjZmFlOWYwNjcyZGQ3ZDI2M2E0NGI5NjY2IiwiYXV0aG9yIjoiYjI4MzQ4ODNjYmM5ZDE5NGJhYjBjZTgyNjhkYTU3ODciLCJraW5kIjoiZGVjaXNpb25fcmVxdWVzdCIsImJvZHkiOiIxLiBXaGljaCB3b3JkIGdvZXMgaW4gd29yZHMvZ2FtbWEudHh0P1xuICAgLSBnYW1tYSAocmVjb21tZW5kZWQpOiBMb3dlcmNhc2UgJ2dhbW1hJyBhcyB0aGUgZmlsZSdzIHNpbmdsZSBsaW5lXG4gICAtIEdBTU1BOiBVcHBlcmNhc2UgJ0dBTU1BJyBhcyB0aGUgZmlsZSdzIHNpbmdsZSBsaW5lXG4yLiBBbnl0aGluZyB0byBhZGQ/IiwibWVzc2FnZV9pZCI6IjlmMDEzZjYyMDdlOGM4NzMwOGNmYTg1OTMyMWViZDJlIiwiY3JlYXRlZF9hdCI6MTc5MDU1ODgyOTkzN30seyJpZCI6IjI4ZWVlYWM2NDliOWZmOGFlN2JhMTk1MDQ1YTA4YzcxIiwiYXV0aG9yIjoiaHVtYW4iLCJraW5kIjoiZGVjaXNpb25fcmVzcG9uc2UiLCJib2R5IjoiVGhlIG93bmVyIGFuc3dlcmVkOlxuXG4xLiBXaGljaCB3b3JkIGdvZXMgaW4gd29yZHMvZ2FtbWEudHh0P1xuICAg4oaSIGdhbW1hXG4yLiBBbnl0aGluZyB0byBhZGQ/XG4gICDihpIgbG93ZXIgY2FzZSwgbGlrZSBhbHBoYSBhbmQgYmV0YSIsIm1lc3NhZ2VfaWQiOiI5OWNlOWQ1NzliNmJhNzBmNmE2MWZkNzdhOGY3MjBjYyIsImNyZWF0ZWRfYXQiOjE3OTA1NTg4MzMxMTR9LHsiaWQiOiJhZjA1ZmIwNjczMTI2MjQ2NmEwZWRiNzNkMzgxMGQwZiIsImF1dGhvciI6IjJkZjc5YzQ1YjFiYTFlMTEzZTlmZTMzNjdjMDIyZmM1Iiwia2luZCI6ImFzc2lnbiIsImJvZHkiOiJSZXN1bWVkIGZyb20gdGhlIFFBIGRpcmVjdG9yeTsgdGhlIG9yY2hlc3RyYXRvciBhc3NpZ25zIHRoZSBjdXJyZW50IHRlYW0uXG5OZXh0IHJlc3BvbmRlcjogT3JjaGVzdHJhdG9yIiwiY3JlYXRlZF9hdCI6MTc5MDU1OTA1MjkzNX1dfSwiYXV0aG9ycyI6eyIyNTdhZDk2N2VjZjAwMjRlMjQ3ZjMyOTEwNzViOTBmNyI6Ik9yY2hlc3RyYXRvciIsIjJkZjc5YzQ1YjFiYTFlMTEzZTlmZTMzNjdjMDIyZmM1IjoiT3JjaGVzdHJhdG9yIiwiYjI4MzQ4ODNjYmM5ZDE5NGJhYjBjZTgyNjhkYTU3ODciOiJJbXBsZW1lbnRlciJ9fQ== -->

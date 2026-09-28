@@ -1,0 +1,1003 @@
+{
+  "receipts": [
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "workspace_configure",
+      "request": "setup-1",
+      "digest": "fe06f79dc061ced5d945a0905ee5904bfa958c4b9a1adb7b4d4dc3cbc9c6acc4",
+      "result": {
+        "configuration": {
+          "catalog": "shakedown",
+          "legend": "🧪 in review; 🔴 blocked on the owner; 💥 failed on purpose",
+          "max_active": 3,
+          "max_members": 6,
+          "name": "Shakedown",
+          "plan_file": "/tmp/wash-shakedown-live-3gIwUt/.wash/plan.toml",
+          "project_root": "/tmp/wash-shakedown-live-3gIwUt",
+          "qa_dir": "/tmp/wash-shakedown-live-3gIwUt/.wash/qa"
+        },
+        "members": {},
+        "preview": false,
+        "revision": 2,
+        "workspace_id": "d316e3101e106ea2ed61632c7a1e43d3"
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "plan_set",
+      "request": "plan-1",
+      "digest": "61bf5827367176689f1c8f5651f96e4f3880be1051fdad0c329b941f4f991203",
+      "result": {
+        "nodes": [
+          "M1 · active · Plan [milestone]",
+          "M2 · todo · Build [milestone] · needs M1 (active)",
+          "M3 · todo · Ship [milestone] · needs M2 (todo)"
+        ],
+        "revision": 2
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "plan_set",
+      "request": "plan-2",
+      "digest": "bad0d54da918e4437c28d89bbd3aa402fbc660705f9a85b24ea1167f8bac61bf",
+      "result": {
+        "nodes": [
+          "M1 · done · Plan [milestone]",
+          "M2 · todo · Build [milestone]",
+          "  A · todo · alpha.txt [step]",
+          "  B · todo · beta.txt [step]",
+          "  C · todo · gamma.txt [step] · needs A (todo), B (todo)",
+          "M3 · todo · Ship [milestone] · needs M2 (todo)"
+        ],
+        "revision": 3
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "workspace_configure",
+      "request": "staff-ab",
+      "digest": "7dc9a2c80b0ec9e11367f8efd3e187a8e3677624efc920e3f463183100b003dd",
+      "result": {
+        "configuration": {
+          "catalog": "shakedown",
+          "legend": "🧪 in review; 🔴 blocked on the owner; 💥 failed on purpose",
+          "max_active": 3,
+          "max_members": 6,
+          "name": "Shakedown",
+          "plan_file": "/tmp/wash-shakedown-live-3gIwUt/.wash/plan.toml",
+          "project_root": "/tmp/wash-shakedown-live-3gIwUt",
+          "qa_dir": "/tmp/wash-shakedown-live-3gIwUt/.wash/qa"
+        },
+        "members": {
+          "a-impl": "babcbd4951ae2b4c9142d96f093ff137",
+          "a-red": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "b-impl": "8893eb66d7d8ef20ec5c4689a36551e0"
+        },
+        "preview": false,
+        "revision": 3,
+        "workspace_id": "d316e3101e106ea2ed61632c7a1e43d3"
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "assignment_update",
+      "request": "review-r1",
+      "digest": "c442d17f032b47f5160d13fbaa6484e7ae0e4dea1bd1a888a3c3c400792505aa",
+      "result": {
+        "assignments": [
+          {
+            "id": "bb85e87e6f1426821a93897483ce88d9",
+            "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+            "member_id": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+            "node": "A",
+            "text": "Round 1. Report CHANGES: this round always asks for changes (a test), as your first line.",
+            "state": "assigned"
+          }
+        ],
+        "instruction": "Finish your turn now; the results arrive together, in one turn. Do not poll.",
+        "waiting_on": [
+          "bb85e87e6f1426821a93897483ce88d9"
+        ]
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "assignment_update",
+      "request": "a-fix",
+      "digest": "673e81b0e8a8a9633f354d4046f7c963505bfddf8f6ef413ef63eeca08838b23",
+      "result": {
+        "assignments": [
+          {
+            "id": "cb7dce4bd76f90d4f5f8fec22cf25782",
+            "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+            "member_id": "babcbd4951ae2b4c9142d96f093ff137",
+            "node": "A",
+            "text": "Check words/alpha.txt is exactly 'alpha' and report complete; change nothing if it is.",
+            "state": "assigned"
+          }
+        ],
+        "instruction": "Finish your turn now; the results arrive together, in one turn. Do not poll.",
+        "waiting_on": [
+          "cb7dce4bd76f90d4f5f8fec22cf25782"
+        ]
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "assignment_update",
+      "request": "review-r2",
+      "digest": "3a54afdc57dd3b310eed9a34e3640ca7ce9c4f1b81bc05ab79e2638debbb2241",
+      "result": {
+        "assignments": [
+          {
+            "id": "ea6a774ee2821fc3a7ae1973412bc0e6",
+            "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+            "member_id": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+            "node": "A",
+            "text": "Round 2. Check words/alpha.txt contains exactly the line alpha; report OK or CHANGES as your first line.",
+            "state": "assigned"
+          }
+        ],
+        "instruction": "Finish your turn now; the results arrive together, in one turn. Do not poll.",
+        "waiting_on": [
+          "ea6a774ee2821fc3a7ae1973412bc0e6"
+        ]
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "plan_accept",
+      "request": "accept-A",
+      "digest": "84f9da5d9733c2a0be7931488d117ca1a5454b05e6fc0aeab07c388a829029aa",
+      "result": {
+        "instruction": "End the node's merge commit message with the trailers as its last paragraph, one per line exactly as given (e.g. git commit -m <subject> -m <trailers>, the trailers keeping their newlines), and stage the listed files with it.",
+        "node": "A",
+        "stage": [
+          ".wash/plan.toml"
+        ],
+        "trailers": "Plan-Node: A\nGates: grep -qx alpha words/alpha.txt 0\nReviewed-by: Red team: OK"
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "workspace_configure",
+      "request": "staff-c",
+      "digest": "34484270853ca7d4b509d884bc6e80eeaa420ad9946da8586e3d80ede1b8749a",
+      "result": {
+        "configuration": {
+          "catalog": "shakedown",
+          "legend": "🧪 in review; 🔴 blocked on the owner; 💥 failed on purpose",
+          "max_active": 3,
+          "max_members": 6,
+          "name": "Shakedown",
+          "plan_file": "/tmp/wash-shakedown-live-3gIwUt/.wash/plan.toml",
+          "project_root": "/tmp/wash-shakedown-live-3gIwUt",
+          "qa_dir": "/tmp/wash-shakedown-live-3gIwUt/.wash/qa"
+        },
+        "members": {
+          "c-impl": "f9ef67743fdc82ecc2a163735e7ddce1"
+        },
+        "preview": false,
+        "revision": 4,
+        "workspace_id": "d316e3101e106ea2ed61632c7a1e43d3"
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "assignment_update",
+      "request": "c-assign-2",
+      "digest": "295a85392ea6cc10e21f04108f475678ed0632af5bf7eb5397c4ad9333be9d1b",
+      "result": [
+        {
+          "id": "dd462c091ff4773df5b3071225db1cee",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "node": "C",
+          "text": "Ask the owner with decision_request, thread_id C-owner, two questions: (1) id word: 'Which word goes in words/gamma.txt?', options 'gamma' and 'GAMMA', recommended 'gamma'; (2) id note: 'Anything to add?' (free text). End your turn. When the answers arrive, write the chosen word as the only line of words/gamma.txt and report complete.",
+          "state": "assigned"
+        }
+      ]
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "assignment_update",
+      "request": "b-fail",
+      "digest": "57dcda827084ddc94d309396b3dce5be60139ddbda25879f2eff32cc5c47b708",
+      "result": [
+        {
+          "id": "f1776481ef6b861662a54c6bbc44201f",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "node": "B",
+          "text": "This assignment tests failure: report it failed with the body 'failed on purpose'. Change nothing.",
+          "state": "assigned"
+        }
+      ]
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "plan_set",
+      "request": "b-done",
+      "digest": "2ca39eed2970da7dcc835511f1fe5876b2e5532067c697d7aaa8c4d2eea69eaf",
+      "result": {
+        "nodes": [
+          "M1 · done · Plan [milestone]",
+          "M2 · todo · Build [milestone]",
+          "  A · done · alpha.txt [step] · on: Implementer (waiting-message), Red team (waiting-message)",
+          "  B · done · beta.txt [step] · on: Implementer (waiting-message)",
+          "  C · reported · gamma.txt [step] · on: Implementer (waiting-message) · 1 override(s)",
+          "M3 · todo · Ship [milestone] · needs M2 (todo)"
+        ],
+        "revision": 19
+      }
+    },
+    {
+      "workspace": "d316e3101e106ea2ed61632c7a1e43d3",
+      "session": "ses_f1b099b45ffengZ1YwwRts5PRy",
+      "operation": "assignment_update",
+      "request": "c-ready",
+      "digest": "006e835e6ac7894669cd71dc873a5685273e0fbfaee997bd43d129a00d9e17da",
+      "result": [
+        {
+          "id": "e24391fd5210b099fbf032040517575b",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "node": "C",
+          "text": "Ask the owner with decision_request one question: 'Ready to end?' with options yes and no. End your turn.",
+          "state": "assigned"
+        }
+      ]
+    }
+  ],
+  "version": 1,
+  "workspaces": [
+    {
+      "qa_dir": "/tmp/wash-shakedown-live-3gIwUt/.wash/qa",
+      "qa": [
+        {
+          "id": "B-case",
+          "node": "B",
+          "title": "Alpha case",
+          "creator": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "assignee": "babcbd4951ae2b4c9142d96f093ff137",
+          "state": "open",
+          "blocking": false,
+          "revision": 2,
+          "decision_refs": null,
+          "events": [
+            {
+              "id": "63497fd0c994f1083951df69543044ba",
+              "author": "8893eb66d7d8ef20ec5c4689a36551e0",
+              "kind": "open",
+              "body": "Is words/alpha.txt lower case?",
+              "message_id": "03d8ba60c099f2e8fba418ddf3fecd52",
+              "created_at": 1790549210956
+            },
+            {
+              "id": "a28ddb545b31c3ff37ea0e1d56037935",
+              "author": "babcbd4951ae2b4c9142d96f093ff137",
+              "kind": "answer",
+              "body": "Yes — verified with od: the file contains exactly `alpha\\n` (all lowercase, no uppercase characters).",
+              "message_id": "d0ae07fb389afc49a94a0fd14b740502",
+              "created_at": 1790549215636
+            }
+          ]
+        },
+        {
+          "id": "C-owner",
+          "node": "C",
+          "title": "Gamma word",
+          "creator": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "assignee": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "state": "awaiting-owner",
+          "blocking": false,
+          "revision": 4,
+          "decision_refs": null,
+          "events": [
+            {
+              "id": "d35f8a60e2da07f67e70320170e461c7",
+              "author": "2f4fb113993e6d59435cd2e9ffdd9e24",
+              "kind": "open",
+              "body": "The owner's questions go on thread C-owner.",
+              "message_id": "cc165c24caa66fbc8bf9ad3eec43f015",
+              "created_at": 1790549331845
+            },
+            {
+              "id": "7a20f584157b64bf9dd3b8222b75c2b7",
+              "author": "f9ef67743fdc82ecc2a163735e7ddce1",
+              "kind": "decision_request",
+              "body": "1. Which word goes in words/gamma.txt?\n   - gamma (recommended): Lowercase\n   - GAMMA: Uppercase\n2. Anything to add?\n   - Nothing: No extra notes",
+              "message_id": "ee8d1b2a966185e9ddf831acebf3237d",
+              "created_at": 1790549339918
+            },
+            {
+              "id": "dcaa9f26a1fd416c6c2d7c439577e2cf",
+              "author": "human",
+              "kind": "decision_response",
+              "body": "The owner answered:\n\n1. Which word goes in words/gamma.txt?\n   → gamma\n2. Anything to add?\n   → lower case, like alpha and beta",
+              "message_id": "79bcf7ce61208fb152ab49048f9bba1f",
+              "created_at": 1790549341693
+            },
+            {
+              "id": "28dc4d1e4ed7ede91ef487e9a6569cfa",
+              "author": "f9ef67743fdc82ecc2a163735e7ddce1",
+              "kind": "decision_request",
+              "body": "1. Ready to end?\n   - yes: Wrap up\n   - no: Keep going",
+              "message_id": "2e0ebfd79573f9bd031f9142debc0a18",
+              "created_at": 1790549356952
+            }
+          ]
+        }
+      ],
+      "catalog": "shakedown",
+      "id": "d316e3101e106ea2ed61632c7a1e43d3",
+      "name": "Shakedown",
+      "project_root": "/tmp/wash-shakedown-live-3gIwUt",
+      "orchestrator": "2f4fb113993e6d59435cd2e9ffdd9e24",
+      "state": "active",
+      "revision": 4,
+      "max_active": 3,
+      "max_members": 6,
+      "plan": [
+        {
+          "id": "M1",
+          "title": "Plan",
+          "template": "milestone",
+          "state": "done",
+          "revision": 3
+        },
+        {
+          "id": "M2",
+          "title": "Build",
+          "template": "milestone",
+          "needs": [
+            "M1"
+          ],
+          "state": "todo",
+          "revision": 2
+        },
+        {
+          "id": "M3",
+          "title": "Ship",
+          "template": "milestone",
+          "needs": [
+            "M2"
+          ],
+          "state": "todo",
+          "revision": 2
+        },
+        {
+          "id": "A",
+          "title": "alpha.txt",
+          "template": "step",
+          "parent": "M2",
+          "body": "words/alpha.txt says alpha",
+          "state": "done",
+          "revision": 14
+        },
+        {
+          "id": "B",
+          "title": "beta.txt",
+          "template": "step",
+          "parent": "M2",
+          "body": "words/beta.txt says beta",
+          "state": "done",
+          "revision": 19
+        },
+        {
+          "id": "C",
+          "title": "gamma.txt",
+          "template": "step",
+          "parent": "M2",
+          "needs": [
+            "A",
+            "B"
+          ],
+          "body": "words/gamma.txt says the word the owner picks",
+          "state": "active",
+          "revision": 20,
+          "overrides": [
+            "2026-09-27: started by Orchestrator before B (reported): shakedown: C starts before B is accepted"
+          ]
+        }
+      ],
+      "plan_revision": 20,
+      "plan_file": "/tmp/wash-shakedown-live-3gIwUt/.wash/plan.toml",
+      "legend": "🧪 in review; 🔴 blocked on the owner; 💥 failed on purpose",
+      "roles": {
+        "implementer": "You are an implementer in a Wash shakedown. The work is trivial: one line in one file under words/. Do exactly what your assignment says, nothing more. Report with member_update assignment_results (complete, or fail), a one-line summary, then set waiting and end your turn.",
+        "reviewer": "You are a reviewer in a Wash shakedown. You read; you never edit. Report with member_update assignment_results complete; the FIRST line of your result is your verdict: 'OK' or 'CHANGES: <what>'. Then set waiting and end your turn."
+      },
+      "context_warn": 0.6,
+      "members": [
+        {
+          "key": "orchestrator",
+          "usage": {
+            "used": 34171,
+            "size": 1310720
+          },
+          "catalog": "shakedown",
+          "model": "frontier",
+          "launch_settings": {
+            "provider": "opencode",
+            "connection": "opencode@openrouter"
+          },
+          "id": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "name": "Orchestrator",
+          "provider": "opencode",
+          "cwd": "/tmp/wash-shakedown-live-3gIwUt",
+          "session_id": "ses_f1b099b45ffengZ1YwwRts5PRy",
+          "creator": "",
+          "lifetime": "resident",
+          "state": "available",
+          "waiting": "waiting for c-impl's 'Ready to end?' question to appear before ending the member",
+          "status_updated_at": 1790547765997,
+          "can_spawn": true
+        },
+        {
+          "key": "a-impl",
+          "node": "A",
+          "role": "implementer",
+          "instructions": "You are an implementer in a Wash shakedown. The work is trivial: one line in one file under words/. Do exactly what your assignment says, nothing more. Report with member_update assignment_results (complete, or fail), a one-line summary, then set waiting and end your turn.\n\nWrite words/alpha.txt.",
+          "initial_task": "Create words/alpha.txt containing exactly one line: alpha",
+          "usage": {
+            "used": 15369,
+            "size": 1310720
+          },
+          "catalog": "shakedown",
+          "model": "small",
+          "launch_settings": {
+            "provider": "opencode",
+            "connection": "opencode@openrouter",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "effort": "high"
+          },
+          "initial_configs": {
+            "effort": "high",
+            "mode": "build",
+            "model": "openrouter/z-ai/glm-5.3-flash"
+          },
+          "auto_approve": true,
+          "id": "babcbd4951ae2b4c9142d96f093ff137",
+          "name": "Implementer",
+          "provider": "opencode",
+          "cwd": "/tmp/wash-shakedown-live-3gIwUt",
+          "session_id": "ses_f1b096819ffeCP3qbREZwEPGE7",
+          "creator": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "lifetime": "resident",
+          "state": "available",
+          "status": "waiting",
+          "waiting": "Verification assignment complete; file unchanged",
+          "status_updated_at": 1790549314960,
+          "can_spawn": false
+        },
+        {
+          "key": "a-red",
+          "node": "A",
+          "role": "reviewer",
+          "instructions": "You are a reviewer in a Wash shakedown. You read; you never edit. Report with member_update assignment_results complete; the FIRST line of your result is your verdict: 'OK' or 'CHANGES: <what>'. Then set waiting and end your turn.\n\nReview node A's file when assigned.",
+          "usage": {
+            "used": 8877,
+            "size": 1310720
+          },
+          "catalog": "shakedown",
+          "model": "small",
+          "launch_settings": {
+            "capability": "reviewer",
+            "provider": "opencode",
+            "connection": "opencode@openrouter",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "effort": "high"
+          },
+          "initial_configs": {
+            "effort": "high",
+            "mode": "build",
+            "model": "openrouter/z-ai/glm-5.3-flash"
+          },
+          "id": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "name": "Red team",
+          "provider": "opencode",
+          "cwd": "/tmp/wash-shakedown-live-3gIwUt",
+          "session_id": "ses_f1b0964c5ffeUJk25a4Vhy6oiF",
+          "creator": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "lifetime": "resident",
+          "state": "available",
+          "status": "waiting",
+          "waiting": "Round 2 review reported (OK); awaiting next instruction.",
+          "status_updated_at": 1790549317014,
+          "can_spawn": false
+        },
+        {
+          "key": "b-impl",
+          "node": "B",
+          "role": "implementer",
+          "instructions": "You are an implementer in a Wash shakedown. The work is trivial: one line in one file under words/. Do exactly what your assignment says, nothing more. Report with member_update assignment_results (complete, or fail), a one-line summary, then set waiting and end your turn.\n\nWrite words/beta.txt.",
+          "initial_task": "First ask a-impl, on a new QA thread, whether words/alpha.txt is lower case: message_send {recipient:'a-impl', type:'question', body:'Is words/alpha.txt lower case?', qa:{id:'B-case', action:'open', node:'B', title:'Alpha case'}}, then set waiting and end your turn. When the answer arrives: start `sleep 45 && touch words/.beta-done` with Bash in the background (run_in_background), create words/beta.txt containing exactly one line: beta, and report complete.",
+          "usage": {
+            "used": 15492,
+            "size": 1310720
+          },
+          "catalog": "shakedown",
+          "model": "small",
+          "launch_settings": {
+            "provider": "opencode",
+            "connection": "opencode@openrouter",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "effort": "high"
+          },
+          "initial_configs": {
+            "effort": "high",
+            "mode": "build",
+            "model": "openrouter/z-ai/glm-5.3-flash"
+          },
+          "auto_approve": true,
+          "id": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "name": "Implementer",
+          "provider": "opencode",
+          "cwd": "/tmp/wash-shakedown-live-3gIwUt",
+          "session_id": "ses_f1b096145ffekvs3grwWwJfeoq",
+          "creator": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "lifetime": "resident",
+          "state": "available",
+          "waiting": "Failure test reported; idle and available for new assignments",
+          "can_spawn": false
+        },
+        {
+          "key": "c-impl",
+          "node": "C",
+          "role": "implementer",
+          "instructions": "You are an implementer in a Wash shakedown. The work is trivial: one line in one file under words/. Do exactly what your assignment says, nothing more. Report with member_update assignment_results (complete, or fail), a one-line summary, then set waiting and end your turn.\n\nWrite words/gamma.txt.",
+          "usage": {
+            "used": 15221,
+            "size": 1310720
+          },
+          "catalog": "shakedown",
+          "model": "small",
+          "launch_settings": {
+            "provider": "opencode",
+            "connection": "opencode@openrouter",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "effort": "high"
+          },
+          "initial_configs": {
+            "effort": "high",
+            "mode": "build",
+            "model": "openrouter/z-ai/glm-5.3-flash"
+          },
+          "auto_approve": true,
+          "id": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "name": "Implementer",
+          "provider": "opencode",
+          "cwd": "/tmp/wash-shakedown-live-3gIwUt",
+          "session_id": "ses_f1af17d51ffeik4MSDj7DpjHpD",
+          "creator": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "lifetime": "resident",
+          "state": "available",
+          "waiting": "Waiting for the owner: Ready to end?",
+          "can_spawn": false
+        }
+      ],
+      "assignments": [
+        {
+          "id": "7c31a8117c7c82dd6a3f2540b8d1e271",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "babcbd4951ae2b4c9142d96f093ff137",
+          "node": "A",
+          "text": "Create words/alpha.txt containing exactly one line: alpha",
+          "state": "completed",
+          "result": "Created words/alpha.txt containing exactly one line: alpha (assignment 7c31a8117c7c82dd6a3f2540b8d1e271)."
+        },
+        {
+          "id": "e953dde1ffcbc532d68f61817c5c390b",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "node": "B",
+          "text": "First ask a-impl, on a new QA thread, whether words/alpha.txt is lower case: message_send {recipient:'a-impl', type:'question', body:'Is words/alpha.txt lower case?', qa:{id:'B-case', action:'open', node:'B', title:'Alpha case'}}, then set waiting and end your turn. When the answer arrives: start `sleep 45 && touch words/.beta-done` with Bash in the background (run_in_background), create words/beta.txt containing exactly one line: beta, and report complete.",
+          "state": "completed",
+          "result": "Answer arrived: words/alpha.txt is lower case. Started `sleep 45 && touch words/.beta-done` in background; created words/beta.txt containing exactly one line: beta."
+        },
+        {
+          "id": "bb85e87e6f1426821a93897483ce88d9",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "node": "A",
+          "text": "Round 1. Report CHANGES: this round always asks for changes (a test), as your first line.",
+          "state": "completed",
+          "result": "CHANGES: words/alpha.txt contains only 'alpha' with no trailing newline and no header context; for a package file, add a one-line title/description and end with a newline so the file is self-describing."
+        },
+        {
+          "id": "cb7dce4bd76f90d4f5f8fec22cf25782",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "babcbd4951ae2b4c9142d96f093ff137",
+          "node": "A",
+          "text": "Check words/alpha.txt is exactly 'alpha' and report complete; change nothing if it is.",
+          "state": "completed",
+          "result": "Verified words/alpha.txt contains exactly 'alpha' (od shows 'a l p h a \\n'); changed nothing (assignment cb7dce4bd76f90d4f5f8fec22cf25782)."
+        },
+        {
+          "id": "ea6a774ee2821fc3a7ae1973412bc0e6",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "node": "A",
+          "text": "Round 2. Check words/alpha.txt contains exactly the line alpha; report OK or CHANGES as your first line.",
+          "state": "completed",
+          "result": "OK"
+        },
+        {
+          "id": "dd462c091ff4773df5b3071225db1cee",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "node": "C",
+          "text": "Ask the owner with decision_request, thread_id C-owner, two questions: (1) id word: 'Which word goes in words/gamma.txt?', options 'gamma' and 'GAMMA', recommended 'gamma'; (2) id note: 'Anything to add?' (free text). End your turn. When the answers arrive, write the chosen word as the only line of words/gamma.txt and report complete.",
+          "state": "completed",
+          "result": "Wrote words/gamma.txt with the single line 'gamma' (lowercase, per owner's answers)."
+        },
+        {
+          "id": "f1776481ef6b861662a54c6bbc44201f",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "node": "B",
+          "text": "This assignment tests failure: report it failed with the body 'failed on purpose'. Change nothing.",
+          "state": "failed",
+          "result": "failed on purpose"
+        },
+        {
+          "id": "e24391fd5210b099fbf032040517575b",
+          "assigner": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "member_id": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "node": "C",
+          "text": "Ask the owner with decision_request one question: 'Ready to end?' with options yes and no. End your turn.",
+          "state": "active"
+        }
+      ],
+      "messages": [
+        {
+          "id": "d673ccd5dfa568a15f1681cc65b4f58d",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "babcbd4951ae2b4c9142d96f093ff137",
+          "type": "instruction",
+          "body": "You are an implementer in a Wash shakedown. The work is trivial: one line in one file under words/. Do exactly what your assignment says, nothing more. Report with member_update assignment_results (complete, or fail), a one-line summary, then set waiting and end your turn.\n\nWrite words/alpha.txt.\n\nYou are member babcbd4951ae2b4c9142d96f093ff137 in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Once you report an assignment complete, stop changing its files: others are now checking that tree. If a later message shows the work needs a change, reply saying what you would change and wait for a new assignment. Resident package workers remain available for fixes until the orchestrator ends them.\n\n## Your assignment (7c31a8117c7c82dd6a3f2540b8d1e271)\n\nFollow it as written, including any limit it sets on what to do first.\n\nCreate words/alpha.txt containing exactly one line: alpha",
+          "assignment_id": "7c31a8117c7c82dd6a3f2540b8d1e271",
+          "delivery": "delivered",
+          "created_at": 1790547761161
+        },
+        {
+          "id": "7b50a25420afdaab45ab9e2b91c3f5e4",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "type": "instruction",
+          "body": "You are a reviewer in a Wash shakedown. You read; you never edit. Report with member_update assignment_results complete; the FIRST line of your result is your verdict: 'OK' or 'CHANGES: <what>'. Then set waiting and end your turn.\n\nReview node A's file when assigned.\n\nYou are member 9f6fbe32c3a6253a5cf3f66c62f2da38 in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Once you report an assignment complete, stop changing its files: others are now checking that tree. If a later message shows the work needs a change, reply saying what you would change and wait for a new assignment. Resident package workers remain available for fixes until the orchestrator ends them.\n\nYou have no assignment yet. Do not start work: set waiting with member_update and end your turn. Your assignment arrives as a message.",
+          "delivery": "delivered",
+          "created_at": 1790547762015
+        },
+        {
+          "id": "7f8c57424fd09df48054cebbb30becfd",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "type": "instruction",
+          "body": "You are an implementer in a Wash shakedown. The work is trivial: one line in one file under words/. Do exactly what your assignment says, nothing more. Report with member_update assignment_results (complete, or fail), a one-line summary, then set waiting and end your turn.\n\nWrite words/beta.txt.\n\nYou are member 8893eb66d7d8ef20ec5c4689a36551e0 in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Once you report an assignment complete, stop changing its files: others are now checking that tree. If a later message shows the work needs a change, reply saying what you would change and wait for a new assignment. Resident package workers remain available for fixes until the orchestrator ends them.\n\n## Your assignment (e953dde1ffcbc532d68f61817c5c390b)\n\nFollow it as written, including any limit it sets on what to do first.\n\nFirst ask a-impl, on a new QA thread, whether words/alpha.txt is lower case: message_send {recipient:'a-impl', type:'question', body:'Is words/alpha.txt lower case?', qa:{id:'B-case', action:'open', node:'B', title:'Alpha case'}}, then set waiting and end your turn. When the answer arrives: start `sleep 45 && touch words/.beta-done` with Bash in the background (run_in_background), create words/beta.txt containing exactly one line: beta, and report complete.",
+          "assignment_id": "e953dde1ffcbc532d68f61817c5c390b",
+          "delivery": "delivered",
+          "created_at": 1790547762919
+        },
+        {
+          "id": "a02abafc24f20aa45bafd22aafeb671b",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "babcbd4951ae2b4c9142d96f093ff137",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "result",
+          "body": "Created words/alpha.txt containing exactly one line: alpha (assignment 7c31a8117c7c82dd6a3f2540b8d1e271).",
+          "assignment_id": "7c31a8117c7c82dd6a3f2540b8d1e271",
+          "delivery": "delivered",
+          "created_at": 1790547780224
+        },
+        {
+          "thread_id": "B-case",
+          "id": "03d8ba60c099f2e8fba418ddf3fecd52",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "recipient": "babcbd4951ae2b4c9142d96f093ff137",
+          "type": "question",
+          "body": "Is words/alpha.txt lower case?",
+          "delivery": "delivered",
+          "created_at": 1790549210956
+        },
+        {
+          "thread_id": "B-case",
+          "id": "d0ae07fb389afc49a94a0fd14b740502",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "babcbd4951ae2b4c9142d96f093ff137",
+          "recipient": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "type": "answer",
+          "body": "Yes — verified with od: the file contains exactly `alpha\\n` (all lowercase, no uppercase characters).",
+          "reply_to": "03d8ba60c099f2e8fba418ddf3fecd52",
+          "delivery": "delivered",
+          "created_at": 1790549215636
+        },
+        {
+          "id": "a204a7ef381c5b5318a5ce823c3acccf",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "result",
+          "body": "Answer arrived: words/alpha.txt is lower case. Started `sleep 45 && touch words/.beta-done` in background; created words/beta.txt containing exactly one line: beta.",
+          "assignment_id": "e953dde1ffcbc532d68f61817c5c390b",
+          "delivery": "delivered",
+          "created_at": 1790549267773
+        },
+        {
+          "id": "6b45c67c6e2e6d17e525817aea5d46ec",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "type": "instruction",
+          "body": "Round 1. Report CHANGES: this round always asks for changes (a test), as your first line.",
+          "assignment_id": "bb85e87e6f1426821a93897483ce88d9",
+          "delivery": "delivered",
+          "created_at": 1790549275332
+        },
+        {
+          "id": "1d2e5bc9ee9814658bb808adcd79659c",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "result",
+          "body": "CHANGES: words/alpha.txt contains only 'alpha' with no trailing newline and no header context; for a package file, add a one-line title/description and end with a newline so the file is self-describing.",
+          "assignment_id": "bb85e87e6f1426821a93897483ce88d9",
+          "delivery": "delivered",
+          "created_at": 1790549298673
+        },
+        {
+          "id": "407d222d43b159764bd35b1e7da11697",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "babcbd4951ae2b4c9142d96f093ff137",
+          "type": "instruction",
+          "body": "Check words/alpha.txt is exactly 'alpha' and report complete; change nothing if it is.",
+          "assignment_id": "cb7dce4bd76f90d4f5f8fec22cf25782",
+          "delivery": "delivered",
+          "created_at": 1790549302717
+        },
+        {
+          "id": "3cfdf339684283545985daff27c04268",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "babcbd4951ae2b4c9142d96f093ff137",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "result",
+          "body": "Verified words/alpha.txt contains exactly 'alpha' (od shows 'a l p h a \\n'); changed nothing (assignment cb7dce4bd76f90d4f5f8fec22cf25782).",
+          "assignment_id": "cb7dce4bd76f90d4f5f8fec22cf25782",
+          "delivery": "delivered",
+          "created_at": 1790549310994
+        },
+        {
+          "id": "edc31750b6652de1bba4c8d55e7efcde",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "type": "instruction",
+          "body": "Round 2. Check words/alpha.txt contains exactly the line alpha; report OK or CHANGES as your first line.",
+          "assignment_id": "ea6a774ee2821fc3a7ae1973412bc0e6",
+          "delivery": "delivered",
+          "created_at": 1790549312507
+        },
+        {
+          "id": "322ebd9be8211ecd2cd33776193df5dd",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "9f6fbe32c3a6253a5cf3f66c62f2da38",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "result",
+          "body": "OK",
+          "assignment_id": "ea6a774ee2821fc3a7ae1973412bc0e6",
+          "delivery": "delivered",
+          "created_at": 1790549317014
+        },
+        {
+          "id": "9c39541b8e024573ff45a379b8042216",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "type": "instruction",
+          "body": "You are an implementer in a Wash shakedown. The work is trivial: one line in one file under words/. Do exactly what your assignment says, nothing more. Report with member_update assignment_results (complete, or fail), a one-line summary, then set waiting and end your turn.\n\nWrite words/gamma.txt.\n\nYou are member f9ef67743fdc82ecc2a163735e7ddce1 in a Wash workspace. Use wash_workspace tools to collaborate. A normal turn ending keeps your session available. Use member_update with waiting, then finish your turn when idle. Messages arrive in your turn and need no acknowledgement. Report assignment results with member_update or assignment_update, as a summary of at most 2000 bytes with detail in QA or a file. Track package questions in QA threads using message_send and member_update. Once you report an assignment complete, stop changing its files: others are now checking that tree. If a later message shows the work needs a change, reply saying what you would change and wait for a new assignment. Resident package workers remain available for fixes until the orchestrator ends them.\n\nYou have no assignment yet. Do not start work: set waiting with member_update and end your turn. Your assignment arrives as a message.",
+          "delivery": "delivered",
+          "created_at": 1790549328610
+        },
+        {
+          "thread_id": "C-owner",
+          "id": "cc165c24caa66fbc8bf9ad3eec43f015",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "type": "progress",
+          "body": "The owner's questions go on thread C-owner.",
+          "delivery": "recorded",
+          "created_at": 1790549331845
+        },
+        {
+          "id": "07df97c001da6833d8646cc4d5db6ab0",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "type": "instruction",
+          "body": "Ask the owner with decision_request, thread_id C-owner, two questions: (1) id word: 'Which word goes in words/gamma.txt?', options 'gamma' and 'GAMMA', recommended 'gamma'; (2) id note: 'Anything to add?' (free text). End your turn. When the answers arrive, write the chosen word as the only line of words/gamma.txt and report complete.",
+          "assignment_id": "dd462c091ff4773df5b3071225db1cee",
+          "delivery": "delivered",
+          "created_at": 1790549336765
+        },
+        {
+          "thread_id": "C-owner",
+          "id": "ee8d1b2a966185e9ddf831acebf3237d",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "recipient": "human",
+          "type": "decision_request",
+          "body": "1. Which word goes in words/gamma.txt?\n   - gamma (recommended): Lowercase\n   - GAMMA: Uppercase\n2. Anything to add?\n   - Nothing: No extra notes",
+          "delivery": "answered",
+          "created_at": 1790549339918,
+          "questions": {
+            "questions": [
+              {
+                "id": "word",
+                "header": "Word",
+                "question": "Which word goes in words/gamma.txt?",
+                "options": [
+                  {
+                    "label": "gamma",
+                    "description": "Lowercase"
+                  },
+                  {
+                    "label": "GAMMA",
+                    "description": "Uppercase"
+                  }
+                ],
+                "recommended": "gamma"
+              },
+              {
+                "id": "note",
+                "header": "Notes",
+                "question": "Anything to add?",
+                "options": [
+                  {
+                    "label": "Nothing",
+                    "description": "No extra notes"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "b12159e997f164fd8ea0e9707e6afdd7",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "wash",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "note",
+          "body": "Implementer asked the owner and waits for the answer: Which word goes in words/gamma.txt?",
+          "delivery": "delivered",
+          "created_at": 1790549339918
+        },
+        {
+          "thread_id": "C-owner",
+          "id": "79bcf7ce61208fb152ab49048f9bba1f",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "human",
+          "recipient": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "type": "decision_response",
+          "body": "The owner answered:\n\n1. Which word goes in words/gamma.txt?\n   → gamma\n2. Anything to add?\n   → lower case, like alpha and beta",
+          "reply_to": "ee8d1b2a966185e9ddf831acebf3237d",
+          "delivery": "delivered",
+          "created_at": 1790549341693,
+          "answers": {
+            "note": {
+              "text": "lower case, like alpha and beta"
+            },
+            "word": {
+              "selected": [
+                "gamma"
+              ]
+            }
+          }
+        },
+        {
+          "id": "b001a8192469910a76210161a4b4f094",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "result",
+          "body": "Wrote words/gamma.txt with the single line 'gamma' (lowercase, per owner's answers).",
+          "assignment_id": "dd462c091ff4773df5b3071225db1cee",
+          "delivery": "delivered",
+          "created_at": 1790549344636
+        },
+        {
+          "id": "6ef31a6ca174df847634ee9a8d312f88",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "type": "instruction",
+          "body": "This assignment tests failure: report it failed with the body 'failed on purpose'. Change nothing.",
+          "assignment_id": "f1776481ef6b861662a54c6bbc44201f",
+          "delivery": "delivered",
+          "created_at": 1790549347424
+        },
+        {
+          "id": "3085604ece5e87a4a9f65c0df4f722b5",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "8893eb66d7d8ef20ec5c4689a36551e0",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "result",
+          "body": "failed on purpose",
+          "assignment_id": "f1776481ef6b861662a54c6bbc44201f",
+          "delivery": "delivered",
+          "created_at": 1790549350659
+        },
+        {
+          "id": "3a99bf0f84283a2ff2437dd084099575",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "recipient": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "type": "instruction",
+          "body": "Ask the owner with decision_request one question: 'Ready to end?' with options yes and no. End your turn.",
+          "assignment_id": "e24391fd5210b099fbf032040517575b",
+          "delivery": "delivered",
+          "created_at": 1790549355451
+        },
+        {
+          "thread_id": "C-owner",
+          "id": "2e0ebfd79573f9bd031f9142debc0a18",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "f9ef67743fdc82ecc2a163735e7ddce1",
+          "recipient": "human",
+          "type": "decision_request",
+          "body": "1. Ready to end?\n   - yes: Wrap up\n   - no: Keep going",
+          "delivery": "recorded",
+          "created_at": 1790549356952,
+          "questions": {
+            "questions": [
+              {
+                "id": "ready",
+                "header": "End",
+                "question": "Ready to end?",
+                "options": [
+                  {
+                    "label": "yes",
+                    "description": "Wrap up"
+                  },
+                  {
+                    "label": "no",
+                    "description": "Keep going"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "2db2fa06d8f80b882fd2912a9a233188",
+          "swarm_id": "d316e3101e106ea2ed61632c7a1e43d3",
+          "sender": "wash",
+          "recipient": "2f4fb113993e6d59435cd2e9ffdd9e24",
+          "type": "note",
+          "body": "Implementer asked the owner and waits for the answer: Ready to end?",
+          "delivery": "queued",
+          "created_at": 1790549356952
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{"total_usd": 0.8034, "by_model": {"deepseek/deepseek-v4-pro-0813": {"cost_usd": 0.7856, "calls": 68, "input": 58335, "output": 5421, "reasoning": 3207, "cache_read": 2941696}, "deepseek/deepseek-v4.1-flash": {"cost_usd": 0.0178, "calls": 44, "input": 85931, "output": 3148, "reasoning": 2583, "cache_read": 440192}}}

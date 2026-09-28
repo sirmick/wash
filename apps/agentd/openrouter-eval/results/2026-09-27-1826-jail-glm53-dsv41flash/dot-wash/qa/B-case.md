@@ -1,0 +1,26 @@
+<!-- wash-qa-thread: B-case -->
+
+## B · B-case — Alpha case
+
+Status: **open** · Assigned to: Orchestrator · Revision: 3
+
+### Implementer · Question
+
+Event: `f8643725fd287185afad04c40c0c737e` · 2026-09-28T01:26:22Z
+
+> Is words/alpha.txt lower case?
+
+### Implementer · Answer
+
+Event: `e58a4b60e6d1531b7e705b6070712dcc` · 2026-09-28T01:26:24Z
+
+> Yes: words/alpha.txt contains exactly "alpha", all lower-case, one line ending in a newline.
+
+### Orchestrator · Assigned
+
+Event: `5bea063ddaefbfdd840197e59455e681` · 2026-09-28T01:30:59Z
+
+> Resumed from the QA directory; the orchestrator assigns the current team.
+> Next responder: Orchestrator
+
+<!-- wash-qa-checkpoint-v2: eyJ0aHJlYWQiOnsiaWQiOiJCLWNhc2UiLCJub2RlIjoiQiIsInRpdGxlIjoiQWxwaGEgY2FzZSIsImNyZWF0b3IiOiI2YjM2MjlhOWNlZWI2ZWI2OGRkMDlhMDY5MTVmMjdhYiIsImFzc2lnbmVlIjoiMDVlYjNmNGIxMDRhN2Y3YjFhMTcwYzNmNzQzMzAxMTMiLCJzdGF0ZSI6Im9wZW4iLCJibG9ja2luZyI6ZmFsc2UsInJldmlzaW9uIjozLCJkZWNpc2lvbl9yZWZzIjpudWxsLCJldmVudHMiOlt7ImlkIjoiZjg2NDM3MjVmZDI4NzE4NWFmYWQwNGM0MGMwYzczN2UiLCJhdXRob3IiOiI2YjM2MjlhOWNlZWI2ZWI2OGRkMDlhMDY5MTVmMjdhYiIsImtpbmQiOiJvcGVuIiwiYm9keSI6IklzIHdvcmRzL2FscGhhLnR4dCBsb3dlciBjYXNlPyIsIm1lc3NhZ2VfaWQiOiJkODJkOTE5ZjJjZGY4YzNiMDY3NWM2NzFiMTUxYzU3NiIsImNyZWF0ZWRfYXQiOjE3OTA1NTg3ODIxMTZ9LHsiaWQiOiJlNThhNGI2MGU2ZDE1MzFiN2U3MDViNjA3MDcxMmRjYyIsImF1dGhvciI6IjYyZGU3ZjlhOWE4MGE4MzA3YWU0Y2M4MzI0ZGU4N2NlIiwia2luZCI6ImFuc3dlciIsImJvZHkiOiJZZXM6IHdvcmRzL2FscGhhLnR4dCBjb250YWlucyBleGFjdGx5IFwiYWxwaGFcIiwgYWxsIGxvd2VyLWNhc2UsIG9uZSBsaW5lIGVuZGluZyBpbiBhIG5ld2xpbmUuIiwibWVzc2FnZV9pZCI6IjVmM2JkMzQzN2U5OTAyMTAyNjdjODBjOTdlMGZiNDRiIiwiY3JlYXRlZF9hdCI6MTc5MDU1ODc4NDI0Nn0seyJpZCI6IjViZWEwNjNkZGFlZmJmZGQ4NDAxOTdlNTk0NTVlNjgxIiwiYXV0aG9yIjoiMDVlYjNmNGIxMDRhN2Y3YjFhMTcwYzNmNzQzMzAxMTMiLCJraW5kIjoiYXNzaWduIiwiYm9keSI6IlJlc3VtZWQgZnJvbSB0aGUgUUEgZGlyZWN0b3J5OyB0aGUgb3JjaGVzdHJhdG9yIGFzc2lnbnMgdGhlIGN1cnJlbnQgdGVhbS5cbk5leHQgcmVzcG9uZGVyOiBPcmNoZXN0cmF0b3IiLCJjcmVhdGVkX2F0IjoxNzkwNTU5MDU5NzI4fV19LCJhdXRob3JzIjp7IjA1ZWIzZjRiMTA0YTdmN2IxYTE3MGMzZjc0MzMwMTEzIjoiT3JjaGVzdHJhdG9yIiwiNjJkZTdmOWE5YTgwYTgzMDdhZTRjYzgzMjRkZTg3Y2UiOiJJbXBsZW1lbnRlciIsIjZiMzYyOWE5Y2VlYjZlYjY4ZGQwOWEwNjkxNWYyN2FiIjoiSW1wbGVtZW50ZXIifX0= -->

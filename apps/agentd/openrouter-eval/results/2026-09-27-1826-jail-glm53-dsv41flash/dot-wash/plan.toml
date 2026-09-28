@@ -1,0 +1,54 @@
+# wash-plan: written by Wash as the plan changes.
+# Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
+
+revision = 2
+legend = "🧪 in review; 🔴 blocked on the owner; 💥 failed on purpose"
+
+[[node]]
+  id = "M1"
+  title = "Plan"
+  template = "milestone"
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "M2"
+  title = "Build"
+  template = "milestone"
+  needs = ["M1"]
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "M3"
+  title = "Ship"
+  template = "milestone"
+  needs = ["M2"]
+  state = "active"
+  revision = 2
+
+[[node]]
+  id = "A"
+  title = "alpha.txt"
+  parent = "M2"
+  body = "words/alpha.txt says alpha"
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "B"
+  title = "beta.txt"
+  parent = "M2"
+  body = "words/beta.txt says beta"
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "C"
+  title = "gamma.txt"
+  parent = "M2"
+  needs = ["A", "B"]
+  body = "words/gamma.txt says the word the owner picks"
+  state = "done"
+  revision = 2
+  overrides = ["2026-09-28: started by Orchestrator before B (reported): shakedown: C starts before B is accepted"]

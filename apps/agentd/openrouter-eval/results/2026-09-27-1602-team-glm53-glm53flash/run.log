@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+shakedown catalog: {"frontier":{"provider":"opencode","connection":"opencode@openrouter","model":"openrouter/z-ai/glm-5.3","effort":"high"},"coding":{"provider":"opencode","connection":"opencode@openrouter","model":"openrouter/z-ai/glm-5.3-flash","effort":"high"},"small":{"provider":"opencode","connection":"opencode@openrouter","model":"openrouter/z-ai/glm-5.3-flash","effort":"high"}}
+shakedown project: /tmp/wash-shakedown-live-VVUvtR
+owner answered ce0aaaa47c308b159c98125613efca5a

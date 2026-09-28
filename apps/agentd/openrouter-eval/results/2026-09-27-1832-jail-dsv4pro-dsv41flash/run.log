@@ -1,0 +1,69 @@
+owner answered f9c80a2c24edcb7cd4fbf983211d500a
+ok   words/alpha.txt says alpha
+ok   words/beta.txt says beta
+ok   words/gamma.txt has the owner's word
+ok   the plan file is Wash's
+ok   node M1 is done
+ok   node M2 is done
+ok   node A is done
+ok   node B is done
+ok   node C is done
+ok   node M3 is active
+ok   node C records its override
+ok   the QA thread B-case has a file
+ok   B-case holds the question and answer
+ok   the owner's answers are in C-owner
+ok   no thread file names a home directory
+ok   A was accepted with trailers
+ok   the trailers name A's review
+ok   handoffs stay out of git
+0 flagged call(s)
+{
+  "catalog": {
+    "frontier": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4-pro-0813",
+      "effort": "high"
+    },
+    "coding": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    },
+    "small": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    }
+  },
+  "timed_out": false,
+  "owner_prods": 0,
+  "checks_ok": 18,
+  "checks_failed": 0,
+  "minutes": 2.5,
+  "cost_usd": 0.8034,
+  "cost_by_model": {
+    "deepseek/deepseek-v4-pro-0813": {
+      "cost_usd": 0.7856,
+      "calls": 68,
+      "input": 58335,
+      "output": 5421,
+      "reasoning": 3207,
+      "cache_read": 2941696
+    },
+    "deepseek/deepseek-v4.1-flash": {
+      "cost_usd": 0.0178,
+      "calls": 44,
+      "input": 85931,
+      "output": 3148,
+      "reasoning": 2583,
+      "cache_read": 440192
+    }
+  },
+  "wash_reminders": 3,
+  "wash_notes": 2,
+  "failed_assignments": 1
+}

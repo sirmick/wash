@@ -1,0 +1,21 @@
+{
+  "name": "DeepSeek V4-Pro / MiniMax M3",
+  "slots": {
+    "frontier": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4-pro-0813",
+      "effort": "high"
+    },
+    "coding": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/minimax/minimax-m3"
+    },
+    "small": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/minimax/minimax-m3"
+    }
+  }
+}

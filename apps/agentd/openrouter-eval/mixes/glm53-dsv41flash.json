@@ -1,0 +1,23 @@
+{
+  "name": "GLM-5.3 / DeepSeek V4.1-Flash",
+  "slots": {
+    "frontier": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/z-ai/glm-5.3",
+      "effort": "high"
+    },
+    "coding": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    },
+    "small": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    }
+  }
+}

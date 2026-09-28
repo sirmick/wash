@@ -1,0 +1,55 @@
+commit d8f4d90a5e0696d5512cb98fe2c84df34afcd13c
+Author: shakedown <shakedown@localhost>
+Date:   Mon Sep 28 01:31:06 2026 +0000
+
+    Shakedown: end state after workspace resume
+
+ .wash/plan.toml     | 14 +++++++-------
+ .wash/qa/B-case.md  | 11 +++++++++--
+ .wash/qa/C-owner.md | 11 +++++++++--
+ 3 files changed, 25 insertions(+), 11 deletions(-)
+
+commit a6c388442fdf15c607e4d8afc8f103e1e1f6843f
+Author: shakedown <shakedown@localhost>
+Date:   Mon Sep 28 01:27:43 2026 +0000
+
+    M2: Build finished
+    
+    Plan-Node: M2
+    QA: B-case, C-owner
+    Reviewed-by: Red team: OK. words/alpha.txt contains exactly one line, 'alpha', with no extra content (verified at /home/agent/project/words/alp…
+
+ .wash/plan.toml     | 19 ++++++++++---------
+ .wash/qa/C-owner.md | 33 +++++++++++++++++++++++++++++++++
+ words/.beta-done    |  0
+ words/gamma.txt     |  1 +
+ 4 files changed, 44 insertions(+), 9 deletions(-)
+
+commit 83bdcd5f977bdfc0266781d97a0a13c263db2c5d
+Author: shakedown <shakedown@localhost>
+Date:   Mon Sep 28 01:26:56 2026 +0000
+
+    A: alpha.txt
+    
+    Plan-Node: A
+    Gates: grep -qx alpha words/alpha.txt 0
+    Reviewed-by: Red team: OK. words/alpha.txt contains exactly one line, 'alpha', with no extra content (verified at /home/agent/project/words/alp…
+
+ .wash/plan.toml    | 53 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ .wash/qa/B-case.md | 19 +++++++++++++++++++
+ words/alpha.txt    |  1 +
+ words/beta.txt     |  1 +
+ 4 files changed, 74 insertions(+)
+
+commit c55c1357b0448472676840a570e27eadaecc8788
+Author: shakedown <shakedown@localhost>
+Date:   Mon Sep 28 01:26:01 2026 +0000
+
+    shakedown: start
+
+ .wash/workspace.toml |  14 +++++
+ README.md            |  28 ++++++++++
+ SCRIPT.md            | 146 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ check.sh             |  23 ++++++++
+ words/README.md      |   1 +
+ 5 files changed, 212 insertions(+)

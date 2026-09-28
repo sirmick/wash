@@ -1,0 +1,49 @@
+{
+  "catalog": {
+    "frontier": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/moonshotai/kimi-k3",
+      "effort": "high"
+    },
+    "coding": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    },
+    "small": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    }
+  },
+  "timed_out": false,
+  "owner_prods": 0,
+  "checks_ok": 18,
+  "checks_failed": 0,
+  "minutes": 4.6,
+  "cost_usd": 1.4475,
+  "cost_by_model": {
+    "moonshotai/kimi-k3": {
+      "cost_usd": 1.4309,
+      "calls": 73,
+      "input": 172384,
+      "output": 7478,
+      "reasoning": 2935,
+      "cache_read": 2525184
+    },
+    "deepseek/deepseek-v4.1-flash": {
+      "cost_usd": 0.0166,
+      "calls": 44,
+      "input": 53366,
+      "output": 2642,
+      "reasoning": 2022,
+      "cache_read": 455296
+    }
+  },
+  "wash_reminders": 3,
+  "wash_notes": 2,
+  "failed_assignments": 1
+}
