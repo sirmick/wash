@@ -1,0 +1,71 @@
+ok   go test ./... passes
+ok   no existing test file was changed
+ok   node INI is done
+ok   INI was accepted with trailers
+ok   node LRU is done
+ok   LRU was accepted with trailers
+ok   node WRAP is done
+ok   WRAP was accepted with trailers
+ok   every acceptance names a review
+ok   node BUILD is done
+ok   node SHIP is active
+0 flagged call(s)
+{
+  "project": "team",
+  "hidden_pass": 35,
+  "hidden_of": 35,
+  "catalog": {
+    "frontier": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/moonshotai/kimi-k3",
+      "effort": "high"
+    },
+    "coding": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    },
+    "small": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/minimax/minimax-m3"
+    }
+  },
+  "timed_out": false,
+  "owner_prods": 0,
+  "checks_ok": 11,
+  "checks_failed": 0,
+  "minutes": 6.4,
+  "cost_usd": 0.9161,
+  "cost_by_model": {
+    "moonshotai/kimi-k3": {
+      "cost_usd": 0.7404,
+      "calls": 37,
+      "input": 71295,
+      "output": 5541,
+      "reasoning": 3576,
+      "cache_read": 1299328
+    },
+    "deepseek/deepseek-v4.1-flash": {
+      "cost_usd": 0.0194,
+      "calls": 29,
+      "input": 26246,
+      "output": 5995,
+      "reasoning": 6845,
+      "cache_read": 407296
+    },
+    "minimax/minimax-m3": {
+      "cost_usd": 0.1563,
+      "calls": 61,
+      "input": 152107,
+      "output": 12820,
+      "reasoning": 23741,
+      "cache_read": 1113984
+    }
+  },
+  "wash_reminders": 2,
+  "wash_notes": 0,
+  "failed_assignments": 0
+}

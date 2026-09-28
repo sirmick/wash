@@ -25,5 +25,6 @@ RUN node /opt/jail/prewarm.mjs
 USER root
 COPY smoke.sh run.sh audit.py /opt/jail/
 COPY shakedown /opt/jail/shakedown
+COPY team /opt/jail/team
 USER agent
 ENV PATH=/opt/wash:$PATH WASH_JAIL=1

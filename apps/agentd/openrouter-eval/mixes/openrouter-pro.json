@@ -1,0 +1,22 @@
+{
+  "name": "OpenRouter pro",
+  "slots": {
+    "frontier": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/moonshotai/kimi-k3",
+      "effort": "high"
+    },
+    "coding": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    },
+    "small": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/minimax/minimax-m3"
+    }
+  }
+}

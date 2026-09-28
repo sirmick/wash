@@ -1,0 +1,23 @@
+{
+  "name": "OpenRouter budget",
+  "slots": {
+    "frontier": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4-pro-0813",
+      "effort": "high"
+    },
+    "coding": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "high"
+    },
+    "small": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "effort": "low"
+    }
+  }
+}

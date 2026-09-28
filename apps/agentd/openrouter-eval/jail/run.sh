@@ -7,9 +7,22 @@
 # and, after three quiet minutes with the orchestrator idle, says to carry
 # on (counted). Everything is written to /out.
 #
-# Environment: CATALOG (the mix's catalog JSON), OPENROUTER_API_KEY, MINUTES.
+# Environment: CATALOG (the mix's catalog JSON), OPENROUTER_API_KEY, MINUTES,
+# PROJECT (shakedown, or team: ../bench/team, whose code is also scored by
+# its held-back tests).
 set -eu
 out=/out
+case ${PROJECT:-shakedown} in
+shakedown)
+  src=/opt/jail/shakedown hidden=""
+  prompt='Read SCRIPT.md and run the shakedown. Commit with git -c user.name=shakedown -c user.email=shakedown@localhost.'
+  done_re='(ok|FAIL) +A was accepted with trailers' ;;
+team)
+  src=/opt/jail/team/project hidden=/opt/jail/team/hidden
+  prompt='Read SCRIPT.md and do what it says.'
+  done_re='(ok|FAIL) +node SHIP is active' ;;
+*) echo "unknown PROJECT $PROJECT"; exit 2 ;;
+esac
 minutes=${MINUTES:-45}
 work=/home/agent/project
 state=/home/agent/.local/state/wash
@@ -21,7 +34,7 @@ printf '{"catalogs":{"shakedown":%s}}\n' "$CATALOG" >/home/agent/.config/wash/ag
 jq -n --arg k "$OPENROUTER_API_KEY" '{openrouter:$k}' >/home/agent/.config/wash/keys.json
 chmod 600 /home/agent/.config/wash/keys.json
 
-cp -R /opt/jail/shakedown "$work"
+cp -R "$src" "$work"
 cd "$work"
 git init -q && git add -A && git -c user.name=shakedown -c user.email=shakedown@localhost commit -qm "shakedown: start"
 
@@ -33,7 +46,6 @@ msg() { ctl "{\"t\":\"msg\",\"instance_id\":\"$inst\",\"data\":$1}" >/dev/null; 
 (printf '{"t":"watch","instance_id":"%s"}\n' "$inst"; sleep 100000) | socat - "UNIX-CONNECT:$sock" >"$out/watch.jsonl" &
 
 began=$(date +%s)
-prompt='Read SCRIPT.md and run the shakedown. Commit with git -c user.name=shakedown -c user.email=shakedown@localhost.'
 msg "$(jq -nc --arg p "$prompt" --arg cwd "$work" '{kind:"agent_start",catalog:"shakedown",model:"frontier",cwd:$cwd,prompt:$p,yolo:true,claim:true}')"
 key=""
 for _ in $(seq 150); do
@@ -65,7 +77,7 @@ while :; do
   fi
   # Done: the orchestrator ran check.sh (its output, not its source, which
   # a model may have read) and its turn is over.
-  if grep -qE '(ok|FAIL) +A was accepted with trailers' "$state/agent-transcripts/$session.jsonl" 2>/dev/null && ! working; then break; fi
+  if grep -qE "$done_re" "$state/agent-transcripts/$session.jsonl" 2>/dev/null && ! working; then break; fi
   # Three quiet minutes with the orchestrator idle: the owner says to go on.
   quiet=$(( now * 1000 - $(last_event) ))
   if [ "$prods" -lt 5 ] && [ "$quiet" -gt 180000 ] && ! working; then
@@ -78,6 +90,16 @@ done
 
 ./check.sh >"$out/check.txt" 2>&1 || true
 cat "$out/check.txt"
+# The code, by the held-back tests: one subtest per scored case.
+hidden_pass=null hidden_of=null
+if [ -n "$hidden" ]; then
+  cp "$hidden"/*.go "$work"/
+  go test -json -run Hidden ./... 2>/dev/null >"$out/hidden.jsonl" || true
+  rm -f "$work"/hidden_test.go
+  hidden_pass=$(jq -s '[.[] | select(.Test and (.Test|contains("/")) and .Action=="pass")] | length' "$out/hidden.jsonl")
+  hidden_of=$(jq -s '[.[] | select(.Test and (.Test|contains("/")) and (.Action=="pass" or .Action=="fail"))] | length' "$out/hidden.jsonl")
+  jq -r 'select(.Test and (.Test|contains("/")) and .Action=="fail") | "FAIL hidden " + .Test' "$out/hidden.jsonl" >"$out/hidden-failed.txt"
+fi
 cp -a "$state/agent-transcripts" "$out/transcripts" 2>/dev/null || true
 cp "$state/workspaces.json" "$out/" 2>/dev/null || true
 cp -a .wash "$out/dot-wash"
@@ -85,12 +107,13 @@ git log --stat >"$out/git-log.txt"
 python3 /opt/jail/audit.py "$work" >"$out/audit.txt" 2>&1 || true
 python3 /opt/jail/audit.py --costs "$work" >"$out/costs.json" 2>/dev/null || echo '{"total_usd":null}' >"$out/costs.json"
 jq -n \
+  --arg project "${PROJECT:-shakedown}" --argjson hidden_pass "$hidden_pass" --argjson hidden_of "$hidden_of" \
   --argjson catalog "$CATALOG" --argjson timed_out "$timed_out" --argjson prods "$prods" \
   --argjson ok "$(grep -c '^ok ' "$out/check.txt" || true)" --argjson failed "$(grep -c '^FAIL ' "$out/check.txt" || true)" \
   --argjson minutes "$(awk "BEGIN{printf \"%.1f\", ($(date +%s) - $began) / 60}")" \
   --slurpfile costs "$out/costs.json" \
   --slurpfile ws "$out/workspaces.json" \
-  '{catalog: $catalog.slots, timed_out: $timed_out, owner_prods: $prods, checks_ok: $ok, checks_failed: $failed,
+  '{project: $project, hidden_pass: $hidden_pass, hidden_of: $hidden_of, catalog: $catalog.slots, timed_out: $timed_out, owner_prods: $prods, checks_ok: $ok, checks_failed: $failed,
     minutes: $minutes, cost_usd: $costs[0].total_usd, cost_by_model: $costs[0].by_model,
     wash_reminders: ([$ws[0].workspaces[].messages[]? | select(.sender=="wash" and .type!="note")] | length),
     wash_notes: ([$ws[0].workspaces[].messages[]? | select(.sender=="wash" and .type=="note")] | length),

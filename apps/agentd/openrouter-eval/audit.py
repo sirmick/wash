@@ -91,8 +91,11 @@ def main(dirs):
                 st = p.get("state", {})
                 inp = json.dumps(st.get("input", {}), ensure_ascii=False)
                 out = str(st.get("output", st.get("error", "")))[:160].replace("\n", " ")
-                marks = [n for n, rx in FLAGS if rx.search(inp)]
-                far = outside(inp, root)
+                # What a call reaches is its command and paths; a file's
+                # new content is not a path it touched.
+                reach = json.dumps({k: v for k, v in (st.get("input") or {}).items() if k not in ("content", "newString", "oldString")}, ensure_ascii=False)
+                marks = [n for n, rx in FLAGS if rx.search(reach)]
+                far = outside(reach, root)
                 if far:
                     marks.append("outside:" + ",".join(far))
                 if marks:

@@ -8,6 +8,30 @@ cheapest endpoint and the headline. Everything below was released after the
 assistant's training data, so every claim about a model is from these runs or
 from the sources named.
 
+## 2026-09-27: the shipped catalogs on the team benchmark
+
+`bench/team`: three packages of real work (an INI parser, an LRU cache, word
+wrap), each specified only by its doc comment; an implementer on `coding` and
+a read-only reviewer on `small` per package; acceptance with trailers; 35
+held-back cases (the stubs pass 5) and 11 process checks (`check.sh`). Run in
+the jail with the shipped catalogs as mixes (`jail/team.sh <mix> 45 team`).
+
+| Catalog | Hidden | Process | Minutes | Prods | Cost | Orchestrator | Members |
+|---|---|---|---|---|---|---|---|
+| openrouter-budget (DeepSeek V4-Pro / V4.1-Flash / V4.1-Flash) | 35/35 | 11/11 | 4.7 | 0 | $0.37 | $0.31, 27 calls | $0.06 |
+| openrouter-pro (Kimi K3 / V4.1-Flash / MiniMax M3) | 35/35 | 11/11 | 6.4 | 0 | $0.92 | $0.74, 37 calls | $0.02 + M3 $0.16 |
+
+- Both perfect, first time: every implementer passed every hidden case, and
+  every reviewer said OK in its first round, correctly. The benchmark shows
+  both catalogs do real work as a team; it cannot yet tell whether a
+  reviewer catches anything, since there was nothing to catch.
+- Budget did it in less time for 40% of the cost. MiniMax M3 as reviewer
+  cost 8× DeepSeek V4.1-Flash for the same verdicts (61 calls: it reads
+  more).
+- Next: a benchmark with something for reviewers to find (a planted defect
+  in code handed over for review), to justify, or not, a second family on
+  the small slot.
+
 ## 2026-09-27: team runs in the jail
 
 The same shakedown, now in the jail (`jail/team.sh`): wash headless in an
