@@ -742,6 +742,23 @@ func (s *Store) TurnStopped(session string, messageIDs []string) error {
 	return s.turnEnded(session, messageIDs, true, true)
 }
 
+// TurnAbandoned records a turn Wash stopped waiting for: the agent did not
+// end it after a cancel. Its mail is uncertain (it may never have reached
+// the model); the member's state is left to whoever cancelled it.
+func (s *Store) TurnAbandoned(session string, messageIDs []string) error {
+	if len(messageIDs) == 0 || s.View(session) == nil {
+		return nil
+	}
+	return s.Mutate(session, false, func(w *Workspace, _ *Member) error {
+		for i := range w.Messages {
+			if v := &w.Messages[i]; slices.Contains(messageIDs, v.ID) && v.State == "dispatched" {
+				v.State = "uncertain"
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped bool) error {
 	// An ordinary successful turn changes no durable workspace state.
 	if !failed && len(messageIDs) == 0 {

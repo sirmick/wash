@@ -204,6 +204,31 @@ func TestConcurrentRetryAndRecipientIsolation(t *testing.T) {
 		t.Fatal("delivery changed the sender's lifecycle or skipped dispatch")
 	}
 }
+// An abandoned turn's mail may never have reached the model: it is
+// uncertain, and the member stays as it was.
+func TestAbandonedTurnLeavesMailUncertain(t *testing.T) {
+	s, _ := fixture(t)
+	if _, e := s.Send("lead-session", "worker", "instruction", "do it", "", "", ""); e != nil {
+		t.Fatal(e)
+	}
+	msg, _ := s.Next("worker-session")
+	if e := s.TurnAbandoned("worker-session", []string{msg[0].ID}); e != nil {
+		t.Fatal(e)
+	}
+	w := s.View("worker-session")
+	if w.Messages[0].State != "uncertain" {
+		t.Fatalf("message state = %s", w.Messages[0].State)
+	}
+	if m := GetMember(w, "worker"); m.State != "available" {
+		t.Fatalf("member state = %s", m.State)
+	}
+	for _, v := range w.Messages {
+		if v.Type == "lifecycle" {
+			t.Fatal("abandoning a turn woke the orchestrator")
+		}
+	}
+}
+
 func TestStopRetainsMailAndEphemeralCompletionIsExplicit(t *testing.T) {
 	s, _ := fixture(t)
 	_ = s.Mutate("worker-session", false, func(_ *Workspace, m *Member) error { m.Lifetime = "ephemeral"; return nil })

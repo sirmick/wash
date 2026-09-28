@@ -507,7 +507,7 @@ func TestAFailedTurnIsNotReportedAsDone(t *testing.T) {
 	reset()
 	withState(t, 1)
 	h := &hosted{key: "acp:1", agent: "codex"}
-	h.beginTurn()
+	h.beginTurn(turn{}, nil)
 	h.endTurn("failed", "error")
 
 	r := rows["acp:1"]
@@ -528,7 +528,7 @@ func TestACancelledTurnIsStillDone(t *testing.T) {
 	reset()
 	withState(t, 1)
 	h := &hosted{key: "acp:2", agent: "codex"}
-	h.beginTurn()
+	h.beginTurn(turn{}, nil)
 	h.endTurn("done", "cancelled")
 
 	r := rows["acp:2"]

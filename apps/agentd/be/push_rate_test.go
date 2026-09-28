@@ -42,7 +42,7 @@ func TestNarrationDoesNotRepublishPerChunk(t *testing.T) {
 	pushes := countingState(t)
 	h := &hosted{key: "acp:1", agent: "claude", sessionID: "s1"}
 
-	h.beginTurn()
+	h.beginTurn(turn{}, nil)
 	first := *pushes
 	if first == 0 {
 		t.Fatal("opening a turn published nothing")
@@ -67,7 +67,7 @@ func TestARowChangeStillPublishes(t *testing.T) {
 	rows = map[string]*row{}
 	pushes := countingState(t)
 	h := &hosted{key: "acp:1", agent: "claude", sessionID: "s1"}
-	h.beginTurn()
+	h.beginTurn(turn{}, nil)
 	before := *pushes
 
 	// A structural row change still publishes.

@@ -718,7 +718,7 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 	if action == "member_pause" && target != nil {
 		cancelAsksFor(target.key, ReasonTurnCancelled)
 		cancelQuestionsFor(target.key, ReasonTurnCancelled)
-		err = target.client.Cancel(target.sessionID)
+		_, _, err = target.cancelTurn()
 	}
 	if loading {
 		launch := memberLaunch(*w, *m)
@@ -841,22 +841,32 @@ func (ws *workspaceService) interrupt(id string, m *swarm.Member) (any, error) {
 		return nil, errors.New("member is not running")
 	}
 	target.turnMu.Lock()
-	live := target.turnLive
-	if live {
+	live := target.busy()
+	if target.turnLive {
 		target.interrupted.Store(true)
 	}
+	mail := target.turnMail
 	target.turnMu.Unlock()
 	if !live {
 		return map[string]any{"interrupted": false, "reason": "no turn running"}, nil
 	}
 	cancelAsksFor(target.key, ReasonTurnCancelled)
 	cancelQuestionsFor(target.key, ReasonTurnCancelled)
-	if err := target.client.Cancel(target.sessionID); err != nil {
+	log.Printf("agentd: workspace interrupt member=%s key=%s", id, target.key)
+	_, abandoned, err := target.cancelTurn()
+	if err != nil {
 		target.interrupted.Store(false)
 		return nil, err
 	}
-	log.Printf("agentd: workspace interrupt member=%s key=%s", id, target.key)
-	return map[string]any{"interrupted": true}, nil
+	if !abandoned {
+		return map[string]any{"interrupted": true}, nil
+	}
+	out := map[string]any{"interrupted": true, "abandoned": true, "reason": "the agent did not end its turn within " + cancelDeadline.String() + "; Wash ended it, and queued messages can be delivered again"}
+	if len(mail) > 0 {
+		out["uncertain"] = mail
+		out["reason"] = out["reason"].(string) + ". The turn's messages are uncertain: they may not have reached the member; message_retry them if they matter"
+	}
+	return out, nil
 }
 
 // planExitDenied hands the orchestrator a member's finished plan. The member
@@ -1096,7 +1106,7 @@ func (ws *workspaceService) dispatch() {
 			}
 			if h := workspaceHosted(m.Session); h != nil {
 				h.turnMu.Lock()
-				if h.turnLive {
+				if h.busy() {
 					active++
 				}
 				h.turnMu.Unlock()
@@ -1108,7 +1118,9 @@ func (ws *workspaceService) dispatch() {
 				continue
 			}
 			h.turnMu.Lock()
-			if h.closing.Load() || !h.sessionReady.Load() || h.turnLive {
+			// Never into a turn the agent started itself: the prompt is
+			// swallowed (agent_turn.go). Its idle signals the loop.
+			if h.closing.Load() || !h.sessionReady.Load() || h.turnLive || h.agentRunning {
 				h.turnMu.Unlock()
 				continue
 			}

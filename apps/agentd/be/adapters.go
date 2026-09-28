@@ -461,6 +461,9 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 		h.stop()
 		return nil, err
 	}
+	if res.AgentInfo.Name == claudeAdapter {
+		h.sessionMeta = claudeStateMeta(h.sessionMeta)
+	}
 	return h, nil
 }
 
@@ -486,7 +489,9 @@ func promptHosted(h *hosted, t turn) (next turn) {
 	} else {
 		appendPrompt(h.key, text, time.Now())
 	}
-	h.beginTurn()
+	ctx, abort := context.WithCancel(context.Background())
+	defer abort()
+	h.beginTurn(t, abort)
 	// Text first, then the attachments: the sentence is what frames them,
 	// and an adapter reading the blocks in order should see the question
 	// before the screenshot it is about.
@@ -495,12 +500,15 @@ func promptHosted(h *hosted, t turn) (next turn) {
 		blocks = append(blocks, acp.Text(text))
 	}
 	blocks = append(blocks, t.blocks...)
-	res, err := h.client.Prompt(context.Background(), h.sessionID, blocks...)
+	res, err := h.client.Prompt(ctx, h.sessionID, blocks...)
+	abandoned := h.abandoned.Swap(false)
 	if workspaces != nil {
 		workspaces.captureUsage(h)
 		var end error
 		interrupted := h.interrupted.Swap(false)
-		if err == nil && res.StopReason == acp.StopCancelled && !interrupted {
+		if abandoned {
+			end = workspaces.store.TurnAbandoned(h.sessionID, t.mailIDs)
+		} else if err == nil && res.StopReason == acp.StopCancelled && !interrupted {
 			end = workspaces.store.TurnStopped(h.sessionID, t.mailIDs)
 		} else {
 			end = workspaces.store.TurnEnded(h.sessionID, t.mailIDs, err != nil)
@@ -511,6 +519,9 @@ func promptHosted(h *hosted, t turn) (next turn) {
 		defer workspaces.signal()
 	}
 	switch {
+	case abandoned:
+		h.note("Wash stopped waiting for this turn: the agent did not end it within " + cancelDeadline.String() + " of the cancel. What this turn was sent may not have reached it.")
+		return h.endTurn("done", "cancelled")
 	case err != nil:
 		log.Printf("agentd: acp prompt key=%s: %v", h.key, err)
 		// "failed", not "done": a turn that died on an adapter error is

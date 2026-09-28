@@ -166,6 +166,18 @@ type hosted struct {
 	// no longer claim the agent is busy.
 	turnMu   sync.Mutex
 	turnLive bool
+	// agentRunning is the agent's own run state, as Claude Code reports it;
+	// ownTurn is a turn it started itself, with no prompt of Wash's open
+	// (agent_turn.go). turnEnd closes when the current turn, either kind, is
+	// over; turnAbort gives up Wash's session/prompt call and turnMail is
+	// the mail it carries. All guarded by turnMu.
+	agentRunning bool
+	ownTurn      bool
+	turnEnd      chan struct{}
+	turnAbort    context.CancelFunc
+	turnMail     []string
+	// abandoned marks a turn Wash stopped waiting for (cancelTurn).
+	abandoned atomic.Bool
 	// Transient activity is guarded by turnMu and never inferred from a saved
 	// transcript. Concurrent tools stay active until each reports completion.
 	activityPhase string
@@ -217,9 +229,12 @@ func (t turn) empty() bool { return t.text == "" && len(t.blocks) == 0 }
 // under the lock and runs. Claiming here — not in beginTurn — is what
 // stops two prompts arriving in the same instant from both seeing a
 // closed turn and both starting one.
+//
+// A prompt is also held while the agent is running a turn of its own, and
+// goes when the agent says it is idle (agent_turn.go).
 func (h *hosted) submitPrompt(t turn) (queued bool) {
 	h.turnMu.Lock()
-	if h.turnLive {
+	if h.turnLive || h.agentRunning {
 		h.pending = append(h.pending, t)
 		h.queued.Store(int32(len(h.pending)))
 		h.turnMu.Unlock()
@@ -229,6 +244,12 @@ func (h *hosted) submitPrompt(t turn) (queued bool) {
 	}
 	h.turnLive = true
 	h.turnMu.Unlock()
+	h.run(t)
+	return false
+}
+
+// run runs a claimed turn and the queued prompts after it.
+func (h *hosted) run(t turn) {
 	go func() {
 		if h.idle != nil {
 			defer func() { h.idle <- struct{}{} }()
@@ -237,14 +258,19 @@ func (h *hosted) submitPrompt(t turn) (queued bool) {
 			next = promptHosted(h, next)
 		}
 	}()
-	return false
 }
 
-// beginTurn opens a turn: narration counts as "working" from here.
-func (h *hosted) beginTurn() {
+// beginTurn opens a turn: narration counts as "working" from here. abort
+// gives up this prompt's call (cancelTurn).
+func (h *hosted) beginTurn(t turn, abort context.CancelFunc) {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
 	h.turnLive = true
+	if h.turnEnd == nil {
+		h.turnEnd = make(chan struct{})
+	}
+	h.turnAbort = abort
+	h.turnMail = t.mailIDs
 	h.activityPhase = "working"
 	h.activityTools = map[string]string{}
 	h.setState("working", "")
@@ -276,6 +302,11 @@ func (h *hosted) endTurn(state, reason string) (next turn) {
 	h.queued.Store(0)
 	wasLive := h.turnLive
 	h.turnLive = false
+	h.turnAbort, h.turnMail = nil, nil
+	if h.turnEnd != nil && !h.ownTurn {
+		close(h.turnEnd)
+		h.turnEnd = nil
+	}
 	h.setState(state, reason)
 	if wasLive {
 		switch {
@@ -307,7 +338,7 @@ func (h *hosted) endTurn(state, reason string) (next turn) {
 func (h *hosted) narrated() {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
-	if h.turnLive {
+	if h.busy() {
 		h.setState("working", "")
 	}
 }
@@ -1463,7 +1494,14 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 		// rail stops asking about a turn that is over.
 		cancelAsksFor(h.key, ReasonTurnCancelled)
 		cancelQuestionsFor(h.key, ReasonTurnCancelled)
-		return h.client.Cancel(h.sessionID)
+		// Not waited for here: this is the bus handler's goroutine, and
+		// cancelTurn can take cancelDeadline.
+		go func() {
+			if _, _, err := h.cancelTurn(); err != nil {
+				log.Printf("agentd: acp cancel key=%s: %v", h.key, err)
+			}
+		}()
+		return nil
 	})
 
 	// agent_add_root / agent_remove_root: widen or narrow which folders a

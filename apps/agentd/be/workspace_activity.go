@@ -13,7 +13,7 @@ import (
 func (h *hosted) observeWorkspaceActivity(u acp.SessionUpdate) {
 	h.turnMu.Lock()
 	defer h.turnMu.Unlock()
-	if !h.turnLive {
+	if !h.busy() {
 		return
 	} // Late events must not resurrect a finished turn.
 	switch u.SessionUpdate {
@@ -56,7 +56,7 @@ func workspaceMemberActivity(m swarm.Member, h *hosted, decision bool) (string, 
 	if h.activityAsks > 0 || decision {
 		return "needs-input", ""
 	}
-	if !h.turnLive {
+	if !h.busy() {
 		// Work left running in the background outlives the turn: the
 		// member is waiting on it, not idle.
 		if bg := h.background(); bg != "" {

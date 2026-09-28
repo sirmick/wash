@@ -49,6 +49,13 @@ type Terminals interface {
 	ReleaseTerminal(ctx context.Context, ref TerminalRef) error
 }
 
+// SDKMessages is optional: implement it to receive claude-agent-acp's raw
+// Claude Code messages (MethodClaudeSDKMessage). Other adapters never send
+// them.
+type SDKMessages interface {
+	SDKMessage(ctx context.Context, n SDKMessageNotification)
+}
+
 // Client drives one adapter process.
 type Client struct {
 	conn *Conn
@@ -186,6 +193,15 @@ func (c *Client) Cancel(sessionID string) error {
 type dispatch struct{ h SessionHandler }
 
 func (d *dispatch) Notify(ctx context.Context, method string, params json.RawMessage) {
+	if s, ok := d.h.(SDKMessages); ok && method == MethodClaudeSDKMessage {
+		var n SDKMessageNotification
+		if err := json.Unmarshal(params, &n); err != nil {
+			log.Printf("acp: %s decode: %v", method, err)
+			return
+		}
+		s.SDKMessage(ctx, n)
+		return
+	}
 	if method != MethodSessionUpdate {
 		log.Printf("acp: ignoring notification method=%s", method)
 		return
