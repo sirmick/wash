@@ -28,7 +28,6 @@ import type {
 /** What this window's backend sends besides agentd's pushes, which it
  *  relays as they are (apps/ai/be/app.go). */
 type WindowMessage =
-  | { kind: 'role'; role: 'manager' | 'session' }
   | { kind: 'autostart'; agent: string; cwd: string }
   | { kind: 'started'; key: string }
   | { kind: 'restore_failed' }
@@ -58,17 +57,10 @@ interface PersistedState {
   session_key?: string;
 }
 
-const mergeEvents = mergeAgentEvents;
-
-
 const App: Component<{ instance: string; host: HTMLElement; origin: string }> = (props) => {
-  // The element says which surface this is. A BE `role` message alone was
-  // not enough: it is sent once at startup, and a browser reload remounts
-  // the FE without replaying it — the manager came back as a blank session
-  // window.
-  const [role, setRole] = createSignal<'session' | 'manager'>(
-    isManagerElement(props.host.tagName) ? 'manager' : 'session',
-  );
+  // The element says which surface this is: it survives a browser reload,
+  // which remounts the FE without any startup message.
+  const role = (): 'session' | 'manager' => (isManagerElement(props.host.tagName) ? 'manager' : 'session');
   const [events, setEvents] = createSignal<agentproto.Event[]>([]);
   const [workspaceFrame, setWorkspaceFrame] = createSignal<agentproto.WorkspaceState>({ kind: 'workspace_state', key: '', sequence: 0, workspace: null });
   const [workspaceResult, setWorkspaceResult] = createSignal<agentproto.WorkspaceResult>();
@@ -224,9 +216,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'workspace_result':
         if (!staleTranscript(m)) setWorkspaceResult(m);
         break;
-      case 'role':
-        setRole(m.role === 'manager' ? 'manager' : 'session');
-        break;
       case 'autostart':
         setAutostart({ agent: m.agent, cwd: m.cwd });
         patchForm({ cwd: m.cwd });
@@ -270,7 +259,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'transcript_snapshot':
         if (staleTranscript(m)) break;
         resyncPending = false;
-        setEvents((prev) => mergeEvents(prev, m.events ?? []));
+        setEvents((prev) => mergeAgentEvents(prev, m.events ?? []));
         break;
       case 'transcript_event': {
         const e = m.event;
@@ -623,20 +612,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       />
 
       <FilePicker
-        open={saving()}
-        mode="save"
-        host={props.host}
-        hostInstanceID={props.instance}
-        defaultName={(row()?.title || 'transcript').replace(/[^\w.-]+/g, '-').slice(0, 60) + '.md'}
-        onConfirm={(p) => {
-          setSaving(false);
-          sendLocal({ kind: 'save_transcript', path: p, text: transcriptText() });
-        }}
-        onCancel={() => setSaving(false)}
-        data-testid="ai-save-picker"
-      />
-
-      <FilePicker
         open={picking()}
         mode="directory"
         host={props.host}
@@ -829,7 +804,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const historyPanel = (
     <HistoryPanel
-      embedded
       sessions={historySessions}
       query={historyQuery}
       loading={historyLoading}
@@ -989,9 +963,25 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     </Show>
   );
 
-  // Both pickers live at the window's root rather than inside the
-  // launcher fragment: the launcher renders only while there is NO
-  // session, and both of these are reached from a running one.
+  // The session's pickers live at the window's root rather than inside the
+  // launcher fragment: the launcher renders only in the Agents window, and
+  // these are reached from a running session.
+  const savePicker = (
+    <FilePicker
+      open={saving()}
+      mode="save"
+      host={props.host}
+      hostInstanceID={props.instance}
+      defaultName={(row()?.title || 'transcript').replace(/[^\w.-]+/g, '-').slice(0, 60) + '.md'}
+      onConfirm={(p) => {
+        setSaving(false);
+        sendLocal({ kind: 'save_transcript', path: p, text: transcriptText() });
+      }}
+      onCancel={() => setSaving(false)}
+      data-testid="ai-save-picker"
+    />
+  );
+
   const attachPicker = (
     <FilePicker
       open={attaching()}
@@ -1211,6 +1201,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
     {renameDialog}
     {attachPicker}
+    {savePicker}
     <div style={{ height: '100%', display: 'flex', 'flex-direction': 'column' }}>
       {menubar}
       <div

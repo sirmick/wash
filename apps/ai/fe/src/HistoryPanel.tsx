@@ -18,9 +18,9 @@
 // stored transcript into a fresh session — is not built yet. A button
 // that guesses is worse than one that is missing.
 
-import { For, Show, children, createSignal, onMount } from 'solid-js';
-import type { Component, ParentComponent } from 'solid-js';
-import { Button, Checkbox, Input, Menu, MenuItem, MenuSeparator, Overlay, fmtBytes, tokens, type agentproto } from '@wash/ui';
+import { For, Show, createSignal } from 'solid-js';
+import type { Component } from 'solid-js';
+import { Button, Checkbox, Input, Menu, MenuItem, MenuSeparator, fmtBytes, tokens, type agentproto } from '@wash/ui';
 
 /**
  * highlightParts splits a snippet into alternating plain / matched runs
@@ -166,43 +166,6 @@ const metaStyle = {
   'white-space': 'nowrap',
 } as const;
 
-const HistoryFrame: ParentComponent<{
-  embedded?: boolean;
-  onClose?: () => void;
-}> = (props) => {
-  const content = children(() => props.children);
-  return (
-    <Show
-      when={props.embedded}
-      fallback={
-        <Overlay
-          onDismiss={() => props.onClose?.()}
-          align="top"
-          data-testid="ai-history-panel"
-          innerStyle={{ width: 'min(760px, 92vw)', 'max-height': '76vh', display: 'flex', 'flex-direction': 'column' }}
-        >
-          {content()}
-        </Overlay>
-      }
-    >
-      <section
-        data-testid="ai-history-panel"
-        style={{
-          height: '100%',
-          'min-height': 0,
-          display: 'flex',
-          'flex-direction': 'column',
-          padding: `${tokens.spaceMd}px`,
-          'box-sizing': 'border-box',
-          background: tokens.bgWindow,
-        }}
-      >
-        {content()}
-      </section>
-    </Show>
-  );
-};
-
 export const HistoryPanel: Component<{
   sessions: () => agentproto.SessionMeta[];
   query: () => string;
@@ -210,9 +173,6 @@ export const HistoryPanel: Component<{
   onResume: (s: agentproto.SessionMeta) => void;
   /** start a new agent session in this row's recorded folder */
   onRestart?: (s: agentproto.SessionMeta) => void;
-  onClose?: () => void;
-  /** render as a pane in the Agents workspace instead of a modal */
-  embedded?: boolean;
   /** true between asking and the answer landing — an empty list mid-flight
    *  is not the same claim as "nothing matched". */
   loading?: () => boolean;
@@ -231,10 +191,6 @@ export const HistoryPanel: Component<{
   onAll?: (all: boolean) => void;
 }> = (props) => {
   const now = Date.now();
-  let inputEl!: HTMLInputElement;
-  // Typing is why the panel is open; landing focus anywhere else means
-  // the first thing every user does is click the box.
-  onMount(() => { if (!props.embedded) inputEl?.focus(); });
   const [selected, setSelected] = createSignal(0);
   // The per-row verbs menu: which row, and where. Menu portals to
   // document.body, so these are viewport coordinates.
@@ -255,7 +211,18 @@ export const HistoryPanel: Component<{
   const rows = () => tree().map((r) => r.s);
 
   return (
-    <HistoryFrame embedded={props.embedded} onClose={props.onClose}>
+    <section
+      data-testid="ai-history-panel"
+      style={{
+        height: '100%',
+        'min-height': 0,
+        display: 'flex',
+        'flex-direction': 'column',
+        padding: `${tokens.spaceMd}px`,
+        'box-sizing': 'border-box',
+        background: tokens.bgWindow,
+      }}
+    >
       <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceMd}px`, 'margin-bottom': `${tokens.spaceMd}px` }}>
         <div style={{ 'font-weight': 600 }}>History</div>
         <div style={{ font: tokens.type.textSm, color: tokens.fgMuted, 'margin-left': 'auto' }}>
@@ -284,13 +251,12 @@ export const HistoryPanel: Component<{
       </div>
 
       <Input
-        ref={inputEl}
         data-testid="ai-history-search"
         placeholder="Search conversations, titles, models, directories…"
         value={props.query()}
         onInput={(e: InputEvent) => props.onQuery((e.currentTarget as HTMLInputElement).value)}
         onKeyDown={(e: KeyboardEvent) => {
-          // Escape belongs to the Overlay; the arrows and Enter make the
+          // The arrows and Enter make the
           // list usable without leaving the search box.
           if (e.key === 'ArrowDown') {
             e.preventDefault();
@@ -467,12 +433,6 @@ export const HistoryPanel: Component<{
         </Show>
       </div>
 
-      <Show when={!props.embedded}>
-        <div style={{ display: 'flex', 'justify-content': 'flex-end', gap: `${tokens.spaceMd}px`, 'margin-top': `${tokens.spaceMd}px` }}>
-          <Button data-testid="ai-history-close" onClick={() => props.onClose?.()}>Close</Button>
-        </div>
-      </Show>
-
       <Show when={menuFor()}>
         {(m) => (
           <Menu x={m().x} y={m().y} onDismiss={() => setMenuFor(null)} data-testid="ai-history-actions">
@@ -508,6 +468,6 @@ export const HistoryPanel: Component<{
           </Menu>
         )}
       </Show>
-    </HistoryFrame>
+    </section>
   );
 };

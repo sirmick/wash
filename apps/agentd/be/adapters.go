@@ -141,15 +141,10 @@ func (a adapterDef) builtinEnv(cfg agentpolicy.AgentConfig) []string {
 	return []string{"CODEX_PATH=" + p}
 }
 
-// launch resolves how to actually start an adapter: its own binary if
-// installed, else npx with the package. Returns ok=false when neither is
-// possible, with a note a human can act on.
-func (a adapterDef) launch() (cmd string, args []string, note string, ok bool) {
-	return a.launchWith(agentpolicy.AgentConfig{})
-}
-
-// launchWith is launch with the user's agents.json entry applied. A
-// configured `command` replaces the built-in name outright and skips the
+// launchWith resolves how to start an adapter: its own binary if
+// installed, else npx with the package, with the user's agents.json entry
+// applied. Returns ok=false when neither is possible, with a note a human
+// can act on. A configured `command` replaces the built-in name outright and skips the
 // npx fallback: someone who named a binary meant that binary, and quietly
 // running a package from the registry instead would be the opposite of
 // what they asked for. It is still resolved through PATH, so a bare name
@@ -687,7 +682,7 @@ func resumeHostedCapability(agentID, cwd, sessionID string, svcConn *sdk.Conn, l
 	h.applyConfigs(res.ConfigOptions)
 	// The replay has landed by the time LoadSession answers, so this is
 	// the moment the stored and replayed records can be settled.
-	reconcileResume(h.key, sessionID, agentID, h.cwd, time.Now())
+	reconcileResume(h.key, sessionID, h.record(), h.cwd, time.Now())
 	h.journal("agent.resume", "session resumed")
 	// Logged like the started path, so "resumed with settings" and
 	// "resumed without" are visible rather than inferred. A started

@@ -19,7 +19,9 @@ export const WorkspaceSidebar: Component<{
   const needsAttention = () => (props.frame.approvals?.length ?? 0) + questions().length + ownerThreads().length + (props.frame.qa_document_status?.state === 'error' ? 1 : 0);
   const label = (id: string) => id === 'human' ? 'You' : (w().members ?? []).find((m) => m.id === id)?.name ?? id;
   const activity = (m: agentproto.Member) => m.state !== 'available' ? m.state : props.frame.activity?.[m.id] ?? (m.waiting ? 'waiting-message' : 'idle');
-  const usage = (m: agentproto.Member) => props.frame.usage?.[m.id] ?? m.usage;
+  // agentd's usage map already holds each member's checkpoint when its
+  // session is not reporting live.
+  const usage = (m: agentproto.Member) => props.frame.usage?.[m.id];
   const count = (n: number) => n.toLocaleString('en-US');
   // "CT1 · Console input-flood test": a plan node's id with its title; a
   // code alone is what made the sidebar cryptic.

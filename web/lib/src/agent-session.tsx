@@ -13,7 +13,7 @@
 
 import { QuestionPanel, type QuestionPanelProps } from './question-panel';
 import type * as agentproto from './agent-protocol.gen';
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createSignal, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { agentStateColor, agentStateLabel } from './agent-status';
@@ -589,20 +589,19 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
   // Answer the oldest pending question from the keyboard. agentd sorts
   // asks oldest-first, so "the one the shortcut answers" is the one at
   // the top — and it is the only row that advertises the keys, because a
-  // shortcut that silently picks among several is worse than none.
-  onMount(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.altKey || e.ctrlKey || e.metaKey) return;
-      const pending = props.asks?.() ?? [];
-      if (pending.length === 0) return;
-      const k = e.key.toLowerCase();
-      if (k !== 'a' && k !== 'd') return;
-      e.preventDefault();
-      props.onAnswer?.(pending[0].id, k === 'a' ? 'allow' : 'deny');
-    };
-    window.addEventListener('keydown', onKey);
-    onCleanup(() => window.removeEventListener('keydown', onKey));
-  });
+  // shortcut that silently picks among several is worse than none. Bound
+  // to this session's element, not the window: Agent windows share one
+  // page and a workspace keeps hidden sessions mounted, so a window-wide
+  // listener answered every session's ask at once.
+  const answerFromKeys = (e: KeyboardEvent) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    const pending = props.asks?.() ?? [];
+    if (pending.length === 0) return;
+    const k = e.key.toLowerCase();
+    if (k !== 'a' && k !== 'd') return;
+    e.preventDefault();
+    props.onAnswer?.(pending[0].id, k === 'a' ? 'allow' : 'deny');
+  };
 
   // Commands offered for what is currently typed. Empty unless the draft
   // starts with "/", so the composer is bare the rest of the time.
@@ -840,6 +839,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
       // goes wrong, and swallowed only when it actually stopped something,
       // so Esc still closes whatever is above this when there is no turn.
       onKeyDown={(e) => {
+        answerFromKeys(e);
         if (e.key !== 'Escape' || e.defaultPrevented) return;
         if (cancelTurn()) {
           e.preventDefault();

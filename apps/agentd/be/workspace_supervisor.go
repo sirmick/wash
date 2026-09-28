@@ -175,7 +175,7 @@ func (ws *workspaceService) supervise(now time.Time) {
 		runtime := map[string]memberRuntime{}
 		for _, m := range w.Members {
 			if m.State != "ended" {
-				runtime[m.ID] = s.runtime(m, workspaceHosted(m.Session), procs)
+				runtime[m.ID] = s.runtime(m, hostedBySession(m.Session), procs)
 			}
 		}
 		ws.report(&w, s.findings(&w, runtime, now), now)
@@ -421,7 +421,7 @@ func (ws *workspaceService) report(w *swarm.Workspace, found []finding, now time
 		})
 		if ws.conn != nil {
 			key := ""
-			if h := workspaceHosted(lead); h != nil {
+			if h := hostedBySession(lead); h != nil {
 				key = h.key
 			}
 			desktop(ws.conn, agentproto.Notify{Key: key, Title: w.Name + " · supervisor", Body: body, Level: "warn"})

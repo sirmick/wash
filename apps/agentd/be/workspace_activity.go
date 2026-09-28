@@ -89,7 +89,7 @@ func workspaceRuntime(w *swarm.Workspace) (map[string]string, map[string]string,
 		}
 	}
 	for _, m := range w.Members {
-		h := workspaceHosted(m.Session)
+		h := hostedBySession(m.Session)
 		activity[m.ID], detail[m.ID] = workspaceMemberActivity(m, h, decisions[m.ID])
 		if m.Usage != nil {
 			usage[m.ID] = *m.Usage
@@ -141,7 +141,7 @@ func workspaceApprovals(w *swarm.Workspace) []agentproto.WorkspaceApproval {
 	}
 	byKey := map[string]string{}
 	for _, m := range w.Members {
-		if h := workspaceHosted(m.Session); h != nil {
+		if h := hostedBySession(m.Session); h != nil {
 			byKey[h.key] = m.ID
 		}
 	}

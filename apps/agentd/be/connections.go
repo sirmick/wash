@@ -23,6 +23,7 @@ var launchDataJSON []byte
 type launchData struct {
 	Keys        map[string]keySpec                `json:"keys"`
 	Connections map[string]agentpolicy.Connection `json:"connections"`
+	Catalogs    map[string]Catalog                `json:"catalogs"`
 }
 
 // keySpec describes a key the launcher offers to store: what to call it, and
@@ -32,6 +33,8 @@ type keySpec struct {
 	TestURL string `json:"test_url,omitempty"`
 }
 
+// builtinLaunch is catalogs.json, decoded once. The file is in the binary,
+// so a malformed one is a build defect, not a runtime condition.
 var builtinLaunch = func() launchData {
 	var d launchData
 	if err := json.Unmarshal(launchDataJSON, &d); err != nil {

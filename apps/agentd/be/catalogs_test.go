@@ -89,7 +89,7 @@ func TestAgentsJSONReplacesACatalogWhole(t *testing.T) {
 	if c.Name != "Mine" || c.Slots["frontier"].Model != "opus[1m]" || c.Slots["small"].Model != "haiku" {
 		t.Errorf("replaced = %+v", c)
 	}
-	if builtinCatalogs["anthropic-pro"].Slots["frontier"].Model == "opus[1m]" {
+	if builtinLaunch.Catalogs["anthropic-pro"].Slots["frontier"].Model == "opus[1m]" {
 		t.Error("an override leaked into the built-in catalogs")
 	}
 	// A partial catalog is invalid, not merged: agents.json says the whole
@@ -156,11 +156,11 @@ func TestInvalidCatalogsAreKeptWithTheirReason(t *testing.T) {
 func TestStartProfile(t *testing.T) {
 	pol := agentpolicy.Policy{}
 	p, l, err := startProfile(pol, agentproto.AgentStart{Catalog: "openrouter-budget"})
-	if err != nil || p.Model != builtinCatalogs["openrouter-budget"].Slots["frontier"].Model || l.connection != "opencode@openrouter" || l.catalog != "openrouter-budget" || l.model != "" {
+	if err != nil || p.Model != builtinLaunch.Catalogs["openrouter-budget"].Slots["frontier"].Model || l.connection != "opencode@openrouter" || l.catalog != "openrouter-budget" || l.model != "" {
 		t.Fatalf("catalog alone: %+v %+v %v", p, l, err)
 	}
 	p, l, _ = startProfile(pol, agentproto.AgentStart{Catalog: "openrouter-budget", Model: "coding"})
-	if p.Model != builtinCatalogs["openrouter-budget"].Slots["coding"].Model || p.Effort != "high" || l.model != "coding" {
+	if p.Model != builtinLaunch.Catalogs["openrouter-budget"].Slots["coding"].Model || p.Effort != "high" || l.model != "coding" {
 		t.Errorf("slot by name: %+v %+v", p, l)
 	}
 	// A model id on a curated catalog: the frontier slot's adapter and
@@ -255,7 +255,7 @@ func TestRefreshLaunchersPushesOnlyChanges(t *testing.T) {
 	keyStore = func() map[string]string { return keys }
 	t.Cleanup(func() { keyStore = old })
 	var s agentproto.State
-	if !refreshLaunchers(&s) || len(s.Catalogs) != len(builtinCatalogs) {
+	if !refreshLaunchers(&s) || len(s.Catalogs) != len(builtinLaunch.Catalogs) {
 		t.Fatalf("first refresh: %+v", s.Catalogs)
 	}
 	if refreshLaunchers(&s) {
@@ -340,7 +340,7 @@ func TestSetAndDeleteCatalogWriteAgentsJSON(t *testing.T) {
 		t.Fatal("deleting an absent override succeeded")
 	}
 	catalogs, _ = loadCatalogs(hostedPolicy())
-	if catalogs["anthropic-pro"].Name != builtinCatalogs["anthropic-pro"].Name {
+	if catalogs["anthropic-pro"].Name != builtinLaunch.Catalogs["anthropic-pro"].Name {
 		t.Fatalf("delete did not revert the built-in: %+v", catalogs["anthropic-pro"])
 	}
 	if err := deleteCatalog("mine"); err != nil {

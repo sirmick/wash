@@ -59,7 +59,7 @@ export { applyAgentEvent, mergeAgentEvents, utf8Len } from './agent-events';
 export type { ApplyResult } from './agent-events';
 // The roster (docs/SIDEBAR.md M2): com.wash.ai's list pane, and the
 // desktop rail's questions. Its types are agentproto's (below).
-export { AgentAsks, AgentRoster, stateColor, stateLabel, fmtElapsed, fmtAgo } from './agent-roster';
+export { AgentAsks, AgentRoster, stateLabel, fmtElapsed, fmtAgo } from './agent-roster';
 // The one agent-state vocabulary (docs/AGENT_MESSENGER.md M5): four
 // surfaces render it, so it lives here rather than in any one of them.
 export {
@@ -69,8 +69,6 @@ export {
   agentActivityLabel,
   agentActivityColor,
   agentActivityPulses,
-  detachedLabel,
-  isOver,
   isWorking,
   needsHuman,
   type AgentState,

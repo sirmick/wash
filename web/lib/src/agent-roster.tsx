@@ -106,16 +106,8 @@ export interface AgentRosterProps {
   onOpenTextEditor?: (row: agentproto.Row) => void;
 }
 
-// stateColor / stateLabel are thin adapters over the shared vocabulary in
-// agent-status.ts (docs/AGENT_MESSENGER.md M5). They used to BE the
-// vocabulary, and three other surfaces kept their own copies that drifted
-// — including one where a failed session rendered green. Kept as named
-// exports because they are part of @wash/ui's public surface; the
-// switch statements are gone.
-export function stateColor(state: string): string {
-  return agentStateColor(state);
-}
-
+// stateLabel is a roster row's state in the shared vocabulary of
+// agent-status.ts (docs/AGENT_MESSENGER.md M5).
 export function stateLabel(row: agentproto.Row): string {
   // Work left running in the background outlives the turn: the session is
   // waiting on it, not done.
@@ -476,7 +468,7 @@ const AgentRowView: Component<{
     return bits.join(' · ');
   };
   const rowStyle = (): JSX.CSSProperties => ({
-    'border-left': `3px solid ${stateColor(props.row.state)}`,
+    'border-left': `3px solid ${agentStateColor(props.row.state)}`,
     // The row the host is showing reads as selected. Kept subtle: the
     // state colour on the left edge is the row's primary signal and a
     // strong selection fill would out-shout it.
@@ -537,7 +529,7 @@ const AgentRowView: Component<{
             width: '7px',
             height: '7px',
             'border-radius': '50%',
-            background: stateColor(props.row.state),
+            background: agentStateColor(props.row.state),
             'flex-shrink': 0,
           }}
         />

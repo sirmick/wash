@@ -109,7 +109,7 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 				if w == nil {
 					err = errors.New("workspace ended")
 				} else if m := swarm.GetMember(w, member); m != nil {
-					if target := workspaceHosted(m.Session); target != nil {
+					if target := hostedBySession(m.Session); target != nil {
 						openHosted(c, target.key)
 					} else {
 						err = errors.New("member is not running")
@@ -122,7 +122,7 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 				// looking at a member's tab.
 				lead := h
 				if w := ws.store.View(h.sessionID); w != nil {
-					lead = workspaceHosted(workspaceLeadSession(*w))
+					lead = hostedBySession(workspaceLeadSession(*w))
 				}
 				if lead == nil {
 					err = errors.New("the orchestrator is not running")
@@ -486,16 +486,6 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 	}
 	return result, nil
 }
-func workspaceHosted(session string) *hosted {
-	hostedMu.Lock()
-	defer hostedMu.Unlock()
-	for _, h := range hostedAll {
-		if h.sessionID == session {
-			return h
-		}
-	}
-	return nil
-}
 func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string) (any, error) {
 	var member swarm.Member
 	var workspaceID string
@@ -665,12 +655,12 @@ func (ws *workspaceService) lifecycle(ctx context.Context, h *hosted, action, id
 		if err := ws.store.EndMember(h.sessionID, id, false); err != nil {
 			return nil, err
 		}
-		if target := workspaceHosted(m.Session); target != nil {
+		if target := hostedBySession(m.Session); target != nil {
 			target.retire()
 		}
 		return map[string]any{"ended": id}, nil
 	}
-	target := workspaceHosted(m.Session)
+	target := hostedBySession(m.Session)
 	loading := action == "member_resume" && target == nil
 	if action == "member_resume" && target != nil && !target.sessionReady.Load() {
 		return nil, errors.New("session is still loading")
@@ -801,7 +791,7 @@ func (ws *workspaceService) configureMember(ctx context.Context, h *hosted, id s
 		return nil, err
 	}
 	applied := map[string]string{}
-	if target := workspaceHosted(m.Session); target != nil && target.sessionReady.Load() {
+	if target := hostedBySession(m.Session); target != nil && target.sessionReady.Load() {
 		hostedMu.Lock()
 		options := append([]acp.ConfigOption(nil), target.configs...)
 		hostedMu.Unlock()
@@ -838,7 +828,7 @@ func (ws *workspaceService) configureMember(ctx context.Context, h *hosted, id s
 // stop, where pause also halts dispatch until someone resumes it. What the
 // turn carried counts as delivered; send the member what to do instead.
 func (ws *workspaceService) interrupt(id string, m *swarm.Member) (any, error) {
-	target := workspaceHosted(m.Session)
+	target := hostedBySession(m.Session)
 	if target == nil || !target.sessionReady.Load() {
 		return nil, errors.New("member is not running")
 	}
@@ -891,7 +881,7 @@ func (ws *workspaceService) planExitDenied(h *hosted, plan string) {
 			continue
 		}
 		for _, a := range w.Assignments {
-			open = open || a.Member == m.ID && slices.Contains([]string{"assigned", "active", "blocked"}, a.State)
+			open = open || a.Member == m.ID && a.Open()
 		}
 	}
 	if !open {
@@ -959,7 +949,7 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (*agentproto
 	if m == nil {
 		return nil, errors.New("unknown member")
 	}
-	if target := workspaceHosted(m.Session); target != nil {
+	if target := hostedBySession(m.Session); target != nil {
 		events := snapshot(target.key)
 		if len(events) > 300 {
 			events = events[len(events)-300:]
@@ -1107,7 +1097,7 @@ func (ws *workspaceService) dispatch() {
 			if m.ID == w.Lead {
 				continue
 			}
-			if h := workspaceHosted(m.Session); h != nil {
+			if h := hostedBySession(m.Session); h != nil {
 				h.turnMu.Lock()
 				if h.busy() {
 					active++
@@ -1116,7 +1106,7 @@ func (ws *workspaceService) dispatch() {
 			}
 		}
 		for _, m := range w.Members {
-			h := workspaceHosted(m.Session)
+			h := hostedBySession(m.Session)
 			if h == nil {
 				continue
 			}
@@ -1186,7 +1176,7 @@ func (ws *workspaceService) end(lead string) (*swarm.Workspace, error) {
 			w.Members[i].State = "ended"
 		}
 		for i := range w.Assignments {
-			if slices.Contains([]string{"assigned", "active", "blocked"}, w.Assignments[i].State) {
+			if w.Assignments[i].Open() {
 				w.Assignments[i].State = "cancelled"
 			}
 		}
@@ -1208,7 +1198,7 @@ func (ws *workspaceService) end(lead string) (*swarm.Workspace, error) {
 	}
 	for _, m := range old.Members {
 		if m.ID != old.Lead {
-			if child := workspaceHosted(m.Session); child != nil {
+			if child := hostedBySession(m.Session); child != nil {
 				child.retire()
 			}
 		}
@@ -1254,7 +1244,7 @@ func (ws *workspaceService) staleLead(caller, id string) (string, error) {
 	if lead == "" {
 		return "", errors.New("workspace has no orchestrator session")
 	}
-	if workspaceHosted(lead) != nil {
+	if hostedBySession(lead) != nil {
 		return "", errors.New("workspace " + found[0].ID + " is running in Wash; its orchestrator ends it")
 	}
 	return lead, nil
@@ -1422,7 +1412,7 @@ func teamView(w *swarm.Workspace) map[string]any {
 		}
 		open := []map[string]string{}
 		for _, a := range w.Assignments {
-			if a.Member == m.ID && a.State != "completed" && a.State != "failed" {
+			if a.Member == m.ID && a.Open() {
 				open = append(open, map[string]string{"id": a.ID, "state": a.State, "text": firstLine(a.Text, 120)})
 			}
 		}

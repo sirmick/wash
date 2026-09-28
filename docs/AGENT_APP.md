@@ -258,7 +258,7 @@ a pro and a budget catalog per vendor:
 
 The OpenRouter catalogs are open-weight models only, by the owner's choice:
 the vendors' own models are reached through their own catalogs. They were
-chosen by the evaluation in `apps/agentd/openrouter-eval` (NOTES.md,
+chosen by the evaluation in `tools/openrouter-eval` (NOTES.md,
 2026-09-27): a screen of 14 models on a small benchmark, then team runs of
 the workspace shakedown in a jail. Every shortlisted mix passed the
 shakedown; the orchestrator was 95–98% of each run's cost, the members cents.

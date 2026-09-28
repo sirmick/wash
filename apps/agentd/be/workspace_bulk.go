@@ -606,12 +606,10 @@ func (ws *workspaceService) launchOutcome(ctx context.Context, h *hosted, worksp
 func neverLaunched(m *swarm.Member) bool { return m.State == "failed" && m.Session == "" }
 
 func knownProvider(provider string) error {
-	for _, a := range adapters {
-		if a.ID == provider {
-			return nil
-		}
+	if _, ok := adapterByID(provider); !ok {
+		return fmt.Errorf("unknown provider %q", provider)
 	}
-	return fmt.Errorf("unknown provider %q", provider)
+	return nil
 }
 
 // memberSettingsFor is a new member's launch settings: the model it asked

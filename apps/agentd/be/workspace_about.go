@@ -48,7 +48,7 @@ func (ws *workspaceService) about(h *hosted) map[string]any {
 		if w.State == "ended" {
 			continue
 		}
-		open = append(open, map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "project_root": w.Root, "orchestrator_running": workspaceHosted(workspaceLeadSession(w)) != nil})
+		open = append(open, map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "project_root": w.Root, "orchestrator_running": hostedBySession(workspaceLeadSession(w)) != nil})
 	}
 	result["open_workspaces"] = open
 	bin, _ := os.Executable()

@@ -36,7 +36,6 @@ const panel = (over: {
   onResume?: (s: agentproto.SessionMeta) => void;
   onRestart?: (s: agentproto.SessionMeta) => void;
   onQuery?: (q: string) => void;
-  embedded?: boolean;
 } = {}) =>
   render(() => (
     <HistoryPanel
@@ -45,8 +44,6 @@ const panel = (over: {
       onQuery={over.onQuery ?? noop}
       onResume={over.onResume ?? noop}
       onRestart={over.onRestart}
-      onClose={noop}
-      embedded={over.embedded}
     />
   ));
 
@@ -101,9 +98,6 @@ test('the keyboard drives the list from the search box', () => {
   const rows = [sess({ session_id: 'a' }), sess({ session_id: 'b' }), sess({ session_id: 'c' })];
   const { getByTestId } = panel({ sessions: rows, onResume: (s) => resumed.push(s.session_id) });
   const input = getByTestId('ai-history-search') as HTMLInputElement;
-
-  // The panel opens focused: the first thing anyone does is type.
-  expect(document.activeElement).toBe(input);
 
   fireEvent.keyDown(input, { key: 'Enter' });
   expect(resumed).toEqual(['a']);
@@ -213,7 +207,6 @@ test('a running session does not act like one more thing to open', () => {
       query={() => ''}
       loading={() => false}
       onQuery={noop}
-      onClose={noop}
       onResume={(s) => clicked.push(s.session_id)}
     />
   ));
@@ -264,7 +257,6 @@ test('a row shows the matching line, with the term marked', () => {
       query={() => 'quokka'}
       loading={() => false}
       onQuery={noop}
-      onClose={noop}
       onResume={noop}
     />
   ));
@@ -279,22 +271,19 @@ test('a row with no snippet renders none — a metadata match quotes nothing bac
       query={() => 'codex'}
       loading={() => false}
       onQuery={noop}
-      onClose={noop}
       onResume={noop}
     />
   ));
   expect(queryByTestId('ai-history-snippet')).toBeNull();
 });
 
-test('embedded history shows a three-line transcript preview without modal controls', () => {
-  const { getByTestId, queryByTestId } = panel({
-    embedded: true,
+test('history shows a three-line transcript preview', () => {
+  const { getByTestId } = panel({
     sessions: [sess({ preview: 'first question\nfirst answer\nlatest detail\nnot visible' })],
   });
   const preview = getByTestId('ai-history-snippet');
   expect(preview.textContent).toContain('first question');
   expect(preview.style.getPropertyValue('-webkit-line-clamp')).toBe('3');
-  expect(queryByTestId('ai-history-close')).toBeNull();
 });
 
 // --- rename / delete / prune (docs/Review-findings.md P2 → agent) ---
@@ -311,7 +300,6 @@ test('a row offers Rename and Delete, and Delete is disabled while it runs', () 
       sessions={() => [sess({ session_id: 's-gone' }), sess({ session_id: 's-live', live: true, row_key: 'acp:1' })]}
       query={() => ''}
       onQuery={noop}
-      onClose={noop}
       onResume={noop}
       onRestart={(s) => restarted.push(s.session_id)}
       onRename={(s) => renamed.push(s.session_id)}
@@ -352,7 +340,7 @@ test('a panel whose host offers no verbs shows no ellipsis and no prune button',
 test('prune lives beside the count it acts on', () => {
   let pruned = 0;
   const { getByTestId } = render(() => (
-    <HistoryPanel sessions={() => [sess()]} query={() => ''} onQuery={noop} onClose={noop} onResume={noop}
+    <HistoryPanel sessions={() => [sess()]} query={() => ''} onQuery={noop} onResume={noop}
       onPrune={() => { pruned++; }} />
   ));
   fireEvent.click(getByTestId('ai-history-prune'));
@@ -398,7 +386,6 @@ test('the members checkbox asks the host, and then the list is indented', async 
       onResume={noop}
       all={all}
       onAll={(v) => { asked.push(v); setAll(v); }}
-      embedded
     />
   ));
   const box = getByTestId('ai-history-all') as HTMLInputElement;

@@ -1740,7 +1740,7 @@ func (h *hosted) toggleYolo(on bool) {
 		return nil
 	})
 	for _, session := range followers {
-		if f := workspaceHosted(session); f != nil {
+		if f := hostedBySession(session); f != nil {
 			f.setYolo(on, "the orchestrator's auto-approval changed")
 		}
 	}

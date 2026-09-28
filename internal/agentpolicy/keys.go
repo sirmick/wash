@@ -3,6 +3,7 @@ package agentpolicy
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -58,13 +59,24 @@ func SetKey(path, name, value string) error {
 	if !ValidKeyName(name) {
 		return errors.New("invalid key name")
 	}
-	keys := LoadKeys(path)
+	// Strictly, unlike LoadKeys: a file that exists but does not parse would
+	// otherwise be replaced by this one key, losing every other.
+	keys := map[string]string{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &keys); err != nil {
+			return fmt.Errorf("%s does not parse, not rewriting it: %w", path, err)
+		}
+	case !os.IsNotExist(err):
+		return err
+	}
 	if value == "" {
 		delete(keys, name)
 	} else {
 		keys[name] = value
 	}
-	data, err := json.MarshalIndent(keys, "", "  ")
+	data, err = json.MarshalIndent(keys, "", "  ")
 	if err != nil {
 		return err
 	}

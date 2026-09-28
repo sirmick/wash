@@ -310,25 +310,11 @@ func (s *Store) Mutate(session string, lead bool, fn func(*Workspace, *Member) e
 }
 func ValidText(s string, max int) bool { return strings.TrimSpace(s) != "" && len(s) <= max }
 
-type Limits struct{ MaxActive, MaxMembers int }
-
 // OrchestratorKey is the orchestrator's key, reserved for it: members
 // address it by this rather than by its random ID.
 const OrchestratorKey = "orchestrator"
 
-func (s *Store) Setup(session, provider, cwd, name, root string, limits ...Limits) (*Workspace, error) {
-	cap := Limits{MaxActive: 4, MaxMembers: 16}
-	if len(limits) > 0 {
-		if limits[0].MaxActive != 0 {
-			cap.MaxActive = limits[0].MaxActive
-		}
-		if limits[0].MaxMembers != 0 {
-			cap.MaxMembers = limits[0].MaxMembers
-		}
-	}
-	if cap.MaxActive < 1 || cap.MaxActive > 16 || cap.MaxMembers < 1 || cap.MaxMembers > 64 || cap.MaxActive > cap.MaxMembers {
-		return nil, errors.New("invalid limits: max_active 1–16, max_members 1–64, active <= members")
-	}
+func (s *Store) Setup(session, provider, cwd, name, root string) (*Workspace, error) {
 	if !ValidText(name, 160) {
 		return nil, errors.New("name must contain 1–160 bytes")
 	}
@@ -346,7 +332,7 @@ func (s *Store) Setup(session, provider, cwd, name, root string, limits ...Limit
 			return errors.New("teardown current workspace first")
 		}
 		lead := Member{ID: ID(), Key: OrchestratorKey, Name: "Orchestrator", Provider: provider, Cwd: cwd, Session: session, Lifetime: "resident", State: "available", CanSpawn: true}
-		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: cap.MaxActive, MaxMembers: cap.MaxMembers, Plan: []Node{}, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}, QA: []QAThread{}}
+		w := Workspace{ID: ID(), Name: name, Root: root, Lead: lead.ID, State: "active", Revision: 1, PlanRevision: 1, MaxActive: 4, MaxMembers: 16, Plan: []Node{}, Members: []Member{lead}, Assignments: []Assignment{}, Messages: []Message{}, QA: []QAThread{}}
 		st.Workspaces = append(st.Workspaces, w)
 		return nil
 	})
@@ -555,7 +541,7 @@ func (s *Store) Complete(session, id, body string, failed bool) error {
 			if a.State == state && a.Result == body {
 				return nil
 			}
-			if a.State != "active" && a.State != "assigned" && a.State != "blocked" {
+			if !a.Open() {
 				return errors.New("assignment already resolved")
 			}
 			a.State = state
@@ -904,7 +890,7 @@ func (s *Store) EndMember(session, id string, notify bool) error {
 			if a.Member == id && a.Open() {
 				a.State = "cancelled"
 				if n := PlanNode(w, a.Node); n != nil && n.State == "active" && len(OpenOn(w, a.Node)) == 0 {
-					nudge(w, "idle:"+a.ID, "Node "+n.ID+" ("+n.Title+") is active with nobody on it: "+m.Name+" ended with assignment "+a.ID+" open. Assign it again, or set the node's state.")
+					nudge(w, "unstaffed:"+a.ID, "Node "+n.ID+" ("+n.Title+") is active with nobody on it: "+m.Name+" ended with assignment "+a.ID+" open. Assign it again, or set the node's state.")
 				}
 			}
 		}

@@ -436,7 +436,7 @@ func loadTranscript(sessionID string) ([]agentproto.Event, error) {
 //
 // The second case is transcript replay doing real work: a session the
 // agent has half-forgotten still comes back whole.
-func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
+func reconcileResume(key, sessionID string, launch launchRecord, cwd string, now time.Time) {
 	if key == "" || sessionID == "" {
 		return
 	}
@@ -482,7 +482,7 @@ func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 	storeMu.Lock()
 	storeSession[key] = sessionID
 	storeMu.Unlock()
-	if err := rewriteTranscript(sessionID, agent, cwd, events, now); err != nil {
+	if err := rewriteTranscript(sessionID, launch, cwd, events, now); err != nil {
 		log.Printf("agentd: transcript rewrite session=%s: %v", sessionID, err)
 	}
 }
@@ -492,7 +492,7 @@ func reconcileResume(key, sessionID, agent, cwd string, now time.Time) {
 // new one — never a half-written conversation. This is the one path that
 // does not append; it exists because resume has to reconcile two
 // numbering schemes into one.
-func rewriteTranscript(sessionID, agent, cwd string, events []agentproto.Event, now time.Time) error {
+func rewriteTranscript(sessionID string, launch launchRecord, cwd string, events []agentproto.Event, now time.Time) error {
 	path := transcriptPath(sessionID)
 	if path == "" {
 		return nil
@@ -523,17 +523,23 @@ func rewriteTranscript(sessionID, agent, cwd string, events []agentproto.Event, 
 		if old.StartedMS != 0 {
 			startedMS = old.StartedMS
 		}
-		if agent == "" {
-			agent = old.Agent
-		}
-		if cwd == "" {
-			cwd = old.Cwd
+		// The header is the launch record a later resume reads back: what
+		// this resume does not know (a resume knows its connection but not
+		// always its catalog) stays as it was.
+		for _, f := range []struct {
+			to   *string
+			orig string
+		}{{&launch.Agent, old.Agent}, {&launch.Connection, old.Connection}, {&launch.Catalog, old.Catalog}, {&launch.Model, old.LaunchModel}, {&cwd, old.Cwd}} {
+			if *f.to == "" {
+				*f.to = f.orig
+			}
 		}
 	}
 	w := bufio.NewWriter(tmp)
 	meta, _ := json.Marshal(transcriptMeta{
 		Kind: metaKind, Version: transcriptVer, SessionID: sessionID,
-		Agent: agent, Cwd: cwd, StartedMS: startedMS,
+		Agent: launch.Agent, Connection: launch.Connection, Catalog: launch.Catalog, Model: launch.Model,
+		Cwd: cwd, StartedMS: startedMS,
 	})
 	w.Write(meta)
 	w.WriteByte('\n')

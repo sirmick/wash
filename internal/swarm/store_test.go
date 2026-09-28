@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -527,5 +528,33 @@ func TestParentsFollowTheCreator(t *testing.T) {
 	want := map[string]string{"worker-session": "lead-session", "sub-session": "worker-session", "orphan-session": "lead-session"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parents = %v, want %v (lead %s)", got, want, w.Lead)
+	}
+}
+
+// The member's "report your assignment" reminder and the orchestrator's
+// "node left with nobody on it" are different nudges: the first must not
+// silence the second.
+func TestEndingARemindedMemberStillTellsTheOrchestrator(t *testing.T) {
+	s, _ := fixture(t)
+	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	msg, _ := s.Next("worker-session")
+	if e = s.TurnEnded("worker-session", []string{msg[0].ID}, false); e != nil {
+		t.Fatal(e)
+	}
+	if !slices.Contains(s.View("lead-session").Nudged, "idle:"+a.ID) {
+		t.Fatal("the member was not reminded")
+	}
+	if e = s.EndMember("lead-session", "worker", false); e != nil {
+		t.Fatal(e)
+	}
+	told := false
+	for _, m := range s.View("lead-session").Messages {
+		told = told || m.Sender == "wash" && strings.Contains(m.Body, "active with nobody on it")
+	}
+	if !told {
+		t.Fatal("the orchestrator was not told the node has nobody on it")
 	}
 }

@@ -18,7 +18,7 @@ import { test, expect } from '../fixtures/router';
 //
 // WASH_E2E_CATALOG names a JSON file holding another catalog ({name, slots})
 // to run it with instead, e.g. open-weight models on OpenRouter
-// (apps/agentd/openrouter-eval/mixes/); the stored OpenRouter key is copied
+// (tools/openrouter-eval/mixes/); the stored OpenRouter key is copied
 // into the isolated Wash for it, and the scorecard carries the key's spend.
 // WASH_E2E_MINUTES bounds the run (default 85).
 

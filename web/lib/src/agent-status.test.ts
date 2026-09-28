@@ -7,7 +7,6 @@ import {
   AGENT_STATES,
   agentStateColor,
   agentStateLabel,
-  isOver,
   isWorking,
   needsHuman,
 } from './agent-status.ts';
@@ -42,15 +41,6 @@ test('needing a human is exactly one state', () => {
   for (const s of ['working', 'running', 'done', 'failed', 'stale']) {
     assert.equal(needsHuman(s), false, `${s} must not claim attention`);
   }
-});
-
-test('over means over, however it ended', () => {
-  assert.equal(isOver('done'), true);
-  assert.equal(isOver('failed'), true);
-  assert.equal(isOver('working'), false);
-  // A stale session has NOT ended — nobody knows what it is doing, which
-  // is a different and worse thing than being finished.
-  assert.equal(isOver('stale'), false);
 });
 
 // --- defect 3: stale was inexpressible in one of the renderers ---

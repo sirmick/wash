@@ -164,7 +164,7 @@ func TestReconcileResumeKeepsTheRicherRecord(t *testing.T) {
 	waitForTranscriptWrites()
 
 	// Resume: a new roster key, and an adapter that replayed nothing.
-	reconcileResume("acp:2", "sess-c", "codex", "/tmp", now)
+	reconcileResume("acp:2", "sess-c", launchRecord{Agent: "codex"}, "/tmp", now)
 
 	transMu.Lock()
 	got := append([]agentproto.Event(nil), trans["acp:2"].events...)
@@ -212,7 +212,7 @@ func TestReconcileResumePrefersAFullReplay(t *testing.T) {
 	bindTranscript("acp:2", "sess-d", launchRecord{Agent: "codex"}, "/tmp", now)
 	appendPrompt("acp:2", "replayed one", now)
 	appendEvent("acp:2", agentproto.Event{Kind: agentproto.EventMessage, Text: "replayed two"}, now)
-	reconcileResume("acp:2", "sess-d", "codex", "/tmp", now)
+	reconcileResume("acp:2", "sess-d", launchRecord{Agent: "codex"}, "/tmp", now)
 	waitForTranscriptWrites()
 
 	got, err := loadTranscript("sess-d")
@@ -801,5 +801,21 @@ func TestExcerptDoesNotSplitRunes(t *testing.T) {
 	}
 	if !strings.Contains(out, "quokka") {
 		t.Errorf("excerpt lost the match: %q", out)
+	}
+}
+
+// A resume rewrites the file; its header is the launch record the next
+// resume reads back, so it keeps the connection, catalog and model.
+func TestResumeKeepsTheLaunchRecord(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "sess-l", launchRecord{Agent: "opencode", Connection: "opencode@openrouter", Catalog: "openrouter-budget", Model: "coding"}, "/tmp", now)
+	appendPrompt("acp:1", "hello", now)
+	waitForTranscriptWrites()
+	// A resume knows its connection but not its catalog.
+	reconcileResume("acp:2", "sess-l", launchRecord{Agent: "opencode", Connection: "opencode@openrouter"}, "/tmp", now.Add(time.Minute))
+	m, ok := readSessionMeta(transcriptPath("sess-l"))
+	if !ok || m.Connection != "opencode@openrouter" || m.Catalog != "openrouter-budget" || m.LaunchModel != "coding" || m.Agent != "opencode" {
+		t.Fatalf("after resume: %+v", m)
 	}
 }

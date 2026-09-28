@@ -56,19 +56,6 @@ type Catalog struct {
 
 func (c Catalog) auto() bool { return len(c.Slots) == 0 }
 
-// builtinCatalogs is catalogs.json's `catalogs`, decoded once. The file is
-// in the binary, so a malformed one is a build defect, not a runtime
-// condition.
-var builtinCatalogs = func() map[string]Catalog {
-	var d struct {
-		Catalogs map[string]Catalog `json:"catalogs"`
-	}
-	if err := json.Unmarshal(launchDataJSON, &d); err != nil {
-		panic("agentd: catalogs.json: " + err.Error())
-	}
-	return d.Catalogs
-}()
-
 // loadCatalogs is the built-in catalogs with agents.json's over them, by
 // id: an entry there replaces the whole catalog, so the file says exactly
 // what the Catalog tab showed when it was saved. A catalog that fails
@@ -76,7 +63,7 @@ var builtinCatalogs = func() map[string]Catalog {
 // can grey it with the reason instead of it silently vanishing.
 func loadCatalogs(pol agentpolicy.Policy) (map[string]Catalog, map[string]error) {
 	catalogs := map[string]Catalog{}
-	for id, c := range builtinCatalogs {
+	for id, c := range builtinLaunch.Catalogs {
 		catalogs[id] = Catalog{Name: c.Name, Adapter: c.Adapter, Connection: c.Connection, Slots: maps.Clone(c.Slots)}
 	}
 	bad := map[string]error{}
@@ -224,7 +211,7 @@ func publishCatalogs(pol agentpolicy.Policy, keys map[string]string) []agentprot
 	out := make([]agentproto.CatalogView, 0, len(ids))
 	for _, id := range ids {
 		c := catalogs[id]
-		_, builtin := builtinCatalogs[id]
+		_, builtin := builtinLaunch.Catalogs[id]
 		_, inPolicy := pol.Catalogs[id]
 		v := agentproto.CatalogView{ID: id, Name: c.Name, Adapter: c.Adapter, Connection: c.Connection, Available: true, Builtin: builtin, Overridden: builtin && inPolicy}
 		if v.Name == "" {

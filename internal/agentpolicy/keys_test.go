@@ -39,6 +39,21 @@ func TestSetKeyWritesOwnerOnlyAndKeepsOtherKeys(t *testing.T) {
 	}
 }
 
+// A store that does not parse is left alone: rewriting it with the one new
+// key would lose every other.
+func TestSetKeyKeepsAStoreItCannotParse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	if err := os.WriteFile(path, []byte(`{"openrouter": "sk-or`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetKey(path, "other", "x"); err == nil {
+		t.Fatal("rewrote a key store it could not parse")
+	}
+	if b, _ := os.ReadFile(path); string(b) != `{"openrouter": "sk-or` {
+		t.Errorf("store changed: %q", b)
+	}
+}
+
 func TestKeysPathSitsBesideAgentsJSON(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/cfg")
 	if got := KeysPath(); got != "/cfg/wash/keys.json" {
