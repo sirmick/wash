@@ -43,6 +43,9 @@ test('MCP configures a live workspace, collaborates across idle turns, and unins
  expect(state().assignments[0].state).toBe('completed');
  expect(state().assignments[0].result).toBe('Completed after an inbox reply');
  const retired=state().members.find((m:any)=>m.name==='Implementer').id;
+ // Ended members leave the Team tree until asked for.
+ await expect(sidebar.locator(`[data-testid="workspace-member-${retired}"]`)).toHaveCount(0);
+ await sidebar.getByTestId('workspace-show-ended').check();
  await expect(sidebar.locator(`[data-testid="workspace-usage-${retired}"]`)).toContainText('2,048 / 32,000 tokens');
  await sidebar.locator(`[data-testid="workspace-member-${retired}"]`).click();
  await expect(app.locator('[data-testid="workspace-member-detail"]')).toContainText('Archived conversation');
