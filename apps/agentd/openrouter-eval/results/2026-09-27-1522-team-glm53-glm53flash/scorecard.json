@@ -1,0 +1,32 @@
+{
+  "catalog": {
+    "frontier": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/z-ai/glm-5.3",
+      "effort": "high"
+    },
+    "coding": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/z-ai/glm-5.3-flash",
+      "effort": "high"
+    },
+    "small": {
+      "provider": "opencode",
+      "connection": "opencode@openrouter",
+      "model": "openrouter/z-ai/glm-5.3-flash",
+      "effort": "high"
+    }
+  },
+  "timed_out": true,
+  "checks_ok": 15,
+  "checks_failed": 3,
+  "minutes": 40.37,
+  "cost_usd": 0.4107,
+  "members": 5,
+  "messages": 25,
+  "wash_reminders": 2,
+  "lifecycle": 0,
+  "failed_assignments": 1
+}

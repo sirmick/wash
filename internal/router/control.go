@@ -258,6 +258,15 @@ func (r *Router) handleControl(ctx context.Context, conn net.Conn) {
 			return
 		}
 		r.controlMsg(ctx, conn, req)
+	case "watch":
+		var req launchMsgReq
+		if err := json.Unmarshal(line, &req); err != nil {
+			writeControlResponse(conn, map[string]any{
+				"t": "error", "code": "bad_request", "msg": err.Error(),
+			})
+			return
+		}
+		r.controlWatch(ctx, conn, req.InstanceID)
 	case "priv.run":
 		var req privRunReq
 		if err := json.Unmarshal(line, &req); err != nil {

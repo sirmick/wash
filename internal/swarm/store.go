@@ -716,9 +716,13 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 		}
 		return 0
 	})
-	// A note never wakes anyone: it goes out with the next turn that
-	// something else starts.
-	if !slices.ContainsFunc(batch, func(i int) bool { return w.Messages[i].Type != "note" }) {
+	// A note wakes nobody busy: it goes out with the next turn something
+	// else starts. It does wake a member idle in a plain wait (no waiting
+	// set): an orchestrator that kept to "do not poll" and waited for a
+	// member's owner question to show was otherwise never told, and sat
+	// until its deadline (live shakedown, GLM-5.3, 2026-09-27); Sonnet had
+	// only got through by polling.
+	if (m.Waiting == "" || len(m.WaitingOn) > 0) && !slices.ContainsFunc(batch, func(i int) bool { return w.Messages[i].Type != "note" }) {
 		batch = nil
 	}
 	return batch, stale, setDone

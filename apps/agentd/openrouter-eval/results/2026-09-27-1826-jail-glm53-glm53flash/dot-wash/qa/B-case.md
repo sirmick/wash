@@ -1,0 +1,26 @@
+<!-- wash-qa-thread: B-case -->
+
+## B · B-case — Alpha case
+
+Status: **open** · Assigned to: Orchestrator · Revision: 3
+
+### Implementer · Question
+
+Event: `ac52767e53b818ea8dd9c03cdac01ba4` · 2026-09-28T01:26:27Z
+
+> Is words/alpha.txt lower case?
+
+### Implementer · Answer
+
+Event: `5179d75d9c90664a2520ee4f724f694e` · 2026-09-28T01:26:33Z
+
+> Yes, it is lower case: the single line reads exactly `alpha` with no capital letters.
+
+### Orchestrator · Assigned
+
+Event: `275e9d00e7ac91b13c5d10c5de07297a` · 2026-09-28T01:30:52Z
+
+> Resumed from the QA directory; the orchestrator assigns the current team.
+> Next responder: Orchestrator
+
+<!-- wash-qa-checkpoint-v2: eyJ0aHJlYWQiOnsiaWQiOiJCLWNhc2UiLCJub2RlIjoiQiIsInRpdGxlIjoiQWxwaGEgY2FzZSIsImNyZWF0b3IiOiI0ZDEwZDZmNWE0MzAyOWE0Y2Y4OGM0YjE5M2UxMjFlMyIsImFzc2lnbmVlIjoiMmRmNzljNDViMWJhMWUxMTNlOWZlMzM2N2MwMjJmYzUiLCJzdGF0ZSI6Im9wZW4iLCJibG9ja2luZyI6ZmFsc2UsInJldmlzaW9uIjozLCJkZWNpc2lvbl9yZWZzIjpudWxsLCJldmVudHMiOlt7ImlkIjoiYWM1Mjc2N2U1M2I4MThlYThkZDljMDNjZGFjMDFiYTQiLCJhdXRob3IiOiI0ZDEwZDZmNWE0MzAyOWE0Y2Y4OGM0YjE5M2UxMjFlMyIsImtpbmQiOiJvcGVuIiwiYm9keSI6IklzIHdvcmRzL2FscGhhLnR4dCBsb3dlciBjYXNlPyIsIm1lc3NhZ2VfaWQiOiI1MDQ0M2NiOGVlZTNlNjg2Y2MzNzE0ZmRjMWFkNzY4YSIsImNyZWF0ZWRfYXQiOjE3OTA1NTg3ODc2NTN9LHsiaWQiOiI1MTc5ZDc1ZDljOTA2NjRhMjUyMGVlNGY3MjRmNjk0ZSIsImF1dGhvciI6IjlkY2Y0NDA2NWUxNzcwNjgwMDA4OGQwMzhkOWVlOTNhIiwia2luZCI6ImFuc3dlciIsImJvZHkiOiJZZXMsIGl0IGlzIGxvd2VyIGNhc2U6IHRoZSBzaW5nbGUgbGluZSByZWFkcyBleGFjdGx5IGBhbHBoYWAgd2l0aCBubyBjYXBpdGFsIGxldHRlcnMuIiwibWVzc2FnZV9pZCI6IjM0NjEwY2Q0NmExYzBhYjNmNzdkOGE4ZWRiZGIxNTUzIiwiY3JlYXRlZF9hdCI6MTc5MDU1ODc5MzY3OH0seyJpZCI6IjI3NWU5ZDAwZTdhYzkxYjEzYzVkMTBjNWRlMDcyOTdhIiwiYXV0aG9yIjoiMmRmNzljNDViMWJhMWUxMTNlOWZlMzM2N2MwMjJmYzUiLCJraW5kIjoiYXNzaWduIiwiYm9keSI6IlJlc3VtZWQgZnJvbSB0aGUgUUEgZGlyZWN0b3J5OyB0aGUgb3JjaGVzdHJhdG9yIGFzc2lnbnMgdGhlIGN1cnJlbnQgdGVhbS5cbk5leHQgcmVzcG9uZGVyOiBPcmNoZXN0cmF0b3IiLCJjcmVhdGVkX2F0IjoxNzkwNTU5MDUyOTM1fV19LCJhdXRob3JzIjp7IjJkZjc5YzQ1YjFiYTFlMTEzZTlmZTMzNjdjMDIyZmM1IjoiT3JjaGVzdHJhdG9yIiwiNGQxMGQ2ZjVhNDMwMjlhNGNmODhjNGIxOTNlMTIxZTMiOiJJbXBsZW1lbnRlciIsIjlkY2Y0NDA2NWUxNzcwNjgwMDA4OGQwMzhkOWVlOTNhIjoiSW1wbGVtZW50ZXIifX0= -->

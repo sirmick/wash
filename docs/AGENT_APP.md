@@ -253,19 +253,21 @@ a pro and a budget catalog per vendor:
 | Anthropic budget (`anthropic-budget`) | `opus[1m]` | `sonnet` | `sonnet` |
 | OpenAI pro (`openai-pro`, Codex) | `gpt-6-astra` high | `gpt-6-sol` medium | `gpt-6-luna` low |
 | OpenAI budget (`openai-budget`) | `gpt-6-sol` high | `gpt-6-sol` medium | `gpt-6-luna` low |
-| OpenRouter pro (`openrouter-pro`, OpenCode; open weights only) | `deepseek/deepseek-v4.1-flash` high | `z-ai/glm-5.3` high | `qwen/qwen3.8-flash` low |
-| OpenRouter budget (`openrouter-budget`; open weights only) | `qwen/qwen3.8-27b` high | `deepseek/deepseek-v4-pro-0813` high | `~deepseek/deepseek-v4-flash-latest` low |
+| OpenRouter pro (`openrouter-pro`, OpenCode; open weights only) | `moonshotai/kimi-k3` high | `deepseek/deepseek-v4.1-flash` high | `minimax/minimax-m3` (no effort option) |
+| OpenRouter budget (`openrouter-budget`; open weights only) | `deepseek/deepseek-v4-pro-0813` high | `deepseek/deepseek-v4.1-flash` high | `deepseek/deepseek-v4.1-flash` low |
 
 The OpenRouter catalogs are open-weight models only, by the owner's choice:
-the vendors' own models are reached through their own catalogs. Prices on
-2026-09-24, per 1M tokens in/out (from `GET /api/v1/models`, 460 models
-that day): DeepSeek V4.1 Flash 0.30/1.20, GLM-5.3 1.40/4.40, Qwen3.8 27B
-0.42/3.00, Qwen3.8 Flash 0.15/0.47, DeepSeek V4 Pro 0813 0.46/1.39,
-DeepSeek V4 Flash 0731 0.03/0.32. The `~…-latest` alias is used only where
-it priced the same as the intended model that day (V4 Flash);
-`~deepseek/deepseek-pro-latest` priced differently, so that slot pins the
-snapshot. GLM-5.3 and both DeepSeek V4 models were run live through OpenCode
-that day; DeepSeek V4.1 Flash and the Qwen models were not.
+the vendors' own models are reached through their own catalogs. They were
+chosen by the evaluation in `apps/agentd/openrouter-eval` (NOTES.md,
+2026-09-27): a screen of 14 models on a small benchmark, then team runs of
+the workspace shakedown in a jail. Every shortlisted mix passed the
+shakedown; the orchestrator was 95–98% of each run's cost, the members cents.
+Budget is DeepSeek V4-Pro orchestrating (fastest, cheapest run, no prods
+needed) with V4.1-Flash below; pro is Kimi K3 (as reliable, about twice the
+orchestrator cost, strongest on paper), with MiniMax M3 on the small slot so
+reviewers are a different family from the implementers. MiniMax M3 offers
+no effort option, so its slot sets none. GLM-5.3 passed too but stopped
+after answering "status?" and needed a prod each time.
 
 - **Overrides.** `agents.json` `catalogs` replaces a catalog by id, whole
   (`{"catalogs":{"anthropic-pro":{"name":"Mine","slots":{"frontier":{"provider":"claude","model":"opus[1m]"},…}}}}`),

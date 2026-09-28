@@ -99,11 +99,41 @@ Haiku members, the test answering as the owner:
 - Run 2 (9.8 min): every check passed, every nudge arrived, the trailers parse.
   Nothing told the orchestrator when a member started waiting on the owner, so
   step 9 (end a member while its question is pending) cost it about five
-  polls. Now it gets a note, which rides with its next turn and never wakes
-  it; step 9's polling stays, since only a waking message would end it. The
+  polls. Now it gets a note, which rides with its next turn, and wakes it
+  when it is idle in a plain wait: GLM-5.3 kept to "do not poll" and sat at
+  step 9 until its deadline while the note never woke it (2026-09-27). The
   Haiku member also
   spent minutes re-reading the whole QA view before asking; its instructions
   could point it at its thread.
+
+## From Redoubt on API 4 (2026-09-27)
+
+Redoubt moved to `workspace.toml`, `plan.toml` and `qa/`; the first hour
+found these.
+
+- **The QA checkpoint is two thirds of every thread file (M, med).** After
+  `tools/qa-split` and one resume, `.wash/qa/` was 95 files and 2.7 MB, more
+  than the 2.1 MB single file it replaced; 1.8 MB of it is the
+  `wash-qa-checkpoint-v2` comment (`internal/swarm/qafile.go`): the whole
+  thread again as base64 JSON, rewritten whole on any change, opaque in
+  diffs. Keep in it only what the Markdown cannot carry losslessly (author
+  IDs, message IDs, flags), or make the Markdown the parsed form; if it
+  stays, plain JSON in a fenced block, not base64.
+- **`qa-split` writes every author into every file (S, low).** Each split
+  thread carries the whole old document's `authors` map (126 members, about
+  5 KB a file); Wash's own writes carry only the thread's. Keep only the
+  thread's authors, and re-split or rewrite Redoubt's files.
+- **Resume reassigns open threads silently (S, low).** 32 of Redoubt's 95
+  threads were open (most answered long ago); resume gave each to the
+  orchestrator with "Resumed from the QA directory"
+  (`workspace_qa_resume.go`), and nothing in the setup result said so.
+  Return `qa_resumed: {open: [ids], resolved: n}` from `workspace_configure`,
+  and have `plan_get` list open threads on no node, so stale ones get
+  triaged rather than carried forward.
+- **A stopped member with an open assignment goes unnoticed (S, low).** In
+  DOC1 an implementer's session dropped mid-step; the lifecycle message
+  reached the orchestrator but nobody was watching for hours. A flash to the
+  owner, or a re-notify after a configurable delay, would shorten that.
 
 # Earlier backlog, kept for reference
 

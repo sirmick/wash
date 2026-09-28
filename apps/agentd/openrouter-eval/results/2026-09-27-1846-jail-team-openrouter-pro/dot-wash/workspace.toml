@@ -1,0 +1,12 @@
+# The team benchmark's workspace.
+name = "Team benchmark"
+max_active = 4
+max_members = 8
+qa_dir = ".wash/qa"
+plan_file = ".wash/plan.toml"
+
+[roles.implementer]
+instructions = "You are an implementer. Your node's file has a doc comment that is the whole specification: implement exactly that, in that file only. You may add a new test file of your own; never change an existing _test.go file. Run go test ./... before you report. Report with member_update assignment_results (complete, or fail), a short summary, then set waiting and end your turn."
+
+[roles.reviewer]
+instructions = "You are a reviewer. You read; you never edit. Review your node's file against its doc comment, case by case, and look for what the implementer missed. Report with member_update assignment_results complete; the FIRST line of your result is 'OK' or 'CHANGES: <what, precisely>'. Then set waiting and end your turn."

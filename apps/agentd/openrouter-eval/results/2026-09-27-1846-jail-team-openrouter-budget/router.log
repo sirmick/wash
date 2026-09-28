@@ -1,0 +1,188 @@
+2026/09/28 01:46:39 wash-router WARNING: --no-auth — the 127.0.0.1:11000 listener serves a full session to anyone who can reach it.
+2026/09/28 01:46:39 wash-router registered com.wash.about (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.agentd (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.agents (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.ai (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.audio (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.bulk (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.commander (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.connect (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.disks (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.edit (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.fm (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.fswatch (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.hostgw (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.imageview (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.inference (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.journal (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.music (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.net (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.netd (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.notify (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.packages (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.priv (surface=modal)
+2026/09/28 01:46:39 wash-router registered com.wash.radio (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.remote (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.services (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.session (surface=desktop)
+2026/09/28 01:46:39 wash-router registered com.wash.session-summary (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.settings (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.syslogs (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.term (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.top (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.vscode (surface=background)
+2026/09/28 01:46:39 wash-router registered com.wash.vscode.workbench (surface=window)
+2026/09/28 01:46:39 wash-router registered com.wash.washamp (surface=window)
+2026/09/28 01:46:39 wash-router wash-router v0.16.0 (dev=false)
+2026/09/28 01:46:39 wash-router activity: journal at /home/agent/.local/state/wash/activity
+2026/09/28 01:46:39 wash-router listening on 127.0.0.1:11000 (apps dirs: /opt/wash; session: com.wash.session)
+2026/09/28 01:46:39 wash-router control socket listening on /tmp/wash-1000.sock
+2026/09/28 01:46:39 wash-router app com.wash.remote up instance=i-1 win=0
+2026/09/28 01:46:39 wash-remote ready instance=i-1
+2026/09/28 01:46:39 wash-router app com.wash.commander up instance=i-2 win=0
+2026/09/28 01:46:39 wash-commander ready instance=i-2
+2026/09/28 01:46:39 mdns: joined group 224.0.0.251 on 1 iface(s)=[eth0] browse=true advertise=true
+2026/09/28 01:46:39 wash-remote: discovery advertising host="53dcff5cfb30" ips=[172.17.0.2] on _wash._tcp.local
+2026/09/28 01:46:39 wash-remote: discovered host="furnace" addr=172.16.16.58 port=0 source=mdns wash=true
+2026/09/28 01:46:40 wash-router app com.wash.ai up instance=i-3 win=1
+2026/09/28 01:46:40 wash-ai ready instance=i-3 manager=false
+2026/09/28 01:46:40 wash-router app com.wash.agentd up instance=i-4 win=0
+2026/09/28 01:46:40 wash-agentd ready instance=i-4
+2026/09/28 01:46:40 agentd: adapter codex available=true 
+2026/09/28 01:46:40 agentd: adapter claude available=true via npx @agentclientprotocol/claude-agent-acp
+2026/09/28 01:46:40 agentd: adapter gemini available=false gemini not on PATH
+2026/09/28 01:46:40 agentd: adapter opencode available=true 
+2026/09/28 01:46:40 agentd: catalog anthropic available=true 
+2026/09/28 01:46:40 agentd: catalog anthropic-budget available=true 
+2026/09/28 01:46:40 agentd: catalog anthropic-pro available=true 
+2026/09/28 01:46:40 agentd: catalog gemini available=false Gemini CLI: gemini not on PATH
+2026/09/28 01:46:40 agentd: catalog openai available=true 
+2026/09/28 01:46:40 agentd: catalog openai-budget available=true 
+2026/09/28 01:46:40 agentd: catalog openai-pro available=true 
+2026/09/28 01:46:40 agentd: catalog opencode available=true 
+2026/09/28 01:46:40 agentd: catalog openrouter available=true 
+2026/09/28 01:46:40 agentd: catalog openrouter-budget available=true 
+2026/09/28 01:46:40 agentd: catalog openrouter-pro available=true 
+2026/09/28 01:46:40 agentd: catalog shakedown available=true 
+2026/09/28 01:46:40 agentd: adapter opencode env+=2 args=1
+2026/09/28 01:46:41 agentd: acp row key=acp:1 agent=opencode state=running session=ses_f1a4ea33cffeJ5XwBj2lVMvUxb dir=project
+2026/09/28 01:46:41 agentd: acp session started key=acp:1 agent=opencode session=ses_f1a4ea33cffeJ5XwBj2lVMvUxb cwd=/home/agent/project mode= modes=0 mcp=1
+2026/09/28 01:46:41 agentd: acp config changed key=acp:1 model=openrouter/deepseek/deepseek-v4-pro-0813 was=opencode/big-pickle
+2026/09/28 01:46:41 agentd: acp config changed key=acp:1 effort=high was=low
+2026/09/28 01:46:41 agentd: acp yolo key=acp:1 on=true why="launched with auto-approve on"
+2026/09/28 01:46:41 agentd: session settings key=acp:1 catalog=shakedown model=frontier connection=opencode@openrouter adapter=opencode mode= yolo=true effective=map[effort:high mode:build model:openrouter/deepseek/deepseek-v4-pro-0813]
+2026/09/28 01:46:41 wash-router app_state.set instance=i-3 bytes=23
+2026/09/28 01:46:41 agentd: acp row key=acp:1 agent=opencode state=working session=ses_f1a4ea33cffeJ5XwBj2lVMvUxb dir=project
+2026/09/28 01:46:41 agentd: transcript subscribed instance=i-3 key=acp:1 replay=false
+2026/09/28 01:46:41 wash-remote: discovered host="fe3c88bba443" addr=172.17.0.3 port=0 source=mdns wash=true
+2026/09/28 01:46:44 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="ls -la /home/agent/project && ls -la /home/agent/project/.wash 2>/dev/null; echo \"---\"; cat /home/agent/project/.wash/workspace.toml 2>/dev/null; echo \"--- check.sh ---\"; cat /home/agent/project/check.sh 2>/dev/null"
+2026/09/28 01:46:47 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="cat /home/agent/project/.wash/workspace.toml"
+2026/09/28 01:46:50 agentd: idle hold "1 agent(s) working" — this session will not be reaped while it stands
+2026/09/28 01:46:50 wash-router idle-inhibit: held by app=com.wash.agentd instance=i-4 reason="1 agent(s) working"
+2026/09/28 01:47:26 agentd: adapter opencode env+=2 args=1
+2026/09/28 01:47:27 agentd: acp row key=acp:2 agent=opencode state=running session=ses_f1a4def47ffeNPqdjsDYTi3POi dir=project
+2026/09/28 01:47:27 agentd: acp session started key=acp:2 agent=opencode session=ses_f1a4def47ffeNPqdjsDYTi3POi cwd=/home/agent/project mode= modes=0 mcp=1
+2026/09/28 01:47:27 agentd: acp config changed key=acp:2 model=openrouter/deepseek/deepseek-v4.1-flash was=opencode/big-pickle
+2026/09/28 01:47:27 agentd: acp config changed key=acp:2 effort=high was=low
+2026/09/28 01:47:27 agentd: acp yolo key=acp:2 on=true why="the session that launched this member is auto-approved"
+2026/09/28 01:47:27 agentd: adapter opencode env+=3 args=1
+2026/09/28 01:47:28 agentd: acp row key=acp:2 agent=opencode state=working session=ses_f1a4def47ffeNPqdjsDYTi3POi dir=project
+2026/09/28 01:47:28 agentd: acp row key=acp:3 agent=opencode state=running session=ses_f1a4deb7cffeYJQ3tc5wehvVDU dir=project
+2026/09/28 01:47:28 agentd: acp session started key=acp:3 agent=opencode session=ses_f1a4deb7cffeYJQ3tc5wehvVDU cwd=/home/agent/project mode= modes=0 mcp=1
+2026/09/28 01:47:28 agentd: acp config changed key=acp:3 model=openrouter/deepseek/deepseek-v4.1-flash was=opencode/big-pickle
+2026/09/28 01:47:28 agentd: adapter opencode env+=2 args=1
+2026/09/28 01:47:29 agentd: acp row key=acp:3 agent=opencode state=working session=ses_f1a4deb7cffeYJQ3tc5wehvVDU dir=project
+2026/09/28 01:47:29 agentd: acp row key=acp:4 agent=opencode state=running session=ses_f1a4de792ffeAjZLwbL4peecx8 dir=project
+2026/09/28 01:47:29 agentd: acp session started key=acp:4 agent=opencode session=ses_f1a4de792ffeAjZLwbL4peecx8 cwd=/home/agent/project mode= modes=0 mcp=1
+2026/09/28 01:47:29 agentd: acp config changed key=acp:4 model=openrouter/deepseek/deepseek-v4.1-flash was=opencode/big-pickle
+2026/09/28 01:47:29 agentd: acp config changed key=acp:4 effort=high was=low
+2026/09/28 01:47:29 agentd: acp yolo key=acp:4 on=true why="the session that launched this member is auto-approved"
+2026/09/28 01:47:29 agentd: adapter opencode env+=3 args=1
+2026/09/28 01:47:30 agentd: idle hold "3 agent(s) working" — this session will not be reaped while it stands
+2026/09/28 01:47:30 wash-router idle-inhibit: held by app=com.wash.agentd instance=i-4 reason="3 agent(s) working"
+2026/09/28 01:47:30 agentd: acp row key=acp:4 agent=opencode state=working session=ses_f1a4de792ffeAjZLwbL4peecx8 dir=project
+2026/09/28 01:47:30 agentd: acp row key=acp:5 agent=opencode state=running session=ses_f1a4de388ffeJ1J26IlaGHqkiO dir=project
+2026/09/28 01:47:30 agentd: acp session started key=acp:5 agent=opencode session=ses_f1a4de388ffeJ1J26IlaGHqkiO cwd=/home/agent/project mode= modes=0 mcp=1
+2026/09/28 01:47:30 agentd: acp config changed key=acp:5 model=openrouter/deepseek/deepseek-v4.1-flash was=opencode/big-pickle
+2026/09/28 01:47:30 agentd: adapter opencode env+=2 args=1
+2026/09/28 01:47:30 agentd: acp row key=acp:5 agent=opencode state=working session=ses_f1a4de388ffeJ1J26IlaGHqkiO dir=project
+2026/09/28 01:47:31 agentd: acp row key=acp:6 agent=opencode state=running session=ses_f1a4ddf70ffeOKCWQ9NnryFNsL dir=project
+2026/09/28 01:47:31 agentd: acp session started key=acp:6 agent=opencode session=ses_f1a4ddf70ffeOKCWQ9NnryFNsL cwd=/home/agent/project mode= modes=0 mcp=1
+2026/09/28 01:47:31 agentd: acp config changed key=acp:6 model=openrouter/deepseek/deepseek-v4.1-flash was=opencode/big-pickle
+2026/09/28 01:47:31 agentd: acp config changed key=acp:6 effort=high was=low
+2026/09/28 01:47:31 agentd: acp yolo key=acp:6 on=true why="the session that launched this member is auto-approved"
+2026/09/28 01:47:31 agentd: adapter opencode env+=3 args=1
+2026/09/28 01:47:32 agentd: acp row key=acp:7 agent=opencode state=running session=ses_f1a4ddb86ffeWEBjRa1huOTU5k dir=project
+2026/09/28 01:47:32 agentd: acp session started key=acp:7 agent=opencode session=ses_f1a4ddb86ffeWEBjRa1huOTU5k cwd=/home/agent/project mode= modes=0 mcp=1
+2026/09/28 01:47:32 agentd: acp config changed key=acp:7 model=openrouter/deepseek/deepseek-v4.1-flash was=opencode/big-pickle
+2026/09/28 01:47:33 agentd: acp row key=acp:4 agent=opencode state=done session=ses_f1a4de792ffeAjZLwbL4peecx8 dir=project
+2026/09/28 01:47:33 agentd: acp row key=acp:6 agent=opencode state=working session=ses_f1a4ddf70ffeOKCWQ9NnryFNsL dir=project
+2026/09/28 01:47:33 agentd: acp row key=acp:3 agent=opencode state=done session=ses_f1a4deb7cffeYJQ3tc5wehvVDU dir=project
+2026/09/28 01:47:33 agentd: acp row key=acp:7 agent=opencode state=working session=ses_f1a4ddb86ffeWEBjRa1huOTU5k dir=project
+2026/09/28 01:47:35 agentd: acp row key=acp:5 agent=opencode state=done session=ses_f1a4de388ffeJ1J26IlaGHqkiO dir=project
+2026/09/28 01:47:35 agentd: acp row key=acp:4 agent=opencode state=working session=ses_f1a4de792ffeAjZLwbL4peecx8 dir=project
+2026/09/28 01:47:37 agentd: acp row key=acp:7 agent=opencode state=done session=ses_f1a4ddb86ffeWEBjRa1huOTU5k dir=project
+2026/09/28 01:47:37 agentd: acp decide key=acp:4 tool=Bash decision=allow reason=yolo subject="pwd && ls -la && go version"
+2026/09/28 01:47:39 agentd: acp row key=acp:1 agent=opencode state=done session=ses_f1a4ea33cffeJ5XwBj2lVMvUxb dir=project
+2026/09/28 01:47:42 agentd: acp decide key=acp:2 tool=Bash decision=allow reason=yolo subject="ls -la /home/agent/project && echo \"---\" && ls -la /home/agent/project/.wash 2>/dev/null"
+2026/09/28 01:47:43 agentd: acp decide key=acp:4 tool=Edit decision=allow reason=yolo subject="/home/agent/project/lru.go"
+2026/09/28 01:47:43 agentd: acp fs write key=acp:4 path=/home/agent/project/lru.go bytes=1816
+2026/09/28 01:47:44 agentd: acp row key=acp:6 agent=opencode state=done session=ses_f1a4ddf70ffeOKCWQ9NnryFNsL dir=project
+2026/09/28 01:47:44 agentd: acp row key=acp:6 agent=opencode state=working session=ses_f1a4ddf70ffeOKCWQ9NnryFNsL dir=project
+2026/09/28 01:47:45 agentd: acp decide key=acp:4 tool=Bash decision=allow reason=yolo subject="go test ./... && go vet ./..."
+2026/09/28 01:47:49 agentd: acp decide key=acp:4 tool=Bash decision=allow reason=yolo subject="go test -run TestLRU -v ./... 2>&1; echo \"---\"; go vet ./... 2>&1"
+2026/09/28 01:47:52 agentd: acp row key=acp:2 agent=opencode state=done session=ses_f1a4def47ffeNPqdjsDYTi3POi dir=project
+2026/09/28 01:47:52 agentd: acp row key=acp:2 agent=opencode state=working session=ses_f1a4def47ffeNPqdjsDYTi3POi dir=project
+2026/09/28 01:47:53 agentd: acp decide key=acp:6 tool=Bash decision=allow reason=yolo subject="ls /home/agent/project && echo \"---\" && cat /home/agent/project/go.mod 2>/dev/null"
+2026/09/28 01:47:53 agentd: acp decide key=acp:4 tool=Edit decision=allow reason=yolo subject="/home/agent/project/lru.go"
+2026/09/28 01:47:53 agentd: acp fs write key=acp:4 path=/home/agent/project/lru.go bytes=1834
+2026/09/28 01:47:56 agentd: acp decide key=acp:4 tool=Edit decision=allow reason=yolo subject="/home/agent/project/lru_extra_test.go"
+2026/09/28 01:47:56 agentd: acp fs write key=acp:4 path=/home/agent/project/lru_extra_test.go bytes=1197
+2026/09/28 01:47:59 agentd: acp decide key=acp:4 tool=Bash decision=allow reason=yolo subject="go test -run 'TestLRU' -v ./... 2>&1; echo \"=== ALL ===\"; go test ./... 2>&1; echo \"=== vet ===\"; go vet ./... 2>&1"
+2026/09/28 01:48:04 agentd: acp row key=acp:4 agent=opencode state=done session=ses_f1a4de792ffeAjZLwbL4peecx8 dir=project
+2026/09/28 01:48:07 agentd: acp decide key=acp:2 tool=Bash decision=allow reason=yolo subject="go version; cat /home/agent/project/check.sh"
+2026/09/28 01:48:10 agentd: idle hold "2 agent(s) working" — this session will not be reaped while it stands
+2026/09/28 01:48:10 wash-router idle-inhibit: held by app=com.wash.agentd instance=i-4 reason="2 agent(s) working"
+2026/09/28 01:48:11 agentd: acp decide key=acp:2 tool=Edit decision=allow reason=yolo subject="/home/agent/project/ini.go"
+2026/09/28 01:48:11 agentd: acp fs write key=acp:2 path=/home/agent/project/ini.go bytes=2753
+2026/09/28 01:48:17 agentd: acp decide key=acp:6 tool=Bash decision=allow reason=yolo subject="cat /home/agent/project/ini.go /home/agent/project/lru.go"
+2026/09/28 01:48:26 agentd: acp decide key=acp:6 tool=Edit decision=allow reason=yolo subject="/home/agent/project/wrap.go"
+2026/09/28 01:48:26 agentd: acp fs write key=acp:6 path=/home/agent/project/wrap.go bytes=1247
+2026/09/28 01:48:29 agentd: acp decide key=acp:6 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && go test ./... 2>&1"
+2026/09/28 01:48:37 agentd: acp row key=acp:6 agent=opencode state=done session=ses_f1a4ddf70ffeOKCWQ9NnryFNsL dir=project
+2026/09/28 01:48:40 agentd: idle hold "1 agent(s) working" — this session will not be reaped while it stands
+2026/09/28 01:48:40 wash-router idle-inhibit: held by app=com.wash.agentd instance=i-4 reason="1 agent(s) working"
+2026/09/28 01:48:49 agentd: acp decide key=acp:2 tool=Edit decision=allow reason=yolo subject="/home/agent/project/ini_extra_test.go"
+2026/09/28 01:48:49 agentd: acp fs write key=acp:2 path=/home/agent/project/ini_extra_test.go bytes=1598
+2026/09/28 01:48:51 agentd: acp decide key=acp:2 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && gofmt -l . && go vet ./... && go test ./..."
+2026/09/28 01:48:53 agentd: acp decide key=acp:2 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && gofmt -w ini_extra_test.go && gofmt -l . && go test ./... && git status --short"
+2026/09/28 01:48:57 agentd: acp row key=acp:1 agent=opencode state=working session=ses_f1a4ea33cffeJ5XwBj2lVMvUxb dir=project
+2026/09/28 01:48:58 agentd: acp row key=acp:2 agent=opencode state=done session=ses_f1a4def47ffeNPqdjsDYTi3POi dir=project
+2026/09/28 01:48:59 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && git status && echo \"=== ini.go ===\" && cat ini.go && echo \"=== lru.go ===\" && cat lru.go && echo \"=== wrap.go ===\" && cat wrap.go"
+2026/09/28 01:49:01 agentd: acp row key=acp:3 agent=opencode state=working session=ses_f1a4deb7cffeYJQ3tc5wehvVDU dir=project
+2026/09/28 01:49:01 agentd: acp row key=acp:5 agent=opencode state=working session=ses_f1a4de388ffeJ1J26IlaGHqkiO dir=project
+2026/09/28 01:49:01 agentd: acp row key=acp:7 agent=opencode state=working session=ses_f1a4ddb86ffeWEBjRa1huOTU5k dir=project
+2026/09/28 01:49:04 agentd: acp row key=acp:1 agent=opencode state=done session=ses_f1a4ea33cffeJ5XwBj2lVMvUxb dir=project
+2026/09/28 01:49:10 agentd: idle hold "3 agent(s) working" — this session will not be reaped while it stands
+2026/09/28 01:49:10 wash-router idle-inhibit: held by app=com.wash.agentd instance=i-4 reason="3 agent(s) working"
+2026/09/28 01:49:30 agentd: acp row key=acp:7 agent=opencode state=done session=ses_f1a4ddb86ffeWEBjRa1huOTU5k dir=project
+2026/09/28 01:49:40 agentd: idle hold "2 agent(s) working" — this session will not be reaped while it stands
+2026/09/28 01:49:40 wash-router idle-inhibit: held by app=com.wash.agentd instance=i-4 reason="2 agent(s) working"
+2026/09/28 01:50:50 agentd: acp row key=acp:3 agent=opencode state=done session=ses_f1a4deb7cffeYJQ3tc5wehvVDU dir=project
+2026/09/28 01:50:51 agentd: acp row key=acp:1 agent=opencode state=working session=ses_f1a4ea33cffeJ5XwBj2lVMvUxb dir=project
+2026/09/28 01:50:52 agentd: acp row key=acp:5 agent=opencode state=done session=ses_f1a4de388ffeJ1J26IlaGHqkiO dir=project
+2026/09/28 01:50:53 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && go test ./... ; echo \"exit=$?\""
+2026/09/28 01:51:00 agentd: idle hold "1 agent(s) working" — this session will not be reaped while it stands
+2026/09/28 01:51:00 wash-router idle-inhibit: held by app=com.wash.agentd instance=i-4 reason="1 agent(s) working"
+2026/09/28 01:51:03 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && git add -A && git -c user.name=team -c user.email=team@localhost commit -m \"INI: ini.go\" -m \"Plan-Node: INI\nGates: go test ./... 0\nReviewed-by: INI reviewer: OK\""
+2026/09/28 01:51:05 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && git add -A && git -c user.name=team -c user.email=team@localhost commit -m \"LRU: lru.go\" -m \"Plan-Node: LRU\nGates: go test ./... 0\nReviewed-by: LRU reviewer: OK\""
+2026/09/28 01:51:07 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && git add -A && git -c user.name=team -c user.email=team@localhost commit -m \"WRAP: wrap.go\" -m \"Plan-Node: WRAP\nGates: go test ./... 0\nReviewed-by: WRAP reviewer: OK\""
+2026/09/28 01:51:11 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && git add -A && git -c user.name=team -c user.email=team@localhost commit -m \"BUILD: all packages\" -m \"Plan-Node: BUILD\nGates: go test ./... 0\nReviewed-by: INI reviewer: OK\nReviewed-by: LRU reviewer: OK\nReviewed-by: WRAP reviewer: OK\""
+2026/09/28 01:51:14 agentd: acp session ended key=acp:2 agent=opencode session=ses_f1a4def47ffeNPqdjsDYTi3POi
+2026/09/28 01:51:14 agentd: acp session ended key=acp:3 agent=opencode session=ses_f1a4deb7cffeYJQ3tc5wehvVDU
+2026/09/28 01:51:14 agentd: acp session ended key=acp:4 agent=opencode session=ses_f1a4de792ffeAjZLwbL4peecx8
+2026/09/28 01:51:14 agentd: acp session ended key=acp:5 agent=opencode session=ses_f1a4de388ffeJ1J26IlaGHqkiO
+2026/09/28 01:51:14 agentd: acp session ended key=acp:6 agent=opencode session=ses_f1a4ddf70ffeOKCWQ9NnryFNsL
+2026/09/28 01:51:14 agentd: acp session ended key=acp:7 agent=opencode session=ses_f1a4ddb86ffeWEBjRa1huOTU5k
+2026/09/28 01:51:17 agentd: acp decide key=acp:1 tool=Bash decision=allow reason=yolo subject="cd /home/agent/project && ./check.sh; echo \"check exit=$?\""
+2026/09/28 01:51:20 agentd: acp row key=acp:1 agent=opencode state=done session=ses_f1a4ea33cffeJ5XwBj2lVMvUxb dir=project

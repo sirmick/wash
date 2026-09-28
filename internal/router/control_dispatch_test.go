@@ -72,6 +72,11 @@ func TestControlDispatchRouting(t *testing.T) {
 			wantCode: "bad_request", // missing instance_id
 		},
 		{
+			name:     "watch routes to controlWatch",
+			req:      map[string]any{"t": "watch"},
+			wantCode: "bad_request", // missing instance_id
+		},
+		{
 			name:     "priv.run routes to controlPrivRun",
 			req:      map[string]any{"t": "priv.run"}, // missing req_id
 			wantCode: "bad_request",

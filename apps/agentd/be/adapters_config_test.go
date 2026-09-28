@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -89,6 +90,28 @@ func TestOpenCodeIsToldToAskForPermission(t *testing.T) {
 	env := append(a.builtinEnv(agentpolicy.AgentConfig{}), p.Merge("opencode", agentpolicy.Launch{}).Env...)
 	if env[len(env)-1] != "OPENCODE_CONFIG_CONTENT={}" {
 		t.Errorf("user env does not come last: %v", env)
+	}
+}
+
+// A reviewer's OpenCode configuration removes every tool that writes, runs,
+// fetches or delegates, and denies them too.
+func TestOpenCodeReviewerHasNoWriteTools(t *testing.T) {
+	var c struct {
+		Permission map[string]string `json:"permission"`
+		Tools      map[string]bool   `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(opencodeReviewer), &c); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"write", "edit", "patch", "bash", "task", "webfetch", "skill"} {
+		if on, ok := c.Tools[tool]; !ok || on {
+			t.Errorf("tool %s not removed", tool)
+		}
+	}
+	for _, p := range []string{"edit", "bash", "webfetch", "external_directory", "task"} {
+		if c.Permission[p] != "deny" {
+			t.Errorf("permission %s = %q, want deny", p, c.Permission[p])
+		}
 	}
 }
 

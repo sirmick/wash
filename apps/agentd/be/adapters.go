@@ -97,6 +97,16 @@ var adapters = []adapterDef{
 // kind "execute" and rawInput.command, the same shape Claude sends.
 const opencodePermissions = `{"permission":{"edit":"ask","bash":"ask"}}`
 
+// opencodeReviewer is a reviewer's OpenCode configuration: the tools that
+// write, run, fetch or delegate are removed, so the model sees only read,
+// glob, grep, todowrite and its MCP servers, and their permissions are
+// denied in case a tool comes back under its name. Verified 2026-09-27 on
+// OpenCode 1.18.32 (reviewerVerifiedOpenCode): asked to create a file by any
+// means, the model listed exactly those tools and created nothing, and a
+// project opencode.json turning the tools back on did not change that, since
+// OPENCODE_CONFIG_CONTENT is merged after it.
+const opencodeReviewer = `{"permission":{"edit":"deny","bash":"deny","webfetch":"deny","external_directory":"deny","task":"deny"},"tools":{"write":false,"edit":false,"patch":false,"bash":false,"task":false,"webfetch":false,"skill":false}}`
+
 // npx installs and launches through one shared cache. Two cold launches can
 // otherwise observe each other's half-populated dependency tree: one of the
 // failures seen in practice found @openai/codex but not its native optional
@@ -222,7 +232,7 @@ type sessionLaunch struct {
 	// the launcher can default to the catalog used last. They change
 	// nothing about the launch itself.
 	catalog, model string
-	// capability "reviewer" restricts the provider's tools (Claude only).
+	// capability "reviewer" restricts the provider's tools (Claude, OpenCode).
 	capability string
 	// member is a session launched into a workspace rather than one that
 	// may lead it: its bridge lists only the tools it may call, and it
@@ -286,7 +296,7 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 // session/load.
 func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
 	capability := launch.capability
-	if capability != "" && (capability != "reviewer" || agentID != "claude") {
+	if capability != "" && (capability != "reviewer" || agentID != "claude" && agentID != "opencode") {
 		return nil, fmt.Errorf("capability %q unsupported by %s; no session started", capability, agentID)
 	}
 	if launch.noSubagents && agentID != "claude" {
@@ -325,6 +335,11 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 		return nil, err
 	}
 	run.Env = append(append(a.builtinEnv(cfg), run.Env...), connEnv...)
+	// A reviewer's restriction comes last of all: neither agents.json nor a
+	// connection may loosen it.
+	if capability == "reviewer" && agentID == "opencode" {
+		run.Env = append(run.Env, "OPENCODE_CONFIG_CONTENT="+opencodeReviewer)
+	}
 	cmd := exec.Command(run.Command, run.Args...)
 	cmd.Dir = cwd
 	// Added to the inherited environment, not substituted for it: an

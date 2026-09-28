@@ -236,6 +236,9 @@ type Router struct {
 	// instanceID → matchID → one-shot channel.
 	appMsgMu       sync.Mutex
 	appMsgWatchers map[string]map[string]chan map[string]any
+	// appMsgStreams are the control socket's `watch` streams: every
+	// app_msg an instance sends its frontend (control_watch.go).
+	appMsgStreams map[string]map[*appMsgStream]struct{}
 
 	// singletons maps a singleton manifest's app_id to its currently-
 	// running instance, or absent if none. Used to (a) refuse a
@@ -329,6 +332,7 @@ func NewRouter(cfg Config, reg *Registry, log Logger) *Router {
 		shells:            make(map[*ShellSession]struct{}),
 		channels:          make(map[uint32]*channelBinding),
 		appMsgWatchers:    make(map[string]map[string]chan map[string]any),
+		appMsgStreams:     make(map[string]map[*appMsgStream]struct{}),
 		singletons:        make(map[string]*AppInstance),
 		pendingAttach:     make(map[int]*pendingAttach),
 		pendingByToken:    make(map[string]*tokenPending),
@@ -908,6 +912,7 @@ func (r *Router) tearDown(inst *AppInstance) {
 	r.broadcastInstanceGone(inst)
 	r.closeChannelsForApp(inst, "app exited")
 	r.dropAppMsgWatchers(inst.InstanceID)
+	r.endAppMsgStreams(inst.InstanceID)
 	r.dropRuntimeStats(inst.InstanceID)
 	r.ingress.dropInstance(inst.InstanceID)
 	r.winSession.dropAppState(inst.InstanceID)

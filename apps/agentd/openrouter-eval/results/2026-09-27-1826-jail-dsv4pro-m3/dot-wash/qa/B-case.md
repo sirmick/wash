@@ -1,0 +1,26 @@
+<!-- wash-qa-thread: B-case -->
+
+## B · B-case — Alpha case
+
+Status: **open** · Assigned to: Orchestrator · Revision: 3
+
+### Implementer · Question
+
+Event: `c394b5fd0073261b35c5c99469ee2da3` · 2026-09-28T01:26:32Z
+
+> Is words/alpha.txt lower case?
+
+### Implementer · Answer
+
+Event: `df909f409a34f22e749ba3825c88c1e4` · 2026-09-28T01:26:38Z
+
+> Yes, words/alpha.txt is lower case: "alpha".
+
+### Orchestrator · Assigned
+
+Event: `994356ee413ab18775f093c4d8f79a3c` · 2026-09-28T01:30:27Z
+
+> Resumed from the QA directory; the orchestrator assigns the current team.
+> Next responder: Orchestrator
+
+<!-- wash-qa-checkpoint-v2: eyJ0aHJlYWQiOnsiaWQiOiJCLWNhc2UiLCJub2RlIjoiQiIsInRpdGxlIjoiQWxwaGEgY2FzZSIsImNyZWF0b3IiOiI0ODYxMDIwNGJlYjBiMTRkNjNmMDU3MzcxZTU1NDNlNyIsImFzc2lnbmVlIjoiNmU5NmQ2MDU1YzIxNzk0M2MwNDc2MTA5MzRkNTMyMmUiLCJzdGF0ZSI6Im9wZW4iLCJibG9ja2luZyI6ZmFsc2UsInJldmlzaW9uIjozLCJkZWNpc2lvbl9yZWZzIjpudWxsLCJldmVudHMiOlt7ImlkIjoiYzM5NGI1ZmQwMDczMjYxYjM1YzVjOTk0NjllZTJkYTMiLCJhdXRob3IiOiI0ODYxMDIwNGJlYjBiMTRkNjNmMDU3MzcxZTU1NDNlNyIsImtpbmQiOiJvcGVuIiwiYm9keSI6IklzIHdvcmRzL2FscGhhLnR4dCBsb3dlciBjYXNlPyIsIm1lc3NhZ2VfaWQiOiI2YmU4OTk2YzAxOTA4MTM3NjBlZDQyYWIwMjc4NTIzZCIsImNyZWF0ZWRfYXQiOjE3OTA1NTg3OTI5MDJ9LHsiaWQiOiJkZjkwOWY0MDlhMzRmMjJlNzQ5YmEzODI1Yzg4YzFlNCIsImF1dGhvciI6Ijg4NTY2ZmZiODJmY2NiMzcyYjUzM2YwYmI2N2I5NTg0Iiwia2luZCI6ImFuc3dlciIsImJvZHkiOiJZZXMsIHdvcmRzL2FscGhhLnR4dCBpcyBsb3dlciBjYXNlOiBcImFscGhhXCIuIiwibWVzc2FnZV9pZCI6IjYzNmY2YTk0YjBjZWM2ZDQ4MDQ5NmEyYjZjZTI1M2IyIiwiY3JlYXRlZF9hdCI6MTc5MDU1ODc5ODUyMH0seyJpZCI6Ijk5NDM1NmVlNDEzYWIxODc3NWYwOTNjNGQ4Zjc5YTNjIiwiYXV0aG9yIjoiNmU5NmQ2MDU1YzIxNzk0M2MwNDc2MTA5MzRkNTMyMmUiLCJraW5kIjoiYXNzaWduIiwiYm9keSI6IlJlc3VtZWQgZnJvbSB0aGUgUUEgZGlyZWN0b3J5OyB0aGUgb3JjaGVzdHJhdG9yIGFzc2lnbnMgdGhlIGN1cnJlbnQgdGVhbS5cbk5leHQgcmVzcG9uZGVyOiBPcmNoZXN0cmF0b3IiLCJjcmVhdGVkX2F0IjoxNzkwNTU5MDI3Mzk2fV19LCJhdXRob3JzIjp7IjQ4NjEwMjA0YmViMGIxNGQ2M2YwNTczNzFlNTU0M2U3IjoiSW1wbGVtZW50ZXIiLCI2ZTk2ZDYwNTVjMjE3OTQzYzA0NzYxMDkzNGQ1MzIyZSI6Ik9yY2hlc3RyYXRvciIsIjg4NTY2ZmZiODJmY2NiMzcyYjUzM2YwYmI2N2I5NTg0IjoiSW1wbGVtZW50ZXIifX0= -->

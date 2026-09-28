@@ -1,0 +1,76 @@
+commit 9198059951b07781bf6fdfe0bf65cd371c1d82d2
+Author: team <team@localhost>
+Date:   Mon Sep 28 01:52:34 2026 +0000
+
+    BUILD: all three packages
+    
+    Plan-Node: BUILD
+    Reviewed-by: INI reviewer: OK
+    Reviewed-by: LRU reviewer: OK
+    Reviewed-by: WRAP reviewer: OK
+
+ .wash/plan.toml | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+commit d4315519bc0901c994091dae280159f6c0bc0d42
+Author: team <team@localhost>
+Date:   Mon Sep 28 01:52:27 2026 +0000
+
+    WRAP: wrap.go
+    
+    Plan-Node: WRAP
+    Gates: go test ./... 0
+    Reviewed-by: WRAP reviewer: OK
+
+ .wash/plan.toml | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+commit 7a178c6fa29a2d2904643dc4060cdf6c0815bdb6
+Author: team <team@localhost>
+Date:   Mon Sep 28 01:52:23 2026 +0000
+
+    LRU: lru.go
+    
+    Plan-Node: LRU
+    Gates: go test ./... 0
+    Reviewed-by: LRU reviewer: OK
+
+ .wash/plan.toml | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+commit d2be7d65eebde6df0e14f3e98cc46727bde91efd
+Author: team <team@localhost>
+Date:   Mon Sep 28 01:52:15 2026 +0000
+
+    INI: ini.go
+    
+    Plan-Node: INI
+    Gates: go test ./... 0
+    Reviewed-by: INI reviewer: OK
+
+ .wash/plan.toml    | 52 +++++++++++++++++++++++++++++++++
+ ini.go             | 86 ++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ ini_extra_test.go  | 81 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ lru.go             | 65 ++++++++++++++++++++++++++++++++++++++---
+ lru_extra_test.go  | 47 +++++++++++++++++++++++++++++
+ wrap.go            | 49 ++++++++++++++++++++++++++++++-
+ wrap_extra_test.go | 32 ++++++++++++++++++++
+ 7 files changed, 405 insertions(+), 7 deletions(-)
+
+commit 70c2dbb0ebb56511db3d564671887f7716c5fcf3
+Author: shakedown <shakedown@localhost>
+Date:   Mon Sep 28 01:46:41 2026 +0000
+
+    shakedown: start
+
+ .wash/workspace.toml | 12 ++++++++++++
+ SCRIPT.md            | 36 ++++++++++++++++++++++++++++++++++++
+ check.sh             | 18 ++++++++++++++++++
+ go.mod               |  3 +++
+ ini.go               | 22 ++++++++++++++++++++++
+ ini_test.go          | 16 ++++++++++++++++
+ lru.go               | 20 ++++++++++++++++++++
+ lru_test.go          | 16 ++++++++++++++++
+ wrap.go              | 12 ++++++++++++
+ wrap_test.go         | 12 ++++++++++++
+ 10 files changed, 167 insertions(+)

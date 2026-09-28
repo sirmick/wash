@@ -451,3 +451,37 @@ func TestANoteWaitsForTheNextTurn(t *testing.T) {
 		t.Fatalf("the note did not ride along: %+v", next)
 	}
 }
+
+// An orchestrator idle in a plain wait is woken by a note: it kept to "do
+// not poll", and nothing else would tell it. One holding a waiting set is
+// not: the set promises one wake-up, when it resolves.
+func TestANoteWakesAPlainWait(t *testing.T) {
+	s, w := fixture(t)
+	note := func() {
+		t.Helper()
+		if err := s.Mutate("lead-session", false, func(w *Workspace, _ *Member) error {
+			_, err := AddMessage(w, "wash", w.Lead, "note", "Worker asked the owner", "", "", "")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wait := func(on ...string) {
+		t.Helper()
+		if err := s.Mutate("lead-session", false, func(w *Workspace, m *Member) error {
+			m.Waiting, m.WaitingOn = "waiting for the worker's question", on
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wait("some-assignment")
+	note()
+	if next, _ := s.Next("lead-session"); len(next) != 0 {
+		t.Fatalf("a note broke a waiting set: %+v", next)
+	}
+	wait()
+	if next, _ := s.Next("lead-session"); len(next) != 1 || next[0].Type != "note" || next[0].Recipient != w.Lead {
+		t.Fatalf("a plain wait was not woken by the note: %+v", next)
+	}
+}
