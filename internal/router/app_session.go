@@ -696,6 +696,7 @@ func (inst *AppInstance) relayAppMsgCrossInstance(m wire.EvtAppMsg, class wire.C
 // queues the relayed envelope at the same priority.
 func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) error {
 	if len(m.Data) > 0 {
+		inst.router.feedAppMsgStreams(inst.InstanceID, m.Data)
 		var probe map[string]any
 		if err := json.Unmarshal(m.Data, &probe); err == nil {
 			if msgID, _ := probe["id"].(string); msgID != "" {

@@ -284,7 +284,7 @@ opens alongside `/ws`. Its purpose is to give local CLI tools and
 externally-spawned apps a way in without speaking the full wash
 protocol. First-byte demux:
 
-- Starts with `{` → JSON request: `launch`, `msg`, or `priv.run`.
+- Starts with `{` → JSON request: `launch`, `msg`, `watch` or `priv.run`.
 - Otherwise → a wash frame; treated as an app attach (the normal path
   for both router-spawned and terminal-launched apps).
 
@@ -293,8 +293,21 @@ JSON requests:
 ```
 {"t":"launch","app_id":"com.wash.fm"}
 {"t":"msg","instance_id":"i-5","data":{...},"await_id":"r1","timeout_ms":3000}
+{"t":"watch","instance_id":"i-5"}
 {"t":"priv.run","req_id":"...","argv":[...],"window":false,...}
 ```
+
+`watch` keeps the connection open and streams every app message the
+instance's backend sends its frontend, one JSON line each:
+`{"t":"watching"}`, then `{"t":"msg","data":{...}}` per message, and
+`{"t":"gone"}` when the instance ends. A watcher more than 4096 messages
+behind gets `{"t":"overflow"}` and the watch ends, so nothing is dropped
+silently. A caller may half-close after its request and keep reading; the
+watch ends when a write to it fails (`control_watch.go`). With
+`launch` and `msg` that is enough to drive an app with no browser: launch
+`com.wash.ai`, `msg` it the frontend's requests (`agent_start`,
+`agent_prompt`, `agent_question_answer`), and `watch` it for what agentd
+sends back.
 
 `wash-launch` and `wash-sudo` are the user-facing CLIs that drive this.
 
