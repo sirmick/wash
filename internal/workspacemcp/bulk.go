@@ -32,7 +32,7 @@ func Tools() []Tool {
 	assignment := schema(map[string]any{"action": enum("create", "complete", "fail"), "id": str, "member_id": str, "node": str, "override": str, "text": str, "body": str, "request_id": str, "cc": strings}, "action")
 	// member_update reports results; it never creates an assignment.
 	result := schema(map[string]any{"action": enum("complete", "fail"), "id": str, "body": str, "cc": strings}, "action", "id", "body")
-	member := schema(map[string]any{"name": str, "catalog": str, "capability": enum("reviewer"), "approval": enum("ask", "auto"), "provider": str, "model": str, "effort": str, "configs": configs, "subagents": enum("allow", "deny"), "cwd": str, "instructions": str, "lifetime": enum("resident", "ephemeral"), "task": str, "can_spawn": boolean, "node": str, "role": enum("architect", "implementer", "reviewer"), "handoff_from": str}, "name", "instructions", "lifetime")
+	member := schema(map[string]any{"name": str, "catalog": str, "capability": enum("reviewer"), "approval": enum("ask", "auto"), "provider": str, "model": str, "effort": str, "configs": configs, "subagents": enum("allow", "deny"), "cwd": str, "instructions": str, "lifetime": enum("resident", "ephemeral"), "task": str, "can_spawn": boolean, "node": str, "role": enum("architect", "implementer", "reviewer"), "handoff_from": str, "handoff_file": str}, "name", "instructions", "lifetime")
 	node := schema(map[string]any{"title": str, "emoji": str, "template": enum("milestone", "package", "step", "note"), "parent": str, "needs": strings, "body": str, "state": str, "expected_revision": integer})
 	gate := schema(map[string]any{"command": str, "exit_code": integer}, "command", "exit_code")
 	option := schema(map[string]any{"label": str, "description": str}, "label")

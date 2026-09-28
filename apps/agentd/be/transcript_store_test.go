@@ -361,6 +361,8 @@ func TestStreamedMessagePersistsEveryChunk(t *testing.T) {
 			Content:       acp.Content{{Type: "text", Text: chunk}},
 		}, now)
 	}
+	// The turn ends with nothing after the message to close it.
+	flushTranscript("acp:1")
 	waitForTranscriptWrites()
 
 	got, err := loadTranscript("sess-h")
@@ -373,6 +375,56 @@ func TestStreamedMessagePersistsEveryChunk(t *testing.T) {
 	}
 	if got[0].Text != "Hello from the fake agent." {
 		t.Errorf("text = %q, want the whole sentence", got[0].Text)
+	}
+}
+
+// Each write of a streaming message is the whole message so far, so one
+// write per chunk grew the file with the square of the reply (Redoubt: one
+// reply written 187 times). It is written when it starts, at most once per
+// messageSaveEvery, and when it closes.
+func TestStreamedMessageIsNotWrittenPerChunk(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "sess-w", launchRecord{Agent: "codex"}, "/tmp", now)
+	chunk := func(text string, at time.Time) {
+		appendUpdate("acp:1", acp.SessionUpdate{
+			SessionUpdate: acp.UpdateAgentMessageChunk,
+			Content:       acp.Content{{Type: "text", Text: text}},
+		}, at)
+	}
+	for i := range 100 {
+		chunk("w ", now.Add(time.Duration(i)*time.Millisecond))
+	}
+	chunk("late ", now.Add(messageSaveEvery+time.Millisecond))
+	appendPrompt("acp:1", "next", now.Add(2*time.Second))
+	waitForTranscriptWrites()
+
+	raw, err := os.ReadFile(transcriptPath("sess-w"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Start, the timed save, the close, the prompt; plus the header.
+	if lines := strings.Count(string(raw), "\n"); lines > 5 {
+		t.Errorf("%d lines written for one message and a prompt", lines)
+	}
+	got, _ := loadTranscript("sess-w")
+	if len(got) != 2 || got[0].Text != strings.Repeat("w ", 100)+"late " {
+		t.Fatalf("loaded %+v", got)
+	}
+}
+
+// A tool row's status changes are written, so a reloaded transcript does
+// not show a finished tool as pending.
+func TestToolStatusReachesDisk(t *testing.T) {
+	withStateDir(t)
+	now := time.Unix(1_700_000_000, 0)
+	bindTranscript("acp:1", "sess-t", launchRecord{Agent: "codex"}, "/tmp", now)
+	appendUpdate("acp:1", acp.SessionUpdate{SessionUpdate: acp.UpdateToolCall, ToolCall: acp.ToolCall{ToolCallID: "t1", Title: "Terminal", Status: acp.ToolStatusPending}}, now)
+	appendUpdate("acp:1", acp.SessionUpdate{SessionUpdate: acp.UpdateToolCallUpdate, ToolCall: acp.ToolCall{ToolCallID: "t1", Status: acp.ToolStatusCompleted}}, now)
+	waitForTranscriptWrites()
+	got, _ := loadTranscript("sess-t")
+	if len(got) != 1 || got[0].Status != acp.ToolStatusCompleted {
+		t.Fatalf("loaded %+v", got)
 	}
 }
 

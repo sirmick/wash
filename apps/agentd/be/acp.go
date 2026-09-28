@@ -303,6 +303,7 @@ func (h *hosted) endTurn(state, reason string) (next turn) {
 	wasLive := h.turnLive
 	h.turnLive = false
 	h.turnAbort, h.turnMail = nil, nil
+	flushTranscript(h.key)
 	if h.turnEnd != nil && !h.ownTurn {
 		close(h.turnEnd)
 		h.turnEnd = nil

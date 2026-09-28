@@ -212,7 +212,9 @@ or abandonment. Limits count idle residents; they do not consume model turns whi
 `assignment_update {updates, wait:{reason}}` creates assignments and sets the caller
 waiting on exactly those as one set, in the same call. `member_update {handoff}` writes the
 caller's handoff to `.wash/local/handoffs/<key>.md` (`.wash/local` keeps itself out of git);
-a member launched with `handoff_from:"<key>"` reads it in its first message. A member whose
+a member launched with `handoff_from:"<key>"` reads it in its first message. A hung member
+cannot write its own, so `handoff_file:"<path>"` launches from a file the orchestrator wrote
+instead (inside the project, at most 32 KiB; not with `handoff_from`). A member whose
 turn ends with its assignment active, no report and no waiting set is reminded once.
 
 `member_update` can complete assignments, update status and set

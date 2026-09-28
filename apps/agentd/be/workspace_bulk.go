@@ -52,6 +52,9 @@ type memberSpec struct {
 	// HandoffFrom names the member (key or id) whose handoff this one
 	// reads in its first message.
 	HandoffFrom string `json:"handoff_from,omitempty"`
+	// HandoffFile is a handoff someone else wrote, a file in the project:
+	// for replacing a member that is hung and cannot write its own.
+	HandoffFile string `json:"handoff_file,omitempty"`
 }
 type bulkConfig struct {
 	swarm.ConfigurePatch
@@ -230,6 +233,19 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 		if len(memberBrief(swarm.Member{ID: swarm.ID(), Instructions: m.Instructions, InitialTask: m.Task}, swarm.ID())) > 32768 {
 			return nil, fmt.Errorf("member %s: instructions and task together exceed 32 KiB: a member receives them as one first message; put detail in a file it can read", key)
+		}
+		if m.HandoffFrom != "" && m.HandoffFile != "" {
+			return nil, fmt.Errorf("member %s: handoff_from or handoff_file, not both", key)
+		}
+		if m.HandoffFile != "" {
+			b, err := readProjectFile(root, m.HandoffFile)
+			if err != nil {
+				return nil, fmt.Errorf("member %s: handoff_file: %w", key, err)
+			}
+			if !swarm.ValidText(string(b), 32768) {
+				return nil, fmt.Errorf("member %s: handoff_file is 1–32768 bytes", key)
+			}
+			handoffs[key] = string(b)
 		}
 		if m.HandoffFrom != "" {
 			if !swarm.ValidProfileName(m.HandoffFrom) {
@@ -718,6 +734,27 @@ func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 // handoffPath is where a member's handoff is kept: under the project's
 // .wash/local, which Wash keeps out of git.
+// readProjectFile reads a file named relative to the project root, or by an
+// absolute path inside it; nothing outside the project.
+func readProjectFile(root, name string) ([]byte, error) {
+	path := name
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	base, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	if rel, err := filepath.Rel(base, real); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("%s is outside the project", name)
+	}
+	return os.ReadFile(real)
+}
+
 func handoffPath(root, member string) string {
 	return filepath.Join(root, ".wash", "local", "handoffs", member+".md")
 }

@@ -109,6 +109,7 @@ func (h *hosted) endOwnTurn(reason string) {
 	h.ownTurn = false
 	close(h.turnEnd)
 	h.turnEnd = nil
+	flushTranscript(h.key)
 	h.setState("done", reason)
 }
 

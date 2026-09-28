@@ -74,6 +74,40 @@ type transcript struct {
 	// chunks, or -1. Streaming a sentence arrives as many chunks; six
 	// transcript lines for one sentence would be unreadable.
 	openMessage int
+	// unsaved says the open message has text not yet on disk; savedAt is
+	// when it was last written. A streamed reply is written at most once
+	// per messageSaveEvery and when it closes, not once per chunk: each
+	// write is the whole message so far, so per-chunk writes grew the file
+	// with the square of the reply (Redoubt: one reply written 187 times).
+	unsaved bool
+	savedAt time.Time
+}
+
+// messageSaveEvery bounds how much of a streaming reply a crash can lose.
+const messageSaveEvery = time.Second
+
+// closeMessage ends the open message, writing what is not yet on disk.
+func (t *transcript) closeMessage() {
+	t.saveMessage()
+	t.openMessage = -1
+}
+
+// saveMessage writes the open message if it has unsaved text.
+func (t *transcript) saveMessage() {
+	if t.unsaved && t.openMessage >= 0 {
+		persistEvent(t.key, t.events[t.openMessage])
+	}
+	t.unsaved = false
+}
+
+// flushTranscript writes a session's open message, for a turn that has
+// ended with nothing after it to close the message.
+func flushTranscript(key string) {
+	transMu.Lock()
+	defer transMu.Unlock()
+	if t := trans[key]; t != nil {
+		t.saveMessage()
+	}
 }
 
 // transcriptDebug logs every streamed chunk with %q. Off unless
@@ -105,7 +139,7 @@ func appendPrompt(key, text string, now time.Time) agentproto.Event {
 		trans[key] = t
 	}
 	// A prompt always closes any open agent message: the turn is over.
-	t.openMessage = -1
+	t.closeMessage()
 	return t.push(agentproto.Event{Kind: agentproto.EventUser, Text: text, AtMS: now.UnixMilli()})
 }
 
@@ -129,7 +163,7 @@ func appendEvent(key string, e agentproto.Event, now time.Time) agentproto.Event
 	}
 	// Anything wash says closes an open agent message, for the same reason
 	// a prompt does: the thread of that message is over.
-	t.openMessage = -1
+	t.closeMessage()
 	if e.AtMS == 0 {
 		e.AtMS = now.UnixMilli()
 	}
@@ -194,7 +228,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []agentproto.E
 				out = append(out, t.push(agentproto.Event{Kind: agentproto.EventMessage, Text: "[image too large to show]", AtMS: now.UnixMilli()}))
 				continue
 			}
-			t.openMessage = -1
+			t.closeMessage()
 			out = append(out, t.push(agentproto.Event{Kind: agentproto.EventImage, Mime: img.MimeType, Text: img.Data, AtMS: now.UnixMilli()}))
 		}
 		text := u.Content.String()
@@ -213,21 +247,24 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []agentproto.E
 		// in between closes it, because the agent has moved on.
 		if t.openMessage >= 0 && t.events[t.openMessage].Kind == kind {
 			t.events[t.openMessage].Text += text
-			// Persist the accumulated message, not just its first chunk.
-			// Continuation grows an existing event in place instead of
-			// pushing a new one, so without this a streamed reply reached
-			// disk as only the words in its first chunk. One line per
-			// chunk is chatty and folds away on load, which is the trade
-			// the append-only format exists to make.
-			persistEvent(t.key, t.events[t.openMessage])
+			// Continuation grows the event in place, so the accumulated
+			// message is written again, not just its first chunk: at most
+			// once per messageSaveEvery, and when it closes.
+			t.unsaved = true
+			if now.Sub(t.savedAt) >= messageSaveEvery {
+				t.saveMessage()
+				t.savedAt = now
+			}
 			return append(out, t.events[t.openMessage])
 		}
+		t.closeMessage()
 		e := t.push(agentproto.Event{Kind: kind, Text: text, AtMS: now.UnixMilli()})
 		t.openMessage = len(t.events) - 1
+		t.savedAt = now
 		return append(out, e)
 
 	case acp.UpdateToolCall, acp.UpdateToolCallUpdate:
-		t.openMessage = -1
+		t.closeMessage()
 		// A tool can produce an image too — a screenshot, a chart. Its
 		// content is nested one level deeper than a message's, which is
 		// why Images() unwraps.
@@ -263,6 +300,8 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []agentproto.E
 			if diff != "" {
 				ev.Diff = diff
 			}
+			// On disk too: a tool row stayed "pending" there for good.
+			persistEvent(t.key, *ev)
 			return append(imgs, *ev)
 		}
 		e := t.push(agentproto.Event{
@@ -363,6 +402,7 @@ func transcriptLen(key string) int {
 // that can run to megabytes.
 func releaseTranscript(key string) {
 	// Let queued writes land before dropping the only other copy.
+	flushTranscript(key)
 	waitForTranscriptWrites()
 	dropEmitter(key)
 	transMu.Lock()
