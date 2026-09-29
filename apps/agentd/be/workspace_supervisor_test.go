@@ -39,7 +39,7 @@ func TestSupervisorFindsAWedgedMember(t *testing.T) {
 	rt := func(r memberRuntime) map[string]memberRuntime {
 		return map[string]memberRuntime{"lead": {live: true, heard: st0}, "fmt": r}
 	}
-	now := st0.Add(3 * time.Minute)
+	now := st0.Add(6 * time.Minute)
 	got := newSupervisor().findings(w, rt(memberRuntime{live: true, busy: true, heard: st0}), now)
 	if keys(got) != "wedged:fmt" || !strings.Contains(got[0].text, "1 message(s) queued") || !strings.Contains(got[0].text, "fmt1") {
 		t.Fatalf("findings = %+v", got)
@@ -59,7 +59,7 @@ func TestSupervisorFindsAWedgedMember(t *testing.T) {
 // A wedged orchestrator cannot be told; the owner is.
 func TestSupervisorTellsTheOwnerAboutAWedgedOrchestrator(t *testing.T) {
 	w := supWorkspace()
-	got := newSupervisor().findings(w, map[string]memberRuntime{"lead": {live: true, busy: true, heard: st0}, "fmt": {live: true, busy: true, tool: true}}, st0.Add(3*time.Minute))
+	got := newSupervisor().findings(w, map[string]memberRuntime{"lead": {live: true, busy: true, heard: st0}, "fmt": {live: true, busy: true, tool: true}}, st0.Add(6*time.Minute))
 	if len(got) != 1 || !got[0].owner {
 		t.Fatalf("findings = %+v", got)
 	}
@@ -133,14 +133,46 @@ func TestSupervisorFindsATeamStall(t *testing.T) {
 func TestSupervisorFindsUndeliveredMail(t *testing.T) {
 	w := supWorkspace()
 	w.Members[1].Waiting = "x"
-	w.Messages = []swarm.Message{{ID: "m", Recipient: "fmt", State: "queued", Created: st0.UnixMilli()}}
-	rt := map[string]memberRuntime{"lead": {live: true, busy: true, heard: st0.Add(3 * time.Minute)}, "fmt": {live: true}}
-	if got := newSupervisor().findings(w, rt, st0.Add(3*time.Minute)); keys(got) != "queued:fmt" {
+	w.Messages = []swarm.Message{{ID: "m", Recipient: "fmt", Type: "instruction", State: "queued", Created: st0.UnixMilli()}}
+	now := st0.Add(6 * time.Minute)
+	rt := map[string]memberRuntime{"lead": {live: true, busy: true, heard: now}, "fmt": {live: true, takesATurn: true}}
+	if got := newSupervisor().findings(w, rt, now); keys(got) != "queued:fmt" {
 		t.Fatalf("findings = %+v", got)
 	}
 	w.MaxActive = 0
-	if got := newSupervisor().findings(w, rt, st0.Add(3*time.Minute)); len(got) != 0 {
+	if got := newSupervisor().findings(w, rt, now); len(got) != 0 {
 		t.Fatalf("mail held by max_active reported: %+v", got)
+	}
+}
+
+// Two things that look identical to a watchdog counting queued messages, and
+// are both healthy: the agent is running a turn of its own (Wash holds the
+// prompt on purpose, and busy() does not see that turn), and the store is
+// holding the mail itself until a waiting set resolves. Reporting either sent
+// the orchestrator to interrupt a member that was working.
+func TestSupervisorLeavesHeldMailAlone(t *testing.T) {
+	now := st0.Add(6 * time.Minute)
+	lead := memberRuntime{live: true, busy: true, heard: now}
+
+	// In the agent's own turn: no Wash turn is live, so busy() is false,
+	// but dispatch could not have claimed the session anyway.
+	w := supWorkspace()
+	w.Messages = []swarm.Message{{ID: "m", Recipient: "fmt", Type: "instruction", State: "queued", Created: st0.UnixMilli()}}
+	rt := map[string]memberRuntime{"lead": lead, "fmt": {live: true, takesATurn: false}}
+	if got := newSupervisor().findings(w, rt, now); strings.Contains(keys(got), "queued") {
+		t.Fatalf("mail behind the agent's own turn reported: %+v", got)
+	}
+
+	// Held by the store: a result for an assignment in the member's waiting
+	// set does not go out until the whole set resolves.
+	w = supWorkspace()
+	w.Members[1].Waiting = "the review round"
+	w.Members[1].WaitingOn = []string{"a2"}
+	w.Assignments = append(w.Assignments, swarm.Assignment{ID: "a2", Member: "lead", Node: "FMT1", State: "active"})
+	w.Messages = []swarm.Message{{ID: "m", Recipient: "fmt", Type: "result", Assignment: "a2", State: "queued", Created: st0.UnixMilli()}}
+	rt = map[string]memberRuntime{"lead": lead, "fmt": {live: true, takesATurn: true}}
+	if got := newSupervisor().findings(w, rt, now); strings.Contains(keys(got), "queued") {
+		t.Fatalf("mail the store holds on purpose reported: %+v", got)
 	}
 }
 
@@ -215,6 +247,40 @@ func TestSupervisorRepeatsThenTellsTheOwner(t *testing.T) {
 	ws.report(w, f, at.Add(2*time.Hour+time.Second))
 	if lead() != 4 {
 		t.Fatal("a finding that came back was not news")
+	}
+}
+
+// A prompt carries only what is due. The body used to list every current
+// finding whenever any one of them was due, so a finding still inside its
+// backoff — or already escalated to the owner and meant to be quiet — was
+// re-sent with its counters untouched, for as long as it held.
+func TestSupervisorPromptsOnlyWhatIsDue(t *testing.T) {
+	ws, w := supStore(t)
+	old := finding{key: "wedged:x", text: "wedged: X"}
+	fresh := finding{key: "ready:m1", text: "ready: M1 has nobody on it"}
+
+	at := st0
+	ws.report(w, []finding{old}, at)
+	// X is now backed off for 5 minutes. A minute later a second finding
+	// appears: its prompt must not drag X along.
+	at = at.Add(time.Minute)
+	ws.report(w, []finding{old, fresh}, at)
+	msgs := ws.supMessages(w.Lead)
+	if len(msgs) != 2 {
+		t.Fatalf("prompts = %d, want 2", len(msgs))
+	}
+	if body := msgs[1].Body; strings.Contains(body, "wedged: X") || !strings.Contains(body, "ready: M1") {
+		t.Fatalf("a finding inside its backoff was re-sent: %q", body)
+	}
+	// X keeps its place in the ladder: it is due 5 minutes after its first
+	// prompt, not restarted by the second finding's.
+	ws.report(w, []finding{old, fresh}, at.Add(3*time.Minute))
+	if n := len(ws.supMessages(w.Lead)); n != 2 {
+		t.Fatalf("prompted before either was due: %d", n)
+	}
+	ws.report(w, []finding{old, fresh}, at.Add(5*time.Minute))
+	if body := ws.supMessages(w.Lead)[2].Body; !strings.Contains(body, "wedged: X") {
+		t.Fatalf("X was not repeated when it came due: %q", body)
 	}
 }
 

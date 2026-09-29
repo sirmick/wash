@@ -247,10 +247,10 @@ message listing what it found:
 
 | Finding | When |
 |---|---|
-| `wedged` | a member in a turn with nothing from it for `quiet` (default 2m): no output, no open tool, no question, no busy process. Reported at once, whatever the rest of the team is doing |
+| `wedged` | a member in a turn with nothing from it for `quiet` (default 5m): no output, no open tool, no question, no busy process. A model composing a long answer sends nothing, so this is set well past any ordinary turn. Reported at once, whatever the rest of the team is doing |
 | `stopped` | an open assignment on a member that is paused, failed, ended, or has no session |
 | `idle with work` | a member idle for `idle` (default 1m) with an active assignment, no report and no waiting set |
-| `undelivered` | mail queued for `quiet` for a member free to take it |
+| `undelivered` | mail queued for `quiet` that dispatch would send now, for a member whose session would take the turn. Mail held on purpose — behind the agent's own turn, an unresolved waiting set, an open owner question, or a second ask cut to the next turn — is not this |
 | `reported`, `failed`, `ready`, `waiting` | the whole team idle for `idle` with the plan unfinished: reported nodes to accept, failed nodes with nobody on them, leaf nodes whose needs are met with nobody on them, and who is waiting on what. Not while a question waits on the owner |
 
 The same findings are sent again after `repeat` (default 5m), doubling; a finding that goes

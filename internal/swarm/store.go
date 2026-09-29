@@ -736,6 +736,16 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 	return batch, stale, setDone
 }
 
+// Deliverable reports whether m's queued mail would go out if it took a turn
+// now. Queued is not the same as undeliverable-and-stuck: pickDelivery holds
+// results until a waiting set resolves, holds everything behind an open owner
+// question, and cuts a second ask to the next turn. A watchdog that counts
+// queued messages instead of asking this calls those healthy states stuck.
+func Deliverable(w *Workspace, m *Member) bool {
+	batch, _, _ := pickDelivery(w, m)
+	return len(batch) > 0
+}
+
 func (s *Store) TurnEnded(session string, messageIDs []string, failed bool) error {
 	return s.turnEnded(session, messageIDs, failed, false)
 }
