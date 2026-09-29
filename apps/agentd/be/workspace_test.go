@@ -473,7 +473,7 @@ func TestWaitingSetDeliversOneBatchAndStaleTasksAreDropped(t *testing.T) {
 	}
 	var ids []string
 	for _, r := range []string{"r1", "r2", "r3"} {
-		a, err := s.Assign("lead", r, "", "", "Review", "")
+		a, err := s.Assign("lead", r, "", "", "Review", "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -561,7 +561,7 @@ func TestResultCCIsANonWakingCopy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.Assign("lead", "red", "", "", "Review", "")
+	a, err := s.Assign("lead", "red", "", "", "Review", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +625,7 @@ func TestAssignmentBatchNamesTheFailingUpdate(t *testing.T) {
 	if got := s.View("lead").Assignments; len(got) != 0 {
 		t.Fatalf("a failed batch kept assignments: %+v", got)
 	}
-	if _, err = s.Assign("lead", "red", "", "", "Review", ""); err != nil {
+	if _, err = s.Assign("lead", "red", "", "", "Review", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	err = assign(create("K5-implementer", "Build"), create("K5-red", "Review again"))

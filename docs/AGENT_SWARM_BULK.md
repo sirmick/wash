@@ -213,7 +213,9 @@ assignment and turn finish. Explicit `member_control` (by IDs, or `node`) ends p
 or abandonment. Limits count idle residents; they do not consume model turns while waiting.
 
 `assignment_update {updates, wait:{reason}}` creates assignments and sets the caller
-waiting on exactly those as one set, in the same call. `member_update {handoff}` writes the
+waiting on exactly those as one set, in the same call. On `create`, `text` is the one-line
+title the plan and the sidebar show and `body` the instructions to work from; the assignee
+receives both. On `complete`/`fail`, `body` is the result. `member_update {handoff}` writes the
 caller's handoff to `.wash/local/handoffs/<key>.md` (`.wash/local` keeps itself out of git);
 a member launched with `handoff_from:"<key>"` reads it in its first message. A hung member
 cannot write its own, so `handoff_file:"<path>"` launches from a file the orchestrator wrote
@@ -227,7 +229,9 @@ completes or fails, so a review round wakes the orchestrator once rather than on
 reviewer. A complete/fail result may `cc` members, who get a non-waking progress copy; a
 reviewer cc's the implementer so findings need not be retyped. Every inbox turn carries its
 messages as one JSON array. A queued assignment instruction whose assignment the assignee
-already resolved (it read the task early with inbox_read) is dropped, not re-delivered. Waiting returns immediately with an instruction to end
+already resolved (it read the task early with inbox_read) is dropped, not re-delivered. Only
+that assignment's own handover is: a later instruction naming the same assignment is a new ask
+about finished work and still wakes its member. Waiting returns immediately with an instruction to end
 the turn; actionable messages wake the member in a later turn. Never poll. Acknowledgment
 is not completion. question/answer/instruction wake; progress records without waking.
 
