@@ -11,7 +11,6 @@
 // straightforward (mock the props).
 
 import type { Component, JSX } from 'solid-js';
-import { Show } from 'solid-js';
 import { tokens } from '@wash/ui';
 
 export interface AboutSystemInfo {

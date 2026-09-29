@@ -23,8 +23,10 @@ const washApi = (): WashRawApi => (window as unknown as { wash: WashRawApi }).wa
 export interface FileClientOptions {
   /** the app's own instance id (props.instance). */
   instance: string;
-  /** the host element to listen on for the file_channel/file_done pushes. */
-  host: HTMLElement;
+  /** the host to listen on for the file_channel/file_done pushes. EventTarget,
+   *  not HTMLElement: add/removeEventListener is all this uses, and demanding
+   *  an element meant a test could not hand it a plain EventTarget. */
+  host: EventTarget;
   /** max cached THUMBNAIL (dim>0) blob URLs before FIFO eviction (default 300). */
   maxCache?: number;
   /** max cached FULL-image (dim=0) blob URLs (default 16). Kept separate from

@@ -35,7 +35,10 @@ export type SegForm = {
 // Loose structural shapes — segment logic only touches these fields; the app's
 // richer Config (full model via an index signature) is assignable to Cfg.
 type Iface = { Name: string; Device?: string; Proto?: any };
-type Dev = { Name: string; Type?: string; Ports?: string[]; Ifname?: string; VID?: number };
+// VLANFiltering as well: Cfg.Devices is the same array fabric-model writes
+// (its own Dev has the field), so leaving it off here made a config this app
+// produces unassignable to the type it reads it back through.
+type Dev = { Name: string; Type?: string; Ports?: string[]; Ifname?: string; VID?: number; VLANFiltering?: boolean };
 export type Cfg = { Interfaces?: Iface[]; Devices?: Dev[]; Zones?: any[]; Pools?: any[]; [k: string]: any };
 
 export const carrierLabel = (c: Carrier): string => {

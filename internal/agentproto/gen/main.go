@@ -168,7 +168,12 @@ func fields(t reflect.Type) []field {
 		if name == "" {
 			name = f.Name
 		}
-		out = append(out, field{goName: f.Name, jsonName: name, typ: f.Type, optional: strings.Contains(opts, "omitempty"), owner: t.Name()})
+		// omitzero as well as omitempty: both leave the field off the wire,
+		// so both make it optional in TypeScript. Reading omitempty alone
+		// declared swarm.Workspace.Supervisor always present when a
+		// default-configured workspace omits it entirely.
+		optional := strings.Contains(opts, "omitempty") || strings.Contains(opts, "omitzero")
+		out = append(out, field{goName: f.Name, jsonName: name, typ: f.Type, optional: optional, owner: t.Name()})
 	}
 	return out
 }

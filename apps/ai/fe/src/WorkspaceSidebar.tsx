@@ -80,7 +80,7 @@ export const WorkspaceSidebar: Component<{
               pinned above its composer; here they are a way there. */}
           <For each={questions()}>{(q) => (
             <Button data-testid={`workspace-question-for-${q.id}`} onClick={() => props.onSelect(q.member_id ?? '')}>
-              {label(q.member_id ?? '')} · Question: {q.set.title || q.set.questions[0]?.question}
+              {label(q.member_id ?? '')} · Question: {q.set.title || q.set.questions?.[0]?.question}
             </Button>
           )}</For>
         </section>

@@ -20,7 +20,7 @@
 // M4's agentd singleton lands it can own a real panel; the domain file
 // stays the same, so that's a UI move, not a data migration.)
 
-import { For, Show, createSignal } from 'solid-js';
+import { For, Show } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { Checkbox, Input, Row, Section, Select, SmallBtn, tokens } from '@wash/ui';
 

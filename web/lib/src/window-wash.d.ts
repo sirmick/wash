@@ -229,7 +229,9 @@ interface WashGlobals {
   // don't. Path is rooted at the asset namespace (e.g.
   // "wallpapers/midnight.svg"); resolves from the runtime drop spot
   // (~/.config/wash/assets) or the embedded chrome.
-  fetchAsset(path: string): Promise<{ bytes: Uint8Array; mime: string }>;
+  // bytes are ArrayBuffer-backed: callers hand them straight to Blob, which
+  // rejects the SharedArrayBuffer-backed Uint8Array the bare type allows.
+  fetchAsset(path: string): Promise<{ bytes: Uint8Array<ArrayBuffer>; mime: string }>;
   // Remote-host APIs (docs/REMOTE.md §6.1), used by wash-connect.
   // catalogFor returns the apps a connected origin advertises (LOCAL or a
   // remote host reached over an ssh -L tunnel); onRemoteCatalog fires when
