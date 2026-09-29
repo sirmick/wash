@@ -4,8 +4,15 @@ The one backlog file, grouped by theme. Detailed designs and implementation
 prompts live in `docs/` and on the linked GitHub issues; resolved items are
 DELETED (git history is the archive), never kept as struck-through history.
 
-Last consolidated: 2026-07-03 — every entry below was re-verified still-open
-against git history and the current tree. (That sweep deleted the 2026-07-01
+Last consolidated: 2026-09-29 — every open entry was re-verified against the
+current tree, file by file. Entries fixed on that pass are deleted; entries
+whose description had gone stale were rewritten rather than trusted, and
+several counts had drifted badly enough to change the decision (the doc
+rename went 311 → 433 referrers and is now explicitly deferred). Anything
+stated here as a count or a line number was true on 2026-09-29; re-derive
+before relying on it.
+
+Prior consolidation: 2026-07-03 — (that sweep deleted the 2026-07-01
 review docs + fix prompts, MAKE-PLAN, PACKS-PROMPT, NEXT, and the sftp-mount
 bug list — all fully landed; see `git log` if you need their content.)
 
@@ -13,13 +20,20 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Repo conventions (working-rules gaps)
 
-- [ ] Doc filenames are `UPPER_CASE.md` (52 files in `docs/`), referenced
-  from ~311 files including Go and TS comments. Rename to normal case with
+- [ ] Doc filenames are `UPPER_CASE.md` (50 files in `docs/`), referenced
+  from ~433 files including Go and TS comments. Rename to normal case with
   a link check in the same change — `docs/ARCHITECTURE.md:1` and friends.
+  **Deliberately not scheduled**: the referrer count has gone 311 → 433
+  since this was filed, so the rename is churn against a moving target and
+  gets more expensive the longer the tree grows. Do it when something else
+  forces a mass doc edit, or not at all. Four files already use normal case
+  (`Project.md`, `Todo.md`, `Sweeps.md`, `Review-findings.md`), which is
+  the drift the entry was originally about.
 - [ ] `COMMANDS.md:1` sits at the repo root; belongs in `docs/`.
-- [ ] No sweep has run under the working rules — `docs/Sweeps.md` and
-  `docs/Review-findings.md` do not exist yet. First sweep should be
-  **docs** (follow getting-started cold).
+- [ ] The **docs** sweep has not run. The apps sweep did (2026-09-08), and
+  `docs/Sweeps.md` + `docs/Review-findings.md` exist and record it — the
+  old claim that neither file existed is gone. What is still outstanding is
+  a docs sweep following getting-started cold.
 
 ## Security  (docs/CORE_AUDIT.md §1)
 
@@ -127,8 +141,13 @@ bug list — all fully landed; see `git log` if you need their content.)
     bearer token, and hostgw's audience is exactly the audience that
     already gets toasts and window state, so it adds no new exposure.
     As-built: SIDEBAR.md M6 "As built".
-- [ ] **Clipboard sync hub; cross-origin z-band** (focused-host windows on
-  top, below chrome z 9999/10000) — the rest of the old M4/M5 entry.
+- [ ] **Clipboard sync hub** — the rest of the old M4/M5 entry. Clipboard
+  state is still per-router (`internal/router/clipboard.go:1-3`, "v0.1 keeps
+  the state inside the router"), so copy on B does not paste on A. The
+  **cross-origin z-band** half of this entry largely landed in `e566bc39`
+  (the colliding per-router `z` became an FE-arbitrated global `gz`, chrome
+  bands in place); only the "focused-host windows on top" grouping rule is
+  still unimplemented.
 - [ ] **M6 — remote hardening pass**: multi-tenancy, provenance/priv-phishing
   review, reconnect-audit alignment, B-router teardown/linger policy.
 - [ ] **Un-diagnosed report from the R2 bug bash**: "something serious funky
@@ -158,21 +177,29 @@ bug list — all fully landed; see `git log` if you need their content.)
 ## Test stability  (docs/TEST_FLAKES.md — the 2026-07-03 full-suite audit)
 
 - [ ] **e2e coverage the 2026-08-24 audit found missing.** The suite is
-  otherwise strong (500 passing, both-halves rule broadly observed); these
-  are the holes worth filling, in order:
+  otherwise strong (190 spec files / ~1279 `test(...)` calls in `e2e/tests`
+  as of 2026-09-29, plus ~1334 Go tests and 69 FE unit files — the audit's
+  "500 passing" is ~2.5x stale, so re-derive any proportion below rather
+  than trusting it); these are the holes worth filling, in order:
   - **idle policy / idle-inhibit has no e2e.** LIFETIME's user-visible
     promise — a session outlives a closed browser, and an agent holding an
     inhibit suspends the reaper — is Go-unit-tested only. The reaper lives
     in `RunUnixListener`, so a spec needs a wash-login-style harness
     rather than the fixture's `--listen` router; that is why it was not
     done alongside the attention spec.
-  - **single-file.spec covers 6 of 24 FE bundles** (one of them the test
-    app). The bundle-size / no-chunks / allowed-externals contract is
-    unenforced for the other 18, so a stray dependency ships silently.
-    Derive the list from the Makefile's FE_APPS rather than hand-listing.
-  - **com.wash.audio, com.wash.about and com.wash.fswatch** appear in app
-    lists but nothing asserts their own behaviour. About's registered-apps
-    table is the cheapest one and doubles as a roster tripwire.
+  - **single-file.spec covers 6 of ~26 FE bundles** (one of them the test
+    app) — `e2e/tests/single-file.spec.ts:30-91` against the Makefile's 22
+    `FE_APPS` + 4 `FE_PANEL_APPS` (`Makefile:64-67`), so the hole is bigger
+    than the audit's "6 of 24". The bundle-size / no-chunks /
+    allowed-externals contract is unenforced for the other ~20, so a stray
+    dependency ships silently. Derive the list from FE_APPS rather than
+    hand-listing.
+  - **com.wash.audio and com.wash.fswatch** appear in app lists but nothing
+    asserts their own behaviour (each shows up only as a launch target in
+    another app's spec). About is now partly covered —
+    `e2e/tests/about-app-traffic.spec.ts` asserts per-app traffic
+    attribution — but the cheap registered-apps roster tripwire named here
+    is still missing.
   - **QoS/credit backpressure** (docs/QOS.md §9 has a test plan) has no
     browser-level spec — only the Go soak test.
 
@@ -191,7 +218,8 @@ bug list — all fully landed; see `git log` if you need their content.)
   written for a smaller LLM): Phase A e2e harness/process lifecycle
   (readiness lines logged before bind, leak-on-throw, no process-group kill,
   env scrub, hardlink staging, freshness/teardown guards); Phase B Go-unit
-  races (the t.Logf-after-test class ×16 files, TestSpine byte-count —
+  races (the t.Logf-after-test class, now ×36 test files and still
+  spreading, TestSpine byte-count —
   tracked as **issue #8**, OpenWRT qemu pdeathsig); Phase C e2e spec sweeps
   (stale timeout overrides, fs-assert barriers, persist-before-reload);
   Phase D FE unit; Phase E the **test event bus** (control-socket
@@ -208,24 +236,17 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Reliability follow-ups  (residuals from the 2026-07-01 reviews)
 
-- [ ] Focus snapshot-claim still adopted when `focused()==null` or the
-  claimed window is minimized (`web/shell/src/wm.ts:330-338`) — residual of
-  the 5523ef3 cross-origin focus fix.
-- [ ] login first-spawn flock doesn't re-`List` under the lock
-  (`internal/login/spawn.go:146-155` vs `server.go:239-248`) → two
-  concurrently-reconnecting tabs can spawn two routers (silent session
-  duplication, not a wedge).
+- [ ] Focus snapshot-claim still adopted when `focused()==null`
+  (`web/shell/src/wm.ts:465-473`, kernel `web/shell/src/wm-focus.ts`) —
+  residual of the 5523ef3 cross-origin focus fix. **Left deliberately**:
+  the hazard is stealing focus from work in progress, and when nothing is
+  focused there is nothing to steal. Revisit only on a real complaint. The
+  minimized half of this entry is fixed.
 - [ ] Bundles re-shipped + re-imported on every live reconnect (fresh
-  `bundleSent` per ShellSession) — harmless (defineWashApp guards
-  redefinition) but wasted bandwidth + a scary "bundle FAILED" log on slow
-  links.
-- [ ] `connect()` from async `reconnectTick`: a throwing factory becomes an
-  unhandled rejection that permanently kills the reconnect loop (unreachable
-  with the stock factory; cheap to guard).
-- [ ] `ListenControl` (`internal/router/control.go:88`) doesn't join
-  per-connection handler goroutines on shutdown — same hazard class as the
-  fixed `runRawListener` (42d6698); latent today, one log line away from the
-  t.Logf-panic class.
+  `bundleSent` per ShellSession, `internal/router/shell_session.go:43-49`,
+  cleared at `:138`) — harmless (defineWashApp guards redefinition) but
+  wasted bandwidth + a scary "bundle FAILED" log on slow links. Needs a
+  per-client rather than per-session ledger.
 - [x] **Control-socket last-binder-wins collision** — FIXED 2026-08-24,
   shipped in 0.14.0. A router now steps aside onto a per-pid path when the
   configured socket still ANSWERS (a stale file is still reused), resolves
@@ -244,12 +265,6 @@ bug list — all fully landed; see `git log` if you need their content.)
   terminal-intercept tier was deleted (docs/AGENT_APP.md §10), so `claude`
   in a wash terminal is an ordinary command; agent features go through the
   Agent app over ACP.
-- [ ] **edit: Save As over an open file drops that tab silently** —
-  `pickerConfirm` converges on one tab per path by removing the duplicate
-  (apps/edit/fe/src/main.tsx:655). If that tab held unsaved edits they go
-  with it, unannounced. Found while fixing the save-seeding bug
-  (2026-09-07); the markers and wysiwyg handles are cleaned up now, but
-  the discard still wants a confirm, or a reload of the surviving tab.
 - [x] **Agent UX phase Now (N1–N6)** — docs/AGENT_UX.md, shipped
   2026-08-21. Focus-or-launch everywhere, agentd needs-input toasts keyed
   to their session, hidden-sidebar badge, single-click reattach, launcher
@@ -260,14 +275,22 @@ bug list — all fully landed; see `git log` if you need their content.)
   merge (live + stored, one row, one search) is M1 and wants the three
   time representations reconciled first; one window per host is M2 and
   needs BOTH spawn paths made instancing-aware, since `EvtSpawnRequest`
-  ignores `Instancing` entirely today. M5's vocabulary pass is worth
-  pulling forward regardless — it fixes three live defects: the rail
-  counts `stale` and `done` rows as "working", a session that failed
-  renders green.
+  ignores `Instancing` entirely today (`internal/router/app_session.go:995-1010`
+  calls `spawnChild` unconditionally, unlike the launch paths).
+  **M5 shipped 2026-08-24**, ahead of M1 — the three defects this entry
+  used to list as live are fixed (`web/lib/src/agent-status.ts:70-75`
+  renders `failed` red; `apps/session/fe/src/sidebar/awareness.ts:254-259`
+  counts only `working`). M1–M4 remain.
 - [ ] **fm/edit: surface access-denied + "relaunch as root"** — **issue #6**
-  (full implementation prompt is a comment there). Part A: status-bar
-  surfacing (edit has no error surface at all; fm misses `read_err`); Part
-  B: `PrivSpawn` wiring + the confinement decision (a root spawn inherits
+  (full implementation prompt is a comment there). Part A is now mostly
+  done and the old description was stale: edit HAS a status-bar error
+  surface (`statusError`, `apps/edit/fe/src/main.tsx:392-395`, 19 call
+  sites incl. the permission-denied open), and fm DOES handle `read_err`
+  (`apps/fm/fe/src/main.tsx:678`) — but routes it to the preview pane
+  rather than the status bar, which is a weaker surface than the issue
+  asks for. **Part B is the real remaining work**: `PrivSpawn` wiring
+  (no match anywhere in `apps/fm` or `apps/edit`) + the confinement
+  decision (a root spawn inherits
   `FSRoot` — decide whether confined deployments need an unconfined-root
   option before building). Invariant: fm/edit never declare
   `CapPrepareSpawn`.
@@ -276,12 +299,49 @@ bug list — all fully landed; see `git log` if you need their content.)
   Solid's async `<For>` timing and was backed out (2026-06-23). Revisit via
   an observer-based anchor only if Safari/iPad becomes a supported target.
 
+## QoS / transport  (docs/QOS.md)
+
+- [ ] **Un-chunked emitters defeat the class scheduler.** The scheduler is
+  preemptive between frames and not inside one: `drainLoop` commits a whole
+  frame to the socket before consulting the queues again
+  (`internal/router/shell_session.go:1185`). `maxChunkBytes` caps that at
+  32 KB (`internal/router/qos.go:306`) — but only for callers that go
+  through `writeChunked`. The `app_msg` relay does not
+  (`internal/router/app_session.go:697-709` hands a whole payload to
+  `WriteCtrlClass`, bounded only by `wire.MaxPayload` = 16 MiB), so one
+  large app message is a single non-preemptible write that stalls every
+  class behind it, including Control. QOS.md §12.2 states the rule; nothing
+  enforces it.
+  - The obvious fix is NOT one-day work, as first estimated: `app_msg` rides
+    the control channel, where one frame carries one whole encoded message
+    with `FlagEnd` set, and `pkg/wire/frame.go:20-22` says plainly
+    "fragmentation is reserved". Neither side implements reassembly. So
+    chunking control messages is a wire feature (continuation frames + FE
+    reassembly + version handling), not a call-site change.
+  - Cheaper steps that need no wire change, in order: enforce a
+    class-dependent cap in `Scheduler.Submit` (`qos.go:106`) so an
+    oversized frame is at least *visible* instead of silent; lower
+    `maxChunkBytes` for Bulk/Background only; per-app round-robin inside
+    Bulk (QOS.md §2 defers it; `recordAppTx` already has the attribution),
+    which is what users actually report as app-vs-app starvation.
+- [ ] **Multiple WebSockets per traffic class — investigated, not doing.**
+  All four classes share one socket (`internal/router/http.go:94`,
+  `web/shell/src/ws.ts:226`), which three docs assert as architecture
+  (ARCHITECTURE.md:107, WIRE.md:11, QOS.md §2). Splitting them fixes only
+  TCP-level head-of-line blocking under loss — the least painful of the
+  four mechanisms, and negligible on LAN. The cost is structural:
+  `ShellSession` *is* the connection, a second socket is currently treated
+  as a second tab (`router.go:1677` sends `ShellSuperseded`), and
+  cross-socket ordering has no guarantee where QOS.md §12.3/§12.4 already
+  record two outages caused by reordering *within* one pipe. Revisit only
+  on a concrete lossy-WAN complaint; do the chunking item above instead.
+
 ## Backend structural debt  (docs/TECH_DEBT.md P2, docs/CORE_AUDIT.md §3)
 
-- [ ] **`internal/sdk/bus.go` struct→`map[string]any`→struct round-trip.**
+- [ ] **`pkg/sdk/bus.go` struct→`map[string]any`→struct round-trip.**
   Collapse the BE↔FE decode path to a typed one. Architectural — touches
   every app's message decode.
-- [ ] **2.4 `bus.Emit` swallow annotations.** 14 bare `_ = bus.Emit(...)`
+- [ ] **2.4 `bus.Emit` swallow annotations.** 16 bare `_ = bus.Emit(...)`
   sites; either an `EmitLogged` helper or per-site "safe to drop" comments.
   Low value, annotation-only.
 - [ ] **Workspace store retention (`internal/swarm/store.go`).** `State.Workspaces`
@@ -296,8 +356,8 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Frontend structural debt  (docs/FE_REFACTOR_PLAN.md)
 
-- [ ] **FE monolith slimming (Phase 5).** `apps/fm/fe/src/main.tsx` (~3.6k
-  lines) and `edit` (~3.3k) — slim `App` to wiring + a `view/` split. The
+- [ ] **FE monolith slimming (Phase 5).** `apps/fm/fe/src/main.tsx` (4799
+  lines) and `edit` (5030) — slim `App` to wiring + a `view/` split. The
   shared logic already moved to `@wash/fs-client`; this is the remaining big
   one. Its own dedicated effort.
 - [ ] **`createEditState` (Phase 6).** Apply the state+controller split to
@@ -313,7 +373,7 @@ The hover/press/focus sweep landed the layer, the guard and the shared
   the `::after` overlay the layer draws, so `panel-kit`'s `Select` is the one
   control the sweep does not reach. Needs either a custom listbox or a
   bespoke rule.
-- [ ] **139 raw `<button>`s that could be `<Button>`.** They all carry the
+- [ ] **114 raw `<button>`s that could be `<Button>`.** They all carry the
   interaction layer now, so this is appearance-only drift (padding, radius,
   font) rather than a missing-state bug. Worth folding in per app, biggest
   first — `edit`, `net`, `term`, `fm`.

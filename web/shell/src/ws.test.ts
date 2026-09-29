@@ -401,3 +401,41 @@ test("a superseded socket's late onclose does not schedule another reconnect", a
   assert.equal(conn.diag().state, 'open', 'stale close ignored');
   assert.equal(socks.length, 2, 'stale close did not trigger a new dial');
 });
+
+// ---- a throwing socket factory must not kill the reconnect loop ----
+//
+// connect() normally reports failure through onclose, which arms the
+// next backoff. A factory that THROWS never produces a socket, so
+// nothing would rearm the timer: the loop would stop for the life of
+// the page, and the throw would escape this async method as an
+// unhandled rejection rather than anything the user ever sees.
+
+test('reconnectTick: a throwing factory stays on the backoff ladder', async () => {
+  // The first dial succeeds (so construction is clean); the factory only
+  // starts throwing afterwards, which is the real shape of this — a
+  // transport whose factory fails once the page has been up a while.
+  let explode = false;
+  const socks: SocketLike[] = [];
+  const conn = new Conn(
+    () => {
+      if (explode) throw new Error('factory exploded');
+      const s = stubSocket();
+      socks.push(s);
+      return s;
+    },
+    () => {},
+    () => {},
+    { fetchImpl: async () => fakeResp({ status: 204 }) },
+  );
+  // Settle the first dial, or reconnectTick early-returns on `dialing`.
+  socks[0].onopen!(new Event('open'));
+  socks[0].onclose!(new Event('close') as CloseEvent);
+  (conn as any).clearReconnectTimer();
+  explode = true;
+
+  // Must resolve, not reject.
+  await (conn as any).reconnectTick();
+  assert.ok((conn as any).reconnectTimer != null, 'another attempt should be scheduled');
+  conn.close();
+  assert.equal((conn as any).reconnectTimer, null, 'close() disarms the timer');
+});

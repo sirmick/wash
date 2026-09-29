@@ -106,18 +106,43 @@ var ErrSessionCap = fmt.Errorf("session cap reached for this user")
 // to PID 1 if wash-login restarts). The Session's Pid is for
 // SIGTERM / /proc lookup purposes only.
 func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
+	sess, _, err := s.spawn(id, name, false)
+	return sess, err
+}
+
+// SpawnIfNone is Spawn for the auto-spawn path, where the intent is
+// "attach this user to a session, starting one only if they have
+// none" rather than "fork a router". It re-checks under the spawn
+// lock and adopts a session that appeared while we were waiting for
+// it, reporting adopted=true.
+//
+// The caller's own List happens before the lock and is therefore a
+// guess: two tabs reconnecting at once both see zero sessions, both
+// call in, and without the re-check both fork — leaving the user with
+// two routers and the picker where they expected their desktop. The
+// picker's explicit "new session" POST keeps using Spawn, which
+// always forks; that caller means it.
+func (s *Spawner) SpawnIfNone(id Identity, name string) (Session, bool, error) {
+	return s.spawn(id, name, true)
+}
+
+func (s *Spawner) spawn(id Identity, name string, adoptExisting bool) (Session, bool, error) {
 	if name == "" {
 		name = id.Name
 	}
-	if s.MaxPerUID > 0 && s.Sessions != nil {
+	// Cheap early rejection so an over-cap request doesn't queue for the
+	// lock at all. Skipped when we may adopt: being at the cap is not a
+	// reason to refuse a user the session they already have, and the
+	// under-lock check below applies the cap to the fork path anyway.
+	if s.MaxPerUID > 0 && s.Sessions != nil && !adoptExisting {
 		existing, err := s.Sessions.List(id.UID)
 		if err == nil && len(existing) >= s.MaxPerUID {
-			return Session{}, ErrSessionCap
+			return Session{}, false, ErrSessionCap
 		}
 	}
 	sessid, err := generateSessID()
 	if err != nil {
-		return Session{}, fmt.Errorf("generate sessid: %w", err)
+		return Session{}, false, fmt.Errorf("generate sessid: %w", err)
 	}
 
 	// Per-uid run directory + sessions subdir layout.
@@ -149,7 +174,7 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	sessionsDir := filepath.Join(uidDir, "sessions")
 	washGID, gerr := LookupGroupGID(WashGroupName)
 	if err := s.ensureRunRoot(gerr == nil, washGID); err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
 
 	// Per-uid flock around the spawn so concurrent /ws hits don't both decide
@@ -161,13 +186,29 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	lockPath := filepath.Join(s.runRoot(), fmt.Sprintf("spawn-%d.lock", id.UID))
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return Session{}, fmt.Errorf("open spawn lock: %w", err)
+		return Session{}, false, fmt.Errorf("open spawn lock: %w", err)
 	}
 	defer lockFile.Close()
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return Session{}, fmt.Errorf("flock: %w", err)
+		return Session{}, false, fmt.Errorf("flock: %w", err)
 	}
 	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+
+	// Everything decided from a List taken before the lock is a guess:
+	// the whole point of the lock is that someone else may have spawned
+	// while we queued for it. So both questions get asked again here,
+	// where the answer is stable.
+	if s.Sessions != nil && (adoptExisting || s.MaxPerUID > 0) {
+		existing, lerr := s.Sessions.List(id.UID)
+		if lerr == nil {
+			if adoptExisting && len(existing) > 0 {
+				return existing[0], true, nil
+			}
+			if s.MaxPerUID > 0 && len(existing) >= s.MaxPerUID {
+				return Session{}, false, ErrSessionCap
+			}
+		}
+	}
 
 	sock := filepath.Join(sessionsDir, sessid+".sock")
 
@@ -226,7 +267,7 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 	}
 
 	if err := cmd.Start(); err != nil {
-		return Session{}, fmt.Errorf("start wash-router bin=%s uid=%d gid=%d: %w", bin, id.UID, id.GID, err)
+		return Session{}, false, fmt.Errorf("start wash-router bin=%s uid=%d gid=%d: %w", bin, id.UID, id.GID, err)
 	}
 	pid := cmd.Process.Pid
 
@@ -259,18 +300,18 @@ func (s *Spawner) Spawn(id Identity, name string) (Session, error) {
 				SessID: sessid,
 				Name:   name,
 				Sock:   sock,
-			}, nil
+			}, false, nil
 		}
 		// Detect early child exit so we don't burn the full timeout
 		// waiting for a socket that will never exist.
 		if !processAlive(pid) {
-			return Session{}, fmt.Errorf("wash-router (pid %d) exited before ctl socket appeared", pid)
+			return Session{}, false, fmt.Errorf("wash-router (pid %d) exited before ctl socket appeared", pid)
 		}
 		time.Sleep(poll)
 	}
 	// Timed out; best-effort kill the child and surface the failure.
 	_ = syscall.Kill(pid, syscall.SIGTERM)
-	return Session{}, fmt.Errorf("wash-router (pid %d) did not bind %s within %s", pid, sock, wait)
+	return Session{}, false, fmt.Errorf("wash-router (pid %d) did not bind %s within %s", pid, sock, wait)
 }
 
 // runRoot returns the /run/wash root, honouring an override for tests.
