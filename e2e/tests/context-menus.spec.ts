@@ -67,7 +67,8 @@ test.describe('context menus', () => {
     await expect.poll(async () => (await cell()).vx).toBe(1);
     const after = await cell();
     expect(after.vy).toBe(0);
-    expect(after.y).toBe(before.y, 'moves by whole screens on one axis only');
+    // Moves by whole screens on one axis only.
+    expect(after.y).toBe(before.y);
     expect(after.x).toBeGreaterThan(before.x);
   });
 
