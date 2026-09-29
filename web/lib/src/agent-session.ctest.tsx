@@ -513,3 +513,27 @@ test('a draft from another app is inserted at the caret and not sent', async () 
   await settle();
   expect(composer.value).toContain('func main() {} func main() {}');
 });
+
+// The transcript is a column flex container, whose default align-items:
+// stretch sets a direct child's used width to 100%. For an image that
+// beats max-width and, with height: auto, upscales a small screenshot to
+// pane width. jsdom does no layout, so this asserts the opt-out itself
+// rather than a measured size — the rule is the thing that regresses.
+test('an embedded image opts out of the transcript column stretch', () => {
+  const events: agentproto.Event[] = [{
+    seq: 1,
+    kind: 'image',
+    mime: 'image/png',
+    text: 'iVBORw0KGgo=',
+    at_ms: 0,
+  }];
+
+  const { container } = render(() => <AgentSession events={() => events} />);
+
+  const img = container.querySelector('img');
+  expect(img).not.toBeNull();
+  expect(img!.style.alignSelf).toBe('flex-start');
+  // Still bounded: a genuinely large image must not blow out the pane.
+  expect(img!.style.maxWidth).toBe('100%');
+  expect(img!.style.height).toBe('auto');
+});
