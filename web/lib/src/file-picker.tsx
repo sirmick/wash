@@ -67,6 +67,14 @@ export interface FilePickerProps {
   defaultFilter?: number;
   onConfirm: (path: string) => void;
   onCancel: () => void;
+  // Extra warning for the save-mode "Replace existing file?" prompt.
+  // The picker knows the file exists; only the host knows what ELSE
+  // replacing it costs — an editor, for instance, knows the path is
+  // open in a tab with unsaved edits that the save will discard. Return
+  // undefined for the ordinary case and the prompt reads as before.
+  // This is a second line in the SAME dialog rather than a second
+  // dialog: both facts are about one decision the user is making once.
+  replaceNote?: (path: string) => string | undefined;
   // Testids — exposed so e2e tests can address the picker without
   // colliding with the host app's own elements.
   'data-testid'?: string;
@@ -823,6 +831,20 @@ export const FilePicker: Component<FilePickerProps> = (props) => {
           <div style={{ color: tokens.fgMuted, 'font-size': tokens.fontSizeMd }}>
             {replacePrompt()}
           </div>
+          <Show when={props.replaceNote?.(replacePrompt())}>
+            <div
+              data-testid="fp-replace-note"
+              style={{
+                color: tokens.fg,
+                'font-size': tokens.fontSizeMd,
+                'margin-top': '8px',
+                'max-width': '380px',
+                'line-height': '1.4',
+              }}
+            >
+              {props.replaceNote!(replacePrompt())}
+            </div>
+          </Show>
         </ConfirmDialog>
       </Show>
     </>
