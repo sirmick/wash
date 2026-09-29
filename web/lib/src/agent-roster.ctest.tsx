@@ -219,7 +219,7 @@ const openRowMenu = (getByTestId: (id: string) => HTMLElement) => {
 };
 
 test('verbs: the row offers a menu, and right-click opens the same one', () => {
-  const { getByTestId, queryByTestId } = render(() => (
+  const { getByTestId } = render(() => (
     <AgentRoster rows={() => [row({ key: 'a', state: 'working' })]} startedAt={at} now={() => 0}
       onActivate={noop} onDetach={noop} onCancel={noop} onStop={noop} />
   ));
@@ -275,7 +275,7 @@ test('verbs: a host that passes no handler gets no menu at all', () => {
 // Detach in a small list. Picking it must ask.
 test('verbs: End asks before it ends, and Cancel backs out', () => {
   let stopped = 0;
-  const { getByTestId, queryByTestId } = render(() => (
+  const { getByTestId } = render(() => (
     <AgentRoster rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
       onActivate={noop} onStop={() => { stopped++; }} />
   ));
@@ -300,7 +300,7 @@ test('verbs: End asks before it ends, and Cancel backs out', () => {
 // Reopening must not resume where it left off: a menu that remembered
 // the armed confirm would fire on the next row you opened it from.
 test('verbs: reopening the menu forgets a pending confirm', () => {
-  const { getByTestId, queryByTestId } = render(() => (
+  const { getByTestId } = render(() => (
     <AgentRoster rows={() => [row({ key: 'a', state: 'done' })]} startedAt={at} now={() => 0}
       onActivate={noop} onStop={noop} />
   ));

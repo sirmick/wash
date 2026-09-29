@@ -1210,7 +1210,7 @@ UsageRow is one row's counters.
 | `legend?` | `string` | Legend says what the orchestrator's emojis and states mean. |
 | `roles?` | `Record<string, string>` | Roles are instruction templates by member role, put before a new member's own instructions (workspace.toml [roles.<role>]). |
 | `context_warn?` | `number` | ContextWarn is the share of its context window at which a member's use is reported to the orchestrator, once; 0 is the default. |
-| `supervisor` | `Supervisor` | Supervisor tunes the stall watchdog. |
+| `supervisor?` | `Supervisor` | Supervisor tunes the stall watchdog. |
 | `nudged?` | `string[]` | Nudged are the lifecycle nudges already sent, so each goes once. |
 | `members` | `Member[] \| null` |  |
 | `assignments` | `Assignment[] \| null` |  |

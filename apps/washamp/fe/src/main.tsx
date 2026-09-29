@@ -313,9 +313,12 @@ function WashampApp(props: WashAppProps) {
     // BE sent none.
     const skins = m.skins ?? [];
     const wa = new Webamp(
+      // {} not undefined: the constructor's options argument is required,
+      // and every field on it is optional — omitting initialSkin is how
+      // Webamp is told to use its bundled default.
       skins.length
         ? { initialSkin: { url: skins[0].url }, availableSkins: skins }
-        : undefined,
+        : {},
     );
     webamp = wa;
     // Closing the Winamp player closes the wash window. (Minimize is

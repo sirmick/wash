@@ -20,7 +20,7 @@ interface Pending {
   mime: string;
   size: number;
   encoding: string;       // '' | 'gzip' — router-side content-coding to undo
-  resolve: (v: { bytes: Uint8Array; mime: string }) => void;
+  resolve: (v: { bytes: Uint8Array<ArrayBuffer>; mime: string }) => void;
   reject: (err: Error) => void;
 }
 
@@ -33,7 +33,7 @@ type SendCtrl = (msg: unknown) => void;
 /** washFetch(path): asks the router for /path, resolves with the file
  *  bytes and mime once the asset channel closes. Rejects if the router
  *  replies with asset.read.err. */
-export function washFetch(send: SendCtrl, path: string): Promise<{ bytes: Uint8Array; mime: string }> {
+export function washFetch(send: SendCtrl, path: string): Promise<{ bytes: Uint8Array<ArrayBuffer>; mime: string }> {
   const reqID = nextReqID++;
   return new Promise((resolve, reject) => {
     const p: Pending = { reqID, chunks: [], mime: '', size: 0, encoding: '', resolve, reject };

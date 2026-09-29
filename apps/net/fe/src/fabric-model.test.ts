@@ -61,7 +61,7 @@ test("adding a VLAN persists its (empty) column + rebinds native br-lan → br-l
   const out = setFabric(cfg, addVlan(plan, 20));
   // VLAN 20 persists even with no ports, so the column stays
   assert.ok((out.BridgeVLANs ?? []).some((b: any) => b.VLAN === 20), "empty VLAN 20 persisted");
-  assert.equal((out.Devices ?? []).find((d: any) => d.Name === "br-lan").VLANFiltering, true);
+  assert.equal((out.Devices ?? []).find((d: any) => d.Name === "br-lan")!.VLANFiltering, true);
   // the LAN interface was rebound to the native sub-device
   assert.equal((out.Interfaces ?? [])[0].Device, "br-lan.1", "native interface rebound under filtering");
   // and the column survives a project round-trip
@@ -112,5 +112,5 @@ test("setFabric splices materialized L2 in, preserving leftovers + the rest", ()
   assert.equal((out.Zones ?? []).length, 1, "zones untouched");
   // br-lan now has both ports
   const br = (out.Devices ?? []).find((d: any) => d.Name === "br-lan");
-  assert.deepEqual(br.Ports.sort(), ["eth1", "eth2"]);
+  assert.deepEqual(br!.Ports!.sort(), ["eth1", "eth2"]);
 });

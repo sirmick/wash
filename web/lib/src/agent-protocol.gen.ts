@@ -1525,7 +1525,7 @@ export interface Workspace {
    */
   context_warn?: number;
   /** Supervisor tunes the stall watchdog. */
-  supervisor: Supervisor;
+  supervisor?: Supervisor;
   /** Nudged are the lifecycle nudges already sent, so each goes once. */
   nudged?: string[];
   members: Member[] | null;
