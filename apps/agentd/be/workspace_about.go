@@ -69,6 +69,12 @@ func (ws *workspaceService) about(h *hosted) workspacemcp.Discovery {
 	permissions["approval_order"] = "host policy rules, then session auto-approval, then human approval (or cancellation if unavailable/disabled)"
 	permissions["filesystem_enforcement"] = "unknown: provider-specific; not verified by Wash workspace discovery"
 	permissions["reviewer_capability_profiles"] = map[string]any{"reviewer": map[string]any{"provider": "claude", "adapter": "@agentclientprotocol/claude-agent-acp", "verified_versions": reviewerVerifiedVersions, "tools": []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "enforcement": "provider tool allowlist plus host write/terminal denial; not an OS sandbox"}, "codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported", "opencode": map[string]any{"adapter": "OpenCode", "verified_versions": reviewerVerifiedOpenCode, "tools": []string{"read", "glob", "grep", "todowrite", "scoped Wash coordination"}, "enforcement": "write, edit, patch, bash, task, webfetch and skill tools removed and denied by launch configuration; not an OS sandbox"}}
+	permissions["launch_setting_support"] = map[string]any{
+		"reviewer":  providerCapability["reviewer"],
+		"subagents": providerCapability["subagents"],
+		"scope":     `which providers can enforce capability:"reviewer" and subagents:"deny"; configuring either on another provider is rejected before the member is committed`,
+		"instructing_a_member_instead": "a member told not to spawn agents is not the same as one that cannot: can_spawn:false removes its Wash spawning authority only",
+	}
 	permissions["approval_profiles"] = map[string]any{
 		"values":   []string{"ask", "auto"},
 		"default":  "unset follows the launcher: the member is auto-approved while the session that launched it is, and follows the orchestrator's later toggles; reviewers never inherit",

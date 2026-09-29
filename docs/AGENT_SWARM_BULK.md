@@ -29,7 +29,8 @@ up to 10 s for the turn to end; an agent that does not end it is not waited for 
 ends the turn itself, and `interrupt` returns `abandoned:true` with the turn's messages as
 `uncertain` (they may not have reached the model; `message_retry` them if they matter). A
 member `subagents:"deny"` removes Claude's own Agent/Task tool at launch and on resume; adapters
-wash cannot restrict fail to launch.
+wash cannot restrict are refused by `workspace_configure` before the member is committed, and
+`view=about` `permissions.launch_setting_support` says which providers enforce which setting.
 
 API 3.2 lets a session end a stale workspace. `workspace_end` with `workspace_id` (the full ID or
 a unique prefix of at least 8) ends another open workspace whose orchestrator session is not
