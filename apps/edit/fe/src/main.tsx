@@ -94,7 +94,6 @@ import {
   Check,
   Bot as BotIcon,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
   Code as CodeIcon,
   File as FileIcon,
@@ -147,6 +146,10 @@ interface Entry {
   // to follow links — same affordance fm has.
   link_to?: string;
   link_err?: string;
+  // What a symlink RESOLVES to, empty for non-symlinks and broken ones
+  // (internal/fs.Entry.LinkType). followSymlink switches on it, and the
+  // shared isDirLike needs it to treat a link to a folder as a folder.
+  link_type?: string;
 }
 
 interface BEMessage {
