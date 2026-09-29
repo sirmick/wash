@@ -1421,7 +1421,8 @@ conn.onEvent((e) => {
 // live shell it lost the foreground head to a newer connection, so its
 // terminals go quiet (REVIEW-RECONNECT L2). Set by the shell.superseded ctrl
 // message; cleared when this tab (re)attaches as head (its own fresh
-// session.snapshot) or reconnects.
+// session.snapshot), when it reconnects, or when the user dismisses it —
+// keeping the session in the other window is an answer too.
 const [superseded, setSuperseded] = createSignal<string | null>(null);
 
 // connTick drives the banner's live "no contact for Ns / next retry" readout
@@ -1841,11 +1842,16 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
             Reconnect now
           </button>
         </Show>
-        <Show when={superseded() && props.state === 'open'}>
+        {/* Reclaiming the head is a re-dial, the same one "Reconnect now"
+            does, so the two never both show. It used to reload the page —
+            throwing the whole desktop away to re-attach a socket — and it
+            was hidden unless the link was open, which is when it was least
+            needed. */}
+        <Show when={superseded() && !canRetry()}>
           <button
             data-wash-hit
             data-testid="wash-connection-use-here"
-            onClick={() => location.reload()}
+            onClick={() => conn.reconnectNow()}
             style={{
               font: tokens.type.textSm,
               color: tokens.fg,
@@ -1857,6 +1863,29 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
             }}
           >
             Use here
+          </button>
+        </Show>
+        {/* Leaving the session in the other tab is a valid answer, and the
+            banner sits above everything: without this it stayed for the rest
+            of the session with no way to put it away. */}
+        <Show when={superseded() && props.state === 'open'}>
+          <button
+            data-wash-hit
+            data-testid="wash-connection-superseded-dismiss"
+            title="Keep the session in the other window"
+            aria-label="Dismiss"
+            onClick={() => setSuperseded(null)}
+            style={{
+              font: tokens.type.textSm,
+              color: tokens.fg,
+              background: 'transparent',
+              border: 'none',
+              padding: '2px 4px',
+              opacity: '0.7',
+              cursor: 'pointer',
+            }}
+          >
+            ✕
           </button>
         </Show>
       </div>
