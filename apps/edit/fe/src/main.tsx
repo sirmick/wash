@@ -404,6 +404,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // revertPrompt asks before Revert throws away unsaved edits; a clean
   // tab reverts without asking.
   const [revertPrompt, setRevertPrompt] = createSignal<{ tabID: string; displayName: string } | null>(null);
+  // overwritePrompt asks before a Save As converges onto a tab that has
+  // unsaved edits. Converging on one tab per path means the duplicate is
+  // dropped, and dropping it discards whatever was typed there — the same
+  // class of loss revertPrompt guards, reached from a different door.
+  const [overwritePrompt, setOverwritePrompt] = createSignal<{ tabID: string; chosen: string; displayName: string } | null>(null);
   const [reloadPrompt, setReloadPrompt] = createSignal<
     | null
     | { tabID: string; displayName: string; diskContent: string }
@@ -1194,7 +1199,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setTreeRoot(chosen);
       return;
     }
-    const src = tabs().find((t) => t.id === cur.tabID);
+    // Converging on one tab per path means a tab already holding the
+    // chosen path gets dropped below. If it has unsaved edits, they go
+    // with it, so ask first — the same work-discarding door revertPrompt
+    // guards, reached from Save As.
+    const clash = tabs().find((t) => t.path === chosen && t.id !== cur.tabID && dirtyIDs().has(t.id));
+    if (clash) {
+      setOverwritePrompt({ tabID: cur.tabID, chosen, displayName: clash.displayName });
+      return;
+    }
+    await saveAsTo(cur.tabID, chosen);
+  };
+
+  // saveAsTo performs the write and canonicalizes the source tab onto
+  // its new path. Split out of pickerConfirm so the unsaved-duplicate
+  // confirmation can gate it without restating the rename bookkeeping.
+  const saveAsTo = async (tabID: string, chosen: string) => {
+    const src = tabs().find((t) => t.id === tabID);
     if (!src) return;
     const content = tabContent(src);
     const reply = await sendWithReply({ kind: 'write', path: chosen, content: toDisk(content, src.eol) });
@@ -3127,7 +3148,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // inline rename owns the keyboard: Ctrl+W typed into the picker's
       // path input used to close the tab under it. Ctrl+` and the rest
       // are left alone — they do not touch the tab.
-      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null || revertPrompt() !== null || qoOpen();
+      const dialogUp = picker() !== null || pendingClose() !== null || reloadPrompt() !== null || renaming() !== null || revertPrompt() !== null || overwritePrompt() !== null || qoOpen();
       const fileKey = ev.key === 's' || ev.key === 'S' || ev.key === 'o' || ev.key === 'O'
         || ev.key === 'n' || ev.key === 'N' || ev.key === 'w' || ev.key === 'W';
       if (dialogUp && fileKey) return;
@@ -4210,6 +4231,31 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
             <strong style={{ color: tokens.fg }}>{revertPrompt()!.displayName}</strong>{' '}
             has unsaved changes. Reverting reloads the file from disk and discards them.
+          </div>
+        </ConfirmDialog>
+      </Show>
+
+      {/* Save As onto a path another tab holds with unsaved edits: that
+          tab is about to be dropped, so say whose work is at stake. */}
+      <Show when={overwritePrompt()}>
+        <ConfirmDialog
+          title="Replace the open file?"
+          confirmLabel="Save"
+          cancelLabel="Cancel"
+          danger
+          onConfirm={() => {
+            const p = overwritePrompt();
+            setOverwritePrompt(null);
+            if (p) void saveAsTo(p.tabID, p.chosen);
+          }}
+          onCancel={() => setOverwritePrompt(null)}
+          data-testid="edit-overwrite-dialog"
+          confirmTestid="edit-overwrite-confirm"
+          cancelTestid="edit-overwrite-cancel"
+        >
+          <div style={{ color: tokens.fgDim, 'max-width': '380px', 'line-height': '1.4' }}>
+            <strong style={{ color: tokens.fg }}>{overwritePrompt()!.displayName}</strong>{' '}
+            is open with unsaved changes. Saving over it closes that tab and discards them.
           </div>
         </ConfirmDialog>
       </Show>
