@@ -9,6 +9,13 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "isolatedModules": true,
+    // The source imports siblings by their real filename ("./wm.ts"), which
+    // is what vite resolves; without this tsc rejected every one of them
+    // (TS5097) and the noise is why nothing ran a bare tsc. noEmit is its
+    // prerequisite, and is true of every one of these configs anyway: vite
+    // owns the build, tsc is only ever asked to check.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "jsx": "preserve",

@@ -92,8 +92,8 @@ import { diff } from '@codemirror/legacy-modes/mode/diff';
 import {
   Bold,
   Check,
+  Bot as BotIcon,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
   Code as CodeIcon,
   File as FileIcon,
@@ -146,6 +146,10 @@ interface Entry {
   // to follow links — same affordance fm has.
   link_to?: string;
   link_err?: string;
+  // What a symlink RESOLVES to, empty for non-symlinks and broken ones
+  // (internal/fs.Entry.LinkType). followSymlink switches on it, and the
+  // shared isDirLike needs it to treat a link to a folder as a folder.
+  link_type?: string;
 }
 
 interface BEMessage {
@@ -359,6 +363,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [expanded, setExpanded] = createStore<Record<string, true>>({});
   const [root, setRoot] = createSignal('');
   const [selectedPath, setSelectedPath] = createSignal('');
+  // ownerAgent is the Agent session that opened this editor, once one has:
+  // its title, and the button back to the conversation. Empty in an editor
+  // the user launched themselves.
+  const [ownerAgent, setOwnerAgent] = createSignal<{ key: string; title: string } | null>(null);
   const [splitPct, setSplitPct] = createSignal(25);
 
   // tabs / activeID drive the editor pane. tabs is ordered; the
@@ -1743,6 +1751,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // the actual UI work below.
     // cmd.open_file also carries a position: the Agent window this editor
     // belongs to sends one for a `file.go:42` clicked in its transcript.
+    // Which Agent session this editor serves, on adoption and whenever the
+    // agent renames it.
+    if (m.kind === 'agent.owner') {
+      const key = String(m.key ?? '');
+      setOwnerAgent(key ? { key, title: String(m.title ?? '') } : null);
+      return;
+    }
     if (m.kind === 'cmd.open_file') {
       const path = String(m.path ?? '');
       const line = Number(m.line) || undefined;
@@ -2269,6 +2284,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const target = (t?.path && !t.diff ? t.path : '') || selectedPath() || root();
     send({ kind: 'spawn', app_id: 'com.wash.fm', ...(target ? { open: target } : {}) });
   };
+
+  // The Agent session this editor was opened for, when it was. The BE asks
+  // agentd to bring that window forward, because a window is only ever
+  // raised by its own app — and agentd reopens one whose window has gone.
+  const showOwnerAgent = () => send({ kind: 'agent.show_owner' });
 
   const openFolderIn = (appID: 'com.wash.term' | 'com.wash.fm', folder: string) => {
     if (folder) send({ kind: 'spawn', app_id: appID, open: folder });
@@ -2993,6 +3013,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (s) void restoreFrom(s);
     };
     props.host.addEventListener('wash:state', onState);
+    // The adoption message arrives once, before this FE is listening after
+    // a reload; the BE still knows who the owner is.
+    send({ kind: 'agent.owner_ask' });
 
     // <Terminal> components carry their own ResizeObserver against
     // each host div, so a window resize bubbles into per-component
@@ -3667,6 +3690,28 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               'text-overflow': 'ellipsis',
               'white-space': 'nowrap',
             }}>{root() || 'loading…'}</span>
+            <Show when={ownerAgent()}>
+              {(a) => (
+                <Button
+                  variant="ghost"
+                  data-testid="edit-show-agent"
+                  title={a().title ? `Show the Agent window · ${a().title}` : 'Show the Agent window'}
+                  onClick={showOwnerAgent}
+                  style={{
+                    color: tokens.fgMuted,
+                    width: '22px',
+                    height: '22px',
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                    'justify-content': 'center',
+                    padding: 0,
+                    'flex-shrink': 0,
+                  }}
+                >
+                  <BotIcon size={12} />
+                </Button>
+              )}
+            </Show>
             <Button
               variant="ghost"
               data-testid="edit-reveal-in-fm"

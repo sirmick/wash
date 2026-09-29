@@ -291,11 +291,10 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 // session/load.
 func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
 	capability := launch.capability
-	if capability != "" && (capability != "reviewer" || agentID != "claude" && agentID != "opencode") {
-		return nil, fmt.Errorf("capability %q unsupported by %s; no session started", capability, agentID)
-	}
-	if launch.noSubagents && agentID != "claude" {
-		return nil, fmt.Errorf("subagents \"deny\" unsupported by %s; no session started", agentID)
+	// Kept as defence in depth: configure rejects these before committing,
+	// but a resume reads launch settings stored before that check existed.
+	if err := unsupportedLaunchSetting(agentID, capability, launch.noSubagents, "; no session started"); err != nil {
+		return nil, err
 	}
 	a, ok := adapterByID(agentID)
 	if !ok {

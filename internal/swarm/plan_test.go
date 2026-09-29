@@ -86,17 +86,17 @@ func TestPlanValidationRefusesBrokenGraphs(t *testing.T) {
 func TestWorkIsOnTheNodeAndNeedsGateTheStart(t *testing.T) {
 	s, _ := planStore(t)
 	seed(t, s)
-	if _, err := s.Assign("lead", "impl", "C", "", "Write gamma", ""); err == nil || !strings.Contains(err.Error(), "needs") || !strings.Contains(err.Error(), "override") {
+	if _, err := s.Assign("lead", "impl", "C", "", "Write gamma", "", ""); err == nil || !strings.Contains(err.Error(), "needs") || !strings.Contains(err.Error(), "override") {
 		t.Fatalf("C started before A and B: %v", err)
 	}
 	// M2's own need (M1) gates A too.
-	if _, err := s.Assign("lead", "impl", "", "", "Write alpha", ""); err == nil || !strings.Contains(err.Error(), "M1") {
+	if _, err := s.Assign("lead", "impl", "", "", "Write alpha", "", ""); err == nil || !strings.Contains(err.Error(), "M1") {
 		t.Fatalf("A started inside an unstarted milestone: %v", err)
 	}
 	if err := setPlan(s, "lead", map[string]*NodePatch{"M1": {State: str("done")}}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.Assign("lead", "impl", "", "", "Write alpha", "")
+	a, err := s.Assign("lead", "impl", "", "", "Write alpha", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestWorkIsOnTheNodeAndNeedsGateTheStart(t *testing.T) {
 		t.Fatalf("A is %s after its result, want reported", got)
 	}
 	// The override is recorded on the node, with who and why.
-	if _, err := s.Assign("lead", "red", "C", "fixture needs C early", "Review gamma", ""); err != nil {
+	if _, err := s.Assign("lead", "red", "C", "fixture needs C early", "Review gamma", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if o := PlanNode(s.View("lead"), "C").Overrides; len(o) != 1 || !strings.Contains(o[0], "fixture needs C early") || !strings.Contains(o[0], "Orchestrator") {
@@ -145,9 +145,9 @@ func TestAcceptWritesTrailersAndNudgesTheNextMilestone(t *testing.T) {
 	if err := setPlan(s, "lead", map[string]*NodePatch{"M1": {State: str("done")}}); err != nil {
 		t.Fatal(err)
 	}
-	a, _ := s.Assign("lead", "impl", "", "", "Write alpha", "")
+	a, _ := s.Assign("lead", "impl", "", "", "Write alpha", "", "")
 	_ = s.Complete("impl-s", a.ID, "Wrote alpha.txt", false)
-	r, _ := s.Assign("lead", "red", "", "", "Review alpha", "")
+	r, _ := s.Assign("lead", "red", "", "", "Review alpha", "", "")
 	_ = s.Complete("red-s", r.ID, "OK: alpha.txt says alpha\nno findings", false)
 	if err := s.Mutate("lead", false, func(w *Workspace, m *Member) error {
 		_, err := UpdateQA(w, m, QAUpdate{ID: "A-case", Action: "open", Node: "A", Title: "Case", Assignee: "impl", Body: "Lower case?"})
@@ -200,7 +200,7 @@ func TestReplacePlanRefusedWhileWorkIsOpen(t *testing.T) {
 	s, _ := planStore(t)
 	seed(t, s)
 	_ = setPlan(s, "lead", map[string]*NodePatch{"M1": {State: str("done")}})
-	if _, err := s.Assign("lead", "impl", "", "", "Write alpha", ""); err != nil {
+	if _, err := s.Assign("lead", "impl", "", "", "Write alpha", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	err := s.Mutate("lead", false, func(w *Workspace, m *Member) error {

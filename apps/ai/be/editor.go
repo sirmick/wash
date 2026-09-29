@@ -8,7 +8,7 @@ package ai
 //	FE → BE  : { kind: "path_probe", id, paths }     which tokens are files
 //	           { kind: "editor_show", token? }        raise; open token's file
 //	BE → FE  : { kind: "path_probe_ok", id, hits }
-//	ai → edit: { kind: "editor.show", path?, line?, col? }
+//	ai → edit: { kind: "editor.show", key, title, path?, line?, col? }
 //	edit → ai: { kind: "editor.closing" }
 //
 // Tokens are resolved here, against the session's folder, by
@@ -38,11 +38,17 @@ type (
 		ID   string         `json:"id"`
 		Hits []pathlink.Hit `json:"hits"`
 	}
+	// Key and Title name the session this editor belongs to. The editor
+	// showed "Editor" in the taskbar however many Agent windows were open,
+	// and offered no way back to the conversation that opened it; with the
+	// key it can title itself and ask agentd to raise that window.
 	editorShowMsg struct {
-		Kind string `json:"kind"`
-		Path string `json:"path,omitempty"`
-		Line int    `json:"line,omitempty"`
-		Col  int    `json:"col,omitempty"`
+		Kind  string `json:"kind"`
+		Key   string `json:"key,omitempty"`
+		Title string `json:"title,omitempty"`
+		Path  string `json:"path,omitempty"`
+		Line  int    `json:"line,omitempty"`
+		Col   int    `json:"col,omitempty"`
 	}
 )
 
@@ -68,7 +74,7 @@ func showEditor(c *sdk.Conn, token string) {
 		log.Printf("wash-ai: editor: session key=%s has no folder yet", session.key)
 		return
 	}
-	msg := editorShowMsg{Kind: "editor.show"}
+	msg := editorShowMsg{Kind: "editor.show", Key: session.key, Title: session.title}
 	if token != "" {
 		hit, ok := pathlink.Resolve(session.cwd, token)
 		if !ok {

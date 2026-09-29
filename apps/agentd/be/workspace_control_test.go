@@ -85,7 +85,7 @@ func TestAMemberCannotApproveItsOwnExitFromPlanMode(t *testing.T) {
 func TestARefusedPlanExitHandsTheOrchestratorThePlan(t *testing.T) {
 	withStateDir(t)
 	s, ws := planWorkspace(t)
-	if _, err := s.Assign("lead", "impl", "", "", "Plan K5a", ""); err != nil {
+	if _, err := s.Assign("lead", "impl", "", "", "Plan K5a", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	plan := "# K5a plan v3\n\n1. Loader stub at a fixed address.\n" + strings.Repeat("Detail line.\n", 400)
@@ -120,7 +120,7 @@ func TestARefusedPlanExitWithoutAnAssignmentWakesNobody(t *testing.T) {
 		t.Fatalf("plan file written for an unassigned member: %v", entries)
 	}
 	// A completed assignment is not an open one either.
-	a, err := s.Assign("lead", "impl", "", "", "Plan K5a", "")
+	a, err := s.Assign("lead", "impl", "", "", "Plan K5a", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

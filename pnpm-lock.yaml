@@ -11,6 +11,9 @@ importers:
       '@solidjs/testing-library':
         specifier: ^0.8.10
         version: 0.8.10(solid-js@1.9.13)
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
       jsdom:
         specifier: ^29.1.1
         version: 29.1.1(@noble/hashes@2.2.0)
@@ -19,13 +22,13 @@ importers:
         version: 1.9.13
       vite:
         specifier: ^5.4.21
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.11.12
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
       vitest:
         specifier: ^2.1.9
-        version: 2.1.9(jsdom@29.1.1(@noble/hashes@2.2.0))
+        version: 2.1.9(@types/node@26.6.3)(jsdom@29.1.1(@noble/hashes@2.2.0))
 
   apps/about/fe:
     dependencies:
@@ -41,10 +44,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/ai/fe:
     dependencies:
@@ -63,10 +66,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/connect/fe:
     dependencies:
@@ -82,10 +85,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/disks/fe:
     dependencies:
@@ -104,10 +107,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/edit/fe:
     dependencies:
@@ -246,10 +249,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/fm/fe:
     dependencies:
@@ -271,10 +274,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/imageview/fe:
     dependencies:
@@ -296,10 +299,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/inference/fe:
     dependencies:
@@ -315,10 +318,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/journal/fe:
     dependencies:
@@ -337,10 +340,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/music/fe:
     dependencies:
@@ -359,10 +362,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/net/fe:
     dependencies:
@@ -384,10 +387,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/netd/fe:
     dependencies:
@@ -403,10 +406,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/packages/fe:
     dependencies:
@@ -431,10 +434,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/priv/fe:
     dependencies:
@@ -450,10 +453,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/radio/fe:
     dependencies:
@@ -472,10 +475,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/remote/fe:
     dependencies:
@@ -491,10 +494,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/services/fe:
     dependencies:
@@ -513,10 +516,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/session-summary/fe:
     dependencies:
@@ -532,10 +535,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/session/fe:
     dependencies:
@@ -566,10 +569,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/settings/fe:
     dependencies:
@@ -588,10 +591,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/syslogs/fe:
     dependencies:
@@ -610,10 +613,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/term/fe:
     dependencies:
@@ -647,10 +650,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/test/fe:
     dependencies:
@@ -666,10 +669,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/top/fe:
     dependencies:
@@ -688,10 +691,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/vscode-workbench/fe:
     dependencies:
@@ -707,10 +710,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/vscode/fe:
     dependencies:
@@ -729,10 +732,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   apps/washamp/fe:
     dependencies:
@@ -751,10 +754,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   wash-display/fe:
     dependencies:
@@ -773,10 +776,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   web/fs-client: {}
 
@@ -854,10 +857,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
   web/shell:
     dependencies:
@@ -897,10 +900,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: ^5.4.10
-        version: 5.4.21
+        version: 5.4.21(@types/node@26.6.3)
       vite-plugin-solid:
         specifier: ^2.10.2
-        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21)
+        version: 2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3))
 
 packages:
 
@@ -1897,6 +1900,9 @@ packages:
 
   '@types/mdurl@2.0.0':
     resolution: {integrity: sha512-RGdgjQUZba5p6QEFAVx2OGb8rQDL/cPRG7GiedRzMcJ1tYnUANBncjbSB1NRGwbvjcPeikRABz2nshyPk1bhWg==}
+
+  '@types/node@26.6.3':
+    resolution: {integrity: sha512-dsqMQQoeTLqu9wynDD00q573mNzso3IdQOAfHRJqLCcmCFPoGo9A1bDpUcv/9tnKpErQWv9uKeGfl37EIS02Yg==}
 
   '@types/prop-types@15.7.15':
     resolution: {integrity: sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw==}
@@ -3015,6 +3021,9 @@ packages:
   unbox-primitive@1.1.0:
     resolution: {integrity: sha512-nWJ91DjeOkej/TA8pXQ3myruKpKEYgqvpw9lz4OPHj/NWFNluYrjbz9j01CJ8yKQd2g4jFoOkINCTW2I5LEEyw==}
     engines: {node: '>= 0.4'}
+
+  undici-types@8.9.0:
+    resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
   undici@7.26.0:
     resolution: {integrity: sha512-3O9Tf67pGhgOv9jM35AbhkXAKi13f3oy3aE4CSgr+TckGeY+/iu97ZXN+J7DpHPzLbVApFd1IFhcnBjREYXYcg==}
@@ -4154,6 +4163,10 @@ snapshots:
 
   '@types/mdurl@2.0.0': {}
 
+  '@types/node@26.6.3':
+    dependencies:
+      undici-types: 8.9.0
+
   '@types/prop-types@15.7.15': {}
 
   '@types/react@18.3.31':
@@ -4184,13 +4197,13 @@ snapshots:
       chai: 5.3.3
       tinyrainbow: 1.2.0
 
-  '@vitest/mocker@2.1.9(vite@5.4.21)':
+  '@vitest/mocker@2.1.9(vite@5.4.21(@types/node@26.6.3))':
     dependencies:
       '@vitest/spy': 2.1.9
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 5.4.21
+      vite: 5.4.21(@types/node@26.6.3)
 
   '@vitest/pretty-format@2.1.9':
     dependencies:
@@ -5538,6 +5551,8 @@ snapshots:
       has-symbols: 1.1.0
       which-boxed-primitive: 1.1.1
 
+  undici-types@8.9.0: {}
+
   undici@7.26.0: {}
 
   update-browserslist-db@1.2.3(browserslist@4.28.2):
@@ -5558,13 +5573,13 @@ snapshots:
     dependencies:
       inherits: 2.0.3
 
-  vite-node@2.1.9:
+  vite-node@2.1.9(@types/node@26.6.3):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3
       es-module-lexer: 1.7.0
       pathe: 1.1.2
-      vite: 5.4.21
+      vite: 5.4.21(@types/node@26.6.3)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -5576,7 +5591,7 @@ snapshots:
       - supports-color
       - terser
 
-  vite-plugin-solid@2.11.12(solid-js@1.9.13)(vite@5.4.21):
+  vite-plugin-solid@2.11.12(solid-js@1.9.13)(vite@5.4.21(@types/node@26.6.3)):
     dependencies:
       '@babel/core': 7.29.0
       '@types/babel__core': 7.20.5
@@ -5584,27 +5599,28 @@ snapshots:
       merge-anything: 5.1.7
       solid-js: 1.9.13
       solid-refresh: 0.6.3(solid-js@1.9.13)
-      vite: 5.4.21
-      vitefu: 1.1.3(vite@5.4.21)
+      vite: 5.4.21(@types/node@26.6.3)
+      vitefu: 1.1.3(vite@5.4.21(@types/node@26.6.3))
     transitivePeerDependencies:
       - supports-color
 
-  vite@5.4.21:
+  vite@5.4.21(@types/node@26.6.3):
     dependencies:
       esbuild: 0.21.5
       postcss: 8.5.14
       rollup: 4.60.4
     optionalDependencies:
+      '@types/node': 26.6.3
       fsevents: 2.3.3
 
-  vitefu@1.1.3(vite@5.4.21):
+  vitefu@1.1.3(vite@5.4.21(@types/node@26.6.3)):
     optionalDependencies:
-      vite: 5.4.21
+      vite: 5.4.21(@types/node@26.6.3)
 
-  vitest@2.1.9(jsdom@29.1.1(@noble/hashes@2.2.0)):
+  vitest@2.1.9(@types/node@26.6.3)(jsdom@29.1.1(@noble/hashes@2.2.0)):
     dependencies:
       '@vitest/expect': 2.1.9
-      '@vitest/mocker': 2.1.9(vite@5.4.21)
+      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@26.6.3))
       '@vitest/pretty-format': 2.1.9
       '@vitest/runner': 2.1.9
       '@vitest/snapshot': 2.1.9
@@ -5620,10 +5636,11 @@ snapshots:
       tinyexec: 0.3.2
       tinypool: 1.1.1
       tinyrainbow: 1.2.0
-      vite: 5.4.21
-      vite-node: 2.1.9
+      vite: 5.4.21(@types/node@26.6.3)
+      vite-node: 2.1.9(@types/node@26.6.3)
       why-is-node-running: 2.3.0
     optionalDependencies:
+      '@types/node': 26.6.3
       jsdom: 29.1.1(@noble/hashes@2.2.0)
     transitivePeerDependencies:
       - less

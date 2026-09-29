@@ -73,7 +73,7 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 			if err != nil {
 				return fail(i, fmt.Errorf("member %q: %w", u.Member, err))
 			}
-			a, err := s.Assign(h.sessionID, member, u.Node, u.Override, u.Text, u.Request)
+			a, err := s.Assign(h.sessionID, member, u.Node, u.Override, u.Text, u.Body, u.Request)
 			if err != nil {
 				if j, ok := created[member]; ok && errors.Is(err, swarm.ErrActiveAssignment) {
 					err = fmt.Errorf("%w: update %d of this batch created it", err, j)
@@ -659,7 +659,16 @@ func notifyQAUpdate(w *swarm.Workspace, m *swarm.Member, q *swarm.QAThread, u sw
 	case "reply":
 		return swarm.NotifyQA(w, q, m.ID, notice("QA "+q.ID+": "+u.Body))
 	case "resolve":
-		return swarm.NotifyQA(w, q, m.ID, notice("QA "+q.ID+" resolved: "+u.Evidence))
+		// The decision is in body and the finding it rests on in evidence.
+		// Sending evidence alone restated the question and never said what
+		// was decided, so the thread's creator had to ask again.
+		text := "QA " + q.ID + " resolved: " + u.Body
+		if u.Body == "" {
+			text = "QA " + q.ID + " resolved: " + u.Evidence
+		} else if u.Evidence != "" {
+			text += "\n\nEvidence: " + u.Evidence
+		}
+		return swarm.NotifyQA(w, q, m.ID, notice(text))
 	case "assign":
 		if q.Assignee == m.ID {
 			return nil
