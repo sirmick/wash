@@ -221,7 +221,6 @@ export function NetApp(props: WashAppProps) {
   const draftSegments = createMemo<Segment[]>(() => projectDraft(draft()));
   // Router-shaped iff some segment owns a zone or a pool (a workstation's segments
   // are bare interfaces). Gates the Networks panel — the router plane (plan §4).
-  const isRouter = () => draftSegments().some((s) => s.zone || s.pool);
   // On a router, the managed-network interfaces (those with a zone/pool) live in
   // the Networks panel — keep them out of the raw connections list below to avoid
   // showing each segment twice. Workstations keep the full flat list.

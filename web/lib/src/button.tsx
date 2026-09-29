@@ -4,9 +4,17 @@ import { tokens } from './tokens';
 
 // Variants:
 //   default — normal button (Cancel, Skip, etc.)
+//   primary — the one action a view is asking for (Save, Start session)
 //   danger  — destructive action (Delete, Replace, Replace All)
 //   ghost   — transparent / chrome (button with hover background)
 //   icon    — small square icon-only chrome button (toolbar)
+//
+// primary fills with accentBlue and takes its text from bgWindow rather
+// than fg. That inverts correctly per theme for free: every pack already
+// picks an accentBlue that reads against its own window surface, so the
+// reverse holds — light text on the dark blues (Solarized, Seoul), dark
+// text on the light ones (Nord frost, Copland periwinkle). No new token,
+// and nothing for the five packs in packs.ts to override.
 //
 // Every variant carries the interaction layer (hit.ts): hover tint,
 // press well, keyboard focus ring, and the inert treatment when
@@ -19,7 +27,7 @@ import { tokens } from './tokens';
 // pass title, data-testid, type, disabled, etc. without bespoke
 // passthrough. Style is computed from variant + size; callers may
 // extend via the `style` prop (merged last).
-export type ButtonVariant = 'default' | 'danger' | 'ghost' | 'icon';
+export type ButtonVariant = 'default' | 'primary' | 'danger' | 'ghost' | 'icon';
 export type ButtonSize = 'sm' | 'md';
 
 export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -51,6 +59,16 @@ function baseStyle(v: ButtonVariant, s: ButtonSize): JSX.CSSProperties {
   const padY = s === 'sm' ? '3px' : '6px';
   const padX = s === 'sm' ? '10px' : '12px';
   switch (v) {
+    case 'primary':
+      return {
+        background: tokens.accentBlue,
+        color: tokens.bgWindow,
+        border: `1px solid ${tokens.accentBlue}`,
+        'border-radius': `${tokens.radiusSm}`,
+        padding: `${padY} ${padX}`,
+        cursor: 'pointer',
+        font: tokens.type.textMd,
+      };
     case 'danger':
       return {
         background: tokens.bgDanger,

@@ -116,26 +116,13 @@ interface CatalogApp {
   };
 }
 
-interface WindowInfo {
-  // Origin (router) the window belongs to. Pair (origin, windowID) is the
-  // only unique identity — ids are per-router — so the pager/taskbar pass
-  // it to WM intents to address a remote window's twin-id local sibling
-  // correctly (docs/REMOTE.md R2).
-  origin: string;
-  windowID: number;
-  instanceID: string;
-  element: string;
-  icon?: string;
-  title: string;
-  focused: boolean;
-  state: 'normal' | 'minimized' | 'maximized';
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  viewport: { vx: number; vy: number };
-}
-
+// WindowInfo is the shell's own WashWindowInfo (@wash/ui's ambient
+// window-wash.d.ts, "the single source of truth for the type"). This was a
+// hand-copy of it, and had drifted: it was missing `attention`, which the
+// taskbar reads to pulse a window whose app says it needs the human
+// (docs/AGENT_UX.md N6). The data was always there — keyWindows spreads the
+// row — so only the type was blind to it.
+type WindowInfo = WashWindowInfo;
 // WinRow is a WindowInfo carrying the identity reconcile() matches rows on.
 // (origin, windowID) is the only unique window identity — window ids are
 // per-router — so the key folds both.
@@ -710,7 +697,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       const pages = more
         ? await Promise.all(Object.entries(cursors).map(([host, cursor]) =>
             window.wash.activityQuery(host === 'local' ? undefined : host, { limit: 100, cursor })
-              .catch(() => ({ host, entries: [] as TimelineEntry[] }))))
+              .catch((): WashActivityPage => ({ host, entries: [] as TimelineEntry[] }))))
         : await window.wash.activityQueryAll({ limit: 100 });
       const next: Record<string, string> = more ? {} : {};
       for (const p of pages) if (p.cursor) next[p.host] = p.cursor;
@@ -1110,7 +1097,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           setHostStats(data as unknown as AboutHostStats);
           return;
         case 'host.ifaces':
-          setNetIfaces((data.interfaces as NetIface[] | undefined) ?? []);
+          // Same widening the neighbouring cases use: the message union does
+          // not model this payload.
+          setNetIfaces((data as unknown as { interfaces?: NetIface[] }).interfaces ?? []);
           return;
         case 'launcher.state': {
           const d = data as unknown as { recent?: RecentEntry[]; pinned?: string[] };
@@ -2093,7 +2082,10 @@ const Banner: Component<{ info: () => SystemInfoMsg | null }> = (props) => {
                 data-testid="desktop-banner-session-name"
                 style={{
                   font: tokens.type.monoMd,
-                  fontWeight: 500,
+                  // Solid style objects take CSS property names, so the
+                  // camelCase spelling was dropped and the name rendered at
+                  // monoMd's own 400.
+                  'font-weight': 500,
                   opacity: 0.55,
                 }}
               >
@@ -2871,7 +2863,7 @@ const StartMenu: Component<{
           border: `1px solid ${tokens.borderMenu}`,
           'border-radius': tokens.radiusSm,
           outline: 'none',
-          font: tokens.type.text,
+          font: tokens.type.textMd,
         }}
       />
       <div style={{ 'max-height': '56vh', 'overflow-y': 'auto', 'overflow-x': 'hidden' }} onScroll={closeFlyout}>
@@ -3360,7 +3352,7 @@ function formatClock(format: '12h' | '24h', showSeconds: boolean): string {
 
 // decodeBase64 returns a Uint8Array from the router's base64 string
 // form of CBOR byte data (see internal/router/app_session.go toJSON).
-function decodeBase64(b64: string): Uint8Array {
+function decodeBase64(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
