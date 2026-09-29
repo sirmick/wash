@@ -21,11 +21,12 @@ import {
   flagsWithClass,
   FLAG_END,
   decodeCtrl,
+  type WireBytes,
 } from './wire.ts';
 import type { SocketLike } from './virtio.ts';
 
 export type CtrlHandler = (msg: any) => void;
-export type RawHandler = (channelID: number, bytes: Uint8Array, cls: Class) => void;
+export type RawHandler = (channelID: number, bytes: WireBytes, cls: Class) => void;
 export type StateHandler = (state: ConnState) => void;
 // 'unauthenticated' is terminal: the reconnect loop stops because the
 // server refused the handshake on auth grounds (expired wash-login

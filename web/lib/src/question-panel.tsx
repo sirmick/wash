@@ -50,13 +50,17 @@ const QuestionSetCard: Component<{ q: agentproto.PendingQuestion; onAnswer?: Que
     }
     p.onAnswer?.(p.q.id, 'accept', out);
   };
-  const answered = () => p.q.set.questions.filter((x) => (get(x.id).selected?.length ?? 0) > 0 || get(x.id).text?.trim()).length;
+  // questions is nullable on the wire: Go marshals a nil slice as null
+  // (swarm.QuestionSet.Questions has no omitempty), so an empty set arrives
+  // as null rather than [] and reading .length off it would throw.
+  const questions = () => p.q.set.questions ?? [];
+  const answered = () => questions().filter((x) => (get(x.id).selected?.length ?? 0) > 0 || get(x.id).text?.trim()).length;
   // Keys: 1–9 pick an option of the question in focus; Ctrl+Enter submits.
   const onKeyDown = (e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); return; }
     const inText = (e.target as HTMLElement)?.tagName === 'TEXTAREA';
     if (inText || e.altKey || e.ctrlKey || e.metaKey || !/^[1-9]$/.test(e.key)) return;
-    const q = p.q.set.questions[focus()];
+    const q = questions()[focus()];
     const o = q?.options?.[Number(e.key) - 1];
     if (!q || !o) return;
     e.preventDefault();
@@ -72,7 +76,7 @@ const QuestionSetCard: Component<{ q: agentproto.PendingQuestion; onAnswer?: Que
         </span>
       </div>
       <Show when={p.q.set.title}><div style={{ font: tokens.type.textMd, 'font-weight': 600 }}><Markdown text={p.q.set.title!} /></div></Show>
-      <For each={p.q.set.questions}>{(q, i) => (
+      <For each={questions()}>{(q, i) => (
         <div data-testid={`question-${q.id}`} tabIndex={0} onFocusIn={() => setFocus(i())}
           style={{ border: `1px solid ${focus() === i() ? tokens.borderFocus : tokens.borderMenu}`, 'border-radius': tokens.radiusMd, padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`, background: tokens.bgInset, outline: 'none' }}>
           <div style={{ display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'baseline' }}>
@@ -105,7 +109,7 @@ const QuestionSetCard: Component<{ q: agentproto.PendingQuestion; onAnswer?: Que
       <div style={{ display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'center' }}>
         <button data-wash-hit type="button" data-testid={`question-submit-${p.q.id}`} onClick={submit}
           style={{ ...chip(true, false), 'flex-direction': 'row', background: tokens.bgSuccess, color: tokens.fgSuccess, border: `1px solid ${tokens.bgSuccess}` }}>
-          Submit {answered()}/{p.q.set.questions.length} <small style={{ opacity: 0.7 }}>Ctrl+Enter</small>
+          Submit {answered()}/{questions().length} <small style={{ opacity: 0.7 }}>Ctrl+Enter</small>
         </button>
         <button data-wash-hit type="button" data-testid={`question-decline-${p.q.id}`} onClick={() => p.onAnswer?.(p.q.id, 'decline')}
           style={{ ...chip(false, false), 'flex-direction': 'row' }}>Decline</button>

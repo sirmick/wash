@@ -22,7 +22,6 @@ import type { ILink, ILinkProvider, ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 
-import { tokens } from './tokens';
 import { washAssetUrl } from './assets';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { washCopyText, washPasteText } from './clipboard';

@@ -549,7 +549,7 @@ export class WashAppDisplay extends HTMLElement {
   // channel credit) turned into constant transparent flicker.
   private onResync(): void {}
 
-  private onFrame(bytes: Uint8Array): void {
+  private onFrame(bytes: Uint8Array<ArrayBuffer>): void {
     if (!this.canvas || !this.ctx) return;
     // Sub-header frames on the video channel are JSON control messages, not
     // pixels — {cursor:"<css-name>"} from cursor-shape-v1 (M4), or {move:true}
@@ -639,7 +639,7 @@ export class WashAppDisplay extends HTMLElement {
     this.popups.set(channelID, placeholder);
   }
 
-  private onPopupBytes(channelID: number, bytes: Uint8Array): void {
+  private onPopupBytes(channelID: number, bytes: Uint8Array<ArrayBuffer>): void {
     const p = this.popups.get(channelID);
     if (!p) return;
     if (bytes.length < HEADER_BYTES) {

@@ -16,7 +16,7 @@
 // through automatically. Identity stabilisation below keeps <For> from tearing
 // down unchanged rows (see the prevRows comment).
 
-import type { Component, JSX } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { createMemo, createSignal, createEffect, For, Show } from 'solid-js';
 import { ChevronRight, ChevronDown, ChevronUp } from 'lucide-solid';
 import { tokens } from './tokens';
