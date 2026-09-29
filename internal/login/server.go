@@ -238,15 +238,23 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	var target Session
 	switch {
 	case len(sessions) == 0:
-		spawned, err := s.spawnFor(payload, payload.Name)
+		// The List above raced: another tab reconnecting at the same
+		// moment may already be spawning. spawnIfNone settles that
+		// under the spawn lock and hands back whichever session won.
+		spawned, adopted, err := s.spawnIfNone(payload, payload.Name)
 		if err != nil {
 			s.log.Printf("ws: spawn for uid=%d: %v", payload.UID, err)
 			http.Error(w, "could not start session", http.StatusInternalServerError)
 			return
 		}
 		target = spawned
-		s.log.Printf("ws: spawned new session sessid=%s pid=%d for uid=%d predecessor=%s",
-			spawned.SessID, spawned.Pid, payload.UID, s.spawner.Predecessor(payload.UID, spawned.SessID))
+		if adopted {
+			s.log.Printf("ws: adopted concurrently-spawned sessid=%s pid=%d for uid=%d",
+				spawned.SessID, spawned.Pid, payload.UID)
+		} else {
+			s.log.Printf("ws: spawned new session sessid=%s pid=%d for uid=%d predecessor=%s",
+				spawned.SessID, spawned.Pid, payload.UID, s.spawner.Predecessor(payload.UID, spawned.SessID))
+		}
 	case len(sessions) == 1:
 		target = sessions[0]
 		s.log.Printf("ws: attaching to existing sessid=%s pid=%d for uid=%d", target.SessID, target.Pid, payload.UID)
@@ -392,6 +400,19 @@ func (s *Server) spawnFor(payload Payload, name string) (Session, error) {
 		Shell: "/bin/sh",
 	}
 	return s.spawner.Spawn(id, name)
+}
+
+// spawnIfNone is spawnFor for the auto-attach path: it adopts a
+// session that another request spawned while this one waited for the
+// spawn lock, rather than forking a second router for the same user.
+func (s *Server) spawnIfNone(payload Payload, name string) (Session, bool, error) {
+	id := Identity{
+		UID:   payload.UID,
+		GID:   uint32(0),
+		Name:  payload.Name,
+		Shell: "/bin/sh",
+	}
+	return s.spawner.SpawnIfNone(id, name)
 }
 
 // pickerView is the template data for picker.html. Time fields are
