@@ -870,7 +870,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             Cancel
           </Button>
           <Button
-            variant="default"
+            variant="primary"
             data-testid="ai-prompt-save"
             onClick={() => {
               sendAgentd({ kind: 'agent_set_default_prompt', text: promptDraft() });
@@ -905,7 +905,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         />
         <div style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'justify-content': 'flex-end', 'margin-top': `${tokens.spaceLg}px` }}>
           <Button data-testid="ai-rename-cancel" onClick={() => setRenameFor(null)}>Cancel</Button>
-          <Button variant="default" data-testid="ai-rename-save" onClick={saveRename}>Save</Button>
+          <Button variant="primary" data-testid="ai-rename-save" onClick={saveRename}>Save</Button>
         </div>
       </Overlay>
     </Show>
@@ -1046,7 +1046,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           </Button>
           <Button
             data-testid="ai-close-detach"
-            variant="default"
+            variant="primary"
             onClick={() => {
               setConfirmClose(false);
               sendLocal({ kind: 'detach' });

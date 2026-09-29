@@ -316,7 +316,7 @@ export const Launcher: Component<{
             {props.hasDefaultPrompt ? 'Edit…' : 'Set…'}
           </Button>
         </span>
-        <Button variant="default" data-testid="ai-start" disabled={props.starting || !!blocker()} onClick={start}>
+        <Button variant="primary" data-testid="ai-start" disabled={props.starting || !!blocker()} onClick={start}>
           {props.starting ? 'Starting…' : 'Start session'}
         </Button>
       </div>
