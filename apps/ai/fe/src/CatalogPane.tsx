@@ -266,7 +266,7 @@ export const CatalogPane: Component<{
             actions={
               <>
                 <Button
-                  variant="default"
+                  variant="primary"
                   data-testid={`ai-catalog-save-${id}`}
                   disabled={!dirty(c()) || !!draftBlocker(draft(c()))}
                   title={draftBlocker(draft(c())) || undefined}
@@ -311,7 +311,7 @@ export const CatalogPane: Component<{
                 options={[['slots', 'Three slots'], ['auto', "An adapter's own list"]]}
               />
               <Button
-                variant="default"
+                variant="primary"
                 data-testid="ai-catalog-new-save"
                 disabled={!!newIDBlocker() || !!draftBlocker(newDraft())}
                 title={newIDBlocker() || draftBlocker(newDraft()) || undefined}
