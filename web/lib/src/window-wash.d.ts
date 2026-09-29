@@ -21,6 +21,10 @@ interface WashCatalogApp {
   id: string;
   name: string;
   icon?: string;
+  /** Brand color (CSS color) for the launcher icon; the wire carries it
+   * (wire.ShellCatalogApp.Accent) and the shell's own catalog type has
+   * always had it. */
+  accent?: string;
   surface: 'window' | 'desktop';
   instancing: 'multi' | 'single' | 'singleton';
   disabled?: boolean;
@@ -236,6 +240,11 @@ interface WashGlobals {
   // at, compositing the host's windows into this desktop.
   catalogFor(origin: string): WashCatalogApp[];
   onRemoteCatalog(cb: (ev: { origin: string; apps: WashCatalogApp[] }) => void): () => void;
+  // summonModal raises a modal-surface app the user asked for, on the host
+  // that owns it (docs/SIDEBAR.md M4). Returns false when that host has no
+  // such modal, so the caller can fall back rather than blur the screen
+  // over nothing. A modal never appears any other way.
+  summonModal(origin: string, appID: string): boolean;
   launchOn(origin: string, appID: string): void;
   // focusOrLaunch is launchOn's door-shaped sibling (docs/AGENT_UX.md N1):
   // raise that host's window for the app if one is open, and only spawn

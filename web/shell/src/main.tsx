@@ -44,7 +44,6 @@ import {
   originForWindow,
   markCrashed,
   mountDesktop,
-  moveLocal,
   raiseLocal,
   screenSize,
   setViewport,
@@ -94,13 +93,13 @@ import './wash-app-display';
 import { showToast } from './notify';
 import { virtioConsoleFactory } from './virtio';
 import { bootStep, bootFinish } from './boot';
-import { ingestLinkStats, linkHealth, onLinkHealth, noteConnState, type RawLinkStatsMsg, type LinkHealth } from './linkstats';
+import { ingestLinkStats, linkHealth, onLinkHealth, noteConnState, type RawLinkStatsMsg } from './linkstats';
 import {
   activityQuery as activityQueryOn, activityStats as activityStatsOn, activityClear as activityClearOn,
   onActivity as onActivityEntry, tailWanted as activityTailWanted,
   handleActivityQueryOK, handleActivityQueryErr, handleActivityStatsOK, handleActivityClearOK, handleActivityEntry,
   rejectPendingFor as rejectActivityFor,
-  type ActivityEntry, type ActivityQuery, type ActivityPage, type ActivityStats,
+  type ActivityEntry, type ActivityPage, type ActivityStats,
 } from './activity';
 import { origins as activityOrigins, LOCAL_ORIGIN as ACTIVITY_LOCAL } from './clients';
 import {
@@ -113,7 +112,6 @@ import {
   hostgwState,
   ingestHostgwMsg,
   onHostgwState,
-  type HostgwMap,
 } from './hostgw';
 import { pickWindow } from './focus-or-launch';
 
@@ -1909,130 +1907,13 @@ render(App, document.getElementById('root')!);
 // when not yet running); InstanceID is a direct address.
 export type Recipient = { app_id: string } | { instance_id: string };
 
-declare global {
-  interface Window {
-    wash: {
-      sendAppMsg(instanceID: string, data: unknown): void;
-      sendAppMsgTo(recipient: Recipient, data: unknown): void;
-      catalog(): CatalogApp[];
-      onCatalog(cb: (apps: CatalogApp[]) => void): () => void;
-      // Remote-host catalogs (docs/REMOTE.md §6.1). catalogFor returns the
-      // apps a given origin (LOCAL or a connected remote host) advertises;
-      // onRemoteCatalog fires whenever any remote catalog changes (apps
-      // empty on disconnect). wash-connect uses these to list B's apps.
-      catalogFor(origin: string): CatalogApp[];
-      onRemoteCatalog(cb: (ev: { origin: string; apps: CatalogApp[] }) => void): () => void;
-      // launchOn asks the router at `origin` to spawn appID (docs/REMOTE.md
-      // §6.1). For a remote host (which runs --no-session) this is the only
-      // launch path — there is no session BE there. Fire-and-forget: the
-      // launched window composites in via the normal app.declared flow.
-      launchOn(origin: string, appID: string): void;
-      // focusOrLaunch is launchOn's door-shaped sibling (docs/AGENT_UX.md
-      // N1): raise that host's window for the app if one is open, and only
-      // spawn when none is. Sidebar doors and per-host rows use this —
-      // clicking "open X on B" four times should show you X on B, not four
-      // copies of it. With several open it cycles, newest first.
-      focusOrLaunch(origin: string, appID: string): void;
-      // attachRemote opens a second connection to a remote host's router
-      // (the local end of an ssh -L tunnel the com.wash.remote supervisor
-      // set up) and composites its windows into this desktop, tagged by
-      // origin. detachRemote tears it down and drops the host's windows.
-      // wash-connect drives these from the supervisor's reported endpoint.
-      attachRemote(origin: string, url?: string): void;
-      detachRemote(origin: string): void;
-      // App-supplied settings panels (from the catalog's `panels` list).
-      // loadSettingsPanel fetches+imports the panel bundle so its custom
-      // element is defined; the promise resolves once it's mountable.
-      settingsPanels(): PanelDesc[];
-      onSettingsPanels(cb: (panels: PanelDesc[]) => void): () => void;
-      loadSettingsPanel(appID: string): Promise<void>;
-      displayScaleMode(): DisplayScaleMode;
-      setDisplayScaleMode(mode: DisplayScaleMode): DisplayScaleMode;
-      windows(): WindowInfo[];
-      windowContexts(options?: { excludeInstance?: string }): Array<WindowInfo & {
-        contentSource: 'app' | 'backing-store' | 'none';
-        content?: unknown;
-        contentError?: string;
-      }>;
-      onWindowsChanged(cb: (windows: WindowInfo[]) => void): () => void;
-      // origin (optional) addresses the WM intent to a specific router:
-      // window ids are per-router, so the shell chrome passes the Win's
-      // origin to avoid aiming a remote window at the same-id local one.
-      // Omitted → resolved by bare id (app bundles addressing their own).
-      focusWindow(id: number, origin?: Origin): void;
-      closeWindow(id: number, origin?: Origin): void;
-      moveWindow(id: number, x: number, y: number, origin?: Origin): void;
-      resizeWindow(id: number, w: number, h: number, origin?: Origin): void;
-      minimizeWindow(id: number, origin?: Origin): void;
-      maximizeWindow(id: number, origin?: Origin): void;
-      restoreWindow(id: number, origin?: Origin): void;
-      // Virtual-desktop viewport API. The shell pans a viewport-sized
-      // camera over a VIEWPORTS_PER_AXIS² plane; setViewport switches
-      // cells with a CSS transition. viewportFor returns the cell
-      // owning a given window's center (used for taskbar dblclick).
-      viewports(): { perAxis: number };
-      getViewport(): { vx: number; vy: number };
-      setViewport(vx: number, vy: number): void;
-      onViewport(cb: (vp: { vx: number; vy: number }) => void): () => void;
-      onScreenSize(cb: (s: { w: number; h: number }) => void): () => void;
-      // Link-health telemetry (docs/QOS.md): per-class throughput + session
-      // running totals + derived rates/health. The desktop info panel + the
-      // About screen render it. null until the first link.stats arrives.
-      linkStats(): LinkHealth | null;
-      onLinkStats(cb: (h: LinkHealth) => void): () => void;
-      // Activity journal (docs/COMMANDER.md §3): one page of one host's
-      // journal, or a page from every connected host; live entries from all
-      // of them while anyone listens; stats and clear per host.
-      activityQuery(origin: Origin | undefined, q?: ActivityQuery): Promise<ActivityPage>;
-      activityQueryAll(q?: ActivityQuery): Promise<ActivityPage[]>;
-      activityStats(origin?: Origin): Promise<ActivityStats>;
-      activityClear(origin?: Origin): Promise<void>;
-      onActivity(cb: (e: ActivityEntry) => void): () => void;
-      // Observe (docs/COMMANDER.md §4): one look at one instance, from what
-      // its router holds — an app export, a terminal's scrollback tail, or
-      // the saved state blob — and, for an eligible app the router holds
-      // nothing for, the app's FE provider or the window's rendered text.
-      // instanceID is the WindowInfo id (origin-tagged) or the bare id;
-      // origin, when given, names whose instance it is.
-      observe(origin: Origin | undefined, instanceID: string, maxBytes?: number): Promise<Observation>;
-      // Host-awareness state, merged across origins (docs/SIDEBAR.md M1):
-      // origin → service → that service's latest snapshot, fed by each
-      // host's com.wash.hostgw. Read-only by design — the rail routes
-      // attention with this and deep-links to an app for control.
-      hostgwState(): HostgwMap;
-      onHostgwState(cb: (m: HostgwMap) => void): () => void;
-      log(level: 'error' | 'warn' | 'info' | 'debug', source: string, msg: string, stack?: string): void;
-      openRawChannel(channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
-      // interactive=true tags the frame CLASS_INTERACTIVE instead of the
-      // default CLASS_BULK — use for latency-sensitive writes (terminal
-      // keystrokes) so they don't queue behind another app's bulk traffic
-      // (ws.ts sendRaw) and so link-health stats classify them correctly.
-      writeRaw(channelID: number, bytes: Uint8Array, interactive?: boolean): void;
-      rawBufferedAmount(): number;
-      // Origin-scoped raw API (docs/REMOTE.md §4): route a channel to a
-      // specific host's connection so a remote app's pty/file stream isn't
-      // mis-routed to (or collided with) the local router. origin comes from
-      // the app's props.origin.
-      openRawChannelFor(origin: string, channelID: number, onBytes: (bytes: Uint8Array) => void): () => void;
-      // Resync (docs/PTY_ROBUST.md, Fix B): register a callback the shell
-      // runs when the router asks to reset this channel's terminal before
-      // replaying a scrollback snapshot. Returns an unsubscribe fn.
-      subscribeResyncFor(origin: string, channelID: number, onResync: () => void): () => void;
-      writeRawFor(origin: string, channelID: number, bytes: Uint8Array, interactive?: boolean): void;
-      rawBufferedAmountFor(origin: string): number;
-      // Sends a zero-byte credit grant for channelID — harmless on the
-      // ledger, but makes the router re-check/resync a "behind" channel.
-      // Self-heal nudge for terminal.tsx's stall watchdog (Fix D).
-      nudgeChannelFor(origin: string, channelID: number): void;
-      // Router-held clipboard (the wash-internal clipboard every app
-      // shares). Text-only on this surface; see clipboard.ts in
-      // @wash/ui for the system-clipboard mirroring helpers.
-      clipboardSetText(text: string): void;
-      clipboardGetText(): Promise<string>;
-      onClipboardChanged(cb: (c: { mime: string; text: string }) => void): () => void;
-    };
-  }
-}
+// window.wash is declared once, by @wash/ui's window-wash.d.ts (WashGlobals):
+// the contract apps compile against. The shell used to declare the same
+// global a second time with its own copy of every member, which TypeScript
+// rejected outright (TS2717) and which let the two drift — the catalog types
+// diverged and summonModal existed here but not in the contract. The object
+// below is the implementation of that contract; adding to it means adding to
+// window-wash.d.ts.
 
 type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 

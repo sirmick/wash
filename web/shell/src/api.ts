@@ -12,8 +12,11 @@ export interface CatalogApp {
   /** Brand color (CSS color) for the launcher icon. Falls back to a
    * deterministic hash of `id` when unset, so no row stays mono. */
   accent?: string;
-  surface: string;
-  instancing: string;
+  // Same vocabulary the wire documents (wire.ShellCatalogApp) and the
+  // public API declares (WashCatalogApp). Widened to string here, the
+  // shell's own catalog type was not assignable to the one it hands apps.
+  surface: 'window' | 'desktop';
+  instancing: 'multi' | 'single' | 'singleton';
   disabled?: boolean;
   reason?: string;
 }
