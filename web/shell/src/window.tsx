@@ -7,11 +7,12 @@
 // / window.focus / window.state on the wire; the router applies them
 // and broadcasts a session.patch back, which lands in the store.
 
-import { Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { accentColor, tokens } from '@wash/ui';
+import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { accentColor, tokens, Menu, MenuItem, MenuSeparator } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId, LOCAL_ORIGIN, type Origin } from './clients';
 import { hostColor } from './host-colors';
+import { sendToViewportRect } from './viewport-math.ts';
 import {
   VIEWPORTS_PER_AXIS,
   CrashInfo,
@@ -52,6 +53,8 @@ export function FloatingWindow(props: WindowProps) {
   // Same idea for resize.
   const [resizeW, setResizeW] = createSignal<number | null>(null);
   const [resizeH, setResizeH] = createSignal<number | null>(null);
+  // The titlebar's own context menu, at viewport coords (what Menu wants).
+  const [titleMenu, setTitleMenu] = createSignal<{ x: number; y: number } | null>(null);
 
   onMount(() => {
     // Don't mount the (dead) custom element when the BE has already
@@ -94,6 +97,11 @@ export function FloatingWindow(props: WindowProps) {
   });
 
   const onTitlebarPointerDown = (ev: PointerEvent) => {
+    // Left button only. This ran for any button, so a right-press started a
+    // drag and captured the pointer: the window faded as if being moved
+    // while the context menu opened over it, and the preventDefault below
+    // suppressed the gesture the menu is for.
+    if (ev.button !== 0) return;
     ev.preventDefault();
     window.wash.focusWindow(props.win.windowID, props.win.origin);
     const startX = ev.clientX;
@@ -304,6 +312,44 @@ export function FloatingWindow(props: WindowProps) {
     };
   };
 
+  // sendToViewport moves the window onto cell (vx, vy). There is no
+  // per-window viewport to set: every window lives in one plane of
+  // VIEWPORTS_PER_AXIS² screens and the shell pans a camera over it
+  // (wm.ts), so "send to a viewport" is a plain move by whole screens.
+  // The same clamp as the drag path keeps it on the plane, and
+  // window.wash.moveWindow (not a raw sendCtrl) is what marks the
+  // geometry pending so an in-flight patch cannot snap it back.
+  const sendToViewport = (vx: number, vy: number) => {
+    const { x, y } = sendToViewportRect(props.win, screenSize(), VIEWPORTS_PER_AXIS, vx, vy);
+    if (x === props.win.x && y === props.win.y) return;
+    moveLocal(props.win.origin, props.win.windowID, x, y);
+    window.wash.moveWindow(props.win.windowID, x, y, props.win.origin);
+  };
+
+  // The plane's cells, in pager reading order, with the one this window is
+  // currently on marked. Recomputed per open so a window dragged between
+  // cells shows the right one disabled.
+  const viewportCells = () => {
+    const cur = viewportFor(props.win);
+    const out: { vx: number; vy: number; n: number; current: boolean }[] = [];
+    for (let vy = 0; vy < VIEWPORTS_PER_AXIS; vy++) {
+      for (let vx = 0; vx < VIEWPORTS_PER_AXIS; vx++) {
+        out.push({ vx, vy, n: vy * VIEWPORTS_PER_AXIS + vx + 1, current: vx === cur.vx && vy === cur.vy });
+      }
+    }
+    return out;
+  };
+
+  // Right-click the titlebar: window actions, and which viewport it sits on.
+  // The window is focused first so the menu acts on what the user just
+  // pointed at, matching every other right-click surface.
+  const onTitlebarContextMenu = (ev: MouseEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    window.wash.focusWindow(props.win.windowID, props.win.origin);
+    setTitleMenu({ x: ev.clientX, y: ev.clientY });
+  };
+
   // Double-click the titlebar toggles maximize ↔ normal.
   const onTitlebarDblClick = () => {
     if (props.win.state === 'maximized') {
@@ -408,6 +454,7 @@ export function FloatingWindow(props: WindowProps) {
       <div
         class="wash-titlebar"
         onPointerDown={onTitlebarPointerDown}
+        onContextMenu={onTitlebarContextMenu}
         onDblClick={onTitlebarDblClick}
         style={{
           display: 'flex',
@@ -497,6 +544,61 @@ export function FloatingWindow(props: WindowProps) {
           <X size={14} />
         </button>
       </div>
+      </Show>
+      <Show when={titleMenu()}>
+        {(m) => (
+          <Menu
+            x={m().x}
+            y={m().y}
+            onDismiss={() => setTitleMenu(null)}
+            data-testid="window-context-menu"
+          >
+            <MenuItem
+              label={props.win.state === 'maximized' ? 'Restore' : 'Maximize'}
+              data-testid="window-ctx-maximize"
+              onClick={() => {
+                setTitleMenu(null);
+                onTitlebarDblClick();
+              }}
+            />
+            <MenuItem
+              label="Minimize"
+              data-testid="window-ctx-minimize"
+              onClick={() => {
+                setTitleMenu(null);
+                window.wash.minimizeWindow(props.win.windowID, props.win.origin);
+              }}
+            />
+            <MenuSeparator />
+            {/* One row per cell of the VIEWPORTS_PER_AXIS² plane, numbered
+                the way the pager reads (left to right, top to bottom). The
+                cell the window is already on is disabled rather than hidden,
+                so the list does not reshuffle as windows move. */}
+            <For each={viewportCells()}>
+              {(c) => (
+                <MenuItem
+                  label={`Send to viewport ${c.n}`}
+                  title={`Row ${c.vy + 1}, column ${c.vx + 1}`}
+                  disabled={c.current}
+                  data-testid={`window-ctx-send-${c.vx}-${c.vy}`}
+                  onClick={() => {
+                    setTitleMenu(null);
+                    sendToViewport(c.vx, c.vy);
+                  }}
+                />
+              )}
+            </For>
+            <MenuSeparator />
+            <MenuItem
+              label="Close"
+              data-testid="window-ctx-close"
+              onClick={() => {
+                setTitleMenu(null);
+                props.onClose(props.win);
+              }}
+            />
+          </Menu>
+        )}
       </Show>
       <div ref={slot} style={{ flex: 1, overflow: props.win.chromeless ? 'visible' : 'auto', position: 'relative' }}>
         <Show when={props.win.crashed}>

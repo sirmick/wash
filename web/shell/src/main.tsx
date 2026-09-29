@@ -114,6 +114,7 @@ import {
   onHostgwState,
 } from './hostgw';
 import { pickWindow } from './focus-or-launch';
+import { TextMenuLayer } from './text-menu.tsx';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -1736,6 +1737,9 @@ const App = () => (
         riding along with the viewport transform. */}
     <Show when={switcher()}>{(s) => <SwitcherOverlay wins={s().wins} index={s().index} />}</Show>
     <ModalLayer />
+    {/* Above the windows, below the connection banner: a field's menu must
+        not cover the one notice that says why nothing is responding. */}
+    <TextMenuLayer />
     <ConnectionBanner state={connState()} />
   </>
 );

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { clampViewport, viewportForRect, nextZ } from './viewport-math.ts';
+import { clampViewport, viewportForRect, nextZ, sendToViewportRect } from './viewport-math.ts';
 
 const PER = 3; // VIEWPORTS_PER_AXIS
 const screen = { w: 1000, h: 800 };
@@ -37,4 +37,30 @@ test('nextZ returns max+1, and 1 for an empty stack', () => {
   assert.equal(nextZ([]), 1);
   assert.equal(nextZ([{ z: 0 }, { z: 4 }, { z: 2 }]), 5);
   assert.equal(nextZ([{ z: 1 }]), 2);
+});
+
+test('sendToViewportRect moves by whole screens and keeps the offset within the cell', () => {
+  // A window 40px into cell (0,0) sits 40px into whichever cell it is sent to.
+  const r = { x: 40, y: 30, w: 300, h: 200 };
+  assert.deepEqual(sendToViewportRect(r, screen, PER, 1, 0), { x: 1040, y: 30 });
+  assert.deepEqual(sendToViewportRect(r, screen, PER, 2, 2), { x: 2040, y: 1630 });
+  assert.deepEqual(sendToViewportRect(r, screen, PER, 0, 0), { x: 40, y: 30 }, 'its own cell is a no-op');
+});
+
+test('sendToViewportRect is relative to the cell the window is ON, not the origin', () => {
+  // Already on (2,1); sending it to (0,0) must walk it back, not add.
+  const r = { x: 2040, y: 830, w: 300, h: 200 };
+  assert.deepEqual(sendToViewportRect(r, screen, PER, 0, 0), { x: 40, y: 30 });
+});
+
+test('sendToViewportRect clamps to the plane so a window is never orphaned', () => {
+  // A window wider than a screen, sent to the last column, would hang off
+  // the right edge of the plane where no viewport can reach its titlebar.
+  // Only the axis that overflows is pulled back: this one is short, so its
+  // y lands where the whole-screen move put it.
+  const wide = { x: 0, y: 0, w: 1200, h: 200 };
+  assert.deepEqual(sendToViewportRect(wide, screen, PER, 2, 2), { x: screen.w * PER - wide.w, y: 1600 });
+  // And a window taller than a screen clamps on y the same way.
+  const tall = { x: 0, y: 0, w: 300, h: 900 };
+  assert.deepEqual(sendToViewportRect(tall, screen, PER, 2, 2), { x: 2000, y: screen.h * PER - tall.h });
 });
