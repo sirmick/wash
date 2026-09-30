@@ -122,7 +122,7 @@ func (w *fakeWin) SpawnRequestOpen(app, _ string) error {
 	return nil
 }
 
-func (w *fakeWin) Raise() error              { w.raised++; return nil }
+func (w *fakeWin) Raise() error             { w.raised++; return nil }
 func (w *fakeWin) Fail(string, error) error { w.failed++; return nil }
 
 func (w *fakeWin) click(target string) {
@@ -501,4 +501,97 @@ func TestTheAgentLeavingClearsTheSession(t *testing.T) {
 			t.Errorf("%s still names the closed agent's session: %+v", w.inst, v)
 		}
 	}
+}
+
+// step delivers exactly one queued message, for tests that interleave a
+// close between deliveries.
+func (n *fakeNet) step() {
+	n.t.Helper()
+	if len(n.queue) == 0 {
+		n.t.Fatal("nothing queued")
+	}
+	f := n.queue[0]
+	n.queue = n.queue[1:]
+	f()
+}
+
+// Two members opening the SAME app at once both get a window; the group
+// keeps exactly one (the older) and the other drops out, instead of the
+// slot flipping between them forever.
+func TestConcurrentOpensOfTheSameAppConverge(t *testing.T) {
+	n := newNet(t)
+	agent := n.open(AppAgent)
+	agent.click(AppFiles)
+	n.run()
+	fm := n.only(AppFiles)
+	agent.click(AppEditor)
+	fm.click(AppEditor)
+	n.run()
+	if got := n.count(AppEditor); got != 2 {
+		t.Fatalf("want both clicks to open a window, got %d", got)
+	}
+	var kept, dup *fakeWin
+	for _, w := range n.windows {
+		if w.app != AppEditor {
+			continue
+		}
+		if kept == nil || wins(w.inst, kept.inst) {
+			if kept != nil {
+				dup = kept
+			}
+			kept = w
+		} else {
+			dup = w
+		}
+	}
+	assertConverged(t, agent, fm, kept)
+	if v := dup.p.View(); v.Group != "" || len(v.Members) != 0 {
+		t.Errorf("the duplicate editor still claims the group: %+v", v)
+	}
+	if len(dup.shown) == 0 {
+		t.Error("the duplicate never did what its click asked")
+	}
+}
+
+// Only the Agent authors the session. A relayed stale title crossing a
+// rename must not flip the group (or the Agent) back and forth.
+func TestAStaleTitleCrossingARenameSettles(t *testing.T) {
+	n := newNet(t)
+	agent := n.open(AppAgent)
+	agent.p.SetSession(agent, "k", "T1")
+	agent.click(AppFiles)
+	n.run()
+	fm := n.only(AppFiles)
+	fm.click(AppTerminal)
+	agent.p.SetSession(agent, "k", "T2")
+	n.run()
+	term := n.only(AppTerminal)
+	assertConverged(t, agent, fm, term)
+	for _, w := range []*fakeWin{agent, fm, term} {
+		if v := w.p.View(); v.Title != "T2" {
+			t.Errorf("%s has title %q, want T2", w.inst, v.Title)
+		}
+	}
+}
+
+// A roster that was in flight when a member closed must not bring the
+// closed member back.
+func TestAClosedMemberIsNotReadopted(t *testing.T) {
+	n := newNet(t)
+	agent := n.open(AppAgent)
+	agent.click(AppEditor)
+	n.run()
+	ed := n.only(AppEditor)
+	agent.click(AppTerminal)
+	n.step() // the spawn lands; the invite (naming the editor) is queued
+	n.close(ed)
+	n.run()
+	term := n.only(AppTerminal)
+	assertConverged(t, agent, term)
+	agent.click(AppEditor)
+	n.run()
+	if n.count(AppEditor) != 1 {
+		t.Fatal("clicking the editor icon after its window closed opened nothing")
+	}
+	assertConverged(t, agent, term, n.only(AppEditor))
 }

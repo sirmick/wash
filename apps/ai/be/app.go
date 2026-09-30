@@ -43,9 +43,9 @@ import (
 
 	agentd "github.com/sirmick/wash/apps/agentd/be"
 	"github.com/sirmick/wash/internal/agentpolicy"
-	"github.com/sirmick/wash/internal/places"
 	"github.com/sirmick/wash/internal/agentproto"
 	wfs "github.com/sirmick/wash/internal/fs"
+	"github.com/sirmick/wash/internal/places"
 	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/pkg/apps/registry"
 	"github.com/sirmick/wash/pkg/sdk"
@@ -215,7 +215,6 @@ func parseFlags(openPath string) {
 		dir = abs
 	}
 	flagCwd = dir
-	flagStart = true
 	if flagAgent == "" && !defaultCatalogSet() {
 		// A bare directory still means "start something here" — the
 		// launcher would otherwise open with the folder filled in and
@@ -229,6 +228,10 @@ func parseFlags(openPath string) {
 		// whichever adapter happened to probe first.
 		flagAgent = firstAvailableAgent()
 	}
+	// Nothing to start — no default and no adapter installed: open the
+	// launcher with the folder filled in, which at least says what is
+	// missing, instead of a start agentd can only refuse.
+	flagStart = flagAgent != "" || defaultCatalogSet()
 }
 
 // defaultCatalogSet reports whether "start an agent" has a stored answer

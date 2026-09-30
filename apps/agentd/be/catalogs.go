@@ -336,6 +336,16 @@ func deleteCatalog(id string) error {
 			return fmt.Errorf("agents.json has no catalog %q", id)
 		}
 		delete(p.Catalogs, id)
+		// A default naming a catalog that no longer exists would fail
+		// every start that relies on it, and every later save of the
+		// launch prefs (setLaunch validates the whole block). A built-in
+		// merely reverts to what wash ships, so only clear when it is gone.
+		if p.Launch != nil && p.Launch.Catalog == id {
+			catalogs, _ := loadCatalogs(*p)
+			if _, ok := catalogs[id]; !ok {
+				p.Launch.Catalog, p.Launch.Model = "", ""
+			}
+		}
 		return nil
 	})
 }
@@ -351,11 +361,16 @@ func setLaunch(prefs agentproto.LaunchPrefs) error {
 			return fmt.Errorf("invalid mode for %s", adapter)
 		}
 	}
-	if prefs.Catalog != "" {
+	stored := agentpolicy.Load(agentpolicy.Path())
+	unchanged := stored.Launch != nil && stored.Launch.Catalog == prefs.Catalog && stored.Launch.Model == prefs.Model
+	if prefs.Catalog != "" && !unchanged {
 		// Validated the same way a start would resolve it, so a default
 		// cannot be saved that every later launch would fail on. A model
 		// that is a slot name or an id is settled by resolveCatalog.
-		catalogs, bad := loadCatalogs(agentpolicy.Load(agentpolicy.Path()))
+		// Only when it CHANGES: the FE sends the whole block for a mode
+		// or yolo edit, and a default that has since gone bad (a
+		// hand-edited catalog) must not make those edits silently fail.
+		catalogs, bad := loadCatalogs(stored)
 		if _, err := resolveCatalog(catalogs, bad, prefs.Catalog, prefs.Model); err != nil {
 			return err
 		}
@@ -442,9 +457,18 @@ func registerCatalogHandlers(bus *sdk.Bus) {
 // check workspace members get, so a model the adapter does not offer fails
 // here, naming the ones it does, rather than running on its default.
 func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error) {
-	p, launch, err := startProfile(hostedPolicy(), req)
+	pol := hostedPolicy()
+	p, launch, err := startProfile(pol, req)
 	if err != nil {
 		return nil, err
+	}
+	// A start that named nothing (the Places agent icon, the Editor's "new
+	// agent here", `wash ai <dir>`) cannot say a mode: the adapter is only
+	// known once the default resolves, here. It gets the remembered mode
+	// the launcher would have filled in. Not yolo — auto-approve is only
+	// ever switched on by a launch that asked for it.
+	if req.Mode == "" && req.Agent == "" && req.Catalog == "" && pol.Launch != nil {
+		req.Mode = pol.Launch.Mode[p.Provider]
 	}
 	h, err := startHostedCapability(p.Provider, req.Cwd, svcConn, launch)
 	if err != nil {

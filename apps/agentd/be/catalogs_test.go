@@ -441,3 +441,44 @@ func TestSetLaunchKeepsACatalogOnlyDefault(t *testing.T) {
 		t.Fatal("an empty default was kept in the file")
 	}
 }
+
+// Deleting the catalog the default names clears the default, so later
+// launch-pref saves (which send the whole block) and default-resolved starts
+// do not fail on a catalog that no longer exists. A built-in only reverts,
+// so the default naming it survives.
+func TestDeletingTheDefaultCatalogClearsTheDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	spec := agentproto.CatalogSpec{Name: "Mine", Slots: map[string]agentproto.SlotSpec{
+		"frontier": {Adapter: "claude", Model: "opus[1m]"},
+		"coding":   {Adapter: "claude", Model: "sonnet"},
+		"small":    {Adapter: "claude", Model: "haiku"},
+	}}
+	if err := setCatalog(hostedPolicy(), "mine", spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := setLaunch(agentproto.LaunchPrefs{Catalog: "mine", Model: "coding"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteCatalog("mine"); err != nil {
+		t.Fatal(err)
+	}
+	if l := hostedPolicy().Launch; l != nil && (l.Catalog != "" || l.Model != "") {
+		t.Fatalf("the default still names a deleted catalog: %+v", l)
+	}
+	if err := setLaunch(agentproto.LaunchPrefs{Mode: map[string]string{"claude": "plan"}}); err != nil {
+		t.Fatalf("a mode save after deleting the default failed: %v", err)
+	}
+
+	if err := setCatalog(hostedPolicy(), "anthropic-pro", spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := setLaunch(agentproto.LaunchPrefs{Catalog: "anthropic-pro", Model: "coding"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteCatalog("anthropic-pro"); err != nil {
+		t.Fatal(err)
+	}
+	if l := hostedPolicy().Launch; l == nil || l.Catalog != "anthropic-pro" {
+		t.Fatalf("reverting a built-in cleared the default: %+v", l)
+	}
+}

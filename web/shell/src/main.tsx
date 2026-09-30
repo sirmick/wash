@@ -439,8 +439,15 @@ function raiseWindow(w: WindowInfo): void {
 function revealWindow(origin: Origin, windowID: number): void {
   const w = windowById(origin, windowID);
   if (!w) return;
-  if (isOnScreen(w, screenSize(), viewport())) return;
   const cell = viewportFor(w);
+  // A maximized window is drawn filling the cell its restore rect's centre
+  // is in (window.tsx), not where that rect is — so "is any of it on
+  // screen" is a question about the cell, not the rect.
+  const visible =
+    w.state === 'maximized'
+      ? cell.vx === viewport().vx && cell.vy === viewport().vy
+      : isOnScreen(w, screenSize(), viewport());
+  if (visible) return;
   setViewport(cell.vx, cell.vy);
 }
 

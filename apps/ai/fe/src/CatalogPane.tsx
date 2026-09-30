@@ -88,7 +88,9 @@ const DefaultRow: Component<{
         <Show when={chosen()}>
           <Select
             data-testid="ai-default-model-select"
-            value={props.launch.model ?? ''}
+            // A curated catalog offers no '' option; an unset model there is
+            // its default slot, as the Launcher shows it.
+            value={chosen()?.slots?.length ? props.launch.model || 'frontier' : (props.launch.model ?? '')}
             options={modelOptions()}
             onChange={(v) => props.onDefault(props.launch.catalog ?? '', v)}
           />

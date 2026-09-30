@@ -342,8 +342,9 @@ type ConnectionView struct {
 // means when nobody says otherwise.
 type LaunchPrefs struct {
 	// Catalog is the catalog id a start with no catalog of its own uses.
-	// Empty falls back to session history, then to the first available
-	// adapter — see agentd's startProfile.
+	// With it empty, agentd refuses a start that names nothing (startProfile);
+	// the launcher falls back to session history, and `wash ai <dir>` to the
+	// first installed adapter.
 	Catalog string `json:"catalog,omitempty"`
 	// Model is the slot name (frontier/coding/small) or model id within
 	// Catalog. Empty is the catalog's own default slot.

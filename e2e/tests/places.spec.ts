@@ -68,8 +68,16 @@ test.describe('places', () => {
     // nobody.
     const termWin = await windowIdOf(page, 'wash-app-term');
     await page.evaluate((id) => window.wash.closeWindow(id), termWin);
-    // A live shell asks first (term-close-confirm.spec.ts); say yes.
-    await page.locator('[data-testid="term-close-confirm-ok"]').click();
+    // A live shell asks first (term-close-confirm.spec.ts); say yes. A shell
+    // that has not started yet closes without asking, so the confirm is
+    // optional — the bound flag above does not wait for the shell.
+    const ok = page.locator('[data-testid="term-close-confirm-ok"]');
+    try {
+      await ok.waitFor({ state: 'visible', timeout: 1_500 });
+      await ok.click();
+    } catch {
+      // no confirm: the window closed on the request
+    }
     await expect(term).toHaveCount(0, { timeout: 20_000 });
     await expect(fm.getByTestId('places-term')).toHaveAttribute('data-bound', 'false');
     await expect(bar).not.toHaveAttribute('data-group', /.+/);
@@ -113,10 +121,19 @@ test.describe('places', () => {
     await fm.getByTestId('places-term').click();
     await expect(page.locator('wash-app-term')).toHaveCount(1, { timeout: 20_000 });
     // Both on (0,0). Bringing the terminal forward must not pan anywhere.
+    // Each check waits for the raise to have LANDED (the target focused) —
+    // the reveal goes out with it, so a wrong pan would already be visible;
+    // asserting the cell straight after the click would pass vacuously.
     const term = page.locator('wash-app-term');
+    const focusedIs = (id: number) =>
+      expect.poll(() => page.evaluate(() => window.wash.windows().find((w) => w.focused)?.windowID)).toBe(id);
+    const fmWin = await windowIdOf(page, 'wash-app-fm');
+    const termWin = await windowIdOf(page, 'wash-app-term');
     await term.getByTestId('places-fm').click();
+    await focusedIs(fmWin);
     await expect(page.locator('[data-testid="pager-cell-0-0"]')).toHaveAttribute('data-active', 'true');
     await fm.getByTestId('places-term').click();
+    await focusedIs(termWin);
     await expect(page.locator('[data-testid="pager-cell-0-0"]')).toHaveAttribute('data-active', 'true');
   });
 });

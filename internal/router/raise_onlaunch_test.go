@@ -224,6 +224,13 @@ func TestAppRaiseRevealsButUserFocusDoesNot(t *testing.T) {
 		t.Fatalf("an app's self-raise sent no reveal for window %d (got %d)", two.win, got)
 	}
 
+	// Raising again while it already has focus changes no stacking, but the
+	// user may have panned away from it since — it must still reveal.
+	writeEvt(t, two.end, wire.NewEvtWindowRaise(two.win))
+	if got := waitReveal(t, shell, 30); got != two.win {
+		t.Fatalf("a self-raise of the focused window sent no reveal (got %d)", got)
+	}
+
 	one.pair.Close()
 	two.pair.Close()
 	shellPair.Close()

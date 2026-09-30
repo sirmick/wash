@@ -64,9 +64,11 @@ func Known(appID string) bool {
 // Show is the wire shape of MsgKind and MsgSync. It carries the WHOLE group
 // rather than just the sender, so a window joining learns every member in one
 // message. Membership converges without a registry because any window whose
-// roster GROWS re-broadcasts it (Places.broadcast); a roster holds at most
-// three peers, so each window can grow at most three times and the exchange
-// terminates.
+// roster GROWS re-broadcasts it (Places.broadcast). Growth is monotone, which
+// is what makes the exchange terminate: a slot only ever moves to a LOWER
+// instance id (two members opening the same app at once both succeed, and
+// every window keeps the older of the two — see wins), and a closed instance
+// is never adopted again.
 type Show struct {
 	Kind string `json:"kind"`
 	// Group identifies the group and, through a stable hash of it, picks the
@@ -164,6 +166,26 @@ type Places struct {
 	// it lands. Keyed by app id: two different apps may be starting at once,
 	// but a second click on the SAME app must not start a second window.
 	pending map[string]Show
+	// gone is every instance this window has seen close. A roster sent
+	// before a member closed can arrive after its instance.gone; without
+	// this the dead member is re-adopted and its icon does nothing forever.
+	gone map[string]bool
+	// displaced is every instance that lost its slot to an older window
+	// since the last broadcast. No roster names it any more, so without a
+	// message sent to it directly it would never learn to drop out.
+	displaced []string
+}
+
+// wins reports whether instance a takes a slot over b. Instance ids are
+// allocated in increasing order ("i-7" before "i-12"), so comparing length
+// first makes this "the older window", which is the one more likely already
+// bound. Any total order would converge; this one is also the least
+// surprising.
+func wins(a, b string) bool {
+	if len(a) != len(b) {
+		return len(a) < len(b)
+	}
+	return a < b
 }
 
 // New makes the seam for one window. appID and instanceID identify this
@@ -176,6 +198,7 @@ func New(appID, instanceID string, onChange func(Conn, View)) *Places {
 		onChange: onChange,
 		members:  map[string]string{},
 		pending:  map[string]Show{},
+		gone:     map[string]bool{},
 	}
 }
 
@@ -220,14 +243,20 @@ func (p *Places) Show(c Conn, req Show, from wire.Sender, onShow func(c Conn, re
 	if !Known(from.AppID) || from.InstanceID == "" || req.Group == "" {
 		return
 	}
-	grew, err := p.join(req, from)
+	grew, left, err := p.join(req, from)
+	if left {
+		// A duplicate: another window of this app holds the slot. It
+		// still does what the click asked (opens the file), unbound.
+		log.Printf("places: %s instance=%s yields its slot in group %s", p.appID, p.self, req.Group)
+		p.changed(c)
+	}
 	if err != nil {
 		// Exclusivity is not an error the user asked for; the clicking
 		// window simply gets its own. Logged, not surfaced.
 		log.Printf("places: declined %s from %s: %v", req.Kind, from.AppID, err)
 		return
 	}
-	if grew {
+	if grew && !left {
 		p.changed(c)
 		p.broadcast(c, "")
 	}
@@ -246,19 +275,34 @@ func (p *Places) Show(c Conn, req Show, from wire.Sender, onShow func(c Conn, re
 // join adopts the sender's group, or refuses when this window already belongs
 // to a different one. grew reports whether it learned a member (or a new
 // instance for an app) it did not know, which is what obliges it to pass the
-// roster on.
-func (p *Places) join(req Show, from wire.Sender) (grew bool, err error) {
+// roster on. left reports that the roster names an older window of this
+// window's own app: that one keeps the slot and this window drops out.
+func (p *Places) join(req Show, from wire.Sender) (grew, left bool, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.group != "" && p.group != req.Group {
-		return false, fmt.Errorf("already in group %s", p.group)
+		return false, false, fmt.Errorf("already in group %s", p.group)
+	}
+	if rival := req.Members[p.appID]; rival != "" && p.self != "" && rival != p.self && !p.gone[rival] {
+		if wins(rival, p.self) {
+			if p.group == req.Group {
+				p.group, p.key, p.title = "", "", ""
+				p.members = map[string]string{}
+			}
+			return false, true, nil
+		}
+		// The sender has a younger window of our app in our slot; tell it.
+		grew = true
 	}
 	p.group = req.Group
 	adopt := func(app, inst string) {
-		if !Known(app) || app == p.appID || inst == "" {
+		if !Known(app) || app == p.appID || inst == "" || p.gone[inst] {
 			return
 		}
-		if p.members[app] != inst {
+		if cur := p.members[app]; cur == "" || (cur != inst && wins(inst, cur)) {
+			if cur != "" {
+				p.displaced = append(p.displaced, cur)
+			}
 			p.members[app] = inst
 			grew = true
 		}
@@ -267,13 +311,21 @@ func (p *Places) join(req Show, from wire.Sender) (grew bool, err error) {
 		adopt(app, inst)
 	}
 	adopt(from.AppID, from.InstanceID)
-	// The session travels like a member: learning it (or a rename) obliges
-	// passing it on. An empty key says nothing — most windows never knew it.
-	if req.Key != "" && (req.Key != p.key || req.Title != p.title) {
-		p.key, p.title = req.Key, req.Title
-		grew = true
+	// The session travels like a member, but it has one author: the Agent.
+	// The Agent never takes it from a message, and anyone else overwrites
+	// a key it holds only when the Agent itself says so — a relayed copy
+	// can be stale, and two stale copies crossing would flip forever. A
+	// window that holds none takes the first relayed one, provided the
+	// agent it names is still alive.
+	if req.Key != "" && p.appID != AppAgent && (req.Key != p.key || req.Title != p.title) {
+		agent := req.Members[AppAgent]
+		direct := from.AppID == AppAgent
+		if direct || (p.key == "" && agent != "" && !p.gone[agent]) {
+			p.key, p.title = req.Key, req.Title
+			grew = true
+		}
 	}
-	return grew, nil
+	return grew, false, nil
 }
 
 // action is what a click resolves to, decided under the lock and performed
@@ -381,7 +433,15 @@ func (p *Places) OnSpawnResult(c Conn, appID, instanceID string, err error) {
 		_ = c.Fail("Could not open "+appID, err)
 		return
 	}
-	p.members[appID] = instanceID
+	// Another member's spawn of the same app may have landed first; the
+	// older window keeps the slot, and the invite below names it, so a
+	// younger one opened here learns to drop out (join's left).
+	if cur := p.members[appID]; cur == "" || wins(instanceID, cur) {
+		if cur != "" {
+			p.displaced = append(p.displaced, cur)
+		}
+		p.members[appID] = instanceID
+	}
 	msg := p.showLocked(clicked.Path, clicked.Line, clicked.Col)
 	p.mu.Unlock()
 	p.changed(c)
@@ -404,6 +464,8 @@ func (p *Places) broadcast(c Conn, skip string) {
 			targets = append(targets, inst)
 		}
 	}
+	targets = append(targets, p.displaced...)
+	p.displaced = nil
 	p.mu.Unlock()
 	for _, inst := range targets {
 		if err := c.SendAppMsgTo(wire.Recipient{InstanceID: inst}, msg); err != nil {
@@ -416,6 +478,7 @@ func (p *Places) broadcast(c Conn, skip string) {
 // click. The app forwards its AppDef.OnInstanceGone here.
 func (p *Places) OnInstanceGone(c Conn, _ string, instanceID string) {
 	p.mu.Lock()
+	p.gone[instanceID] = true
 	var dropped bool
 	for app, inst := range p.members {
 		if inst == instanceID {
