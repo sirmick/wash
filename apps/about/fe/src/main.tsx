@@ -4,8 +4,8 @@
 //
 //   • wash header — name, license, refresh
 //   • Build — router version/commit/built timestamp, app version (about.info)
-//   • Host — hostname, user, workdir, about-app uptime (about.info)
-//   • Processes — live table from the router's runtime.query peer:
+//   • Host — hostname, user, workdir (about.info)
+//   • Wash Processes — live table from the router's runtime.query peer:
 //     every running wash process with goroutines, heap, RSS, etc.,
 //     plus a "Total RSS" footer.
 //   • Registered apps — every catalog entry (from window.wash.catalog)
@@ -88,12 +88,6 @@ function formatBuilt(s: string): string {
   const m = s.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
   if (m) return `${m[1]} ${m[2]}`;
   return s;
-}
-
-function formatCapturedAt(unixSec: number): string {
-  if (!unixSec) return '';
-  const d = new Date(unixSec * 1000);
-  return d.toLocaleTimeString();
 }
 
 // ----- browser info (FE-only) -----
@@ -227,11 +221,6 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           sortDesc={sortDesc()}
           onSort={onSort}
         />
-        <Show when={link()}>
-          <Section title="Display">
-            <DisplayStatsPanel h={link()!} />
-          </Section>
-        </Show>
         <RegistrySection apps={catalog()} />
         <Show when={link()}>
           <Section title="Link">
@@ -241,6 +230,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         <Show when={journal()}>
           <Section title="Activity journal">
             <JournalPanel st={journal()!} />
+          </Section>
+        </Show>
+        <Show when={link()}>
+          <Section title="Wash Display (X11/Wayland)">
+            <DisplayStatsPanel h={link()!} />
           </Section>
         </Show>
         <Section title="Browser">
@@ -351,7 +345,6 @@ const HostPanel: Component<{ host: HostBlock }> = (props) => (
     <Show when={props.host.workdir}>
       <KVRow k="Workdir" v={<span style={pathStyle}>{props.host.workdir!}</span>} />
     </Show>
-    <KVRow k="About uptime" v={fmtUptime(props.host.uptime_sec)} />
   </KVList>
 );
 
@@ -365,9 +358,9 @@ const ProcessSection: Component<{
 }> = (props) => {
   const title = () => {
     const t = props.table;
-    if (!t) return 'Processes';
+    if (!t) return 'Wash Processes';
     const rss = fmtBytes(t.total_rss);
-    return `Processes (${t.rows.length}) · total RSS ${rss}`;
+    return `Wash Processes (${t.rows.length}) · total RSS ${rss}`;
   };
   return (
     <Section title={title()}>
@@ -378,9 +371,6 @@ const ProcessSection: Component<{
           sortDesc={props.sortDesc}
           onSort={props.onSort}
         />
-        <div style={tableFooterStyle}>
-          <span>as of {formatCapturedAt(props.table!.captured_at_sec)}</span>
-        </div>
       </Show>
     </Section>
   );
@@ -694,7 +684,11 @@ const AppTrafficTable: Component<{ h: WashLinkHealth }> = (props) => {
           <For each={rows()}>
             {(r) => (
               <tr style={tdRowStyle} data-testid={`about-app-traffic-row-${r.label}`}>
-                <td style={{ ...tdStyle, color: r.derived ? tokens.fgMuted : tokens.fg }}>{r.label}</td>
+                {/* The derived row is not an app, so it is not set in the
+                    app-name mono: a sentence-case label in the heading font. */}
+                <td style={{ ...tdStyle, color: r.derived ? tokens.fgMuted : tokens.fg, ...(r.derived ? { font: tokens.type.textSm } : {}) }}>
+                  {r.derived ? 'Router lifecycle' : r.label}
+                </td>
                 <For each={LINK_CLASSES}>
                   {(_, i) => (
                     <td style={{ ...tdStyle, 'text-align': 'right' }}>
@@ -934,14 +928,6 @@ const appIDInRowStyle: JSX.CSSProperties = {
   color: tokens.fgMuted,
   opacity: 0.7,
   'margin-top': '1px',
-};
-
-const tableFooterStyle: JSX.CSSProperties = {
-  display: 'flex',
-  'justify-content': 'flex-end',
-  'padding-top': '4px',
-  font: tokens.type.textSm,
-  color: tokens.fgMuted,
 };
 
 const appsGridStyle: JSX.CSSProperties = {

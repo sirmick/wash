@@ -2313,6 +2313,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                       : undefined,
                   }}
                   onMouseDown={() => focusGroup(path)}
+                  // A double-click on the strip's empty space opens a tab,
+                  // as in a browser. Not on a tab (that renames it), its
+                  // rename box, or a control button.
+                  onDblClick={(e) => {
+                    const t = e.target as HTMLElement;
+                    if (t.closest('[data-testid^="term-tab-"], button, input')) return;
+                    openNewTabIn(path);
+                  }}
                 >
                   {tabScroller(path)}
                   <span style={{ flex: 1, 'min-width': '4px' }} />

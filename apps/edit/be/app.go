@@ -261,8 +261,8 @@ func pushPlaces(c places.Conn, v places.View) {
 		owner = inst
 	}
 	agentMu.Unlock()
-	if sc, ok := c.(*sdk.Conn); ok && adoptOwner(sc, v.Key, v.Title) {
-		tellFEOwner(sc)
+	if sc, ok := c.(*sdk.Conn); ok {
+		adoptOwner(sc, v.Key, v.Title)
 	}
 }
 
