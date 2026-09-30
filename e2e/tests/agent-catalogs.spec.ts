@@ -43,8 +43,8 @@ test.describe('catalogs', () => {
     // toBeDisabled does not read an <option>'s own disabled state.
     await expect(option).toHaveJSProperty('disabled', true);
     await expect(option).toContainText('no openrouter key set');
-    // Keys live on the Connections tab.
-    await manager.locator('[data-testid="agents-tab-connections"]').click();
+    // Keys live on the Setup tab.
+    await manager.locator('[data-testid="agents-tab-setup"]').click();
     await expect(manager.locator('[data-testid="ai-key-status-openrouter"]')).toHaveText('not set');
 
     const secret = 'sk-or-v1-e2e-secret-0000-wxyz';
@@ -59,7 +59,7 @@ test.describe('catalogs', () => {
     await expect(manager.locator('[data-testid="ai-key-input-openrouter"]')).toHaveValue('');
     await manager.locator('[data-testid="agents-tab-new"]').click();
     await expect(option).toHaveJSProperty('disabled', false);
-    await manager.locator('[data-testid="agents-tab-connections"]').click();
+    await manager.locator('[data-testid="agents-tab-setup"]').click();
     expect(await manager.innerHTML()).not.toContain(secret);
     expect(router.log()).not.toContain(secret);
 
@@ -74,15 +74,15 @@ test.describe('catalogs', () => {
     await expect(option).toHaveJSProperty('disabled', true);
   });
 
-  // The Catalog tab writes agents.json; the launcher offers the result on
+  // The Setup tab writes agents.json; the launcher offers the result on
   // the next roster. A reset removes the override and the built-in is
   // back.
-  test('a catalog edited on the Catalog tab is what the launcher then starts from', async ({ page, router }) => {
+  test('a catalog edited on the Setup tab is what the launcher then starts from', async ({ page, router }) => {
     writeKeys(router.xdgConfigHome, { openrouter: 'sk-or-e2e-0000-wxyz' });
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
     const manager = await openAgents(page);
-    await manager.locator('[data-testid="agents-tab-catalog"]').click();
+    await manager.locator('[data-testid="agents-tab-setup"]').click();
     const card = manager.locator('[data-testid="ai-catalog-openrouter-budget"]');
     await expect(card.locator('[data-testid="ai-catalog-origin-openrouter-budget"]')).toHaveText('built in');
     await expect(card.locator('[data-testid="ai-catalog-slot-openrouter-budget-review"]')).toHaveCount(0);
@@ -106,7 +106,7 @@ test.describe('catalogs', () => {
     await manager.locator('[data-testid="ai-model-select"]').selectOption('coding');
     await expect(manager.locator('[data-testid="ai-model-summary"]')).toHaveText('OpenCode · openrouter/z-ai/glm-5.3 · effort high · via openrouter');
 
-    await manager.locator('[data-testid="agents-tab-catalog"]').click();
+    await manager.locator('[data-testid="agents-tab-setup"]').click();
     await card.locator('[data-testid="ai-catalog-reset-openrouter-budget"]').click();
     await expect(card.locator('[data-testid="ai-catalog-origin-openrouter-budget"]')).toHaveText('built in');
     await expect(card.locator('[data-testid="ai-catalog-model-openrouter-budget-coding"]')).toHaveValue('openrouter/deepseek/deepseek-v4.1-flash');

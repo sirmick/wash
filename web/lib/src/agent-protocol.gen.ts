@@ -225,7 +225,7 @@ export interface AgentResume {
 
 /**
  * AgentSetCatalog stores one catalog under agents.json `catalogs`, whole,
- * as the Catalog tab holds it. For a built-in catalog this is its override;
+ * as the Setup tab holds it. For a built-in catalog this is its override;
  * for any other id it is the user's own.
  */
 export interface AgentSetCatalog {
@@ -450,7 +450,7 @@ export interface CatalogSpec {
 }
 
 /**
- * CatalogView is a catalog as the launcher and the Catalog tab show it. A
+ * CatalogView is a catalog as the launcher and the Setup tab show it. A
  * catalog is either an adapter's own model list (Adapter set, no Slots:
  * what the adapter reports is what the Model select offers) or a curated
  * set of three slots, frontier, coding and small, each a model on an
@@ -475,7 +475,7 @@ export interface CatalogView {
   /**
    * Builtin is a catalog wash ships (catalogs.json); Overridden says
    * agents.json changes it. A catalog that is neither is the user's
-   * own. The Catalog tab offers "reset" for an overridden built-in and
+   * own. The Setup tab offers "reset" for an overridden built-in and
    * "delete" for the user's own.
    */
   builtin?: boolean;

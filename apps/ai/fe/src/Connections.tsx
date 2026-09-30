@@ -1,4 +1,4 @@
-// The Connections tab of the Agents window: the keys connections need,
+// The keys section of the Agents window's Setup tab: the keys connections need,
 // such as an OpenRouter API key.
 //
 // A key is typed here and sent to agentd once, to be saved or tested. It is

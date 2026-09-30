@@ -1,5 +1,5 @@
-// The Catalog tab: the machine's catalogs, editable. The keys their
-// connections need are the Connections tab's.
+// The catalogs section of the Setup tab: the machine's catalogs, editable.
+// The keys their connections need sit above it (Connections.tsx).
 //
 // A catalog is an adapter's own model list (adapter and connection; the
 // models come from what the adapter reported) or three slots (frontier,

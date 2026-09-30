@@ -100,8 +100,6 @@ export const Launcher: Component<{
   onPickFolder: () => void;
   starting: boolean;
   error: string;
-  hasDefaultPrompt: boolean;
-  onOpenPrompt: () => void;
 }> = (props) => {
   const catalog = createMemo(() => props.catalogs.find((c) => c.id === props.form.catalog));
   const curated = () => !!catalog()?.slots?.length;
@@ -113,6 +111,11 @@ export const Launcher: Component<{
   const models = createMemo(() => optionValues(props.adapterOptions, adapter(), 'model'));
   const advanced = createMemo(() => advancedOptions(props.adapterOptions, adapter()));
   const mode = () => props.launch.mode?.[adapter()] ?? '';
+  const permissionsSummary = () => {
+    const m = mode();
+    const name = m ? (seen()?.modes?.find((x) => x.id === m)?.name ?? m) : adapter() ? `${adapterName(adapter())}'s default` : '';
+    return [name, props.launch.yolo ? 'auto-approve on' : ''].filter(Boolean).join(' · ');
+  };
 
   // The Model select: a curated catalog's slots first, then any other model
   // its adapter reported; an auto catalog lists what its adapter reported,
@@ -228,9 +231,17 @@ export const Launcher: Component<{
           every later start begins with, which is the point: this is the
           row that was being re-set on every session. Neither is
           enforcement: a "read-only" preset on Codex still asks. */}
-      <div data-testid="ai-permissions" style={fieldStyle} title="Remembered for every new session. A change made inside a running session is that session's only.">
-        <span style={labelStyle}>permissions</span>
-        <div style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'align-items': 'center', 'flex-wrap': 'wrap' }}>
+      {/* Collapsed like Advanced: remembered, so rarely changed per start. */}
+      <details data-testid="ai-permissions" title="Remembered for every new session. A change made inside a running session is that session's only.">
+        {/* Collapsed must not hide a yolo launch: the summary says what
+            the next start gets. */}
+        <summary data-wash-hit style={labelStyle}>
+          permissions
+          <span data-testid="ai-permissions-summary" style={{ color: props.launch.yolo ? tokens.sevWarn : tokens.fgMuted, 'margin-left': `${tokens.spaceSm}px` }}>
+            {permissionsSummary()}
+          </span>
+        </summary>
+        <div style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'align-items': 'center', 'flex-wrap': 'wrap', 'margin-top': `${tokens.spaceSm}px` }}>
           <Show
             when={adapter() && seen()?.modes?.length}
             fallback={
@@ -260,7 +271,7 @@ export const Launcher: Component<{
             label="Auto-approve everything (yolo)"
           />
         </div>
-      </div>
+      </details>
 
       {/* The adapter's own settings, by the names and values it reported:
           effort, fast mode, whatever else it has. A one-off for this start,
@@ -303,19 +314,9 @@ export const Launcher: Component<{
       <Show when={blocker() && props.form.catalog}>
         <div data-testid="ai-start-blocker" style={{ font: tokens.type.textSm, color: tokens.fgMuted }}>{blocker()}</div>
       </Show>
-      {/* The default prompt is stated on the launcher, not hidden in a
-          menu: a prompt that silently prefixes every new session is the
-          kind of magic that gets blamed on the agent. One line, beside the
-          button it applies to, and one click to read or change it. */}
-      <div style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceSm}px`, font: tokens.type.textSm }}>
-        <span style={{ flex: 1, 'min-width': 0, display: 'flex', 'align-items': 'center', gap: `${tokens.spaceXs}px` }}>
-          <span data-testid="ai-prompt-status" style={{ color: tokens.fgMuted, 'min-width': 0, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}>
-            {props.hasDefaultPrompt ? 'A default prompt will be sent first.' : 'No default prompt.'}
-          </span>
-          <Button variant="ghost" size="sm" data-testid="ai-prompt-open" onClick={() => props.onOpenPrompt()}>
-            {props.hasDefaultPrompt ? 'Edit…' : 'Set…'}
-          </Button>
-        </span>
+      {/* The default prompt is edited on the Setup tab, with the rest of
+          the machine's configuration. */}
+      <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'flex-end' }}>
         <Button variant="primary" data-testid="ai-start" disabled={props.starting || !!blocker()} onClick={start}>
           {props.starting ? 'Starting…' : 'Start session'}
         </Button>

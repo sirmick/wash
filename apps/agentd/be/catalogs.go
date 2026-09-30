@@ -38,7 +38,7 @@ import (
 // A slot is a swarm.AgentProfile, the type a member's launch settings use.
 // The defaults are data (catalogs.json), because model names churn faster
 // than code should; agents.json's `catalogs` replaces a catalog by id, whole,
-// or adds one, which is what the Agents window's Catalog tab writes.
+// or adds one, which is what the Agents window's Setup tab writes.
 
 // Slots, in launcher order. A curated catalog starts on frontier by default.
 var slotNames = []string{"frontier", "coding", "small"}
@@ -58,7 +58,7 @@ func (c Catalog) auto() bool { return len(c.Slots) == 0 }
 
 // loadCatalogs is the built-in catalogs with agents.json's over them, by
 // id: an entry there replaces the whole catalog, so the file says exactly
-// what the Catalog tab showed when it was saved. A catalog that fails
+// what the Setup tab showed when it was saved. A catalog that fails
 // validation is returned with its error rather than dropped, so the launcher
 // can grey it with the reason instead of it silently vanishing.
 func loadCatalogs(pol agentpolicy.Policy) (map[string]Catalog, map[string]error) {
@@ -198,7 +198,7 @@ func autoCatalogFor(catalogs map[string]Catalog, adapter, connection string) str
 }
 
 // publishCatalogs is every catalog with what this box can start, sorted by
-// id. An invalid catalog still lists what it has, so the Catalog tab can
+// id. An invalid catalog still lists what it has, so the Setup tab can
 // show what is wrong and let it be fixed rather than only saying that it
 // is.
 func publishCatalogs(pol agentpolicy.Policy, keys map[string]string) []agentproto.CatalogView {
@@ -292,7 +292,7 @@ func startProfile(pol agentpolicy.Policy, req agentproto.AgentStart) (swarm.Agen
 	return p, sessionLaunch{connection: p.Connection, catalog: catalog, model: model}, nil
 }
 
-// catalogFromSpec is a catalog as the Catalog tab writes it, in the shape
+// catalogFromSpec is a catalog as the Setup tab writes it, in the shape
 // catalogs.json and agents.json hold.
 func catalogFromSpec(spec agentproto.CatalogSpec) Catalog {
 	c := Catalog{Name: spec.Name, Adapter: spec.Adapter, Connection: spec.Connection}
@@ -408,7 +408,7 @@ func publishLaunch(pol agentpolicy.Policy) agentproto.LaunchPrefs {
 	}
 }
 
-// The Catalog tab's and the Permissions row's writes. Only a manager may
+// The Setup tab's and the Permissions row's writes. Only a manager may
 // change machine configuration, as with keys; the roster push that
 // follows is how every window, including the writer, sees the result.
 func registerCatalogHandlers(bus *sdk.Bus) {

@@ -278,7 +278,7 @@ type Session struct {
 	RowKey string `json:"row_key,omitempty"`
 }
 
-// CatalogView is a catalog as the launcher and the Catalog tab show it. A
+// CatalogView is a catalog as the launcher and the Setup tab show it. A
 // catalog is either an adapter's own model list (Adapter set, no Slots:
 // what the adapter reports is what the Model select offers) or a curated
 // set of three slots, frontier, coding and small, each a model on an
@@ -297,7 +297,7 @@ type CatalogView struct {
 	Slots     []SlotView `json:"slots,omitempty"`
 	// Builtin is a catalog wash ships (catalogs.json); Overridden says
 	// agents.json changes it. A catalog that is neither is the user's
-	// own. The Catalog tab offers "reset" for an overridden built-in and
+	// own. The Setup tab offers "reset" for an overridden built-in and
 	// "delete" for the user's own.
 	Builtin    bool `json:"builtin,omitempty"`
 	Overridden bool `json:"overridden,omitempty"`
