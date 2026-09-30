@@ -443,6 +443,11 @@ type EvtSpawnRequest struct {
 	// ("reveal in Files") without going through extension routing.
 	// Ignored for Prepare spawns (the caller builds its own argv).
 	Open string `json:"open,omitempty"`
+	// Tag, when non-zero, is echoed on the normal spawn's EvtSpawnOk /
+	// EvtSpawnErr, so a caller with several spawns of the same app in
+	// flight can tell which reply is which. Separate from ReqID, whose
+	// presence on a reply marks it a prepare-spawn one.
+	Tag uint64 `json:"tag,omitempty"`
 }
 
 func NewEvtSpawnRequest(appID string) EvtSpawnRequest {
@@ -453,6 +458,12 @@ func NewEvtSpawnRequest(appID string) EvtSpawnRequest {
 // `--open <path>`.
 func NewEvtSpawnRequestOpen(appID, path string) EvtSpawnRequest {
 	return EvtSpawnRequest{T: TEvtSpawnRequest, AppID: appID, Open: path}
+}
+
+// NewEvtSpawnRequestTagged is a normal spawn (optionally at path) whose
+// reply echoes tag.
+func NewEvtSpawnRequestTagged(appID, path string, tag uint64) EvtSpawnRequest {
+	return EvtSpawnRequest{T: TEvtSpawnRequest, AppID: appID, Open: path, Tag: tag}
 }
 
 // NewEvtPrepareSpawnRequest is the prepare-spawn variant. Same wire
@@ -502,6 +513,8 @@ type EvtSpawnOk struct {
 	InstanceID  string `json:"instance_id"`
 	AttachToken string `json:"attach_token,omitempty"`
 	Binary      string `json:"binary,omitempty"`
+	// Tag echoes EvtSpawnRequest.Tag for a normal spawn.
+	Tag uint64 `json:"tag,omitempty"`
 }
 
 func NewEvtSpawnOk(appID, instanceID string) EvtSpawnOk {
@@ -523,6 +536,8 @@ type EvtSpawnErr struct {
 	AppID string `json:"app_id,omitempty"`
 	Code  string `json:"code"`
 	Msg   string `json:"msg"`
+	// Tag echoes EvtSpawnRequest.Tag for a normal spawn.
+	Tag uint64 `json:"tag,omitempty"`
 }
 
 func NewEvtSpawnErr(appID, code, msg string) EvtSpawnErr {

@@ -482,3 +482,38 @@ func TestDeletingTheDefaultCatalogClearsTheDefault(t *testing.T) {
 		t.Fatalf("reverting a built-in cleared the default: %+v", l)
 	}
 }
+
+// A start that names nothing runs the default only if it can start here;
+// otherwise what the launcher would preselect (default-catalog.ts): the
+// catalog used last, else the first that can start.
+func TestPickStartCatalog(t *testing.T) {
+	views := []agentproto.CatalogView{
+		{ID: "anthropic", Available: false, Note: "no ANTHROPIC_API_KEY key set"},
+		{ID: "gemini", Available: true},
+		{ID: "openai", Available: true},
+	}
+	recent := []agentproto.Session{{Catalog: "anthropic"}, {Catalog: "openai"}, {Catalog: "gemini"}}
+	for _, tc := range []struct {
+		name   string
+		recent []agentproto.Session
+		pref   string
+		want   string
+	}{
+		{"usable default wins over history", recent, "gemini", "gemini"},
+		{"unusable default falls to history, skipping unusable entries", recent, "anthropic", "openai"},
+		{"no history: the first that can start", nil, "anthropic", "gemini"},
+		{"no default: history", recent, "", "openai"},
+		{"a deleted default is no different", nil, "gone", "gemini"},
+	} {
+		if got := pickStartCatalog(views, tc.recent, tc.pref); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	none := []agentproto.CatalogView{{ID: "anthropic", Note: "no ANTHROPIC_API_KEY key set"}}
+	if got := pickStartCatalog(none, recent, "anthropic"); got != "" {
+		t.Fatalf("nothing can start, got %q", got)
+	}
+	if err := noCatalogError(none, "anthropic"); !strings.Contains(err.Error(), "no ANTHROPIC_API_KEY key set") {
+		t.Errorf("the error should name the default's reason: %v", err)
+	}
+}

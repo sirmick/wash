@@ -112,8 +112,8 @@ func init() {
 		OnCloseRequested: onCloseRequested,
 		// The group adopts the windows it opens — including this window's
 		// editor, which is the group's (editor.go) — and forgets closed ones.
-		OnSpawnResult: func(c *sdk.Conn, appID, instanceID string, err error) {
-			group.OnSpawnResult(c, appID, instanceID, err)
+		OnTaggedSpawnResult: func(c *sdk.Conn, tag uint64, appID, instanceID string, err error) {
+			group.OnSpawnResult(c, tag, appID, instanceID, err)
 		},
 		OnInstanceGone: func(c *sdk.Conn, appID, instanceID string) {
 			group.OnInstanceGone(c, appID, instanceID)

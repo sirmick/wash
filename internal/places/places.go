@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
@@ -126,7 +127,7 @@ func ShowFrom(m map[string]any) Show {
 type Conn interface {
 	SendAppMsg(data any) error
 	SendAppMsgTo(recipient wire.Recipient, data any) error
-	SpawnRequestOpen(appID, path string) error
+	SpawnRequestTagged(appID, path string, tag uint64) error
 	Raise() error
 	Fail(title string, err error) error
 }
@@ -165,7 +166,7 @@ type Places struct {
 	// pending is the app a spawn is in flight for, and what to send it once
 	// it lands. Keyed by app id: two different apps may be starting at once,
 	// but a second click on the SAME app must not start a second window.
-	pending map[string]Show
+	pending map[string]pendingSpawn
 	// gone is every instance this window has seen close. A roster sent
 	// before a member closed can arrive after its instance.gone; without
 	// this the dead member is re-adopted and its icon does nothing forever.
@@ -175,6 +176,19 @@ type Places struct {
 	// message sent to it directly it would never learn to drop out.
 	displaced []string
 }
+
+// pendingSpawn is one spawn this seam started: the tag its reply will
+// carry, and what to send the window once it lands.
+type pendingSpawn struct {
+	tag uint64
+	msg Show
+}
+
+// spawnTags numbers this process's spawns. The router echoes the tag on
+// the reply, which is what lets OnSpawnResult adopt THIS spawn's window and
+// not another spawn of the same app in flight at the same time (Files'
+// "Open in Terminal" racing the Terminal icon).
+var spawnTags atomic.Uint64
 
 // wins reports whether instance a takes a slot over b. Instance ids are
 // allocated in increasing order ("i-7" before "i-12"), so comparing length
@@ -197,7 +211,7 @@ func New(appID, instanceID string, onChange func(Conn, View)) *Places {
 		self:     instanceID,
 		onChange: onChange,
 		members:  map[string]string{},
-		pending:  map[string]Show{},
+		pending:  map[string]pendingSpawn{},
 		gone:     map[string]bool{},
 	}
 }
@@ -337,6 +351,7 @@ type action struct {
 	// spawn is the app to open; empty when a window already exists or a
 	// spawn for it is already in flight.
 	spawn string
+	tag   uint64
 	msg   Show
 }
 
@@ -355,15 +370,17 @@ func (p *Places) plan(target, path string, line, col int) (action, error) {
 	if inst := p.members[target]; inst != "" {
 		return action{sendTo: inst, msg: msg}, nil
 	}
-	if _, busy := p.pending[target]; busy {
+	if ps, busy := p.pending[target]; busy {
 		// A spawn is already on its way. Replace what it will be sent — the
 		// last click is the one the user meant — but do not start a second
 		// window.
-		p.pending[target] = msg
+		ps.msg = msg
+		p.pending[target] = ps
 		return action{}, nil
 	}
-	p.pending[target] = msg
-	return action{spawn: target, msg: msg}, nil
+	tag := spawnTags.Add(1)
+	p.pending[target] = pendingSpawn{tag: tag, msg: msg}
+	return action{spawn: target, tag: tag, msg: msg}, nil
 }
 
 // Click is the icon for target being clicked. Either the group's window of
@@ -389,7 +406,7 @@ func (p *Places) Click(c Conn, target, cwd, path string, line, col int) error {
 		return c.SendAppMsgTo(wire.Recipient{InstanceID: a.sendTo}, a.msg)
 	case a.spawn != "":
 		log.Printf("places: %s open %s dir=%q group=%s", p.appID, a.spawn, cwd, a.msg.Group)
-		if err := c.SpawnRequestOpen(a.spawn, cwd); err != nil {
+		if err := c.SpawnRequestTagged(a.spawn, cwd, a.tag); err != nil {
 			p.mu.Lock()
 			delete(p.pending, a.spawn)
 			p.mu.Unlock()
@@ -413,16 +430,18 @@ func (p *Places) showLocked(path string, line, col int) Show {
 }
 
 // OnSpawnResult adopts a window opened by Click. The app forwards its
-// AppDef.OnSpawnResult here; a spawn this seam did not ask for is ignored.
+// AppDef.OnTaggedSpawnResult here; a reply whose tag is not the pending
+// spawn's — another spawn of the same app, or one this seam did not ask
+// for — is ignored.
 //
 // The new window is sent the roster as it stands NOW, not as it stood at
 // click time — another member may have joined while this one was starting —
 // and the rest of the group is told about it (broadcast), because otherwise
 // they would never learn it exists and would open a second one.
-func (p *Places) OnSpawnResult(c Conn, appID, instanceID string, err error) {
+func (p *Places) OnSpawnResult(c Conn, tag uint64, appID, instanceID string, err error) {
 	p.mu.Lock()
-	clicked, waiting := p.pending[appID]
-	if !waiting {
+	ps, waiting := p.pending[appID]
+	if !waiting || ps.tag != tag {
 		p.mu.Unlock()
 		return
 	}
@@ -442,7 +461,7 @@ func (p *Places) OnSpawnResult(c Conn, appID, instanceID string, err error) {
 		}
 		p.members[appID] = instanceID
 	}
-	msg := p.showLocked(clicked.Path, clicked.Line, clicked.Col)
+	msg := p.showLocked(ps.msg.Path, ps.msg.Line, ps.msg.Col)
 	p.mu.Unlock()
 	p.changed(c)
 	if err := c.SendAppMsgTo(wire.Recipient{InstanceID: instanceID}, msg); err != nil {

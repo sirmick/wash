@@ -160,7 +160,8 @@ Clicking the icon for app `X`:
 
 - **X is in my group** → `SendAppMsgTo({InstanceID}, places.show{…})`. The
   receiver raises **itself** with `c.Raise()`.
-- **not in my group** → `SpawnRequestOpen(X, cwd)`, adopt in `OnSpawnResult`,
+- **not in my group** → `SpawnRequestTagged(X, cwd, tag)`, adopt in
+  `OnTaggedSpawnResult` only the reply carrying that tag,
   then send `places.show`. A click while a spawn is in flight queues rather
   than spawning twice, and the later click's payload wins. A window with no
   group yet mints one first.
@@ -168,7 +169,7 @@ Clicking the icon for app `X`:
 The folder comes **from the FE at click time**, confined by the BE, as every
 existing open-with verb does — except the Terminal, whose BE already records
 each tab's cwd (`cwdOf()`): its FE names only the front tab. Built as
-`internal/places`; each app forwards `OnSpawnResult`/`OnInstanceGone` to it.
+`internal/places`; each app forwards `OnTaggedSpawnResult`/`OnInstanceGone` to it.
 
 This keeps the standing doctrine: **an app may raise only its own window**
 (`pkg/sdk/outbound.go`, `apps/agentd/be/focus.go`). Files never raises a
@@ -448,3 +449,14 @@ twelve more icons are added.
 - **Not done:** the agent icon's tooltip in Files and Terminal does not name
   the default catalog, because those apps do not receive agentd's state (the
   Editor does, and shows it). Cross-host (§6.1) remains local-only.
+- **Spawns are tagged** (0.17.1). A spawn reply named only the app, so a
+  Places click racing another spawn of the same app from the same window
+  (Files' "Open in Terminal" and the Terminal icon) could adopt the context
+  menu's window and never invite its own. `spawn.request` now takes a `tag`
+  the router echoes on `spawn.ok`/`spawn.err`, delivered to
+  `AppDef.OnTaggedSpawnResult`.
+- **A default that cannot start is skipped** (0.17.1). Resolution is done in
+  agentd's `startSession` against what can start *now* — the default, else
+  the catalog used last, else the first that can start (`pickStartCatalog`,
+  the launcher's own order) — so a default whose key was cleared no longer
+  fails every Places, `✦` and `wash ai` start with a setup error.

@@ -341,10 +341,10 @@ type ConnectionView struct {
 // LaunchPrefs is the remembered default for a launch: what "start an agent"
 // means when nobody says otherwise.
 type LaunchPrefs struct {
-	// Catalog is the catalog id a start with no catalog of its own uses.
-	// With it empty, agentd refuses a start that names nothing (startProfile);
-	// the launcher falls back to session history, and `wash ai <dir>` to the
-	// first installed adapter.
+	// Catalog is the catalog id a start with no catalog of its own uses,
+	// when it can start here. Otherwise (or unset) agentd uses the catalog
+	// used most recently, then the first that can start — the launcher's
+	// preselection order (agentd's pickStartCatalog).
 	Catalog string `json:"catalog,omitempty"`
 	// Model is the slot name (frontier/coding/small) or model id within
 	// Catalog. Empty is the catalog's own default slot.

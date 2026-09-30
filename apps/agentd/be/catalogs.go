@@ -458,6 +458,32 @@ func registerCatalogHandlers(bus *sdk.Bus) {
 // here, naming the ones it does, rather than running on its default.
 func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error) {
 	pol := hostedPolicy()
+	namedNothing := req.Agent == "" && req.Catalog == ""
+	if namedNothing {
+		// Resolved against what can start NOW, not just what is stored:
+		// a default whose key was since cleared would otherwise fail
+		// every Places/Editor/`wash ai` start with a setup error while
+		// the launcher quietly preselected something else.
+		var recent []agentproto.Session
+		if svc != nil {
+			recent = svc.Snapshot().Recent
+		}
+		pref := ""
+		if pol.Launch != nil {
+			pref = pol.Launch.Catalog
+		}
+		views := publishCatalogs(pol, keyStore())
+		id := pickStartCatalog(views, recent, pref)
+		if id == "" {
+			return nil, noCatalogError(views, pref)
+		}
+		if id == pref {
+			req.Model = pol.Launch.Model
+		} else if pref != "" {
+			log.Printf("agentd: default catalog %s cannot start here; using %s", pref, id)
+		}
+		req.Catalog = id
+	}
 	p, launch, err := startProfile(pol, req)
 	if err != nil {
 		return nil, err
@@ -467,7 +493,7 @@ func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error)
 	// known once the default resolves, here. It gets the remembered mode
 	// the launcher would have filled in. Not yolo — auto-approve is only
 	// ever switched on by a launch that asked for it.
-	if req.Mode == "" && req.Agent == "" && req.Catalog == "" && pol.Launch != nil {
+	if req.Mode == "" && namedNothing && pol.Launch != nil {
 		req.Mode = pol.Launch.Mode[p.Provider]
 	}
 	h, err := startHostedCapability(p.Provider, req.Cwd, svcConn, launch)
@@ -531,4 +557,41 @@ func modeIDs(modes []acp.SessionMode) string {
 		return "no modes"
 	}
 	return strings.Join(ids, ", ")
+}
+
+// pickStartCatalog is what a start that named nothing runs, in the order the
+// launcher preselects (apps/ai/fe/src/default-catalog.ts, kept in step): the
+// stored default, else the catalog used most recently, else the first one —
+// each only if it can start here. "" means none can.
+func pickStartCatalog(views []agentproto.CatalogView, recent []agentproto.Session, pref string) string {
+	usable := map[string]bool{}
+	first := ""
+	for _, v := range views {
+		if v.Available {
+			usable[v.ID] = true
+			if first == "" {
+				first = v.ID
+			}
+		}
+	}
+	if pref != "" && usable[pref] {
+		return pref
+	}
+	for _, r := range recent {
+		if r.Catalog != "" && usable[r.Catalog] {
+			return r.Catalog
+		}
+	}
+	return first
+}
+
+// noCatalogError says why nothing could start, naming the default's own
+// reason when there is one — the thing the user set and would look for.
+func noCatalogError(views []agentproto.CatalogView, pref string) error {
+	for _, v := range views {
+		if v.ID == pref && v.Note != "" {
+			return fmt.Errorf("the default catalog %s cannot start here (%s), and no other catalog can", pref, v.Note)
+		}
+	}
+	return errors.New("no catalog can start here: set a key or install an adapter in Agents")
 }

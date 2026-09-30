@@ -30,6 +30,8 @@ type fakeWin struct {
 	failed int
 	// shown is the Path of every places.show this window received, in order.
 	shown []string
+	// lastTag is the tag of this window's most recent spawn request.
+	lastTag uint64
 }
 
 func newNet(t *testing.T) *fakeNet {
@@ -114,10 +116,11 @@ func (w *fakeWin) SendAppMsgTo(r wire.Recipient, data any) error {
 	return nil
 }
 
-func (w *fakeWin) SpawnRequestOpen(app, _ string) error {
+func (w *fakeWin) SpawnRequestTagged(app, _ string, tag uint64) error {
+	w.lastTag = tag
 	w.net.queue = append(w.net.queue, func() {
 		nw := w.net.open(app)
-		w.p.OnSpawnResult(w, app, nw.inst, nil)
+		w.p.OnSpawnResult(w, tag, app, nw.inst, nil)
 	})
 	return nil
 }
@@ -363,7 +366,7 @@ func TestFailedSpawnFreesTheSlot(t *testing.T) {
 	agent := n.open(AppAgent)
 	agent.click(AppFiles)
 	n.queue = nil // the router never starts it
-	agent.p.OnSpawnResult(agent, AppFiles, "", fmt.Errorf("boom"))
+	agent.p.OnSpawnResult(agent, agent.lastTag, AppFiles, "", fmt.Errorf("boom"))
 	if agent.failed != 1 {
 		t.Errorf("a failed spawn was not reported")
 	}
@@ -379,9 +382,31 @@ func TestAnUnrelatedSpawnIsIgnored(t *testing.T) {
 	agent := n.open(AppAgent)
 	// The Agent opens editors for its own reasons too (editor.go); a spawn
 	// result nobody here asked for must not be adopted into the group.
-	agent.p.OnSpawnResult(agent, AppEditor, "e9", nil)
+	agent.p.OnSpawnResult(agent, 0, AppEditor, "e9", nil)
 	if len(agent.p.View().Members) != 0 {
 		t.Fatalf("adopted an unrelated spawn: %+v", agent.p.View().Members)
+	}
+}
+
+// Files' "Open in Terminal" and the Terminal icon, clicked together: two
+// spawns of the same app in flight from one window. The group must adopt
+// the icon's window, whichever reply lands first — before tags, the first
+// reply for com.wash.term was taken, which could be the context menu's.
+func TestAnotherSpawnOfTheSameAppIsNotAdopted(t *testing.T) {
+	n := newNet(t)
+	fm := n.open(AppFiles)
+	fm.click(AppTerminal)
+	tag := fm.lastTag
+	n.queue = nil // deliver the replies by hand, the other one first
+	// The context menu's spawn: untagged, so the app routes it to its
+	// plain OnSpawnResult; a stray tag must be ignored just the same.
+	fm.p.OnSpawnResult(fm, tag+1000, AppTerminal, "term-menu", nil)
+	if len(fm.p.View().Members) != 0 {
+		t.Fatalf("adopted the other spawn's window: %+v", fm.p.View().Members)
+	}
+	fm.p.OnSpawnResult(fm, tag, AppTerminal, "term-icon", nil)
+	if got := fm.p.View().Members[AppTerminal]; got != "term-icon" {
+		t.Fatalf("group has terminal %q, want the icon's", got)
 	}
 }
 
