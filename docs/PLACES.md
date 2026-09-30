@@ -186,12 +186,16 @@ no raise — and one rule: **any window whose roster grows re-broadcasts it.**
 "Whoever adds a member tells the others" is *not* enough, and the tests prove
 it: it passes every sequential case and fails when two members add different
 apps at once, because each broadcasts a roster missing the other's newcomer.
-The grow-rebroadcast rule terminates because a roster holds at most three
-peers — each window can grow at most three times.
-
-One race remains, accepted: two members spawning the **same** app at the same
-instant can leave one extra window tinted but unreachable from the rest. It
-needs two clicks on the same icon from two windows inside one spawn's latency.
+The grow-rebroadcast rule terminates because growth is monotone: a slot only
+ever moves to a **lower** instance id (the older window), and an instance seen
+closing is never adopted again. Without that order, "grows" is just "differs",
+and two members spawning the **same** app at the same instant flip the slot
+between the two windows forever (a test reproduced it). Now both clicks open a
+window, the group keeps the older one, and the younger — told directly, since
+no roster names it any more — drops out, still showing what its click asked
+for, untinted. The session key/title has one author, the Agent: others take a
+relayed copy only while they hold none, or straight from the Agent, since two
+stale relayed titles crossing a rename would flip the same way.
 
 #### Raising something you cannot see
 
