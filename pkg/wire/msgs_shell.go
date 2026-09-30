@@ -376,6 +376,9 @@ func NewShellSessionPatch(patches ...SessionPatch) ShellSessionPatch {
 type ShellWindowCloseClicked struct {
 	T        string `json:"t"`
 	WindowID uint32 `json:"window_id"`
+	// Force skips the app's close handshake and ends it at once — the
+	// taskbar's Quit, for an app that will not or cannot answer.
+	Force bool `json:"force,omitempty"`
 }
 
 func NewShellWindowCloseClicked(windowID uint32) ShellWindowCloseClicked {

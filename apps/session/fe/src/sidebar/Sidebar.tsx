@@ -1,7 +1,7 @@
 // Sidebar is the right-edge chrome that hosts the widget sections.
 // Two modes (M4 scope):
 //
-//   open    — 300px panel; sections render full chrome
+//   open    — 340px panel; sections render full chrome
 //   hidden  — 0px (a 14px tab on the right edge with a chevron lets
 //             the user re-open; Ctrl+Alt+S toggles too)
 //
@@ -30,7 +30,8 @@ export type SidebarMode = 'open' | 'hidden';
 
 /** Width of the sidebar in open mode. Hard-coded for M4; theming /
  *  user-resize lands later. */
-export const SIDEBAR_OPEN_WIDTH = 300;
+// Wide enough for a full IPv6 address beside its interface name on one line.
+export const SIDEBAR_OPEN_WIDTH = 340;
 /** Width of the always-visible toggle tab when sidebar is hidden. */
 export const SIDEBAR_TAB_WIDTH = 14;
 
@@ -79,7 +80,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       transform: isOpen() ? 'translateX(0)' : `translateX(${SIDEBAR_OPEN_WIDTH}px)`,
       'box-shadow': '-4px 0 16px rgba(0,0,0,0.35)',
       // Hidden mode keeps the panel translated off-screen but its
-      // 300px-wide bounding box still intercepts pointer events on
+      // SIDEBAR_OPEN_WIDTH-wide bounding box still intercepts pointer events on
       // the right edge — disable hit-testing entirely while hidden so
       // windows underneath stay interactive.
       'pointer-events': isOpen() ? ('auto' as const) : ('none' as const),

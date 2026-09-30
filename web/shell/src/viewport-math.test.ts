@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { clampViewport, clampToPlane, isOnScreen, isOrphaned, viewportForRect, nextZ, sendToViewportRect } from './viewport-math.ts';
+import { clampViewport, clampToPlane, isOnScreen, isOrphaned, viewportForRect, nextZ, sendToViewportRect, resizeRect } from './viewport-math.ts';
 
 const PER = 3; // VIEWPORTS_PER_AXIS
 const screen = { w: 1000, h: 800 };
@@ -103,4 +103,31 @@ test('isOnScreen is true when any part of the window is in the camera cell', () 
   // Vertical axis too.
   assert.equal(isOnScreen({ x: 40, y: 830, w: 300, h: 200 }, screen, at(0, 0)), false);
   assert.equal(isOnScreen({ x: 40, y: 830, w: 300, h: 200 }, screen, at(0, 1)), true);
+});
+
+test('resizeRect: an east/south edge grows the size, origin fixed', () => {
+  const r = { x: 100, y: 100, w: 400, h: 300 };
+  assert.deepEqual(resizeRect(r, 'se', 50, 20), { x: 100, y: 100, w: 450, h: 320 });
+  assert.deepEqual(resizeRect(r, 'e', 50, 20), { x: 100, y: 100, w: 450, h: 300 });
+  assert.deepEqual(resizeRect(r, 's', 50, 20), { x: 100, y: 100, w: 400, h: 320 });
+});
+
+test('resizeRect: a west/north edge moves the origin, the far edge stays', () => {
+  const r = { x: 100, y: 100, w: 400, h: 300 };
+  assert.deepEqual(resizeRect(r, 'nw', -30, -40), { x: 70, y: 60, w: 430, h: 340 });
+  assert.deepEqual(resizeRect(r, 'ne', 30, 40), { x: 100, y: 140, w: 430, h: 260 });
+  assert.deepEqual(resizeRect(r, 'sw', 30, 40), { x: 130, y: 100, w: 370, h: 340 });
+});
+
+test('resizeRect: the minimum size stops the origin, not the far edge', () => {
+  const r = { x: 100, y: 100, w: 400, h: 300 };
+  const g = resizeRect(r, 'nw', 1000, 1000);
+  assert.deepEqual(g, { x: 340, y: 320, w: 160, h: 80 });
+  assert.equal(g.x + g.w, r.x + r.w);
+  assert.equal(g.y + g.h, r.y + r.h);
+});
+
+test('resizeRect: never past the plane top-left', () => {
+  const r = { x: 20, y: 10, w: 400, h: 300 };
+  assert.deepEqual(resizeRect(r, 'nw', -100, -100), { x: 0, y: 0, w: 420, h: 310 });
 });

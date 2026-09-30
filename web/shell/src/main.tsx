@@ -71,7 +71,7 @@ import {
 } from './switcher';
 import { SwitcherOverlay } from './switcher-ui';
 import { shouldSwallowDesktopKey } from './keyguard';
-import { FloatingWindow } from './window';
+import { FloatingWindow, openWindowMenu } from './window';
 import {
   CatalogApp,
   PanelDesc,
@@ -2225,6 +2225,15 @@ window.wash = {
   },
   closeWindow(id, origin) {
     wmSend(origin ?? originForWindow(id), id, { t: 'window.close_clicked', window_id: id });
+  },
+  // Quit skips the app's close handshake: the router ends the process
+  // (SIGTERM, then SIGKILL) as it does for a close the app agreed to. For
+  // a window whose app will not, or cannot, answer.
+  quitWindow(id, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.close_clicked', window_id: id, force: true });
+  },
+  openWindowMenu(id, x, y, origin) {
+    openWindowMenu(origin ?? originForWindow(id), id, x, y);
   },
   moveWindow(id, x, y, origin) {
     // Tagged commit: the store holds our geometry against in-flight

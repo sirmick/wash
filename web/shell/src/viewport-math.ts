@@ -99,3 +99,37 @@ export function sendToViewportRect(r: Rect, screen: Size, perAxis: number, vx: n
     y: Math.round(Math.max(0, Math.min(maxY, r.y + (vy - cur.vy) * screen.h))),
   };
 }
+
+// Which sides a resize handle moves.
+export type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+const MIN_W = 160;
+const MIN_H = 80;
+
+// resizeRect is the geometry after dragging edge by (dx, dy). A west or
+// north side moves the origin so the opposite side stays where it was —
+// including at the minimum size, where the origin stops rather than the
+// far edge being pushed away.
+export function resizeRect(
+  r: { x: number; y: number; w: number; h: number },
+  edge: ResizeEdge,
+  dx: number,
+  dy: number,
+): { x: number; y: number; w: number; h: number } {
+  let { x, y, w, h } = r;
+  if (edge.includes('e')) w = Math.max(MIN_W, Math.round(r.w + dx));
+  if (edge.includes('s')) h = Math.max(MIN_H, Math.round(r.h + dy));
+  if (edge.includes('w')) {
+    w = Math.max(MIN_W, Math.round(r.w - dx));
+    x = r.x + r.w - w;
+  }
+  if (edge.includes('n')) {
+    h = Math.max(MIN_H, Math.round(r.h - dy));
+    y = r.y + r.h - h;
+  }
+  // Never off the plane's top-left edge: a titlebar above y=0 is one
+  // nobody can grab again.
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  return { x, y, w, h };
+}

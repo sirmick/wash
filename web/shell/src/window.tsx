@@ -7,12 +7,12 @@
 // / window.focus / window.state on the wire; the router applies them
 // and broadcasts a session.patch back, which lands in the store.
 
-import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from 'solid-js';
 import { accentColor, tokens, Menu, MenuItem, MenuSeparator } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId, LOCAL_ORIGIN, type Origin } from './clients';
 import { hostColor } from './host-colors';
-import { sendToViewportRect } from './viewport-math.ts';
+import { resizeRect, sendToViewportRect, type ResizeEdge } from './viewport-math.ts';
 import {
   VIEWPORTS_PER_AXIS,
   CrashInfo,
@@ -21,6 +21,7 @@ import {
   raiseLocal,
   resizeLocal,
   screenSize,
+  setViewport,
   viewportFor,
   Win,
 } from './wm';
@@ -50,11 +51,23 @@ export function FloatingWindow(props: WindowProps) {
   // patch a moment later and we clear the override.
   const [dragX, setDragX] = createSignal<number | null>(null);
   const [dragY, setDragY] = createSignal<number | null>(null);
-  // Same idea for resize.
+  // Same idea for resize. A left or top edge moves the origin too, so a
+  // resize carries its own position override (resizeX/Y) — separate from
+  // dragX/Y, whose presence is what fades a window being moved.
   const [resizeW, setResizeW] = createSignal<number | null>(null);
   const [resizeH, setResizeH] = createSignal<number | null>(null);
+  const [resizeX, setResizeX] = createSignal<number | null>(null);
+  const [resizeY, setResizeY] = createSignal<number | null>(null);
   // The titlebar's own context menu, at viewport coords (what Menu wants).
-  const [titleMenu, setTitleMenu] = createSignal<{ x: number; y: number } | null>(null);
+  // taskbar: opened from the window's taskbar pill (openWindowMenu), which
+  // adds Move to 0,0 and Quit and must sit above the taskbar's layer.
+  const [titleMenu, setTitleMenu] = createSignal<{ x: number; y: number; taskbar?: boolean } | null>(null);
+  createEffect(() => {
+    const req = windowMenuRequest();
+    if (!req || req.windowID !== props.win.windowID || req.origin !== props.win.origin) return;
+    setWindowMenuRequest(null);
+    setTitleMenu({ x: req.x, y: req.y, taskbar: true });
+  });
 
   onMount(() => {
     // Don't mount the (dead) custom element when the BE has already
@@ -155,8 +168,12 @@ export function FloatingWindow(props: WindowProps) {
   // focused window is a no-op.
   const onWindowDragEnter = () => window.wash.focusWindow(props.win.windowID, props.win.origin);
 
-  // Bottom-right resize: track override locally, commit on release.
-  const onResizeHandlePointerDown = (ev: PointerEvent) => {
+  // Resize from any edge or corner: track the override locally, commit on
+  // release. edge names which sides move — 'se' is the classic grip; a
+  // side on the left or top moves the origin as the size changes, so the
+  // opposite edge stays put.
+  const onResizeHandlePointerDown = (edge: ResizeEdge) => (ev: PointerEvent) => {
+    if (ev.button !== 0) return;
     ev.preventDefault();
     ev.stopPropagation();
     window.wash.focusWindow(props.win.windowID, props.win.origin);
@@ -164,6 +181,8 @@ export function FloatingWindow(props: WindowProps) {
     target.setPointerCapture(ev.pointerId);
     const startX = ev.clientX;
     const startY = ev.clientY;
+    const origX = props.win.x;
+    const origY = props.win.y;
     const origW = props.win.w;
     const origH = props.win.h;
     // Stream the resize to the BE live during the drag, throttled to one
@@ -179,10 +198,11 @@ export function FloatingWindow(props: WindowProps) {
       if (w != null && h != null) window.wash.resizeWindow(props.win.windowID, w, h, props.win.origin);
     };
     const onMove = (m: PointerEvent) => {
-      const newW = Math.max(160, Math.round(origW + (m.clientX - startX)));
-      const newH = Math.max(80, Math.round(origH + (m.clientY - startY)));
-      setResizeW(newW);
-      setResizeH(newH);
+      const g = resizeRect({ x: origX, y: origY, w: origW, h: origH }, edge, m.clientX - startX, m.clientY - startY);
+      setResizeW(g.w);
+      setResizeH(g.h);
+      if (g.x !== origX) setResizeX(g.x);
+      if (g.y !== origY) setResizeY(g.y);
       if (rafPending == null) rafPending = requestAnimationFrame(flush);
     };
     const onUp = () => {
@@ -195,12 +215,23 @@ export function FloatingWindow(props: WindowProps) {
       }
       const w = resizeW();
       const h = resizeH();
+      const x = resizeX() ?? origX;
+      const y = resizeY() ?? origY;
+      // Position first: a left/top resize is a move plus a resize, and
+      // committing the size alone would grow the window the wrong way
+      // until the move landed.
+      if (x !== origX || y !== origY) {
+        moveLocal(props.win.origin, props.win.windowID, x, y);
+        window.wash.moveWindow(props.win.windowID, x, y, props.win.origin);
+      }
       if (w != null && h != null && (w !== origW || h !== origH)) {
         resizeLocal(props.win.origin, props.win.windowID, w, h);
         window.wash.resizeWindow(props.win.windowID, w, h, props.win.origin);
       }
       setResizeW(null);
       setResizeH(null);
+      setResizeX(null);
+      setResizeY(null);
     };
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);
@@ -272,7 +303,7 @@ export function FloatingWindow(props: WindowProps) {
       // same screenSize).
       //
       // --wash-reserved-right reserves screen width for the session
-      // app's right sidebar (300px when open, 14px tab when hidden).
+      // app's right sidebar (SIDEBAR_OPEN_WIDTH when open, a 14px tab when hidden).
       // The session app writes the var on document.documentElement;
       // here we just respect it so a maximized window's titlebar
       // controls stay reachable instead of disappearing under chrome.
@@ -286,8 +317,8 @@ export function FloatingWindow(props: WindowProps) {
         height: `${s.h - 40}px`,
       };
     }
-    const x = dragX() ?? props.win.x;
-    const y = dragY() ?? props.win.y;
+    const x = dragX() ?? resizeX() ?? props.win.x;
+    const y = dragY() ?? resizeY() ?? props.win.y;
     const w = resizeW() ?? props.win.w;
     const h = resizeH() ?? props.win.h;
     // Fade the frame slightly while dragging so the user can see
@@ -324,6 +355,32 @@ export function FloatingWindow(props: WindowProps) {
     if (x === props.win.x && y === props.win.y) return;
     moveLocal(props.win.origin, props.win.windowID, x, y);
     window.wash.moveWindow(props.win.windowID, x, y, props.win.origin);
+  };
+
+  // moveHome is the taskbar's rescue for a window that has gone missing:
+  // back to the plane's origin, at a size that fits one screen, and the
+  // camera brought to it. Restored first — a maximized or minimized window
+  // ignores moves (wmstate.go) — and sized from what is actually free: the
+  // right sidebar's reservation, the taskbar, the frame's own chrome.
+  const moveHome = () => {
+    const id = props.win.windowID;
+    const o = props.win.origin;
+    if (props.win.state !== 'normal') window.wash.restoreWindow(id, o);
+    const s = screenSize();
+    const reserved = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10) || 0;
+    const margin = 16;
+    const maxW = Math.max(160, s.w - reserved - FRAME_BORDER * 2 - margin);
+    const maxH = Math.max(80, s.h - TASKBAR_H - TITLEBAR_H - FRAME_BORDER * 2 - margin);
+    const w = Math.min(props.win.w, maxW);
+    const h = Math.min(props.win.h, maxH);
+    moveLocal(o, id, 0, 0);
+    window.wash.moveWindow(id, 0, 0, o);
+    if (w !== props.win.w || h !== props.win.h) {
+      resizeLocal(o, id, w, h);
+      window.wash.resizeWindow(id, w, h, o);
+    }
+    setViewport(0, 0);
+    window.wash.focusWindow(id, o);
   };
 
   // The plane's cells, in pager reading order, with the one this window is
@@ -552,6 +609,7 @@ export function FloatingWindow(props: WindowProps) {
             y={m().y}
             onDismiss={() => setTitleMenu(null)}
             data-testid="window-context-menu"
+            zIndex={m().taskbar ? TASKBAR_MENU_Z : undefined}
           >
             <MenuItem
               label={props.win.state === 'maximized' ? 'Restore' : 'Maximize'}
@@ -588,6 +646,18 @@ export function FloatingWindow(props: WindowProps) {
                 />
               )}
             </For>
+            <Show when={m().taskbar}>
+              <MenuSeparator />
+              <MenuItem
+                label="Move to 0,0"
+                title="Back to the top-left of the desktop, resized to fit one screen"
+                data-testid="window-ctx-home"
+                onClick={() => {
+                  setTitleMenu(null);
+                  moveHome();
+                }}
+              />
+            </Show>
             <MenuSeparator />
             <MenuItem
               label="Close"
@@ -597,6 +667,17 @@ export function FloatingWindow(props: WindowProps) {
                 props.onClose(props.win);
               }}
             />
+            <Show when={m().taskbar}>
+              <MenuItem
+                label="Quit"
+                title="End the app now, without asking it first — unsaved work is lost"
+                data-testid="window-ctx-quit"
+                onClick={() => {
+                  setTitleMenu(null);
+                  window.wash.quitWindow(props.win.windowID, props.win.origin);
+                }}
+              />
+            </Show>
           </Menu>
         )}
       </Show>
@@ -610,10 +691,24 @@ export function FloatingWindow(props: WindowProps) {
           away, so it's unreachable; this wash-owned grip drives window.resize
           (→ the guest's set_size) instead. Invisible for chromeless so it
           doesn't clutter the guest's own chrome; just the resize cursor. */}
+      {/* The other seven edges and corners: invisible strips along each
+          side, a little wider at the corners. Not on a maximized window,
+          which has no edges to move (the router drops its resizes). */}
+      <Show when={props.win.state !== 'maximized'}>
+        <For each={EDGE_HANDLES}>
+          {(hd) => (
+            <div
+              data-testid={`window-resize-${hd.edge}`}
+              onPointerDown={onResizeHandlePointerDown(hd.edge)}
+              style={{ position: 'absolute', 'z-index': '1', cursor: hd.cursor, ...hd.box }}
+            />
+          )}
+        </For>
+      </Show>
       <div
         class="wash-resize-handle"
         data-testid="window-resize"
-        onPointerDown={onResizeHandlePointerDown}
+        onPointerDown={onResizeHandlePointerDown('se')}
         title="Resize"
         style={{
           position: 'absolute',
@@ -631,6 +726,37 @@ export function FloatingWindow(props: WindowProps) {
     </div>
   );
 }
+
+// The seven handles beyond the bottom-right grip. EDGE px thick along each
+// side, CORNER px square at the corners (drawn after the sides, so a
+// corner wins where they overlap). Inset from the titlebar's buttons: the
+// top-right corner is small enough to leave the close button its target.
+const EDGE = 5;
+const CORNER = 10;
+const EDGE_HANDLES: { edge: ResizeEdge; cursor: string; box: JSX.CSSProperties }[] = [
+  { edge: 'n', cursor: 'ns-resize', box: { top: `-${EDGE / 2}px`, left: `${CORNER}px`, right: `${CORNER}px`, height: `${EDGE}px` } },
+  { edge: 's', cursor: 'ns-resize', box: { bottom: `-${EDGE / 2}px`, left: `${CORNER}px`, right: `${CORNER}px`, height: `${EDGE}px` } },
+  { edge: 'w', cursor: 'ew-resize', box: { left: `-${EDGE / 2}px`, top: `${CORNER}px`, bottom: `${CORNER}px`, width: `${EDGE}px` } },
+  { edge: 'e', cursor: 'ew-resize', box: { right: `-${EDGE / 2}px`, top: `${CORNER}px`, bottom: `${CORNER}px`, width: `${EDGE}px` } },
+  { edge: 'nw', cursor: 'nwse-resize', box: { top: `-${EDGE / 2}px`, left: `-${EDGE / 2}px`, width: `${CORNER}px`, height: `${CORNER}px` } },
+  { edge: 'ne', cursor: 'nesw-resize', box: { top: `-${EDGE / 2}px`, right: `-${EDGE / 2}px`, width: `${CORNER / 2 + 1}px`, height: `${CORNER / 2 + 1}px` } },
+  { edge: 'sw', cursor: 'nesw-resize', box: { bottom: `-${EDGE / 2}px`, left: `-${EDGE / 2}px`, width: `${CORNER}px`, height: `${CORNER}px` } },
+];
+
+// openWindowMenu opens a window's own context menu from outside it — the
+// taskbar pill's right-click (window.wash.openWindowMenu). The window
+// renders it, so the two menus cannot drift; the request only says where,
+// and marks it as the taskbar's (Move to 0,0 and Quit on top).
+const [windowMenuRequest, setWindowMenuRequest] = createSignal<{ origin: Origin; windowID: number; x: number; y: number } | null>(null);
+export function openWindowMenu(origin: Origin, windowID: number, x: number, y: number): void {
+  setWindowMenuRequest({ origin, windowID, x, y });
+}
+
+// Above the session app's taskbar layer (z-index 10000), which a menu
+// opened from it would otherwise sit under.
+const TASKBAR_MENU_Z = 10001;
+// The chrome's bottom taskbar, as the maximized frame reserves it.
+const TASKBAR_H = 40;
 
 // Re-exported for the desktop button click path, which raises a
 // window before invoking a wire helper.
@@ -742,12 +868,18 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
   );
 }
 
+// A flex box, not inline text: an inline SVG sits on the text baseline, which
+// left the glyphs a pixel or two off the titlebar's vertical centre.
 const titlebarBtnStyle = {
   background: 'transparent',
   color: `var(--wash-titlebar-fg, ${tokens.fg})`,
   border: 'none',
-  'font-size': '12px',
   cursor: 'pointer',
   padding: '0 8px',
-  'line-height': '16px',
+  height: '22px',
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  'line-height': 0,
+  'flex-shrink': 0,
 };

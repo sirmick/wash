@@ -50,18 +50,78 @@ test.describe('chrome (test app via --show-hidden)', () => {
     await expect(win1.locator('[data-testid="focused"] b')).toHaveText('no');
   });
 
-  test('right-click taskbar pill closes the window', async ({ page, router }) => {
+  test('right-click taskbar pill opens the window menu; Close closes', async ({ page, router }) => {
     await page.goto(router.url);
     await launchTestApp(page);
     const app = page.locator('wash-app-test');
     await expect(app).toBeVisible();
 
-    // The taskbar pill lives in wash-app-session and carries the
-    // window title text. Right-click sends close_clicked.
+    // The taskbar pill lives in wash-app-session and carries the window
+    // title text. Right-click opens the window's own titlebar menu, with
+    // the taskbar's extras.
     const pill = page.locator('wash-app-session button', { hasText: /^wash test$/ });
     await expect(pill).toBeVisible();
     await pill.click({ button: 'right' });
+    const menu = page.locator('[data-testid="window-context-menu"]');
+    await expect(menu).toBeVisible();
+    for (const id of ['window-ctx-maximize', 'window-ctx-minimize', 'window-ctx-send-1-0', 'window-ctx-home', 'window-ctx-close', 'window-ctx-quit']) {
+      await expect(menu.locator(`[data-testid="${id}"]`)).toBeVisible();
+    }
+    await menu.locator('[data-testid="window-ctx-close"]').click();
     await expect(app).toHaveCount(0);
+  });
+
+  test('the titlebar menu has no taskbar extras', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    await expect(page.locator('wash-app-test')).toBeVisible();
+    await page.locator('.wash-titlebar').first().click({ button: 'right', position: { x: 80, y: 10 } });
+    const menu = page.locator('[data-testid="window-context-menu"]');
+    await expect(menu.locator('[data-testid="window-ctx-close"]')).toBeVisible();
+    await expect(menu.locator('[data-testid="window-ctx-home"]')).toHaveCount(0);
+    await expect(menu.locator('[data-testid="window-ctx-quit"]')).toHaveCount(0);
+  });
+
+  // Quit does not ask: an app vetoing its close still goes.
+  test('taskbar Quit ends an app that would veto its close', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+    await app.locator('[data-testid="action-toggle-veto"]').click();
+    await expect(app.locator('[data-testid="veto-next-close"]')).toHaveText('on');
+
+    const cursor = router.logCursor();
+    await page.locator('wash-app-session button', { hasText: /^wash test$/ }).click({ button: 'right' });
+    await page.locator('[data-testid="window-ctx-quit"]').click();
+    await expect(app).toHaveCount(0);
+    await router.waitForLog(/quit window \d+ instance=\S+ app=com\.wash\.test/, 10_000, cursor);
+  });
+
+  // The rescue for a window that went missing: back to the plane's origin,
+  // shrunk to fit a screen, and the camera brought to it.
+  test('taskbar Move to 0,0 brings a far, oversized window home', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+    const id = await page.evaluate(() => window.wash.windows().find((x) => x.element === 'wash-app-test')!.windowID);
+    const screen = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+    // Far away (cell 2,2) and bigger than a screen.
+    await page.evaluate(([i, x, y, w, h]) => { window.wash.moveWindow(i, x, y); window.wash.resizeWindow(i, w, h); },
+      [id, screen.w * 2 + 50, screen.h * 2 + 20, screen.w + 200, screen.h + 200] as const);
+    await expect.poll(() => page.evaluate((i) => window.wash.windows().find((x) => x.windowID === i)!.x, id)).toBe(screen.w * 2 + 50);
+
+    await page.locator('wash-app-session button', { hasText: /^wash test$/ }).click({ button: 'right' });
+    await page.locator('[data-testid="window-ctx-home"]').click();
+    await expect.poll(() => page.evaluate((i) => {
+      const w = window.wash.windows().find((x) => x.windowID === i)!;
+      return { x: w.x, y: w.y };
+    }, id)).toEqual({ x: 0, y: 0 });
+    const w = await page.evaluate((i) => window.wash.windows().find((x) => x.windowID === i)!, id);
+    expect(w.w).toBeLessThan(screen.w);
+    expect(w.h).toBeLessThan(screen.h);
+    await expect(page.locator('[data-testid="pager-cell-0-0"]')).toHaveAttribute('data-active', 'true');
   });
 
   test('clicking taskbar pill focuses the window', async ({ page, router }) => {
@@ -205,7 +265,7 @@ test.describe('chrome (test app via --show-hidden)', () => {
     expect(box.y).toBeLessThanOrEqual(1);
     // Fills the screen minus the session sidebar reservation (right) and
     // the 40 px taskbar (bottom); never overflows the visible viewport.
-    expect(box.width).toBeGreaterThanOrEqual(innerW - 320);
+    expect(box.width).toBeGreaterThanOrEqual(innerW - 360);
     expect(box.x + box.width).toBeLessThanOrEqual(innerW + 1);
     expect(box.height).toBeGreaterThanOrEqual(innerH - 120);
     expect(box.y + box.height).toBeLessThanOrEqual(innerH - 39);
@@ -285,7 +345,7 @@ test.describe('chrome (test app via --show-hidden)', () => {
     expect(box.x).toBeLessThanOrEqual(1);
     expect(box.y).toBeLessThanOrEqual(1);
     // Width tracks the new 900-px screen (minus sidebar reservation).
-    expect(box.width).toBeGreaterThanOrEqual(900 - 320);
+    expect(box.width).toBeGreaterThanOrEqual(900 - 360);
     expect(box.x + box.width).toBeLessThanOrEqual(901);
     // Height tracks the new 600-px screen (minus the 40-px taskbar).
     expect(box.height).toBeGreaterThanOrEqual(600 - 120);
@@ -324,6 +384,35 @@ test.describe('chrome (test app via --show-hidden)', () => {
     // BE receives EvtWindowResize on commit and echoes geometry to FE.
     await expect(app.locator('[data-testid="geometry"] b')).toHaveText('660x540');
     await expect(app.locator('[data-testid="event-row-resize"]').first()).toContainText('660x540');
+  });
+
+  // Every side and corner resizes; a west or north side moves the origin
+  // so the opposite side stays put.
+  test('the top-left corner resizes and moves the window', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+    const id = await page.evaluate(() => window.wash.windows().find((x) => x.element === 'wash-app-test')!.windowID);
+    await page.evaluate((i) => window.wash.moveWindow(i, 200, 150), id);
+    await expect.poll(() => page.evaluate((i) => window.wash.windows().find((x) => x.windowID === i)!.x, id)).toBe(200);
+
+    const handle = page.locator('[data-testid="window-resize-nw"]').first();
+    const box = await handle.boundingBox();
+    if (!box) throw new Error('no nw handle bbox');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 100, box.y + box.height / 2 - 60, { steps: 4 });
+    await page.mouse.up();
+
+    await expect(app.locator('[data-testid="geometry"] b')).toHaveText('660x540');
+    await expect.poll(() => page.evaluate((i) => {
+      const w = window.wash.windows().find((x) => x.windowID === i)!;
+      return { x: w.x, y: w.y };
+    }, id)).toEqual({ x: 100, y: 90 });
+    for (const e of ['n', 's', 'e', 'w', 'ne', 'sw']) {
+      await expect(page.locator(`[data-testid="window-resize-${e}"]`).first()).toBeAttached();
+    }
   });
 
   test('notify button shows a toast that auto-dismisses', async ({ page, router }) => {

@@ -100,8 +100,17 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
                 data-testid={`net-iface-${ifc.name}`}
                 style={{ display: 'flex', gap: '6px', 'align-items': 'baseline', font: tokens.type.monoSm }}
               >
-                <span style={{ color: tokens.accentBlue, 'min-width': '52px' }}>{ifc.name}</span>
-                <span style={{ color: tokens.fg, flex: 1, 'word-break': 'break-all' }}>{ifc.ips.join('  ')}</span>
+                <span style={{ color: tokens.accentBlue, 'min-width': '52px', 'flex-shrink': 0 }}>{ifc.name}</span>
+                {/* One address per line, never broken mid-address: an IPv6
+                    split across lines reads as two addresses. Too long for
+                    the panel, it ellipsises and the tooltip has it whole. */}
+                <span style={{ flex: 1, 'min-width': 0, display: 'flex', 'flex-direction': 'column' }}>
+                  <For each={ifc.ips}>
+                    {(ip) => (
+                      <span title={ip} style={{ color: tokens.fg, 'white-space': 'nowrap', overflow: 'hidden', 'text-overflow': 'ellipsis' }}>{ip}</span>
+                    )}
+                  </For>
+                </span>
               </div>
             )}
           </For>

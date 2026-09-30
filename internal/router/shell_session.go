@@ -720,6 +720,13 @@ func (s *ShellSession) handleWindowCloseClicked(m wire.ShellWindowCloseClicked) 
 	if inst == nil {
 		return nil
 	}
+	if m.Force {
+		// Quit: the user chose to end it without asking. Same teardown
+		// as a close the app agreed to.
+		s.router.log("quit window %d instance=%s app=%s", m.WindowID, inst.InstanceID, inst.Manifest.ID)
+		s.router.approveWindowClose(inst, m.WindowID)
+		return nil
+	}
 	// Drive the close handshake in a goroutine — the loop must keep
 	// reading so confirm_close can arrive.
 	go func() {
