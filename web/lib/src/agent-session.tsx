@@ -409,6 +409,33 @@ const hintStyle: JSX.CSSProperties = {
  *  guard was off, or that something was refused. */
 const clipped: JSX.CSSProperties = { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', 'min-width': 0 };
 
+/** The agent's thinking, collapsed: open-model adapters stream it, and in
+ *  full it buries the reply. The summary counts characters as they arrive,
+ *  so a long think is visibly progressing without being read. */
+export const ThoughtRow: Component<{ e: agentproto.Event; open: boolean; onToggle: (open: boolean) => void }> = (p) => {
+  const chars = () => (p.e.text ?? '').length;
+  return (
+    <details
+      data-testid="agent-thought"
+      open={p.open}
+      onToggle={(ev) => p.onToggle((ev.currentTarget as HTMLDetailsElement).open)}
+      style={{ 'flex-shrink': 0, color: tokens.fgMuted, font: tokens.type.textSm }}
+    >
+      <summary data-wash-hit style={{ cursor: 'pointer', 'user-select': 'none' }}>
+        Thinking <span data-testid="agent-thought-chars" style={{ font: tokens.type.monoSm, color: tokens.fgDim }}>· {chars().toLocaleString()} chars</span>
+      </summary>
+      <div style={{ 'font-style': 'italic', 'white-space': 'pre-wrap', 'overflow-wrap': 'anywhere', 'margin-top': `${tokens.spaceXs}px`, 'padding-left': `${tokens.spaceMd}px`, 'border-left': `2px solid ${tokens.borderMenu}` }}>
+        <Markdown text={p.e.text ?? ''} />
+      </div>
+    </details>
+  );
+};
+
+/** A per-call yolo approval, which agentd no longer writes but older saved
+ *  transcripts still hold: hidden, for the reason agentd stopped. */
+export const routineYolo = (e: agentproto.Event): boolean =>
+  e.kind === 'decision' && e.status === 'allow' && e.reason === 'yolo';
+
 export const DecisionRow: Component<{ e: agentproto.Event }> = (p) => {
   const allowed = () => p.e.status === 'allow';
   const label = () => allowed()
@@ -568,6 +595,17 @@ function askBtn(bg: string, fg: string): JSX.CSSProperties {
 }
 
 export const AgentSession: Component<AgentSessionProps> = (props) => {
+  // Which thinking panels are open, by event seq. Held here, not in the
+  // row: every streamed chunk replaces the event object and so remounts
+  // its row, which would snap an opened panel shut on the next chunk.
+  const [openThoughts, setOpenThoughts] = createSignal<ReadonlySet<number>>(new Set());
+  const setThoughtOpen = (seq: number, open: boolean) => {
+    if (openThoughts().has(seq) === open) return;
+    const next = new Set(openThoughts());
+    if (open) next.add(seq);
+    else next.delete(seq);
+    setOpenThoughts(next);
+  };
   const [draft, setDraft] = createSignal('');
   let scroller: HTMLDivElement | undefined;
   let input: HTMLTextAreaElement | undefined;
@@ -971,10 +1009,13 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               </div>
             </Show>
 
+            <Show when={e.kind === 'thought'}>
+              <ThoughtRow e={e} open={openThoughts().has(e.seq)} onToggle={(open) => setThoughtOpen(e.seq, open)} />
+            </Show>
             <Show
-              when={e.kind !== 'tool' && e.kind !== 'image' && e.kind !== 'terminal' && e.kind !== 'decision'}
+              when={e.kind !== 'tool' && e.kind !== 'image' && e.kind !== 'terminal' && e.kind !== 'decision' && e.kind !== 'thought'}
               fallback={
-                <Show when={e.kind === 'tool'} fallback={<Show when={e.kind === 'decision'}><DecisionRow e={e} /></Show>}>
+                <Show when={e.kind === 'tool'} fallback={<Show when={e.kind === 'decision' && !routineYolo(e)}><DecisionRow e={e} /></Show>}>
                   <ToolRow e={e} />
                 </Show>
               }
@@ -983,8 +1024,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                 data-testid={e.kind === 'user' ? 'agent-human-message' : undefined}
                 style={{
                   font: tokens.type.textMd,
-                  color: e.kind === 'thought' ? tokens.fgMuted : tokens.fg,
-                  'font-style': e.kind === 'thought' ? 'italic' : 'normal',
+                  color: tokens.fg,
                   'white-space': 'pre-wrap',
                   'overflow-wrap': 'anywhere',
                   // What you typed gets a rule down its left edge. Without
@@ -1006,7 +1046,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                 {/* Agent-authored prose is Markdown; what you typed is literal.
                     Rendering your own prompt as Markdown would eat the
                     asterisks and backticks you meant to send. */}
-                <Show when={e.kind === 'message' || e.kind === 'thought'} fallback={
+                <Show when={e.kind === 'message'} fallback={
                   <Show when={e.kind === 'collaboration'} fallback={<>{e.text}</>}>
                     <Collaboration text={e.text ?? ''} />
                   </Show>

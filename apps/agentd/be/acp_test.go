@@ -1158,13 +1158,11 @@ func TestApprovalVerdictsAreDecisionEvents(t *testing.T) {
 			got = append(got, e)
 		}
 	}
-	if len(got) != 2 {
+	// The yolo approval is logged, not narrated: only the refusal is a row.
+	if len(got) != 1 {
 		t.Fatalf("decision events = %+v", snapshot(h.key))
 	}
-	if a := got[0]; a.Status != DecisionAllow || a.Title != "Bash" || a.Detail != "python3 - <<'EOF' …" || a.Reason != "yolo" || a.Text != "" {
-		t.Errorf("allow = %+v", a)
-	}
-	if c := got[1]; c.Status != "cancelled" || c.Detail != "rm -rf build" || c.Reason != "no desktop was attached to ask" || c.Text != "" {
+	if c := got[0]; c.Status != "cancelled" || c.Detail != "rm -rf build" || c.Reason != "no desktop was attached to ask" || c.Text != "" {
 		t.Errorf("cancelled = %+v", c)
 	}
 }
