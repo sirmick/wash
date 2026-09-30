@@ -276,7 +276,7 @@ func TestCompletingSomeoneElsesAssignmentSaysWhose(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.Assign("lead", "writer", "", "", "Fix it", "")
+	a, err := s.Assign("lead", "writer", "", "", "Fix it", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

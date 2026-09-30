@@ -15,6 +15,7 @@ const PNG_ISH = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a, 0x1a, 0x0
 
 function seed(root: string): void {
   writeFileSync(join(root, 'notes.txt'), 'plain\n');
+  writeFileSync(join(root, 'target.txt'), 'ORIGINAL\n');
   writeFileSync(join(root, 'dos.txt'), CRLF_TEXT);
   writeFileSync(join(root, 'photo.png'), PNG_ISH);
   writeFileSync(join(root, 'latin1.txt'), LATIN1);
@@ -125,5 +126,84 @@ test.describe('wash-edit save guards', () => {
     } finally {
       chmodSync(join(router.fmRoot, 'notes.txt'), 0o644);
     }
+  });
+
+  // Save As converges on one tab per path, so landing on a path another
+  // tab already holds drops that tab. When it has unsaved edits, they go
+  // with it. The picker already asks about replacing the FILE; the point
+  // here is that the same dialog also says what else is being thrown
+  // away, and that cancelling leaves both the tab's work and the bytes
+  // on disk exactly as they were.
+  test('replacing a file that is open with unsaved edits says so, and cancel keeps both', async ({ page, router }) => {
+    const editor = await openEditor(page, router);
+    const targetPath = join(router.fmRoot, 'target.txt');
+    const targetTab = editor.locator(`[data-testid="edit-tab-${targetPath}"]`);
+
+    // target.txt gets unsaved edits, then we switch to notes.txt.
+    await editor.locator('[data-testid="edit-entry-target.txt"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('ORIGINAL');
+    await editor.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('UNSAVED');
+    await expect(targetTab).toHaveAttribute('data-dirty', 'true');
+
+    await editor.locator('[data-testid="edit-entry-notes.txt"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('plain');
+
+    const saveAsOnto = async (name: string) => {
+      await page.keyboard.press('Control+Shift+S');
+      const picker = page.locator('[data-testid="edit-picker"]');
+      await expect(picker).toBeVisible();
+      await picker.locator('[data-testid="fp-path"]').fill(router.fmRoot);
+      await picker.locator('[data-testid="fp-path"]').press('Enter');
+      await picker.locator('[data-testid="fp-save-name"]').fill(name);
+      await picker.locator('[data-testid="fp-confirm"]').click();
+    };
+
+    // One dialog, carrying both facts.
+    await saveAsOnto('target.txt');
+    const dialog = page.locator('[data-testid="fp-replace-dialog"]');
+    await expect(dialog).toBeVisible();
+    const note = page.locator('[data-testid="fp-replace-note"]');
+    await expect(note).toContainText('target.txt');
+    await expect(note).toContainText('unsaved changes');
+
+    // Cancelling writes nothing and keeps the other tab's work.
+    await page.locator('[data-testid="fp-replace-cancel"]').click();
+    await expect(dialog).not.toBeVisible();
+    await expect(targetTab).toHaveAttribute('data-dirty', 'true');
+    expect(readFileSync(targetPath, 'utf8')).toBe('ORIGINAL\n');
+
+    // Confirming goes through: the file is the source buffer, and the
+    // duplicate tab is gone rather than left pointing at a stale id.
+    await saveAsOnto('target.txt');
+    await expect(dialog).toBeVisible();
+    await page.locator('[data-testid="fp-replace-confirm"]').click();
+    await expect(dialog).not.toBeVisible();
+    await expect.poll(() => readFileSync(targetPath, 'utf8')).toBe('plain\n');
+    await expect(editor.locator(`[data-testid="edit-tab-${targetPath}"]`)).toHaveCount(1);
+  });
+
+  // The note is about unsaved work, not about Save As onto an open file:
+  // a CLEAN duplicate gets the ordinary replace prompt and nothing extra.
+  test('replacing a file open with no unsaved edits gets the plain prompt', async ({ page, router }) => {
+    const editor = await openEditor(page, router);
+    await editor.locator('[data-testid="edit-entry-target.txt"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('ORIGINAL');
+    await editor.locator('[data-testid="edit-entry-notes.txt"]').dblclick();
+    await expect(editor.locator('.cm-content')).toContainText('plain');
+
+    await page.keyboard.press('Control+Shift+S');
+    const picker = page.locator('[data-testid="edit-picker"]');
+    await expect(picker).toBeVisible();
+    await picker.locator('[data-testid="fp-path"]').fill(router.fmRoot);
+    await picker.locator('[data-testid="fp-path"]').press('Enter');
+    await picker.locator('[data-testid="fp-save-name"]').fill('target.txt');
+    await picker.locator('[data-testid="fp-confirm"]').click();
+
+    await expect(page.locator('[data-testid="fp-replace-dialog"]')).toBeVisible();
+    await expect(page.locator('[data-testid="fp-replace-note"]')).toHaveCount(0);
+    await page.locator('[data-testid="fp-replace-confirm"]').click();
+    await expect.poll(() => readFileSync(join(router.fmRoot, 'target.txt'), 'utf8')).toBe('plain\n');
   });
 });

@@ -19,7 +19,24 @@ export type Class = 0 | 1 | 2 | 3;
 
 export const MAX_PAYLOAD = 16 * 1024 * 1024;
 
+// WireBytes is a Uint8Array whose backing store is a plain ArrayBuffer.
+// Since TS 5.7 a bare Uint8Array may be backed by a SharedArrayBuffer, which
+// Blob and createImageBitmap refuse — and the shell hands raw channel bytes
+// to both. Every frame here is decoded from `new Uint8Array(ev.data as
+// ArrayBuffer)` or allocated locally, so this is what they already are.
+export type WireBytes = Uint8Array<ArrayBuffer>;
+
+// A DECODED frame: its payload is handed to Blob/createImageBitmap, so the
+// backing store matters.
 export interface Frame {
+  flags: number;
+  channel: number;
+  payload: WireBytes;
+}
+
+// A frame to encode. Sending only ever READS the payload, so any Uint8Array
+// will do — an app's own buffer need not prove where it came from.
+export interface OutFrame {
   flags: number;
   channel: number;
   payload: Uint8Array;
@@ -35,7 +52,7 @@ export function classOf(flags: number): Class {
   return ((flags & FLAG_CLASS_MASK) >> FLAG_CLASS_SHIFT) as Class;
 }
 
-export function encodeFrame(f: Frame): Uint8Array {
+export function encodeFrame(f: OutFrame): WireBytes {
   if (f.payload.length > MAX_PAYLOAD) throw new Error('wash wire: frame too large');
   if (f.channel >= 1 << 24) throw new Error('wash wire: channel id out of range');
   if ((f.flags & FLAG_RESERVED_MASK) !== 0) throw new Error('wash wire: reserved flag set');
@@ -51,7 +68,7 @@ export function encodeFrame(f: Frame): Uint8Array {
   return buf;
 }
 
-export function decodeFrame(bytes: Uint8Array): Frame {
+export function decodeFrame(bytes: WireBytes): Frame {
   if (bytes.length < 8) throw new Error('wash wire: short header');
   const flags = bytes[0];
   const channel = (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];

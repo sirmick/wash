@@ -37,6 +37,32 @@ var reviewerVerifiedVersions = []string{"0.81.1", "0.81.2"}
 // restriction is its launch environment, so it needs no session metadata.
 var reviewerVerifiedOpenCode = []string{"1.18.32"}
 
+// providerCapability is which launch settings a provider can actually
+// enforce. The launch path checked this with literal comparisons of its own,
+// so an orchestrator could configure a member Wash would never start and only
+// learn of it from the failure: both gates now read this table, and discovery
+// publishes it. A provider absent from a list does not support that setting.
+var providerCapability = map[string][]string{
+	// capability:"reviewer" — read/search only, enforced by the adapter.
+	"reviewer": {"claude", "opencode"},
+	// subagents:"deny" — removing the member's own subagent tool needs
+	// claude-agent-acp's session metadata; no other adapter takes it.
+	"subagents": {"claude"},
+}
+
+// unsupportedLaunchSetting says why a provider cannot take a launch setting,
+// or returns nil. suffix distinguishes a refusal before launch from one that
+// already cost a session.
+func unsupportedLaunchSetting(provider, capability string, noSubagents bool, suffix string) error {
+	if capability != "" && (capability != "reviewer" || !slices.Contains(providerCapability["reviewer"], provider)) {
+		return fmt.Errorf("capability %q unsupported by %s%s", capability, provider, suffix)
+	}
+	if noSubagents && !slices.Contains(providerCapability["subagents"], provider) {
+		return fmt.Errorf("subagents \"deny\" unsupported by %s (supported by %s)%s", provider, strings.Join(providerCapability["subagents"], ", "), suffix)
+	}
+	return nil
+}
+
 func reviewerMetadata(provider string, info acp.Implementation) (map[string]any, error) {
 	if provider == "opencode" {
 		if info.Name != "OpenCode" || !slices.Contains(reviewerVerifiedOpenCode, info.Version) {

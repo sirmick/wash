@@ -42,6 +42,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirmick/wash/pkg/wire"
@@ -157,16 +158,28 @@ func (r *Router) ListenControl(ctx context.Context) error {
 		}
 	}()
 
+	// Track in-flight handlers so shutdown joins them before returning —
+	// the same join runRawListener and the ctl listener already do. Each
+	// handleControl can r.log, and a log that lands after the caller has
+	// been told the listener stopped is the t.Logf-after-test panic in a
+	// Go test and a write to a closed sink in production.
+	var handlers sync.WaitGroup
+
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
+				handlers.Wait()
 				return nil
 			}
 			r.log("control accept: %v", err)
 			continue
 		}
-		go r.handleControl(ctx, conn)
+		handlers.Add(1)
+		go func() {
+			defer handlers.Done()
+			r.handleControl(ctx, conn)
+		}()
 	}
 }
 

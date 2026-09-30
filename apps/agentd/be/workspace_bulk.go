@@ -466,6 +466,13 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if err := knownProvider(settings.Provider); err != nil {
 					return fmt.Errorf("member %s: %w", key, err)
 				}
+				// Before committing, not at launch: a member configured with
+				// a setting its provider cannot enforce used to be written
+				// down and then fail to start, and resume failed the same way
+				// forever because it re-read the same settings.
+				if err := unsupportedLaunchSetting(settings.Provider, settings.Capability, settings.Subagents == "deny", ""); err != nil {
+					return fmt.Errorf("member %s: %w", key, err)
+				}
 				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: swarm.WithRole(w, spec.Role, spec.Instructions), InitialTask: spec.Task, Handoff: handoffs[key], Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Node: spec.Node, Role: spec.Role}
 				if redefine != nil {
 					member.ID = redefine.ID

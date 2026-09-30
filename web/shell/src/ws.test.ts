@@ -18,6 +18,7 @@ import {
   encodeFrame,
   flagsWithClass,
   FLAG_END,
+  type WireBytes,
 } from './wire.ts';
 
 // Minimal shape of node:test's context we use (its types aren't resolvable
@@ -93,7 +94,7 @@ test('authGone: network error → not declared dead (keep retrying)', async () =
 
 // recordingSocket captures sends and exposes the lifecycle hooks so a
 // test can drive open/close transitions by hand.
-function recordingSocket(sent: Uint8Array[]): SocketLike {
+function recordingSocket(sent: WireBytes[]): SocketLike {
   return {
     binaryType: 'arraybuffer',
     bufferedAmount: 0,
@@ -102,14 +103,14 @@ function recordingSocket(sent: Uint8Array[]): SocketLike {
     onmessage: null,
     onclose: null,
     send(data: ArrayBuffer | Uint8Array) {
-      sent.push(data instanceof Uint8Array ? data : new Uint8Array(data));
+      sent.push(data instanceof Uint8Array ? (data as WireBytes) : new Uint8Array(data));
     },
     close() {},
   } as unknown as SocketLike;
 }
 
 test('sendCtrl before open queues; flushes FIFO on open', () => {
-  const sent: Uint8Array[] = [];
+  const sent: WireBytes[] = [];
   const socks: SocketLike[] = [];
   const conn = new Conn(
     () => {
@@ -136,7 +137,7 @@ test('sendCtrl before open queues; flushes FIFO on open', () => {
 });
 
 test('sends during reconnect window queue and flush on reopen', async () => {
-  const sent: Uint8Array[] = [];
+  const sent: WireBytes[] = [];
   const socks: SocketLike[] = [];
   const conn = new Conn(
     () => {
@@ -167,7 +168,7 @@ test('sends during reconnect window queue and flush on reopen', async () => {
 });
 
 test('queue overflow drops everything rather than a torn middle', () => {
-  const sent: Uint8Array[] = [];
+  const sent: WireBytes[] = [];
   const conn = new Conn(() => recordingSocket(sent), () => {}, () => {});
   // state 'connecting' — everything queues. Push past the cap.
   const chunk = new Uint8Array(256 * 1024);
@@ -181,7 +182,7 @@ test('queue overflow drops everything rather than a torn middle', () => {
 });
 
 test('queue overflow emits a lost-input event', () => {
-  const sent: Uint8Array[] = [];
+  const sent: WireBytes[] = [];
   const events: ConnEvent[] = [];
   const conn = new Conn(() => recordingSocket(sent), () => {}, () => {});
   conn.onEvent((e) => events.push(e));
@@ -228,7 +229,7 @@ test('going unauthenticated with queued frames emits lost-input', async () => {
 // milliseconds. The socket factory hands out recordingSockets the test
 // drives by hand (onopen/onclose/onmessage), so no real WebSocket is used.
 
-function lastCtrl(sent: Uint8Array[]): any {
+function lastCtrl(sent: WireBytes[]): any {
   for (let i = sent.length - 1; i >= 0; i--) {
     const f = decodeFrame(sent[i]);
     if (f.channel === 0) return decodeCtrl(f.payload);
@@ -250,7 +251,7 @@ function pongBytes(seq: number): ArrayBuffer {
 // Registers conn.close() as test cleanup so the heartbeat interval + any
 // armed reconnect timer don't keep the node:test process alive.
 function hbConn(t: { after(fn: () => void): void }, opts?: { pongTimeoutMs?: number; heartbeatMs?: number; wakeProbeMs?: number }) {
-  const sent: Uint8Array[] = [];
+  const sent: WireBytes[] = [];
   const socks: SocketLike[] = [];
   const ctrl: any[] = [];
   const events: ConnEvent[] = [];
@@ -347,7 +348,7 @@ test('diag reports total reconnects and last close code', (t: TestCtx) => {
 // ---- concurrent-dial race (REVIEW-RECONNECT H2) ----
 
 // countChannel returns how many sent frames rode a given channel.
-function countChannel(sent: Uint8Array[], channel: number): number {
+function countChannel(sent: WireBytes[], channel: number): number {
   let n = 0;
   for (const b of sent) {
     if (decodeFrame(b).channel === channel) n++;
@@ -399,4 +400,42 @@ test("a superseded socket's late onclose does not schedule another reconnect", a
   await Promise.resolve();
   assert.equal(conn.diag().state, 'open', 'stale close ignored');
   assert.equal(socks.length, 2, 'stale close did not trigger a new dial');
+});
+
+// ---- a throwing socket factory must not kill the reconnect loop ----
+//
+// connect() normally reports failure through onclose, which arms the
+// next backoff. A factory that THROWS never produces a socket, so
+// nothing would rearm the timer: the loop would stop for the life of
+// the page, and the throw would escape this async method as an
+// unhandled rejection rather than anything the user ever sees.
+
+test('reconnectTick: a throwing factory stays on the backoff ladder', async () => {
+  // The first dial succeeds (so construction is clean); the factory only
+  // starts throwing afterwards, which is the real shape of this — a
+  // transport whose factory fails once the page has been up a while.
+  let explode = false;
+  const socks: SocketLike[] = [];
+  const conn = new Conn(
+    () => {
+      if (explode) throw new Error('factory exploded');
+      const s = stubSocket();
+      socks.push(s);
+      return s;
+    },
+    () => {},
+    () => {},
+    { fetchImpl: async () => fakeResp({ status: 204 }) },
+  );
+  // Settle the first dial, or reconnectTick early-returns on `dialing`.
+  socks[0].onopen!(new Event('open'));
+  socks[0].onclose!(new Event('close') as CloseEvent);
+  (conn as any).clearReconnectTimer();
+  explode = true;
+
+  // Must resolve, not reject.
+  await (conn as any).reconnectTick();
+  assert.ok((conn as any).reconnectTimer != null, 'another attempt should be scheduled');
+  conn.close();
+  assert.equal((conn as any).reconnectTimer, null, 'close() disarms the timer');
 });

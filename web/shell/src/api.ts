@@ -4,6 +4,7 @@
 // focus, close).
 
 import { type Origin, parseInstanceId, compoundInstanceId, compoundChannelId } from './clients.ts';
+import { type WireBytes } from './wire.ts';
 
 export interface CatalogApp {
   id: string;
@@ -12,8 +13,11 @@ export interface CatalogApp {
   /** Brand color (CSS color) for the launcher icon. Falls back to a
    * deterministic hash of `id` when unset, so no row stays mono. */
   accent?: string;
-  surface: string;
-  instancing: string;
+  // Same vocabulary the wire documents (wire.ShellCatalogApp) and the
+  // public API declares (WashCatalogApp). Widened to string here, the
+  // shell's own catalog type was not assignable to the one it hands apps.
+  surface: 'window' | 'desktop';
+  instancing: 'multi' | 'single' | 'singleton';
   disabled?: boolean;
   reason?: string;
 }
@@ -132,12 +136,12 @@ export function resolveWindowContent(instanceID: string): ResolvedWindowContent 
 // (docs/REMOTE.md §4 — per-origin app wiring). Elements register via
 // window.wash.openRawChannelFor; the per-client WS dispatch routes
 // matching frames through with that client's origin.
-const rawSubscribers = new Map<string, (bytes: Uint8Array) => void>();
+const rawSubscribers = new Map<string, (bytes: WireBytes) => void>();
 // pendingRaw queues bytes that arrive on a channel before any
 // subscriber registers (the BE typically writes its first byte the
 // moment the router binds the channel, ahead of the BE → FE
 // app_msg that tells the FE the channel id). Same origin-scoped key.
-const pendingRaw = new Map<string, Uint8Array[]>();
+const pendingRaw = new Map<string, WireBytes[]>();
 // pendingRawBytes mirrors pendingRaw's per-channel byte total so the cap
 // check is O(1) per push instead of re-summing the queue.
 const pendingRawBytes = new Map<string, number>();
@@ -242,7 +246,7 @@ export function deliverToInstance(instanceID: string, data: unknown): void {
 // bytes — the caller grants router credit only then (never for parked bytes),
 // so a channel that never gets a subscriber can't keep the router streaming
 // into an unbounded queue (REVIEW-DATAPATH F7).
-export function deliverRaw(origin: Origin, channelID: number, bytes: Uint8Array): boolean {
+export function deliverRaw(origin: Origin, channelID: number, bytes: WireBytes): boolean {
   const key = compoundChannelId(origin, channelID);
   const cb = rawSubscribers.get(key);
   if (cb) {
@@ -269,7 +273,7 @@ export function deliverRaw(origin: Origin, channelID: number, bytes: Uint8Array)
   return false;
 }
 
-export function subscribeRaw(origin: Origin, channelID: number, cb: (bytes: Uint8Array) => void): () => void {
+export function subscribeRaw(origin: Origin, channelID: number, cb: (bytes: WireBytes) => void): () => void {
   const key = compoundChannelId(origin, channelID);
   rawSubscribers.set(key, cb);
   const q = pendingRaw.get(key);

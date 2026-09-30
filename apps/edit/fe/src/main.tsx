@@ -92,8 +92,8 @@ import { diff } from '@codemirror/legacy-modes/mode/diff';
 import {
   Bold,
   Check,
+  Bot as BotIcon,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
   Code as CodeIcon,
   File as FileIcon,
@@ -146,6 +146,10 @@ interface Entry {
   // to follow links — same affordance fm has.
   link_to?: string;
   link_err?: string;
+  // What a symlink RESOLVES to, empty for non-symlinks and broken ones
+  // (internal/fs.Entry.LinkType). followSymlink switches on it, and the
+  // shared isDirLike needs it to treat a link to a folder as a folder.
+  link_type?: string;
 }
 
 interface BEMessage {
@@ -359,6 +363,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [expanded, setExpanded] = createStore<Record<string, true>>({});
   const [root, setRoot] = createSignal('');
   const [selectedPath, setSelectedPath] = createSignal('');
+  // ownerAgent is the Agent session that opened this editor, once one has:
+  // its title, and the button back to the conversation. Empty in an editor
+  // the user launched themselves.
+  const [ownerAgent, setOwnerAgent] = createSignal<{ key: string; title: string } | null>(null);
   const [splitPct, setSplitPct] = createSignal(25);
 
   // tabs / activeID drive the editor pane. tabs is ordered; the
@@ -396,6 +404,20 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // revertPrompt asks before Revert throws away unsaved edits; a clean
   // tab reverts without asking.
   const [revertPrompt, setRevertPrompt] = createSignal<{ tabID: string; displayName: string } | null>(null);
+  // replaceNote adds edit's half of the picker's "Replace existing file?"
+  // prompt. The picker knows the file exists; only we know the path is
+  // also open in a tab with unsaved edits, which Save As is about to drop
+  // on the floor when it converges on one tab per path — the same class of
+  // loss revertPrompt guards, reached from a different door. One dialog
+  // carries both facts; the picker already asks, so we do not ask again.
+  const replaceNote = (path: string): string | undefined => {
+    const cur = picker();
+    // Only a save carries a source tab; the note is meaningless otherwise.
+    const srcID = cur?.mode === 'save' ? cur.tabID : undefined;
+    const clash = tabs().find((t) => t.path === path && t.id !== srcID && dirtyIDs().has(t.id));
+    if (!clash) return undefined;
+    return `${clash.displayName} is open with unsaved changes. Replacing it closes that tab and discards them.`;
+  };
   const [reloadPrompt, setReloadPrompt] = createSignal<
     | null
     | { tabID: string; displayName: string; diskContent: string }
@@ -1186,7 +1208,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setTreeRoot(chosen);
       return;
     }
-    const src = tabs().find((t) => t.id === cur.tabID);
+    await saveAsTo(cur.tabID, chosen);
+  };
+
+  // saveAsTo performs the write and canonicalizes the source tab onto
+  // its new path. A named step rather than an inline tail: the picker
+  // has already asked about replacing the file (and, via replaceNote,
+  // about discarding an open tab's unsaved edits), so by the time we
+  // are here the destructive part is settled.
+  const saveAsTo = async (tabID: string, chosen: string) => {
+    const src = tabs().find((t) => t.id === tabID);
     if (!src) return;
     const content = tabContent(src);
     const reply = await sendWithReply({ kind: 'write', path: chosen, content: toDisk(content, src.eol) });
@@ -1743,6 +1774,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // the actual UI work below.
     // cmd.open_file also carries a position: the Agent window this editor
     // belongs to sends one for a `file.go:42` clicked in its transcript.
+    // Which Agent session this editor serves, on adoption and whenever the
+    // agent renames it.
+    if (m.kind === 'agent.owner') {
+      const key = String(m.key ?? '');
+      setOwnerAgent(key ? { key, title: String(m.title ?? '') } : null);
+      return;
+    }
     if (m.kind === 'cmd.open_file') {
       const path = String(m.path ?? '');
       const line = Number(m.line) || undefined;
@@ -2269,6 +2307,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     const target = (t?.path && !t.diff ? t.path : '') || selectedPath() || root();
     send({ kind: 'spawn', app_id: 'com.wash.fm', ...(target ? { open: target } : {}) });
   };
+
+  // The Agent session this editor was opened for, when it was. The BE asks
+  // agentd to bring that window forward, because a window is only ever
+  // raised by its own app — and agentd reopens one whose window has gone.
+  const showOwnerAgent = () => send({ kind: 'agent.show_owner' });
 
   const openFolderIn = (appID: 'com.wash.term' | 'com.wash.fm', folder: string) => {
     if (folder) send({ kind: 'spawn', app_id: appID, open: folder });
@@ -2993,6 +3036,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       if (s) void restoreFrom(s);
     };
     props.host.addEventListener('wash:state', onState);
+    // The adoption message arrives once, before this FE is listening after
+    // a reload; the BE still knows who the owner is.
+    send({ kind: 'agent.owner_ask' });
 
     // <Terminal> components carry their own ResizeObserver against
     // each host div, so a window resize bubbles into per-component
@@ -3667,6 +3713,28 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               'text-overflow': 'ellipsis',
               'white-space': 'nowrap',
             }}>{root() || 'loading…'}</span>
+            <Show when={ownerAgent()}>
+              {(a) => (
+                <Button
+                  variant="ghost"
+                  data-testid="edit-show-agent"
+                  title={a().title ? `Show the Agent window · ${a().title}` : 'Show the Agent window'}
+                  onClick={showOwnerAgent}
+                  style={{
+                    color: tokens.fgMuted,
+                    width: '22px',
+                    height: '22px',
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                    'justify-content': 'center',
+                    padding: 0,
+                    'flex-shrink': 0,
+                  }}
+                >
+                  <BotIcon size={12} />
+                </Button>
+              )}
+            </Show>
             <Button
               variant="ghost"
               data-testid="edit-reveal-in-fm"
@@ -4087,6 +4155,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         hostInstanceID={props.instance}
         defaultName={picker()?.mode === 'save' ? (picker() as { suggestedName: string }).suggestedName : undefined}
         start={picker()?.mode === 'save' ? (picker() as { start?: string }).start : undefined}
+        replaceNote={replaceNote}
         onConfirm={(p) => void pickerConfirm(p)}
         onCancel={() => { setPicker(null); saveAllQueue = []; }}
         data-testid="edit-picker"

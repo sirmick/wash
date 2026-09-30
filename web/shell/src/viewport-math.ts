@@ -49,3 +49,20 @@ export function nextZ(windows: ReadonlyArray<{ z: number }>): number {
   for (const w of windows) if (w.z > maxZ) maxZ = w.z;
   return maxZ + 1;
 }
+
+// Where a window lands when it is sent to viewport cell (vx, vy).
+//
+// There is no per-window viewport field to set: every window lives in one
+// plane of perAxis² screens and the shell pans a camera over it, so sending
+// a window to a cell is a move by whole screens, preserving where it sits
+// WITHIN the cell. Clamped to the plane like the titlebar drag — a window
+// off the far edge is reachable from no viewport at all.
+export function sendToViewportRect(r: Rect, screen: Size, perAxis: number, vx: number, vy: number): { x: number; y: number } {
+  const cur = viewportForRect(r, screen, perAxis);
+  const maxX = screen.w * perAxis - r.w;
+  const maxY = screen.h * perAxis - r.h;
+  return {
+    x: Math.round(Math.max(0, Math.min(maxX, r.x + (vx - cur.vx) * screen.w))),
+    y: Math.round(Math.max(0, Math.min(maxY, r.y + (vy - cur.vy) * screen.h))),
+  };
+}

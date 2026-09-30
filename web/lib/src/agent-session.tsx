@@ -887,6 +887,14 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                 src={`data:${e.mime || 'image/png'};base64,${e.text ?? ''}`}
                 alt="image from the agent"
                 style={{
+                  // The transcript is a column flex container, so its
+                  // default align-items: stretch sets this image's used
+                  // width to exactly 100% — max-width cannot hold it back,
+                  // and height: auto then scales to match. A small
+                  // screenshot arrived upscaled and soft. Opting out of the
+                  // stretch lets it sit at its natural size, with
+                  // max-width still bounding anything genuinely large.
+                  'align-self': 'flex-start',
                   'max-width': '100%',
                   height: 'auto',
                   'border-radius': tokens.radiusMd,

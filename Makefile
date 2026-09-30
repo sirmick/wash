@@ -201,16 +201,16 @@ check-design:
 check-interactive:
 	@python3 ./scripts/check-interactive.py
 
-# check-names: the "green build, ReferenceError in the browser" guard. vite
-# does not typecheck, so an identifier that was never imported is not a build
-# error — esbuild emits a bare global reference and the bundle ships. It fails
-# only when that line runs, which in a desktop of lazily-mounted apps can be a
-# pane nobody happened to open while testing. Runs the real tsc and gates on
-# TS2304 alone; see the script header for why the scope is that tight, and for
-# why it must not resolve tsc through npx.
-.PHONY: check-names
-check-names:
-	@./scripts/check-undefined-names.sh
+# check-types: the "green build, broken in the browser" guard. vite does not
+# typecheck, so neither an identifier that was never imported nor a style token
+# that does not exist is a build error — esbuild ships both. They fail only when
+# that line runs, which in a desktop of lazily-mounted apps can be a pane nobody
+# happened to open while testing. Runs the real tsc over every FE package; see
+# the script header for why this used to gate on TS2304 alone, and for why it
+# must not resolve tsc through npx.
+.PHONY: check-types
+check-types:
+	@./scripts/check-types.sh
 
 # gen-agent-protocol: the agentd protocol is written once, as Go structs in
 # internal/agentproto. This writes what is generated from them: the
@@ -1111,7 +1111,7 @@ unit-test: test-app fe-unit component
 	$(MAKE) -s check-versions
 	$(MAKE) -s check-design
 	$(MAKE) -s check-interactive
-	$(MAKE) -s check-names
+	$(MAKE) -s check-types
 	$(MAKE) -s check-agent-protocol
 	go vet ./...
 	go test -count=1 -p 1 -timeout 120s $(GO_UNIT_PKGS)

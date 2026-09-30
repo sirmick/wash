@@ -21,12 +21,12 @@ beforeEach(() => {
 
 test('NetApp mounts without throwing (guards setup-time TDZ / declaration order)', () => {
   const host = document.createElement('div');
-  expect(() => render(() => <NetApp instance="i-test" host={host} />)).not.toThrow();
+  expect(() => render(() => <NetApp instance="i-test" host={host} origin="local" provideContent={() => {}} />)).not.toThrow();
 });
 
 test('NetApp renders its app root + the connections header', () => {
   const host = document.createElement('div');
-  const { container } = render(() => <NetApp instance="i-test" host={host} />);
+  const { container } = render(() => <NetApp instance="i-test" host={host} origin="local" provideContent={() => {}} />);
   expect(container.querySelector('.wash-net-app')).not.toBeNull();
   // The add bar always renders (workstation buttons); router buttons are caps-gated.
   expect(container.querySelector('[data-testid="add-ethernet"]')).not.toBeNull();
@@ -40,7 +40,7 @@ test('router caps reveal the Networks UI (+ Network button)', async () => {
   const sent: any[] = [];
   (window as any).wash = { sendAppMsg: (_inst: string, msg: any) => sent.push(msg) };
   const host = document.createElement('div');
-  const { queryByTestId } = render(() => <NetApp instance="i-test" host={host} />);
+  const { queryByTestId } = render(() => <NetApp instance="i-test" host={host} origin="local" provideContent={() => {}} />);
 
   await waitFor(() => expect(sent.find((m) => m.kind === 'current')).toBeTruthy());
   const id = sent.find((m) => m.kind === 'current').id;
@@ -61,7 +61,7 @@ test('validation diagnostics surface in the banner', async () => {
   const sent: any[] = [];
   (window as any).wash = { sendAppMsg: (_inst: string, msg: any) => sent.push(msg) };
   const host = document.createElement('div');
-  const { queryByTestId, getByTestId } = render(() => <NetApp instance="i-test" host={host} />);
+  const { queryByTestId, getByTestId } = render(() => <NetApp instance="i-test" host={host} origin="local" provideContent={() => {}} />);
 
   await waitFor(() => expect(sent.find((m) => m.kind === 'current')).toBeTruthy());
   const curId = sent.find((m) => m.kind === 'current').id;

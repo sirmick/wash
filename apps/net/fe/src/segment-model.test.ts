@@ -6,7 +6,10 @@ import {
 } from "./segment-model.ts";
 
 const lanForm = (over: Partial<SegForm> = {}): SegForm => ({
-  name: "iot", carrierKind: "vlan", parent: "switch", vid: 6, port: "", members: [],
+  // role and proto were missing: SegForm requires both, and the code reads
+  // role ("wan" branches, anything else is lan) — so this fixture was taking
+  // the lan path by accident rather than by saying so.
+  name: "iot", role: "lan", proto: "static", carrierKind: "vlan", parent: "switch", vid: 6, port: "", members: [],
   address: "192.168.15.1/24", dhcp: true, start: 50, limit: 150, lease: "12h", dns: "", isolate: true,
   ...over,
 });

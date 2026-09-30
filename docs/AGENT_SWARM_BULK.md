@@ -29,7 +29,8 @@ up to 10 s for the turn to end; an agent that does not end it is not waited for 
 ends the turn itself, and `interrupt` returns `abandoned:true` with the turn's messages as
 `uncertain` (they may not have reached the model; `message_retry` them if they matter). A
 member `subagents:"deny"` removes Claude's own Agent/Task tool at launch and on resume; adapters
-wash cannot restrict fail to launch.
+wash cannot restrict are refused by `workspace_configure` before the member is committed, and
+`view=about` `permissions.launch_setting_support` says which providers enforce which setting.
 
 API 3.2 lets a session end a stale workspace. `workspace_end` with `workspace_id` (the full ID or
 a unique prefix of at least 8) ends another open workspace whose orchestrator session is not
@@ -213,7 +214,9 @@ assignment and turn finish. Explicit `member_control` (by IDs, or `node`) ends p
 or abandonment. Limits count idle residents; they do not consume model turns while waiting.
 
 `assignment_update {updates, wait:{reason}}` creates assignments and sets the caller
-waiting on exactly those as one set, in the same call. `member_update {handoff}` writes the
+waiting on exactly those as one set, in the same call. On `create`, `text` is the one-line
+title the plan and the sidebar show and `body` the instructions to work from; the assignee
+receives both. On `complete`/`fail`, `body` is the result. `member_update {handoff}` writes the
 caller's handoff to `.wash/local/handoffs/<key>.md` (`.wash/local` keeps itself out of git);
 a member launched with `handoff_from:"<key>"` reads it in its first message. A hung member
 cannot write its own, so `handoff_file:"<path>"` launches from a file the orchestrator wrote
@@ -227,7 +230,9 @@ completes or fails, so a review round wakes the orchestrator once rather than on
 reviewer. A complete/fail result may `cc` members, who get a non-waking progress copy; a
 reviewer cc's the implementer so findings need not be retyped. Every inbox turn carries its
 messages as one JSON array. A queued assignment instruction whose assignment the assignee
-already resolved (it read the task early with inbox_read) is dropped, not re-delivered. Waiting returns immediately with an instruction to end
+already resolved (it read the task early with inbox_read) is dropped, not re-delivered. Only
+that assignment's own handover is: a later instruction naming the same assignment is a new ask
+about finished work and still wakes its member. Waiting returns immediately with an instruction to end
 the turn; actionable messages wake the member in a later turn. Never poll. Acknowledgment
 is not completion. question/answer/instruction wake; progress records without waking.
 
@@ -242,10 +247,10 @@ message listing what it found:
 
 | Finding | When |
 |---|---|
-| `wedged` | a member in a turn with nothing from it for `quiet` (default 2m): no output, no open tool, no question, no busy process. Reported at once, whatever the rest of the team is doing |
+| `wedged` | a member in a turn with nothing from it for `quiet` (default 5m): no output, no open tool, no question, no busy process. A model composing a long answer sends nothing, so this is set well past any ordinary turn. Reported at once, whatever the rest of the team is doing |
 | `stopped` | an open assignment on a member that is paused, failed, ended, or has no session |
 | `idle with work` | a member idle for `idle` (default 1m) with an active assignment, no report and no waiting set |
-| `undelivered` | mail queued for `quiet` for a member free to take it |
+| `undelivered` | mail queued for `quiet` that dispatch would send now, for a member whose session would take the turn. Mail held on purpose — behind the agent's own turn, an unresolved waiting set, an open owner question, or a second ask cut to the next turn — is not this |
 | `reported`, `failed`, `ready`, `waiting` | the whole team idle for `idle` with the plan unfinished: reported nodes to accept, failed nodes with nobody on them, leaf nodes whose needs are met with nobody on them, and who is waiting on what. Not while a question waits on the owner |
 
 The same findings are sent again after `repeat` (default 5m), doubling; a finding that goes

@@ -341,7 +341,10 @@ function RadioApp(props: WashAppProps) {
     }
     return entries;
   });
-  const visibleRows = createMemo<Row[]>(() => visibleEntries().filter((e): e is { kind: 'station'; row: Row; di: number } => e.kind === 'station').map((e) => e.row));
+  // Extract, not a hand-written shape: the inline predicate had gone stale
+  // against the union (it predates `depth`), which made it unassignable and
+  // hid the fact that nothing was narrowing at all.
+  const visibleRows = createMemo<Row[]>(() => visibleEntries().filter((e): e is Extract<VisibleEntry, { kind: 'station' }> => e.kind === 'station').map((e) => e.row));
   const playingDisplay = () => visibleRows().findIndex((r) => r.be === index());
 
   function toggleFav(name: string) {

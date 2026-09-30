@@ -16,13 +16,13 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import type { ISearchOptions } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { TERM_URL_RE } from './term-url.ts';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { ensureScrollbarStyles } from './scrollbars';
 import type { ILink, ILinkProvider, ITheme } from '@xterm/xterm';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 
-import { tokens } from './tokens';
 import { washAssetUrl } from './assets';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { washCopyText, washPasteText } from './clipboard';
@@ -1008,10 +1008,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // consumer supplied the corresponding callback, so a terminal with no
     // `links` prop behaves exactly as before.
     if (props.links?.openUrl) {
+      // TERM_URL_RE replaces the addon's own pattern, which stops at the
+      // first ( ) ! * or ' and hands back a truncated URL — see term-url.ts.
       term.loadAddon(new WebLinksAddon((ev, uri) => {
         ev.preventDefault();
         props.links?.openUrl?.(uri);
-      }));
+      }, { urlRegex: TERM_URL_RE }));
     }
     if (props.links?.probePaths) term.registerLinkProvider(pathLinkProvider());
     // Cursor preference, applied live so a menu change does not need a

@@ -763,6 +763,13 @@ export interface Message {
   delivery: string;
   created_at: number;
   /**
+   * Task marks the instruction Assign wrote to hand its assignment over.
+   * Only that one goes stale when the assignment resolves: a later
+   * instruction naming the same assignment is a new ask about finished
+   * work, not a duplicate of this one.
+   */
+  task?: boolean;
+  /**
    * Questions is a decision_request's question set; Answers the owner's
    * answers on its decision_response.
    */
@@ -1518,7 +1525,7 @@ export interface Workspace {
    */
   context_warn?: number;
   /** Supervisor tunes the stall watchdog. */
-  supervisor: Supervisor;
+  supervisor?: Supervisor;
   /** Nudged are the lifecycle nudges already sent, so each goes once. */
   nudged?: string[];
   members: Member[] | null;

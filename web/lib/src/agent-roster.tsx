@@ -199,7 +199,7 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
             padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
           }}>
           <span style={{ color: tokens.accentAmber, 'font-weight': 600 }}>● Needs you</span>{' '}
-          {q.workspace_name || q.agent}: {q.set.title || q.set.questions[0]?.question}
+          {q.workspace_name || q.agent}: {q.set.title || q.set.questions?.[0]?.question}
         </button>
       )}</For>
       <Show when={empty()}>

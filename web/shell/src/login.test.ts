@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { authenticate, isLoginRequired, peekType, LoginError, T_LOGIN, T_LOGIN_OK, T_LOGIN_ERR, T_LOGIN_REQUIRED } from './login.ts';
-import { encodeFrame, encodeCtrl, decodeFrame, decodeCtrl, FLAG_END } from './wire.ts';
+import { encodeFrame, encodeCtrl, decodeFrame, decodeCtrl, FLAG_END, type WireBytes } from './wire.ts';
 import type { SocketLike } from './virtio.ts';
 
 // ctrlFrame builds a whole channel-0 wash frame carrying a JSON ctrl message.
@@ -19,10 +19,10 @@ class FakeSock implements SocketLike {
   onerror: ((ev: Event) => unknown) | null = null;
   onmessage: ((ev: MessageEvent) => unknown) | null = null;
   onclose: ((ev: CloseEvent) => unknown) | null = null;
-  sent: Uint8Array[] = [];
+  sent: WireBytes[] = [];
 
   send(data: ArrayBuffer | Uint8Array): void {
-    this.sent.push(data instanceof Uint8Array ? data : new Uint8Array(data));
+    this.sent.push(data instanceof Uint8Array ? (data as WireBytes) : new Uint8Array(data));
   }
   close(): void {}
 

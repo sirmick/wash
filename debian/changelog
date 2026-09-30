@@ -1,3 +1,25 @@
+wash (0.16.1-1) unstable; urgency=low
+
+  * Save As no longer discards another tab's unsaved edits without saying
+    so: replacing a file that is open with unsaved changes now says what
+    else is being thrown away, in the same prompt that already asks about
+    replacing the file.
+  * Two tabs reconnecting at the same moment no longer start two sessions.
+    The session list is re-read under the spawn lock, and the auto-attach
+    path joins whichever session won instead of forking a second router.
+  * A socket factory that throws no longer ends the reconnect loop for the
+    life of the page, and the router's control listener waits for its
+    handlers before reporting itself stopped.
+  * Focus no longer lands on a minimized window after a reconnect.
+  * An image in an agent transcript renders at its own size instead of
+    being stretched to the width of the pane.
+  * Clicking a link in a terminal opens the whole URL. The link pattern
+    stopped at the first ( ) ! * or ' — ordinary characters in a query
+    string — so a search or a Maps link opened a truncated address, and
+    did it silently: a page loaded, just not the one that was clicked.
+
+ -- Michael <sirmick@gmail.com>  Tue, 29 Sep 2026 11:50:00 -0700
+
 wash (0.16.0-1) unstable; urgency=low
 
   * An optional AI provider service (com.wash.inference) holds the

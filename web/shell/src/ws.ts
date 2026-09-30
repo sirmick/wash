@@ -21,11 +21,12 @@ import {
   flagsWithClass,
   FLAG_END,
   decodeCtrl,
+  type WireBytes,
 } from './wire.ts';
 import type { SocketLike } from './virtio.ts';
 
 export type CtrlHandler = (msg: any) => void;
-export type RawHandler = (channelID: number, bytes: Uint8Array, cls: Class) => void;
+export type RawHandler = (channelID: number, bytes: WireBytes, cls: Class) => void;
 export type StateHandler = (state: ConnState) => void;
 // 'unauthenticated' is terminal: the reconnect loop stops because the
 // server refused the handshake on auth grounds (expired wash-login
@@ -383,7 +384,19 @@ export class Conn {
         return;
       }
       if (this.closedByUser) return;
-      this.connect();
+      // connect() normally reports failure through onclose, which arms
+      // the next backoff. A factory that THROWS never gets that far:
+      // there is no socket to close, so nothing would rearm the timer
+      // and the reconnect loop would stop for the life of the page —
+      // and, because this method is async, the throw would surface as
+      // an unhandled rejection rather than anything the user sees.
+      // Catch it and stay on the backoff ladder.
+      try {
+        this.connect();
+      } catch (e) {
+        console.error('wash: connect threw, staying on the backoff ladder:', e);
+        this.scheduleReconnect();
+      }
     } finally {
       this.tickInFlight = false;
     }

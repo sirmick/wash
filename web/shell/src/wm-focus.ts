@@ -8,6 +8,7 @@
 export interface FocusClaim {
   window_id: number;
   focused?: boolean;
+  state?: 'normal' | 'minimized' | 'maximized';
 }
 
 // focusFromSnapshot resolves which window claims focus in a full session
@@ -20,10 +21,19 @@ export interface FocusClaim {
 // `if (sw.focused) setFocused(sw.window_id)`, where each later claim
 // overwrote the earlier one and the post-loop block only cleared focus when
 // no window claimed it. An empty snapshot yields null.
+//
+// A MINIMIZED window never wins the claim. A router attests focus from its
+// own point of view and keeps attesting it across a minimize, so honouring
+// that claim puts the shell's focus on a window the user cannot see: the
+// focus ring is nowhere, keystrokes route to a hidden window, and Alt-Tab
+// starts from a window that isn't on screen. Skipping it lets an earlier
+// non-minimized claim win, and a snapshot whose only claim is minimized
+// reads as "this origin has nothing focusable" — which is exactly what the
+// caller's no-claim branch does.
 export function focusFromSnapshot(wins: ReadonlyArray<FocusClaim>): number | null {
   let claim: number | null = null;
   for (const w of wins) {
-    if (w.focused) claim = w.window_id;
+    if (w.focused && w.state !== 'minimized') claim = w.window_id;
   }
   return claim;
 }

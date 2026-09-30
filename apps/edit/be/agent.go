@@ -31,6 +31,11 @@ var (
 	// owner is the Agent window this editor belongs to, once one has sent
 	// editor.show: told when this window closes (tellOwnerClosing).
 	owner string
+	// ownerKey is that window's agentd session, and ownerTitle the agent's
+	// own name for it. The key outlives the window — agentd reopens a closed
+	// session — so it, not the instance id, is what the Agent button asks
+	// agentd to raise.
+	ownerKey, ownerTitle string
 	// pending maps a start's req_id to the FE tab waiting for it. Without
 	// it two tabs started in quick succession cannot tell whose session
 	// arrived — and a FAILED start carries no key at all, so there would
@@ -71,6 +76,17 @@ func initAgent(c *sdk.Conn) {
 		},
 		State: func(state agentproto.State) {
 			_ = c.SendAppMsg(map[string]any{"kind": "agent.state", "state": state})
+			// The agent renames its session as the work becomes clear, so
+			// the title this editor was opened with goes stale. The roster
+			// it already subscribes to carries the new one.
+			agentMu.Lock()
+			key := ownerKey
+			agentMu.Unlock()
+			for _, r := range state.Rows {
+				if r.Key == key && r.Title != "" && adoptOwner(c, key, r.Title) {
+					tellFEOwner(c)
+				}
+			}
 		},
 	})
 	agentMu.Lock()
@@ -115,9 +131,47 @@ const agentWindowAppID = "com.wash.ai"
 // editorShowReq brings this window forward and, with a path, opens that
 // file at the line.
 type editorShowReq struct {
-	Path string `json:"path,omitempty"`
-	Line int    `json:"line,omitempty"`
-	Col  int    `json:"col,omitempty"`
+	// Key and Title name the Agent session this editor serves; both are
+	// absent from a plain cmd.open_file, which reuses this type.
+	Key   string `json:"key,omitempty"`
+	Title string `json:"title,omitempty"`
+	Path  string `json:"path,omitempty"`
+	Line  int    `json:"line,omitempty"`
+	Col   int    `json:"col,omitempty"`
+}
+
+// titleForSession is what this editor's window is called once it belongs to
+// an Agent session. A taskbar of windows all called "Editor" says nothing
+// about which conversation each one is for.
+func titleForSession(title string) string {
+	if title == "" {
+		return "Editor"
+	}
+	return "Editor · " + title
+}
+
+// adoptOwner records the Agent session this editor serves and titles the
+// window after it. Returns whether the FE needs telling.
+func adoptOwner(c *sdk.Conn, key, title string) bool {
+	agentMu.Lock()
+	if key == "" || key == ownerKey && title == ownerTitle {
+		agentMu.Unlock()
+		return false
+	}
+	ownerKey, ownerTitle = key, title
+	agentMu.Unlock()
+	if err := c.SetTitle(titleForSession(title)); err != nil {
+		log.Printf("edit: title for session %s: %v", key, err)
+	}
+	return true
+}
+
+// tellFEOwner lets the FE offer the way back to the conversation.
+func tellFEOwner(c *sdk.Conn) {
+	agentMu.Lock()
+	key, title := ownerKey, ownerTitle
+	agentMu.Unlock()
+	_ = c.SendAppMsg(map[string]any{"kind": "agent.owner", "key": key, "title": title})
 }
 
 // tellOwnerClosing tells the Agent window that owns this editor that it is
@@ -235,6 +289,9 @@ func registerAgentHandlers(b *sdk.Bus) {
 		agentMu.Lock()
 		owner = from.InstanceID
 		agentMu.Unlock()
+		if adoptOwner(c, req.Key, req.Title) {
+			tellFEOwner(c)
+		}
 		if err := c.Raise(); err != nil {
 			log.Printf("edit: raise for %s: %v", from.InstanceID, err)
 		}
@@ -246,6 +303,24 @@ func registerAgentHandlers(b *sdk.Bus) {
 			return sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 		}
 		return bus.Emit("cmd.open_file", editorShowReq{Path: abs, Line: req.Line, Col: req.Col})
+	})
+	// agent.show_owner: the way back to the conversation that opened this
+	// editor. Asks agentd to focus the session by key rather than raising
+	// the instance directly: agentd reopens a window for a session whose
+	// own was closed, and only the window's app may raise it anyway.
+	sdk.HandleVoid(b, "agent.show_owner", func(c *sdk.Conn, _ string, _ struct{}) error {
+		agentMu.Lock()
+		key := ownerKey
+		agentMu.Unlock()
+		if key == "" {
+			return nil
+		}
+		return agentproto.SendAgentd(c, agentproto.Focus{Key: key})
+	})
+	// agent.owner_ask: the FE asking what it missed, for a reload.
+	sdk.HandleVoid(b, "agent.owner_ask", func(c *sdk.Conn, _ string, _ struct{}) error {
+		tellFEOwner(c)
+		return nil
 	})
 	// agent.path_probe: which tokens in an agent tab's transcript are files
 	// under the session's folder, so only those become links.

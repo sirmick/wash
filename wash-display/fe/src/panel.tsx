@@ -162,7 +162,9 @@ const Panel = (props: SettingsPanelProps) => {
   };
 
   const serviceRunning = () => alive() ?? state()?.running ?? false;
-  const statusTone = () => (op() || alive() === null ? 'busy' : serviceRunning() ? 'on' : 'off') as const;
+  // The return annotation, not `as const`: a const assertion cannot be applied
+  // to a conditional, and the point was the literal union rather than string.
+  const statusTone = (): 'busy' | 'on' | 'off' => (op() || alive() === null ? 'busy' : serviceRunning() ? 'on' : 'off');
   const statusLabel = () => {
     if (op() === 'start') return 'starting';
     if (op() === 'restart') return 'restarting';

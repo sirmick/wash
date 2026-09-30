@@ -28,8 +28,13 @@ import (
 // max_prompts the owner is told instead.
 
 const (
-	superviseEvery    = 5 * time.Second
-	defaultQuiet      = 2 * time.Minute
+	superviseEvery = 5 * time.Second
+	// defaultQuiet was 2 minutes, which a member that was merely thinking
+	// hit routinely: nothing reaches Wash while a model composes a long
+	// answer, so silence is not evidence of a wedge until it is well past
+	// any turn a provider would take. The alert's remedy (interrupt) costs
+	// the turn, so it must not fire on ordinary work.
+	defaultQuiet      = 5 * time.Minute
 	defaultIdle       = time.Minute
 	defaultRepeat     = 5 * time.Minute
 	defaultMaxPrompts = 3
@@ -72,7 +77,12 @@ type memberRuntime struct {
 	live                     bool // a session is up
 	busy, tool, asks, bgWork bool
 	cpuBusy                  bool
-	heard                    time.Time
+	// takesATurn is whether dispatch could start a turn right now: the same
+	// question claim() answers. busy() is not that question — it does not
+	// count the agent's own turn, so a member Wash is deliberately holding
+	// mail for read as one that was refusing to take it.
+	takesATurn bool
+	heard      time.Time
 }
 
 // readProcs lists every process as pid → (parent, CPU ticks). A variable
@@ -128,6 +138,7 @@ func (s *supervisor) runtime(m swarm.Member, h *hosted, procs map[int][2]uint64)
 	r := memberRuntime{live: true, heard: time.UnixMilli(h.heard.Load()), bgWork: h.background() != ""}
 	h.mu.Lock()
 	r.busy, r.tool, r.asks = h.busy(), len(h.activityTools) > 0, h.activityAsks > 0
+	r.takesATurn = !h.turnLive && !h.agentRunning
 	h.mu.Unlock()
 	if h.pid > 0 && procs != nil {
 		ticks := treeTicks(procs, h.pid)
@@ -278,10 +289,15 @@ func (s *supervisor) findings(w *swarm.Workspace, runtime map[string]memberRunti
 		}
 	}
 
-	// Mail that is not going out to a member that is free to take it.
+	// Mail that is not going out to a member that is free to take it: the
+	// message is one dispatch would send (not one the store is holding on
+	// purpose), and the session would accept the turn that carries it.
 	for _, m := range w.Members {
 		r := runtime[m.ID]
-		if m.ID == w.Lead || m.State != "available" || !r.live || r.busy || queued[m.ID] == 0 || activeWorkers >= w.MaxActive {
+		if m.ID == w.Lead || m.State != "available" || !r.live || !r.takesATurn || queued[m.ID] == 0 || activeWorkers >= w.MaxActive {
+			continue
+		}
+		if !swarm.Deliverable(w, &m) {
 			continue
 		}
 		oldest := now
@@ -291,7 +307,7 @@ func (s *supervisor) findings(w *swarm.Workspace, runtime map[string]memberRunti
 			}
 		}
 		if now.Sub(oldest) >= quiet {
-			out = append(out, finding{key: "queued:" + m.ID, text: fmt.Sprintf("undelivered: %d message(s) for %s have been queued for %s and it is not in a turn. Its session may be stuck: interrupt it, or end it and relaunch.", queued[m.ID], name(m.ID), now.Sub(oldest).Round(time.Second))})
+			out = append(out, finding{key: "queued:" + m.ID, text: fmt.Sprintf("undelivered: %d message(s) for %s have been queued for %s, it is in no turn, and nothing is holding them. Check it before acting; if its session is stuck, end it and relaunch.", queued[m.ID], name(m.ID), now.Sub(oldest).Round(time.Second))})
 		}
 	}
 
@@ -389,10 +405,12 @@ func (ws *workspaceService) report(w *swarm.Workspace, found []finding, now time
 	if len(due) > 0 {
 		var b strings.Builder
 		b.WriteString("Supervisor: work has stalled.\n")
-		for _, f := range found {
-			if !f.owner {
-				b.WriteString("\n- " + f.text)
-			}
+		// Only what is due: listing every current finding re-sent the ones
+		// whose backoff had not elapsed, and the ones already escalated past
+		// maxPrompts, without advancing either counter — so a finding the
+		// orchestrator could do nothing about repeated for as long as it held.
+		for _, f := range due {
+			b.WriteString("\n- " + f.text)
 		}
 		fmt.Fprintf(&b, "\n\nThis repeats while nothing changes (the next in %s).", repeat)
 		err := ws.store.Mutate(lead, false, func(w *swarm.Workspace, _ *swarm.Member) error {
@@ -402,7 +420,7 @@ func (ws *workspaceService) report(w *swarm.Workspace, found []finding, now time
 		if err != nil {
 			log.Printf("agentd: supervisor workspace=%s: %v", w.ID, err)
 		} else {
-			log.Printf("agentd: supervisor workspace=%s prompted the orchestrator: %d finding(s)", w.ID, len(found))
+			log.Printf("agentd: supervisor workspace=%s prompted the orchestrator: %d finding(s)", w.ID, len(due))
 			ws.signal()
 		}
 	}

@@ -8,7 +8,9 @@ import { type Origin, LOCAL_ORIGIN, compoundInstanceId, compoundChannelId } from
 
 interface Pending {
   channelID: number;
-  chunks: Uint8Array[];
+  // Backed by a real ArrayBuffer (see gzip.ts): a Blob will not take bytes
+  // that might sit in shared memory.
+  chunks: Uint8Array<ArrayBuffer>[];
   resolve: () => void;
   reject: (err: Error) => void;
   promise: Promise<void>;
@@ -75,7 +77,7 @@ function runImport(url: string, origin: Origin): Promise<void> {
 // pushBundleBytes accumulates raw frames arriving on a bundle channel.
 // Returns true if the bytes were consumed, false otherwise (which the
 // caller treats as a normal raw-channel frame).
-export function pushBundleBytes(channelID: number, bytes: Uint8Array, origin: Origin = LOCAL_ORIGIN): boolean {
+export function pushBundleBytes(channelID: number, bytes: Uint8Array<ArrayBuffer>, origin: Origin = LOCAL_ORIGIN): boolean {
   const ck = compoundChannelId(origin, channelID);
   const ik = instanceByChannel.get(ck);
   if (ik == null) return false;

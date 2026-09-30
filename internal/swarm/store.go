@@ -116,6 +116,11 @@ type Message struct {
 	RequestID  string `json:"request_id,omitempty"`
 	State      string `json:"delivery"`
 	Created    int64  `json:"created_at"`
+	// Task marks the instruction Assign wrote to hand its assignment over.
+	// Only that one goes stale when the assignment resolves: a later
+	// instruction naming the same assignment is a new ask about finished
+	// work, not a duplicate of this one.
+	Task bool `json:"task,omitempty"`
 	// Questions is a decision_request's question set; Answers the owner's
 	// answers on its decision_response.
 	Questions *QuestionSet              `json:"questions,omitempty"`
@@ -459,7 +464,12 @@ var ErrActiveAssignment = errors.New("member already has an active assignment")
 // Assign gives member an assignment on a plan node: node, or the member's
 // own node when node is empty. The node's needs must be done unless override
 // says why not.
-func (s *Store) Assign(session, member, node, override, text, request string) (Assignment, error) {
+//
+// text is the assignment's one-line title, which is what the plan and the
+// sidebar show; body is the instructions that go with it. Both reach the
+// assignee in the instruction this writes — a title alone left a member
+// guessing at its scope, or stopping to ask for the brief it was sent.
+func (s *Store) Assign(session, member, node, override, text, body, request string) (Assignment, error) {
 	var out Assignment
 	err := s.Mutate(session, false, func(w *Workspace, m *Member) error {
 		if !m.CanSpawn {
@@ -487,7 +497,14 @@ func (s *Store) Assign(session, member, node, override, text, request string) (A
 			return err
 		}
 		out = *a
-		_, err = AddMessage(w, m.ID, target.ID, "instruction", text, "", out.ID, request)
+		brief := text
+		if body != "" {
+			brief += "\n\n" + body
+		}
+		v, err := AddMessage(w, m.ID, target.ID, "instruction", brief, "", out.ID, request)
+		if err == nil {
+			v.Task = true
+		}
 		return err
 	})
 	return out, err
@@ -620,11 +637,14 @@ func (s *Store) Next(session string) ([]Message, error) {
 // pickDelivery chooses what m's next turn delivers, as indexes into
 // w.Messages, and which queued messages are stale.
 //
-// Stale: an assignment's instruction still queued after the assignee already
-// completed or failed that assignment. A member that reads its inbox in the
-// turn that delivers its role finds the queued task there and does it; wash
-// then used to dispatch the same task again ("late duplicate delivery"), one
-// wasted turn per member.
+// Stale: an assignment's own handover instruction (Message.Task) still queued
+// after the assignee already completed or failed that assignment. A member
+// that reads its inbox in the turn that delivers its role finds the queued
+// task there and does it; wash then used to dispatch the same task again
+// ("late duplicate delivery"), one wasted turn per member. Only that
+// handover goes stale: an orchestrator writing to a member about work it has
+// finished is asking it something new, and dropping those left a member idle
+// with mail that could never wake it, under a promise that messages wake.
 //
 // Held: while a WaitingOn set has not fully resolved, its results and the
 // answers and progress of the members doing it. A reviewer answering a QA
@@ -670,7 +690,7 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 		if owner && msg.Type != "decision_response" {
 			continue
 		}
-		if msg.Type == "instruction" && msg.Assignment != "" && resolved(msg.Assignment) {
+		if msg.Task && msg.Assignment != "" && resolved(msg.Assignment) {
 			for _, a := range w.Assignments {
 				if a.ID == msg.Assignment && a.Member == m.ID {
 					stale = append(stale, i)
@@ -714,6 +734,16 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 		batch = nil
 	}
 	return batch, stale, setDone
+}
+
+// Deliverable reports whether m's queued mail would go out if it took a turn
+// now. Queued is not the same as undeliverable-and-stuck: pickDelivery holds
+// results until a waiting set resolves, holds everything behind an open owner
+// question, and cuts a second ask to the next turn. A watchdog that counts
+// queued messages instead of asking this calls those healthy states stuck.
+func Deliverable(w *Workspace, m *Member) bool {
+	batch, _, _ := pickDelivery(w, m)
+	return len(batch) > 0
 }
 
 func (s *Store) TurnEnded(session string, messageIDs []string, failed bool) error {

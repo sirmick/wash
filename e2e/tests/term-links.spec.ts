@@ -159,4 +159,42 @@ test.describe('term links', () => {
     expect(win.url()).toContain('example.invalid');
     await win.close();
   });
+
+  // The test above asserts only the host, so it passes whether or not the
+  // query survives. A link whose meaning IS its query — a search, a
+  // tracked doc, anything with an id — is useless if it opens the bare
+  // path, and silently so: a page loads, just the wrong one.
+  test('a URL keeps its query string when clicked', async ({ page, router }) => {
+    await page.context().route('http://example.invalid/**', (r) =>
+      r.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' }));
+    const host = await openTerminal(page, router.url);
+    const url = 'http://example.invalid/search?q=wash&page=2';
+    const line = await echoLine(page, host, url);
+    const at = await cellOf(host, line, url);
+    const popup = page.waitForEvent('popup', { timeout: 20_000 });
+    await clickLink(page, at);
+    const win = await popup;
+    await win.waitForLoadState('domcontentloaded').catch(() => {});
+    expect(win.url()).toBe(url);
+    await win.close();
+  });
+
+  // The addon's own pattern stops at the first ( ) ! * or ', which are
+  // ordinary characters in a query string — this exact shape opened
+  // `?q=a` and dropped the rest. The unit tests in web/lib cover the
+  // pattern; this proves the terminal is actually using it.
+  test('a query string containing ! and parens survives the click', async ({ page, router }) => {
+    await page.context().route('http://example.invalid/**', (r) =>
+      r.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' }));
+    const host = await openTerminal(page, router.url);
+    const url = 'http://example.invalid/p?q=a!b&r=(c)';
+    const line = await echoLine(page, host, url);
+    const at = await cellOf(host, line, url);
+    const popup = page.waitForEvent('popup', { timeout: 20_000 });
+    await clickLink(page, at);
+    const win = await popup;
+    await win.waitForLoadState('domcontentloaded').catch(() => {});
+    expect(win.url()).toBe(url);
+    await win.close();
+  });
 });

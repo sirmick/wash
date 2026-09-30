@@ -44,7 +44,7 @@ export const SwitcherOverlay: Component<{ wins: ReadonlyArray<Win>; index: numbe
         border: `1px solid ${tokens.borderMenu}`,
         'border-radius': tokens.radiusMd,
         'box-shadow': tokens.shadowMenu,
-        font: tokens.type.text,
+        font: tokens.type.textMd,
       }}
     >
       <For each={props.wins}>

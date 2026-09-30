@@ -87,14 +87,12 @@ import {
   Package,
   PanelRightClose,
   PanelRightOpen,
-  Pencil,
   Presentation,
   RotateCw,
   Search,
   ShieldAlert,
   Square,
   Terminal,
-  Trash2,
   Upload,
   Video,
   FolderUp,
@@ -438,7 +436,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   let pendingReveal: string | null = null;
 
   // Refs / latched state (no reactivity needed)
-  let pendingNav: string | null = null;
   // navSnapshot is the state selectPath commits over, kept until the
   // target's listing arrives: on list_err the navigation is rolled back
   // to it (see onListErr), so a path-bar typo neither moves the cursor
@@ -545,7 +542,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const LIST_INFLIGHT_STALE_MS = 30_000;
   const listInFlight = new Map<string, { again: boolean; at: number }>();
   const requestList = (p: string, refresh: boolean) => {
-    pendingNav = p;
     const cur = listInFlight.get(p);
     if (cur && Date.now() - cur.at < LIST_INFLIGHT_STALE_MS) {
       if (refresh) cur.again = true;
@@ -668,7 +664,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (m.code !== 'outside_root') {
           setStatusOverride(`error: ${String(m.msg)}`);
         }
-        pendingNav = null;
         return;
       case 'read_ok': {
         const r = m as unknown as { binary: boolean; size: number; content: string; truncated: boolean };
@@ -830,7 +825,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         setSelectedPath(path());
       }
     }
-    pendingNav = null;
   };
 
   // onListErr is the one place a cached listing is dropped: the
@@ -843,7 +837,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // well be the live tree (the sandbox root sits under a probed ancestor).
     if (listings[p]) dropSubtreeState(p);
     else collapseDir(p);
-    pendingNav = null;
     const snap = navSnapshot;
     if (snap && snap.target === p && path() === p) {
       navSnapshot = null;
@@ -4075,7 +4068,11 @@ const OpenWithMenu: Component<{
 // ConfirmDeleteOverlay — destructive-delete confirm modal.
 const ConfirmDeleteOverlay: Component<{
   name: string;
-  path: string;
+  // A bulk delete confirms several paths at once (requestBulkDelete). Rendering
+  // the array straight into JSX ran them together with no separator — a
+  // garbled path list on the one dialog that must be read before it destroys
+  // anything.
+  path: string | string[];
   onCancel: () => void;
   onConfirm: () => void;
 }> = (props) => {
@@ -4096,9 +4093,10 @@ const ConfirmDeleteOverlay: Component<{
           font: tokens.type.monoMd,
           opacity: 0.8,
           'word-break': 'break-all',
+          'white-space': 'pre-line',
         }}
       >
-        {props.path}
+        {Array.isArray(props.path) ? props.path.join('\n') : props.path}
       </div>
     </ConfirmDialog>
   );

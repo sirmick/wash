@@ -19,7 +19,10 @@ export function planStateColor(state: string): string {
 }
 
 /** The ids from the top of the plan down to id: the breadcrumb a member tab shows. */
-export function planPath(plan: Node[] | undefined, id: string | undefined): Node[] {
+// plan is nullable as well as optional: Go marshals a nil slice as null, so
+// the generated Workspace.plan is `Node[] | null`. The body already folds
+// both to [].
+export function planPath(plan: Node[] | null | undefined, id: string | undefined): Node[] {
   const out: Node[] = [];
   const byId = new Map((plan ?? []).map((n) => [n.id, n]));
   for (let cur = id ? byId.get(id) : undefined, guard = 0; cur && guard <= byId.size; cur = cur.parent ? byId.get(cur.parent) : undefined, guard++) out.unshift(cur);

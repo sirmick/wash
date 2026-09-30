@@ -747,6 +747,7 @@ No fields.
 | `request_id?` | `string` |  |
 | `delivery` | `string` |  |
 | `created_at` | `number` |  |
+| `task?` | `boolean` | Task marks the instruction Assign wrote to hand its assignment over. Only that one goes stale when the assignment resolves: a later instruction naming the same assignment is a new ask about finished work, not a duplicate of this one. |
 | `questions?` | `QuestionSet` | Questions is a decision_request's question set; Answers the owner's answers on its decision_response. |
 | `answers?` | `Record<string, QuestionAnswer>` |  |
 
@@ -1209,7 +1210,7 @@ UsageRow is one row's counters.
 | `legend?` | `string` | Legend says what the orchestrator's emojis and states mean. |
 | `roles?` | `Record<string, string>` | Roles are instruction templates by member role, put before a new member's own instructions (workspace.toml [roles.<role>]). |
 | `context_warn?` | `number` | ContextWarn is the share of its context window at which a member's use is reported to the orchestrator, once; 0 is the default. |
-| `supervisor` | `Supervisor` | Supervisor tunes the stall watchdog. |
+| `supervisor?` | `Supervisor` | Supervisor tunes the stall watchdog. |
 | `nudged?` | `string[]` | Nudged are the lifecycle nudges already sent, so each goes once. |
 | `members` | `Member[] \| null` |  |
 | `assignments` | `Assignment[] \| null` |  |

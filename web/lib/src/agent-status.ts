@@ -53,11 +53,11 @@ export const AGENT_STATES: readonly AgentState[] = [
  * is the colour this vocabulary added: `failed` was previously `done`,
  * so an adapter error and a clean finish were the same green.
  *
- * An unknown state returns the muted default rather than throwing: a
+ * An unknown or absent state returns the muted default rather than throwing: a
  * newer agentd may publish a state this build has never heard of, and a
  * grey dot is a better answer than a crash or a blank.
  */
-export function agentStateColor(state: string): string {
+export function agentStateColor(state: string | undefined): string {
   switch (state) {
     case 'needs-input':
       return tokens.accentAmber;
@@ -81,7 +81,7 @@ export function agentStateColor(state: string): string {
  * Never renders the raw token: "needs-input" is not English, and every
  * surface was independently translating it.
  */
-export function agentStateLabel(state: string, reason?: string): string {
+export function agentStateLabel(state: string | undefined, reason?: string): string {
   switch (state) {
     case 'needs-input':
       return reason ? `needs you · ${reason}` : 'needs you';
@@ -94,7 +94,9 @@ export function agentStateLabel(state: string, reason?: string): string {
     case 'done':
       return state;
     default:
-      return state;
+      // A state this build has not heard of is shown as itself; no state
+      // at all reads as nothing, which is what the surfaces already gate on.
+      return state ?? '';
   }
 }
 

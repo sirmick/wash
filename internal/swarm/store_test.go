@@ -39,7 +39,7 @@ func TestTurnCarriesAtMostOneAsk(t *testing.T) {
 	if _, e := s.Send("lead-session", "worker", "answer", "Main moved; rebase first", "", "", ""); e != nil {
 		t.Fatal(e)
 	}
-	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "task-1")
+	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "", "task-1")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -83,11 +83,11 @@ func TestWaitingSetSettlesWhenAMemberIsEnded(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.Assign("lead-session", "worker", "", "", "Review", "")
+	a, err := s.Assign("lead-session", "worker", "", "", "Review", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.Assign("lead-session", "other", "", "", "Review", "")
+	b, err := s.Assign("lead-session", "other", "", "", "Review", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestWaitingSetSettlesWhenAMemberIsEnded(t *testing.T) {
 
 func TestInboxAcrossIdleAndRecovery(t *testing.T) {
 	s, w := fixture(t)
-	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "task-1")
+	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "", "task-1")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -234,7 +234,7 @@ func TestAbandonedTurnLeavesMailUncertain(t *testing.T) {
 func TestStopRetainsMailAndEphemeralCompletionIsExplicit(t *testing.T) {
 	s, _ := fixture(t)
 	_ = s.Mutate("worker-session", false, func(_ *Workspace, m *Member) error { m.Lifetime = "ephemeral"; return nil })
-	a, e := s.Assign("lead-session", "worker", "", "", "Review", "request")
+	a, e := s.Assign("lead-session", "worker", "", "", "Review", "", "request")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -296,7 +296,7 @@ func TestDelegateEndingCancelsItsDecisionsAndRoutesChildResultToLead(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assignment, err := s.Assign("worker-session", "child", "", "", "Review", "request")
+	assignment, err := s.Assign("worker-session", "child", "", "", "Review", "", "request")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestReportsToTheOrchestratorAreSummaries(t *testing.T) {
 	if _, err := s.Send("lead-session", "worker", "instruction", long, "", "", ""); err != nil {
 		t.Fatal("orchestrator brief capped", err)
 	}
-	a, err := s.Assign("lead-session", "worker", "", "", "Do it", "")
+	a, err := s.Assign("lead-session", "worker", "", "", "Do it", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func TestAMembersLastReportBeforeWaitingWakesTheOrchestrator(t *testing.T) {
 // A cheap model that ends its turn without reporting is reminded once.
 func TestAMemberThatForgetsToReportIsRemindedOnce(t *testing.T) {
 	s, _ := fixture(t)
-	a, err := s.Assign("lead-session", "worker", "", "", "Build timers", "")
+	a, err := s.Assign("lead-session", "worker", "", "", "Build timers", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,6 +455,56 @@ func TestAMemberThatForgetsToReportIsRemindedOnce(t *testing.T) {
 	}
 	if again, _ := s.Next("worker-session"); len(again) != 0 {
 		t.Fatalf("reminded twice: %+v", again)
+	}
+}
+
+// An assignment's instructions reach its assignee. text is the title the plan
+// shows; body is what the member works from, and delivering the title alone
+// left it with a one-line ask and no scope.
+func TestAssignDeliversItsBody(t *testing.T) {
+	s, _ := fixture(t)
+	body := "Reconcile every open MR against production. Report the gaps in evidence/gaps.md."
+	a, err := s.Assign("lead-session", "worker", "", "", "Reconcile the MRs", body, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.Next("worker-session")
+	if err != nil || len(next) != 1 || next[0].Assignment != a.ID {
+		t.Fatalf("no instruction: %+v %v", next, err)
+	}
+	if !strings.Contains(next[0].Body, body) || !strings.Contains(next[0].Body, "Reconcile the MRs") {
+		t.Fatalf("the member was sent %q", next[0].Body)
+	}
+	// The title stays the title: the plan and the sidebar show one line.
+	if a.Text != "Reconcile the MRs" {
+		t.Fatalf("the body leaked into the assignment's title: %q", a.Text)
+	}
+}
+
+// An orchestrator's own instruction about finished work is a new ask, and
+// reaches an idle member. Only the assignment's own handover goes stale when
+// it resolves; dropping the rest left a member with mail that never woke it,
+// while every tool said messages wake.
+func TestAnInstructionAboutFinishedWorkStillWakesTheMember(t *testing.T) {
+	s, _ := fixture(t)
+	a, err := s.Assign("lead-session", "worker", "", "", "Build timers", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.Next("worker-session")
+	if err := s.Complete("worker-session", a.ID, "Done; timers land in pkg/clock.", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TurnEnded("worker-session", []string{first[0].ID}, false); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.Send("lead-session", "worker", "instruction", "One more thing on those timers: use the monotonic clock.", "", a.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.Next("worker-session")
+	if err != nil || len(next) != 1 || next[0].ID != m.ID {
+		t.Fatalf("the follow-up never reached the member: %+v %v", next, err)
 	}
 }
 
@@ -536,7 +586,7 @@ func TestParentsFollowTheCreator(t *testing.T) {
 // silence the second.
 func TestEndingARemindedMemberStillTellsTheOrchestrator(t *testing.T) {
 	s, _ := fixture(t)
-	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "")
+	a, e := s.Assign("lead-session", "worker", "", "", "Build timers", "", "")
 	if e != nil {
 		t.Fatal(e)
 	}
