@@ -71,9 +71,17 @@ type Policy struct {
 	Launch *LaunchPrefs `json:"launch,omitempty"`
 }
 
-// LaunchPrefs is the remembered default for the two permission settings a
-// launch has: the adapter's own approval preset and wash's auto-approval.
+// LaunchPrefs is the remembered default for a launch: the catalog and model
+// "start an agent" means, and the two permission settings it starts with —
+// the adapter's own approval preset and wash's auto-approval.
 type LaunchPrefs struct {
+	// Catalog is the catalog id a start that names none of its own uses,
+	// and Model the slot or model id within it. This is what the Editor's
+	// "new agent here", the Places agent icon and `wash ai <dir>` all
+	// resolve against, so one setting decides what starting an agent means
+	// everywhere (docs/PLACES.md §4.5).
+	Catalog string `json:"catalog,omitempty"`
+	Model   string `json:"model,omitempty"`
 	// Mode is the adapter's session mode to start in, by adapter id: the
 	// names are the adapter's own ("acceptEdits" on Claude Code, "read-only"
 	// on Codex), so one remembered value cannot serve two adapters.

@@ -73,6 +73,16 @@ export function isOrphaned(r: Rect, screen: Size, perAxis: number): boolean {
   return r.x >= planeW || r.y >= planeH || r.x + r.w <= 0 || r.y + r.h <= 0;
 }
 
+// Is any part of this rect inside the camera's current cell? Used to decide
+// whether revealing a window needs the camera to move at all: if the user
+// can already see some of it, panning the whole desktop away from what they
+// were looking at is worse than leaving it.
+export function isOnScreen(r: Rect, screen: Size, vp: ViewportCoord): boolean {
+  const left = vp.vx * screen.w;
+  const top = vp.vy * screen.h;
+  return r.x < left + screen.w && r.x + r.w > left && r.y < top + screen.h && r.y + r.h > top;
+}
+
 // Where a window lands when it is sent to viewport cell (vx, vy).
 //
 // There is no per-window viewport field to set: every window lives in one

@@ -14,6 +14,16 @@ export { Menu, MenuItem, MenuSeparator } from './menu';
 export { Tab, TAB_HEIGHT } from './tab';
 export type { TabProps } from './tab';
 export { MenuBar, kbdStyle } from './menubar';
+export {
+  PlacesBar,
+  groupTint,
+  groupTintIndex,
+  PLACES_AGENT,
+  PLACES_FILES,
+  PLACES_EDITOR,
+  PLACES_TERMINAL,
+  type PlacesView,
+} from './places-bar';
 export type { MenuBarProps, MenuBarMenu } from './menubar';
 export type { MenuProps, MenuItemProps } from './menu';
 export { Overlay, ConfirmDialog } from './overlay';

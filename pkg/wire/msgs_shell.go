@@ -100,6 +100,12 @@ const (
 	// converts the matching window into a crash tombstone in place,
 	// preserving geometry so the user can copy the trace.
 	TShellAppCrashed = "app.crashed"
+	// Router → shell: a window was raised by something other than the user
+	// clicking it (an app raising itself, launchOrRaise), so the shell should
+	// bring the camera to it if it is not already on screen. The user's own
+	// focus clicks never produce this — they go through window.focus — so a
+	// reload, which refocuses every window as it mounts, never pans.
+	TShellWindowReveal = "window.reveal"
 
 	// Shell → router, asset pull. Read a single file from the
 	// router's embedded shell-asset FS (icons.svg, future docs, etc.).
@@ -756,6 +762,17 @@ type ShellAppCrashed struct {
 	Signal     string `json:"signal,omitempty"`
 	Uptime     string `json:"uptime"`
 	Log        string `json:"log"`
+}
+
+// ShellWindowReveal asks the shell to bring WindowID into view. Advisory: a
+// shell that is already looking at it does nothing.
+type ShellWindowReveal struct {
+	T        string `json:"t"`
+	WindowID uint32 `json:"window_id"`
+}
+
+func NewShellWindowReveal(windowID uint32) ShellWindowReveal {
+	return ShellWindowReveal{T: TShellWindowReveal, WindowID: windowID}
 }
 
 func NewShellAppCrashed(instanceID, appID string, windowID uint32, exitCode int, signal, uptime, log string) ShellAppCrashed {

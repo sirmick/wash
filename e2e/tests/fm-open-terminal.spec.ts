@@ -3,10 +3,11 @@
 // a terminal in the folder you were browsing meant launching wash-term and
 // re-typing the path.
 //
-// The toolbar button and the context menu now spawn com.wash.term with the
-// folder as its `--open` argv (Conn.SpawnRequestOpen). Both halves: the fm
-// BE's `fm: open_terminal dir=…` audit line carrying the right directory,
-// and a term window appearing.
+// Two ways in. The row context menu spawns com.wash.term for the CLICKED
+// folder, a new window each time (`fm: open_terminal dir=…`). The toolbar's
+// Terminal icon is the Places bar (docs/PLACES.md): the first click opens a
+// terminal in the VIEWED folder and binds it to this window, and every click
+// after brings that same terminal back rather than opening another.
 //
 // TODO: the term track is teaching wash-term to honour `--open <dir>` as
 // the first tab's cwd. Once both land, assert the SHELL's cwd here (`pwd`
@@ -42,17 +43,39 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 test.describe('fm open terminal here', () => {
   test.setTimeout(45_000);
 
-  test('the toolbar button spawns a terminal for the viewed folder', async ({ page, router }) => {
+  test('the Places terminal icon opens one terminal, bound, and reuses it', async ({ page, router }) => {
     await openFm(page, router);
+    const fm = page.locator('wash-app-fm');
+    const icon = fm.getByTestId('places-term');
+    await expect(icon).toHaveAttribute('data-bound', 'false');
+    await expect(icon).toHaveAttribute('title', `Open Terminal here · ${router.fmRoot}`);
 
     const from = router.logCursor();
-    await page.locator('[data-testid="fm-open-terminal"]').click();
+    await icon.click();
     await router.waitForLog(
-      new RegExp(`fm: open_terminal dir="${escapeRe(router.fmRoot)}" app=com\\.wash\\.term`),
+      new RegExp(`places: com\\.wash\\.fm open com\\.wash\\.term dir="${escapeRe(router.fmRoot)}"`),
       10_000,
       from,
     );
-    await expect(page.locator('wash-app-term')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('wash-app-term')).toHaveCount(1, { timeout: 20_000 });
+
+    // Bound, and visibly so from BOTH ends, in the same group.
+    await expect(icon).toHaveAttribute('data-bound', 'true');
+    const term = page.locator('wash-app-term');
+    await expect(term.getByTestId('places-fm')).toHaveAttribute('data-bound', 'true');
+    const group = await fm.getByTestId('places-bar').getAttribute('data-group');
+    expect(group).toBeTruthy();
+    await expect(term.getByTestId('places-bar')).toHaveAttribute('data-group', group!);
+
+    // The point of binding: a second click brings THAT terminal back. The
+    // new terminal opened on top of Files' corner, so bring Files forward
+    // first, as a person would.
+    const fmWin = Number(await fm.getAttribute('data-wash-window'));
+    await page.evaluate((w) => window.wash.focusWindow(w), fmWin);
+    const again = router.logCursor();
+    await icon.click();
+    await router.waitForLog(/places: com\.wash\.fm show com\.wash\.term /, 10_000, again);
+    await expect(page.locator('wash-app-term')).toHaveCount(1);
   });
 
   test('the context menu spawns a terminal for the clicked folder', async ({ page, router }) => {

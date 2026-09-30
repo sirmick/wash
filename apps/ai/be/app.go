@@ -43,6 +43,7 @@ import (
 
 	agentd "github.com/sirmick/wash/apps/agentd/be"
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/places"
 	"github.com/sirmick/wash/internal/agentproto"
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/version"
@@ -109,8 +110,14 @@ func init() {
 		OnAppMsg:         onAppMsg,
 		OnAppMsgFrom:     onAppMsgFrom,
 		OnCloseRequested: onCloseRequested,
-		OnSpawnResult:    onSpawnResult,
-		OnInstanceGone:   onInstanceGone,
+		// The group adopts the windows it opens — including this window's
+		// editor, which is the group's (editor.go) — and forgets closed ones.
+		OnSpawnResult: func(c *sdk.Conn, appID, instanceID string, err error) {
+			group.OnSpawnResult(c, appID, instanceID, err)
+		},
+		OnInstanceGone: func(c *sdk.Conn, appID, instanceID string) {
+			group.OnInstanceGone(c, appID, instanceID)
+		},
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-ai",
@@ -159,21 +166,29 @@ func run(ctx context.Context) error { return sdk.Run(ctx, def) }
 var (
 	flagAgent string
 	flagCwd   string
+	// flagStart is "a folder was named, so start a session in it" — true
+	// even when no adapter was picked, which is the default-catalog case:
+	// agentd resolves what to run from LaunchPrefs.
+	flagStart bool
 )
 
 // parseFlags reads --agent / --cwd so a session can be started straight
 // from a shell:
 //
 //	wash ai --agent claude --cwd ~/wash
-//	wash ai ~/wash                       (agent = first available adapter)
+//	wash ai ~/wash                       (the default catalog)
 //
 // ContinueOnError and a discarded output, matching wash-term: the SDK's
-// own argv (--wash-manifest, --open) must pass through unscathed.
+// own argv (--wash-manifest) must pass through unscathed. `--open` IS read,
+// via openPath: the router's open-routing and every cross-app spawn
+// (SpawnRequestOpen) deliver a folder that way, so ignoring it meant the
+// Editor's "new agent here" and the Places agent icon opened a window with
+// no session at all (docs/PLACES.md §4.5).
 //
 // The directory is resolved to an absolute path HERE, in the process the
 // user launched, because "." and "~" mean something in this cwd and
 // nothing in the router's — resolving them later cost a bug already.
-func parseFlags() {
+func parseFlags(openPath string) {
 	flags := flag.NewFlagSet("wash-ai", flag.ContinueOnError)
 	agent := flags.String("agent", "", "which agent to start, on its own defaults (claude, codex, gemini, opencode)")
 	cwd := flags.String("cwd", "", "working directory for the session (default: $HOME)")
@@ -184,6 +199,9 @@ func parseFlags() {
 	dir := *cwd
 	if dir == "" && flags.NArg() > 0 {
 		dir = flags.Arg(0)
+	}
+	if dir == "" {
+		dir = openPath
 	}
 	if dir == "" {
 		return
@@ -197,13 +215,28 @@ func parseFlags() {
 		dir = abs
 	}
 	flagCwd = dir
-	if flagAgent == "" {
+	flagStart = true
+	if flagAgent == "" && !defaultCatalogSet() {
 		// A bare directory still means "start something here" — the
 		// launcher would otherwise open with the folder filled in and
 		// nothing chosen, which is a worse answer than picking the first
 		// adapter that is actually installed.
+		//
+		// Only when there is no default catalog to resolve against. With
+		// one set, the request goes up naming nothing and agentd applies
+		// the default, so `wash ai <dir>` starts what the Editor's "new
+		// agent here" and the Places agent icon start, rather than
+		// whichever adapter happened to probe first.
 		flagAgent = firstAvailableAgent()
 	}
+}
+
+// defaultCatalogSet reports whether "start an agent" has a stored answer
+// (LaunchPrefs.Catalog). agentd owns resolving it; this only decides whether
+// to name an adapter instead.
+func defaultCatalogSet() bool {
+	pol := agentpolicy.Load(agentpolicy.Path())
+	return pol.Launch != nil && pol.Launch.Catalog != ""
 }
 
 // firstAvailableAgent is the adapter probe's first usable row, so
@@ -268,6 +301,8 @@ func persistSessionView(c *sdk.Conn) {
 // whole transcript again even if agentd thinks this window has it.
 func bind(c *sdk.Conn, key string, replay bool) {
 	session.key = key
+	// The group carries the session so its Editor knows the conversation.
+	group.SetSession(c, session.key, session.title)
 	persistSessionView(c)
 	// Before the snapshot can arrive: started clears the FE's event list.
 	c.SendAppMsg(startedMsg{Kind: "started", Key: key})
@@ -299,6 +334,7 @@ func followRoster(c *sdk.Conn, state agentproto.State) {
 		if r.Key == session.key && r.Title != "" && r.Title != session.title {
 			session.title = r.Title
 			_ = c.SetTitle(r.Title)
+			group.SetSession(c, session.key, session.title)
 		}
 		if r.Key == session.key && r.Cwd != "" {
 			session.cwd = r.Cwd
@@ -318,9 +354,15 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// `wash-ai list-apps` — which then ran an adapter probe, shelling out
 	// and logging, on every multicall invocation of every app.
 	if !managerMode {
-		parseFlags()
+		parseFlags(c.LaunchOpenPath())
 	}
 	log.Printf("wash-ai ready instance=%s manager=%v", instanceID, managerMode)
+	// Only a session window takes part in groups; the manager is a
+	// different surface with no folder of its own.
+	if !managerMode {
+		group.SetSelf(instanceID)
+		pushPlaces(c, group.View())
+	}
 	// The launcher picks a working directory with the shared
 	// <FilePicker mode="directory">, which talks to its own BE rather than
 	// a service. Typing a path into a text field was the placeholder, and
@@ -338,12 +380,16 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	if !managerMode {
 		go keepWatching(c)
 	}
-	if flagAgent == "" {
+	if !flagStart {
 		return
 	}
-	// Launched with flags: skip the launcher entirely. The FE is told
+	// Launched with a folder: skip the launcher entirely. The FE is told
 	// first so it shows what is starting instead of flashing an empty
 	// form that is about to be replaced.
+	//
+	// An empty Agent is deliberate and is the common case now — agentd
+	// resolves the default catalog (startProfile). Naming one here would
+	// pin the adapter and lose the default's model and connection.
 	c.SendAppMsg(autostartMsg{Kind: "autostart", Agent: flagAgent, Cwd: flagCwd})
 	_ = agentproto.SendAgentd(c, agentproto.AgentStart{Agent: flagAgent, Cwd: flagCwd, Claim: true})
 }
@@ -352,6 +398,17 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 // go to agentd as they are: this window is a thin host, and agentd decides
 // what each may do (docs/AGENT_PROTOCOL.md, Trust and roles). What remains
 // here is the window's own business.
+// group is this window's Places membership — the other three apps it is
+// bound to (docs/PLACES.md). Built at package scope so the AppDef callbacks
+// always have something to talk to; the instance id arrives in onReady.
+var group = places.New(places.AppAgent, "", pushPlaces)
+
+// pushPlaces hands the FE the current group so the icon bar can draw which
+// apps are reachable and which tint the group carries.
+func pushPlaces(c places.Conn, v places.View) {
+	c.SendAppMsg(map[string]any{"kind": "places", "group": v.Group, "members": v.Members})
+}
+
 func onAppMsg(c *sdk.Conn, win uint32, data any) {
 	m, _ := data.(map[string]any)
 	if m == nil {
@@ -388,6 +445,18 @@ func onAppMsg(c *sdk.Conn, win uint32, data any) {
 
 	case "open_agents":
 		_ = c.SpawnRequest("com.wash.agents")
+
+	case "places_click":
+		// The session's folder, not one the FE names: this window IS the
+		// session, so its cwd is not the frontend's to choose.
+		if session.cwd == "" {
+			log.Printf("wash-ai: places click with no folder yet")
+			return
+		}
+		group.SetSession(c, session.key, session.title)
+		if err := group.Click(c, str(m["target"]), session.cwd, "", 0, 0); err != nil {
+			log.Printf("wash-ai: places click: %v", err)
+		}
 
 	case "save_transcript":
 		// Written through internal/fs, so the sandbox root the router
@@ -466,10 +535,17 @@ func onAppMsgFrom(c *sdk.Conn, win uint32, data any, from wire.Sender) {
 		c.SendAppMsg(draftMsg{Kind: "draft", Text: text})
 		return
 	}
+	// An invitation into another window's group. Handled here rather than
+	// on a Bus because this app dispatches app messages itself; `from` is
+	// the router-attested sender the SDK handed us.
+	if k := str(m["kind"]); k == places.MsgKind || k == places.MsgSync {
+		group.Show(c, places.ShowFrom(m), from, nil)
+		return
+	}
 	// This window's editor, closing: forget it now rather than when the
 	// router reaps it (editor.go).
 	if from.AppID == editAppID && str(m["kind"]) == "editor.closing" {
-		onInstanceGone(c, from.AppID, from.InstanceID)
+		group.OnInstanceGone(c, from.AppID, from.InstanceID)
 		return
 	}
 	if from.AppID != agentdAppID {

@@ -338,8 +338,16 @@ type ConnectionView struct {
 	Key     string `json:"key,omitempty"`
 }
 
-// LaunchPrefs is the remembered permission default for a launch.
+// LaunchPrefs is the remembered default for a launch: what "start an agent"
+// means when nobody says otherwise.
 type LaunchPrefs struct {
+	// Catalog is the catalog id a start with no catalog of its own uses.
+	// Empty falls back to session history, then to the first available
+	// adapter — see agentd's startProfile.
+	Catalog string `json:"catalog,omitempty"`
+	// Model is the slot name (frontier/coding/small) or model id within
+	// Catalog. Empty is the catalog's own default slot.
+	Model string `json:"model,omitempty"`
 	// Mode is the adapter session mode to start in, by adapter id; absent
 	// is the adapter's default.
 	Mode map[string]string `json:"mode,omitempty"`

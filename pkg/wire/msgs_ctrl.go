@@ -399,6 +399,9 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellAppCrashed:
 		var m ShellAppCrashed
 		return m, json.Unmarshal(data, &m)
+	case TShellWindowReveal:
+		var m ShellWindowReveal
+		return m, json.Unmarshal(data, &m)
 	case TShellActivityQuery:
 		var m ShellActivityQuery
 		return m, json.Unmarshal(data, &m)

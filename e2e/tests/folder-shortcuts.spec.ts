@@ -78,14 +78,16 @@ test.describe('folder shortcuts', () => {
     }
   }
 
-  test('File Manager toolbar opens the viewed folder as an Editor project', async ({ page, router }) => {
+  // The toolbar's Editor icon is the Places bar (docs/PLACES.md): it opens
+  // the folder being VIEWED, which is why the path is navigated first.
+  test('File Manager Places icon opens the viewed folder as an Editor project', async ({ page, router }) => {
     const fm = await openApp(page, router.url, 'fm');
     const dir = join(router.fmRoot, 'sub folder');
     await fm.getByTestId('fm-path').fill(dir);
     await fm.getByTestId('fm-path').press('Enter');
     await expect(fm.getByTestId('fm-entry-note.txt')).toBeVisible();
-    const action = fm.getByTestId('fm-open-text-editor');
-    await expect(action).toHaveAttribute('title', `Open text editor in this folder: ${dir}`);
+    const action = fm.getByTestId('places-edit');
+    await expect(action).toHaveAttribute('title', `Open Editor here · ${dir}`);
     await action.click();
     await editorFolder(page.locator('wash-app-edit'), dir);
   });

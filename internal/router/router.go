@@ -1170,6 +1170,16 @@ func (r *Router) raiseWindow(inst *AppInstance, win uint32) {
 	if err := inst.WriteEvt(wire.NewEvtWindowFocus(win)); err != nil {
 		r.log("raise: focus relay instance=%s win=%d: %v", inst.InstanceID, win, err)
 	}
+	// Focus alone is invisible when the window sits in another viewport cell:
+	// the shell pans its camera only for its own clicks. Every path here is a
+	// raise the user did NOT click (an app raising itself, launchOrRaise), so
+	// ask the shells to bring it into view.
+	reveal := wire.NewShellWindowReveal(win)
+	for _, s := range r.shellList() {
+		if err := s.WriteCtrl(reveal); err != nil {
+			r.log("raise: reveal win=%d: %v", win, err)
+		}
+	}
 }
 
 // maybeBroadcastCrash inspects the cmd.ProcessState after Wait() has

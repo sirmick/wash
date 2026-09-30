@@ -174,6 +174,19 @@ func tellFEOwner(c *sdk.Conn) {
 	_ = c.SendAppMsg(map[string]any{"kind": "agent.owner", "key": key, "title": title})
 }
 
+// onAgentInstanceGone forgets an Agent window that closed, so the editor is
+// claimable again. Without this the owner slot held a dead instance id for
+// the life of the window: messages back went nowhere, and — now that the
+// claim is exclusive — no other agent could ever take it.
+func onAgentInstanceGone(instanceID string) {
+	agentMu.Lock()
+	defer agentMu.Unlock()
+	if owner == instanceID {
+		log.Printf("edit: owner %s closed", instanceID)
+		owner = ""
+	}
+}
+
 // tellOwnerClosing tells the Agent window that owns this editor that it is
 // closing. The router's instance.gone says the same, but only once the
 // process is reaped, and a file clicked in between would be sent here and
@@ -217,9 +230,13 @@ type agentKeyReq struct {
 func registerAgentHandlers(b *sdk.Bus) {
 	sdk.HandleVoid(b, "agent.start", func(_ *sdk.Conn, _ string, req agentStartReq) error {
 		cl := agentClient()
-		if cl == nil || req.Agent == "" {
+		if cl == nil {
 			return nil
 		}
+		// An empty Agent is not a mistake: it means "the default catalog",
+		// which agentd resolves (startProfile, docs/PLACES.md §4.5). The FE
+		// only offers it when a default is set, so the no-default error is
+		// not a path a click can reach.
 		cwd := req.Cwd
 		if cwd == "" {
 			cwd = root
@@ -287,6 +304,16 @@ func registerAgentHandlers(b *sdk.Bus) {
 			return nil
 		}
 		agentMu.Lock()
+		// Exclusive: an editor already claimed by a LIVE agent window is
+		// not taken over by a second one, which would leave the first
+		// silently pointing at an editor that no longer answers it
+		// (docs/PLACES.md §4.3). owner is cleared when that window closes
+		// (onAgentInstanceGone), so the slot does free up.
+		if owner != "" && owner != from.InstanceID {
+			agentMu.Unlock()
+			log.Printf("edit: declined editor.show from %s; owned by %s", from.InstanceID, owner)
+			return nil
+		}
 		owner = from.InstanceID
 		agentMu.Unlock()
 		if adoptOwner(c, req.Key, req.Title) {

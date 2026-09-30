@@ -56,8 +56,9 @@ import {
   type WinState,
   nextGeomTok,
   markGeomPending,
+  windowById,
 } from './wm';
-import { clampToPlane, isOrphaned } from './viewport-math';
+import { clampToPlane, isOnScreen, isOrphaned } from './viewport-math';
 import { Desktop } from './desktop';
 import {
   chordReleased,
@@ -307,6 +308,13 @@ interface ShellSuperseded {
   msg: string;
 }
 
+// A window was raised by something other than the user clicking it (an app
+// raising itself, launchOrRaise). See pkg/wire/msgs_shell.go.
+interface ShellWindowReveal {
+  t: 'window.reveal';
+  window_id: number;
+}
+
 export interface ShellAppCrashed {
   t: 'app.crashed';
   instance_id: string;
@@ -341,6 +349,7 @@ type ShellCtrlMsg =
   | ShellAppMsgDeliver
   | ShellNotify
   | ShellAppCrashed
+  | ShellWindowReveal
   | ShellReload
   | ShellChannelBind
   | ShellAssetReadOK
@@ -409,6 +418,30 @@ function raiseWindow(w: WindowInfo): void {
   // restoreWindow raises + focuses on its own; focusWindow for the rest.
   if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
   else window.wash.focusWindow(w.windowID, w.origin);
+}
+
+// revealWindow brings a window an app raised into view. The router's focus
+// patch has already raised it; without this, a window one viewport cell
+// over comes to the front where nobody can see it, and the click that asked
+// for it appears to do nothing.
+//
+// Only when NONE of it is on screen: if the user can see any part of it,
+// yanking the whole desktop sideways is worse than leaving the camera be.
+// A window not in the store yet (a spawn still loading its bundle) is left
+// alone — spawns already land in the current cell (handlePatch).
+//
+// Deliberately NOT skipped for a minimized window. This message goes out on
+// the control path while the un-minimize arrives as a session patch, which
+// can be held in the router's coalescing queue under load — so the store may
+// still say minimized when this lands. It does not matter: minimizing never
+// moves a window (wmstate.go setState only snapshots x/y into Restore*), so
+// its x/y is exactly where it is about to reappear.
+function revealWindow(origin: Origin, windowID: number): void {
+  const w = windowById(origin, windowID);
+  if (!w) return;
+  if (isOnScreen(w, screenSize(), viewport())) return;
+  const cell = viewportFor(w);
+  setViewport(cell.vx, cell.vy);
 }
 
 // appIDForWindow resolves a window's app id from the router-attested
@@ -672,6 +705,9 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       }
       case 'app.crashed':
         handleCrash(client, msg);
+        break;
+      case 'window.reveal':
+        revealWindow(client.origin, msg.window_id);
         break;
       case 'shell.reload': {
         // Dev-mode signal: only the LOCAL router may bounce the page (a
