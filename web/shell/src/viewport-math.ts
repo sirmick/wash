@@ -50,6 +50,29 @@ export function nextZ(windows: ReadonlyArray<{ z: number }>): number {
   return maxZ + 1;
 }
 
+// Clamp a rect's origin into the perAxis² plane, the same bound the
+// titlebar drag enforces. Every path that writes window coordinates goes
+// through this — a window outside the plane is reachable from no viewport.
+export function clampToPlane(r: Rect, screen: Size, perAxis: number): { x: number; y: number } {
+  return {
+    x: Math.round(Math.max(0, Math.min(screen.w * perAxis - r.w, r.x))),
+    y: Math.round(Math.max(0, Math.min(screen.h * perAxis - r.h, r.y))),
+  };
+}
+
+// Is this rect stranded — entirely outside the plane, so no viewport can
+// show any part of it and the titlebar can never be grabbed?
+//
+// Deliberately narrower than "not fully inside": a window hanging off the
+// edge of cell (2,2) is ugly but still reachable, and dragging it back
+// uninvited would be worse than leaving it. Only the unreachable case is
+// worth an unsolicited move.
+export function isOrphaned(r: Rect, screen: Size, perAxis: number): boolean {
+  const planeW = screen.w * perAxis;
+  const planeH = screen.h * perAxis;
+  return r.x >= planeW || r.y >= planeH || r.x + r.w <= 0 || r.y + r.h <= 0;
+}
+
 // Where a window lands when it is sent to viewport cell (vx, vy).
 //
 // There is no per-window viewport field to set: every window lives in one
