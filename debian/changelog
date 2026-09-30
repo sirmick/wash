@@ -1,3 +1,30 @@
+wash (0.17.1-1) unstable; urgency=low
+
+  * Places adopts only the window its own click opened. A spawn reply named
+    only the app, so a Places click racing another open of the same app
+    (Files' "Open in Terminal" and the Terminal icon) could bind the wrong
+    window. Spawn requests now carry a tag the router echoes.
+  * A default agent catalog that cannot start here (its key cleared) is
+    skipped: folder-opened agents use the catalog used last, else the
+    first that can start, instead of failing with a setup error.
+  * Agents: one Setup tab holds the keys (OpenRouter), the default prompt
+    and the catalogs. On the launcher, Permissions collapses like Advanced,
+    its summary still naming the mode and whether auto-approve is on.
+  * Agents: no transcript row per yolo auto-approval; thinking streams into
+    a collapsed panel with a running character count.
+  * Windows resize from every side and corner. Right-clicking a taskbar
+    button opens the window menu, with "Move to 0,0" (brings a lost window
+    home, sized to fit) and "Quit" (ends the app without asking);
+    middle-click still closes. New windows open clear of the sidebar.
+  * The sidebar is wider and shows each IP address on its own line.
+    Titlebar buttons are vertically centred.
+  * About: "Wash Processes"; "Wash Display (X11/Wayland)" moved below the
+    activity journal; the always-zero "About uptime" and the "as of" line
+    are gone. Edit: the stray Show Agent button is gone. Term:
+    double-clicking empty tab-bar space opens a new tab.
+
+ -- Michael <sirmick@gmail.com>  Wed, 30 Sep 2026 17:30:00 -0700
+
 wash (0.17.0-1) unstable; urgency=low
 
   * Places: the Agent, Files, Editor and Terminal windows each carry icons
