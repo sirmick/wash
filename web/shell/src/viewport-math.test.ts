@@ -132,9 +132,15 @@ test('resizeRect: never past the plane top-left', () => {
   assert.deepEqual(resizeRect(r, 'nw', -100, -100), { x: 0, y: 0, w: 420, h: 310 });
 });
 
-test('fitLeftOf: a frame over the reserved edge shifts left, within its cell', () => {
-  assert.equal(fitLeftOf({ x: 90, w: 852 }, 0, 940), 88);
-  assert.equal(fitLeftOf({ x: 40, w: 400 }, 0, 940), 40, 'already clear');
-  assert.equal(fitLeftOf({ x: 1100, w: 852 }, 1000, 940), 1088, 'relative to the cell');
-  assert.equal(fitLeftOf({ x: 60, w: 1200 }, 0, 940), 0, 'too wide: the cell edge');
+test('fitLeftOf: a frame over the reserved edge narrows, keeping its cascade x', () => {
+  assert.deepEqual(fitLeftOf({ x: 90, w: 852 }, 0, 940, 480), { x: 90, w: 850 });
+  assert.deepEqual(fitLeftOf({ x: 40, w: 400 }, 0, 940, 480), { x: 40, w: 400 }, 'already clear');
+  assert.deepEqual(fitLeftOf({ x: 1100, w: 852 }, 1000, 940, 480), { x: 1100, w: 840 }, 'relative to the cell');
+});
+
+test('fitLeftOf: too narrow after fitting, it shifts left instead', () => {
+  // x=600 leaves 340 < 480: shift so 600 wide fits, ending at 940.
+  assert.deepEqual(fitLeftOf({ x: 600, w: 600 }, 0, 940, 480), { x: 340, w: 600 });
+  // Wider than the free width: the cell edge, narrowed to fit.
+  assert.deepEqual(fitLeftOf({ x: 600, w: 1200 }, 0, 940, 480), { x: 0, w: 940 });
 });

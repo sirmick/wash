@@ -1464,6 +1464,7 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   const vp = viewport();
   const s = screenSize();
   const moves: Array<{ id: number; x: number; y: number }> = [];
+  const resizes: Array<{ id: number; w: number; h: number }> = [];
   const reserved = reservedRight();
   for (const p of msg.patches) {
     if (p.op === 'window.upsert' && p.window && !client.seenWindowIDs.has(p.window.window_id)) {
@@ -1478,11 +1479,17 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
           VIEWPORTS_PER_AXIS,
         ));
       }
-      // A new window opens clear of the right sidebar where it fits: the
-      // router cascades without knowing the sidebar is there, and a
-      // window whose titlebar buttons land under it cannot be closed.
-      if (p.window.state === 'normal') {
-        x = fitLeftOf({ x, w: p.window.w + 2 }, vp.vx * s.w, s.w - reserved);
+      // A new window opens clear of the right sidebar: the router
+      // cascades without knowing the sidebar is there, and a window whose
+      // titlebar buttons land under it cannot be closed. Narrowed rather
+      // than moved where it can be, so the cascade survives.
+      if (p.window.state === 'normal' && reserved > 0) {
+        const fit = fitLeftOf({ x, w: p.window.w + 2 }, vp.vx * s.w, s.w - reserved, 480);
+        x = fit.x;
+        if (fit.w - 2 !== p.window.w) {
+          p.window.w = fit.w - 2;
+          resizes.push({ id: p.window.window_id, w: p.window.w, h: p.window.h });
+        }
       }
       if (x !== p.window.x || y !== p.window.y) {
         p.window.x = x;
@@ -1506,6 +1513,11 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
     const tok = nextGeomTok();
     markGeomPending(client.origin, m.id, tok);
     client.conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y, tok });
+  }
+  for (const r of resizes) {
+    const tok = nextGeomTok();
+    markGeomPending(client.origin, r.id, tok);
+    client.conn.sendCtrl({ t: 'window.resize', window_id: r.id, w: r.w, h: r.h, tok });
   }
 }
 

@@ -134,11 +134,20 @@ export function resizeRect(
   return { x, y, w, h };
 }
 
-// fitLeftOf shifts a frame left so its right edge ends within `free` px of
-// the cell starting at cellLeft — never left of the cell itself. A frame
-// wider than the free width is left at the cell's left edge.
-export function fitLeftOf(r: { x: number; w: number }, cellLeft: number, free: number): number {
+// fitLeftOf makes a frame end within `free` px of the cell starting at
+// cellLeft. It keeps x — the router's cascade, which is what keeps a new
+// window from landing squarely on the one before it — and narrows the
+// frame, unless that would leave it under minW; then it shifts left instead
+// (never past the cell's left edge), narrowing only what still overhangs.
+export function fitLeftOf(
+  r: { x: number; w: number },
+  cellLeft: number,
+  free: number,
+  minW: number,
+): { x: number; w: number } {
   const right = cellLeft + free;
-  if (r.x + r.w <= right) return r.x;
-  return Math.max(cellLeft, right - r.w);
+  if (r.x + r.w <= right) return r;
+  if (right - r.x >= minW) return { x: r.x, w: right - r.x };
+  const x = Math.max(cellLeft, right - Math.max(r.w, minW));
+  return { x, w: Math.min(r.w, right - x) };
 }
