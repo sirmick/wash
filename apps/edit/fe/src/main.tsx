@@ -18,6 +18,8 @@ import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDir
 import type { InsertedDraft } from '@wash/ui';
 import type { AgentStatus, PathHit, PathLinks, TerminalAPI, agentproto } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
+import { PLACES_AGENT, PLACES_EDITOR, PlacesBar } from '@wash/ui';
+import type { PlacesView } from '@wash/ui';
 
 // One roster row as agentd publishes it; only the fields this pane reads.
 import {
@@ -433,7 +435,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // outside TermTab so an arriving event does not replace the tab object
   // and remount the pane.
   const [agentEvents, setAgentEvents] = createSignal<Record<string, agentproto.Event[]>>({});
-  const [agentRoster, setAgentRoster] = createSignal<{ rows?: agentproto.Row[]; asks?: agentproto.Ask[]; adapters?: { id: string; name?: string }[] }>({});
+  const [agentRoster, setAgentRoster] = createSignal<{
+    rows?: agentproto.Row[];
+    asks?: agentproto.Ask[];
+    adapters?: { id: string; name?: string }[];
+    // The default catalog (docs/PLACES.md §4.5) and the catalogs it names,
+    // so "new agent here" can start on it and say which it is.
+    launch?: agentproto.LaunchPrefs;
+    catalogs?: agentproto.CatalogView[];
+  }>({});
   const [agentMenu, setAgentMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [termOpen, setTermOpen] = createSignal(false);
   // Dotfiles in the sidebar tree and quick open (View → Show Hidden Files).
@@ -543,6 +553,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // ---- BE I/O ----
 
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+  // This window's Places group (docs/PLACES.md): which of the Agent, Files
+  // and Terminal are bound to it, and the tint the group carries.
+  const [places, setPlaces] = createSignal<PlacesView>({ group: '', members: {} });
   // Sessions with a transcript replay in flight (agent.resync); the
   // snapshot clears it.
   const agentResyncPending = new Set<string>();
@@ -1776,6 +1789,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // belongs to sends one for a `file.go:42` clicked in its transcript.
     // Which Agent session this editor serves, on adoption and whenever the
     // agent renames it.
+    if (m.kind === 'places') {
+      setPlaces({ group: (m.group as string) ?? '', members: (m.members as Record<string, string>) ?? {} });
+      return;
+    }
     if (m.kind === 'agent.owner') {
       const key = String(m.key ?? '');
       setOwnerAgent(key ? { key, title: String(m.title ?? '') } : null);
@@ -1884,7 +1901,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       return;
     }
     if (m.kind === 'agent.state') {
-      setAgentRoster((m.state ?? {}) as { rows?: agentproto.Row[]; asks?: agentproto.Ask[] });
+      setAgentRoster((m.state ?? {}) as ReturnType<typeof agentRoster>);
       return;
     }
     // Terminal lifecycle messages: term.opened pairs the
@@ -1958,14 +1975,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // the editor already has open — the reason hosting one here beats the
   // standalone Agent app, where the first question is always "which
   // folder". The tab exists immediately so the user sees it starting.
+  // agentID '' starts on the default catalog: agentd resolves it
+  // (docs/PLACES.md §4.5), so the tab is named after the catalog until the
+  // session reports its own title.
   const openAgentTab = (agentID: string) => {
     setTermOpen(true);
     nextTermLocalID += 1;
     const localID = `t-${nextTermLocalID}`;
     const cwd = root();
+    const name = agentID || defaultCatalog()?.label || 'agent';
     setTermTabs([...termTabs(), {
       id: localID, channelID: 0, kind: 'agent',
-      agentName: agentID, title: `${agentID}…`, agentCwd: cwd,
+      agentName: name, title: `${name}…`, agentCwd: cwd,
     }]);
     setActiveTermID(localID);
     send({ kind: 'agent.start', tab: localID, agent: agentID, cwd });
@@ -2029,7 +2050,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     let target = termTabs().find((x) => x.id === activeTermID() && x.kind === 'agent')
       ?? termTabs().find((x) => x.kind === 'agent');
     if (!target) {
-      const adapter = agentAdapters()[0];
+      // The default catalog when one is set — the same answer "new agent
+      // here" gives — else the first installed adapter, as before.
+      const adapter = defaultCatalog() ? { id: '' } : agentAdapters()[0];
       if (!adapter) {
         setStatusError('no agent installed to send this to');
         return;
@@ -2050,6 +2073,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Adapters agentd found, for the + menu. Empty until the roster push
   // arrives, which is why the menu says so rather than looking broken.
   const agentAdapters = (): { id: string; name?: string }[] => agentRoster().adapters ?? [];
+  // The default catalog (Agents → Catalog → Default), when one is set AND it
+  // can still start here: what "new agent here" means without asking. ''
+  // when there is none, which leaves the adapter list as the only choice.
+  const defaultCatalog = (): { id: string; label: string } | null => {
+    const l = agentRoster().launch;
+    if (!l?.catalog) return null;
+    const c = (agentRoster().catalogs ?? []).find((x) => x.id === l.catalog);
+    if (c && !c.available) return null;
+    const name = c?.name || l.catalog;
+    return { id: l.catalog, label: l.model ? `${name} / ${l.model}` : name };
+  };
 
   // The roster row backing an agent tab: its state, context usage, mode,
   // and the agent's own settings. Same shape the Agent app renders.
@@ -3444,6 +3478,19 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <MenuBarButton id="view" label="View" active={openMenu() === 'view'} onClick={openMenuFor} />
         <MenuBarButton id="syntax" label="Syntax" active={openMenu() === 'syntax'} onClick={openMenuFor} />
         <MenuBarButton id="terminal" label="Terminal" active={openMenu() === 'terminal'} onClick={openMenuFor} />
+        {/* The other apps, bound to this window (docs/PLACES.md), at the
+            menu bar's right end. A new window opens on the project folder.
+            The Agent icon opens a separate Agent WINDOW bound to this
+            editor; ✦ in the terminal pane still starts a session in a TAB
+            here — two different things, both on the default catalog. */}
+        <PlacesBar
+          self={PLACES_EDITOR}
+          view={places()}
+          onOpen={(target) => send({ kind: 'places_click', target, cwd: root() })}
+          disabled={root() ? undefined : 'Open a folder first'}
+          describe={(t) => (t === PLACES_AGENT ? defaultCatalog()?.label ?? root() : root())}
+          style={{ 'margin-left': 'auto', 'margin-right': '4px' }}
+        />
         <Show when={openMenu() === 'file'}>
           <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-file">
             <MenuItem label="New" trailing={<kbd style={kbdStyle}>Ctrl+N</kbd>} onClick={run(newUntitled)} data-testid="edit-menu-new" />
@@ -3517,7 +3564,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 terminal PANE. Reachable from here whether or not that pane
                 is open — the ✦ button in the tab strip cannot be, and
                 needing to open a shell first before you can start an agent
-                is a silly gate. */}
+                is a silly gate. The default catalog leads, as in ✦. */}
+            <Show when={defaultCatalog()}>
+              {(d) => (
+                <MenuItem
+                  label={`New session · ${d().label}`}
+                  onClick={run(() => openAgentTab(''))}
+                  data-testid="edit-menu-agent-default"
+                />
+              )}
+            </Show>
             <Show
               when={agentAdapters().length > 0}
               fallback={<MenuItem label="No agents installed" disabled onClick={() => {}} data-testid="edit-menu-agent-none" />}
@@ -3944,6 +4000,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         <Show when={agentMenu()}>
           {(at) => (
             <Menu x={at().x} y={at().y} onDismiss={() => setAgentMenu(null)} data-testid="edit-agent-menu">
+              {/* Your default first: the one-click answer, the same one the
+                  Places agent icon and `wash ai <dir>` give. The adapters
+                  below stay, for starting on something else. */}
+              <Show when={defaultCatalog()}>
+                {(d) => (
+                  <>
+                    <MenuItem
+                      label={`Default · ${d().label}`}
+                      data-testid="edit-agent-start-default"
+                      onClick={() => { setAgentMenu(null); openAgentTab(''); }}
+                    />
+                    <MenuSeparator />
+                  </>
+                )}
+              </Show>
               <Show
                 when={agentAdapters().length > 0}
                 fallback={<MenuItem label="No agents installed" disabled onClick={() => {}} />}

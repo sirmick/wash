@@ -29,6 +29,8 @@ import {
 } from '@wash/ui';
 import type { PasteAnalysis, TermCursorStyle, TermModes, TermSearchOptions, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
+import { PLACES_TERMINAL, PlacesBar } from '@wash/ui';
+import type { PlacesView } from '@wash/ui';
 import { PasteOverlay } from './PasteOverlay';
 import { SplitIntents } from './intents';
 import type { SplitIntent } from './intents';
@@ -377,6 +379,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   let stageEl: HTMLDivElement | undefined;
 
   const send = (m: unknown) => window.wash.sendAppMsg(props.instance, m);
+  // This window's Places group (docs/PLACES.md): which of the Agent, Files
+  // and Editor are bound to it, and the tint the group carries.
+  const [places, setPlaces] = createSignal<PlacesView>({ group: '', members: {} });
 
   // Reconcile/persist timers (cleared on unmount).
   let pendingFallback: ReturnType<typeof setTimeout> | undefined;
@@ -1230,6 +1235,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   const handleBE = (m: BEMessage) => {
     switch (m.kind) {
+      case 'places':
+        setPlaces({ group: (m.group as string) ?? '', members: (m.members as Record<string, string>) ?? {} });
+        break;
       case 'tab_opened':
         addTab(Number(m.channel_id), String(m.shell ?? 'shell'), undefined, reqOf(m));
         return;
@@ -1870,6 +1878,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         >
           Font
         </button>
+        {/* The other apps, bound to this window (docs/PLACES.md), at the
+            menu bar's right end. A new window opens in the FRONT tab's
+            folder — the BE resolves it from that tab's own cwd, so only the
+            tab is named here. */}
+        <PlacesBar
+          self={PLACES_TERMINAL}
+          view={places()}
+          onOpen={(target) => send({ kind: 'places_click', target, channel_id: active() })}
+          disabled={active() ? undefined : 'No tab is open'}
+          style={{ 'margin-left': 'auto', 'margin-right': '4px' }}
+        />
       </div>
       <Show when={openMenu() === 'edit'}>
         <Menu x={menuAnchor().x} y={menuAnchor().y} data-testid="term-menu-edit" onDismiss={closeMenu}>

@@ -21,6 +21,85 @@ import { For, Show, createMemo, createSignal, type Component, type JSX } from 's
 import { Button, Input, Select, tokens, type agentproto } from '@wash/ui';
 import { SLOTS, fieldStyle, labelStyle, optionValues, slotLabel } from './Launcher.tsx';
 
+/** DefaultRow is what "start an agent" means when nobody says otherwise:
+ *  the catalog and model the Editor's "new agent here", the Places agent
+ *  icon and `wash ai <dir>` all resolve against (docs/PLACES.md §4.5).
+ *
+ *  It lives here rather than in the launcher because it is configuration,
+ *  not a choice about the session being started — the launcher's own
+ *  selects preselect FROM it. Unset is legal and means the old behaviour:
+ *  the catalog used last, else the first adapter that can run.
+ */
+const DefaultRow: Component<{
+  catalogs: agentproto.CatalogView[];
+  adapterOptions: agentproto.AdapterOptions[];
+  launch: agentproto.LaunchPrefs;
+  onDefault: (catalog: string, model: string) => void;
+}> = (props) => {
+  const chosen = createMemo(() => props.catalogs.find((c) => c.id === props.launch.catalog));
+  // Only catalogs that can actually start: a default nobody can run is a
+  // trap, and agentd rejects it on save anyway.
+  // A stored default that can no longer start (its key cleared since) stays
+  // listed, disabled and labelled. Dropping it would make the select show
+  // "No default" while agentd still resolves every start against it — the
+  // screen would say one thing and the launch do another.
+  const catalogOptions = createMemo<[string, string, boolean?][]>(() => {
+    const out: [string, string, boolean?][] = [['', 'No default']];
+    for (const c of props.catalogs) {
+      if (c.available) out.push([c.id, c.name || c.id]);
+      else if (c.id === props.launch.catalog) out.push([c.id, `${c.name || c.id} (cannot start here)`, true]);
+    }
+    return out;
+  });
+  const modelOptions = createMemo<[string, string][]>(() => {
+    const c = chosen();
+    if (!c) return [];
+    const out: [string, string][] = [];
+    if (c.slots?.length) {
+      for (const s of c.slots) out.push([s.slot, `${slotLabel(s.slot)} — ${s.model || 'default model'}`]);
+    } else {
+      out.push(['', "the adapter's default"]);
+    }
+    // A curated catalog carries no adapter of its own — its slots do — so
+    // the models on offer are the FRONTIER slot's adapter's, matching how a
+    // launch resolves a bare model id against a curated catalog.
+    const adapter = c.slots?.length ? (c.slots.find((s) => s.slot === 'frontier') ?? c.slots[0]).adapter : (c.adapter ?? '');
+    const listed = new Set(c.slots?.map((s) => s.model) ?? []);
+    for (const m of optionValues(props.adapterOptions, adapter, 'model')) {
+      if (!listed.has(m.value)) out.push([m.value, m.name || m.value]);
+    }
+    return out;
+  });
+  return (
+    <div data-testid="ai-default-catalog" style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
+      <div style={fieldStyle}>
+        <span style={labelStyle}>default for new agents</span>
+        <span style={{ font: tokens.type.textSm, color: tokens.fgDim }}>
+          What starts when a session is opened from a folder — the Editor, the Files and Terminal agent icons, and <code>wash ai &lt;dir&gt;</code>. Unset uses whichever catalog you used last.
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: `${tokens.spaceSm}px`, 'align-items': 'center', 'flex-wrap': 'wrap' }}>
+        <Select
+          data-testid="ai-default-catalog-select"
+          value={props.launch.catalog ?? ''}
+          options={catalogOptions()}
+          onChange={(v) => props.onDefault(v, '')}
+        />
+        <Show when={chosen()}>
+          <Select
+            data-testid="ai-default-model-select"
+            // A curated catalog offers no '' option; an unset model there is
+            // its default slot, as the Launcher shows it.
+            value={chosen()?.slots?.length ? props.launch.model || 'frontier' : (props.launch.model ?? '')}
+            options={modelOptions()}
+            onChange={(v) => props.onDefault(props.launch.catalog ?? '', v)}
+          />
+        </Show>
+      </div>
+    </div>
+  );
+};
+
 /** The outcome of the last save or delete of one catalog. */
 export interface CatalogResult {
   ok?: boolean;
@@ -88,8 +167,10 @@ export const CatalogPane: Component<{
   connections: agentproto.ConnectionView[];
   adapterOptions: agentproto.AdapterOptions[];
   results: Record<string, CatalogResult>;
+  launch: agentproto.LaunchPrefs;
   onSave: (id: string, catalog: agentproto.CatalogSpec) => void;
   onDelete: (id: string) => void;
+  onDefault: (catalog: string, model: string) => void;
 }> = (props) => {
   // Drafts by catalog id. A catalog the person has not touched follows the
   // roster; one being edited keeps its edits until Save or Discard, so a
@@ -255,6 +336,7 @@ export const CatalogPane: Component<{
           Where a model comes from: an adapter's own list, or three slots. What a session may do is set when it starts, not here.
         </span>
       </div>
+      <DefaultRow catalogs={props.catalogs} adapterOptions={props.adapterOptions} launch={props.launch} onDefault={props.onDefault} />
       <For each={ids()}>{(id) => {
         const c = () => props.catalogs.find((x) => x.id === id)!;
         return (

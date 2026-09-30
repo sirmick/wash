@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { clampViewport, viewportForRect, nextZ, sendToViewportRect } from './viewport-math.ts';
+import { clampViewport, clampToPlane, isOnScreen, isOrphaned, viewportForRect, nextZ, sendToViewportRect } from './viewport-math.ts';
 
 const PER = 3; // VIEWPORTS_PER_AXIS
 const screen = { w: 1000, h: 800 };
@@ -63,4 +63,44 @@ test('sendToViewportRect clamps to the plane so a window is never orphaned', () 
   // And a window taller than a screen clamps on y the same way.
   const tall = { x: 0, y: 0, w: 300, h: 900 };
   assert.deepEqual(sendToViewportRect(tall, screen, PER, 2, 2), { x: 2000, y: screen.h * PER - tall.h });
+});
+
+test('clampToPlane pulls an off-plane origin back inside', () => {
+  // Past the far corner — the exact shape the refresh bug produced.
+  assert.deepEqual(clampToPlane({ x: 3100, y: 2500, w: 300, h: 200 }, screen, PER), { x: 2700, y: 2200 });
+  // Negative origin clamps to 0.
+  assert.deepEqual(clampToPlane({ x: -80, y: -40, w: 300, h: 200 }, screen, PER), { x: 0, y: 0 });
+  // Already inside — untouched.
+  assert.deepEqual(clampToPlane({ x: 40, y: 30, w: 300, h: 200 }, screen, PER), { x: 40, y: 30 });
+});
+
+test('isOrphaned is true only when no viewport can show any of the window', () => {
+  // Entirely past the right edge of the plane.
+  assert.equal(isOrphaned({ x: 3000, y: 100, w: 300, h: 200 }, screen, PER), true);
+  // Entirely past the bottom.
+  assert.equal(isOrphaned({ x: 100, y: 2400, w: 300, h: 200 }, screen, PER), true);
+  // Entirely off the top-left.
+  assert.equal(isOrphaned({ x: -300, y: 100, w: 300, h: 200 }, screen, PER), true);
+  // Straddling the far edge is still reachable — leave it alone.
+  assert.equal(isOrphaned({ x: 2900, y: 100, w: 300, h: 200 }, screen, PER), false);
+  // Comfortably inside.
+  assert.equal(isOrphaned({ x: 40, y: 30, w: 300, h: 200 }, screen, PER), false);
+});
+
+test('isOnScreen is true when any part of the window is in the camera cell', () => {
+  const at = (vx: number, vy: number) => ({ vx, vy });
+  // Wholly inside cell (0,0).
+  assert.equal(isOnScreen({ x: 40, y: 30, w: 300, h: 200 }, screen, at(0, 0)), true);
+  // Wholly inside (1,0), camera on (0,0): needs a pan.
+  assert.equal(isOnScreen({ x: 1040, y: 30, w: 300, h: 200 }, screen, at(0, 0)), false);
+  // Straddling the (0,0)/(1,0) edge is visible from BOTH — no pan either way,
+  // because the user can already see it.
+  const straddle = { x: 900, y: 30, w: 300, h: 200 };
+  assert.equal(isOnScreen(straddle, screen, at(0, 0)), true);
+  assert.equal(isOnScreen(straddle, screen, at(1, 0)), true);
+  // Touching an edge exactly is not overlap.
+  assert.equal(isOnScreen({ x: 1000, y: 30, w: 300, h: 200 }, screen, at(0, 0)), false);
+  // Vertical axis too.
+  assert.equal(isOnScreen({ x: 40, y: 830, w: 300, h: 200 }, screen, at(0, 0)), false);
+  assert.equal(isOnScreen({ x: 40, y: 830, w: 300, h: 200 }, screen, at(0, 1)), true);
 });

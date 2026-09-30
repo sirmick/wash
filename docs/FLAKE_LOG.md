@@ -16,6 +16,23 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-30 — imageview open dialog: picker entry never appeared, once, under full-suite load
+
+**Seen during:** `make e2e-test` (multicall) on the PR #29 review branch
+(`viewport-reload-and-places` + review fixes): 735 passed / 1 failed / 18
+skipped. `imageview-open.spec.ts:63` timed out (25s) waiting for
+`[data-testid="iv-picker"] [data-testid="fp-entry-banana.png"]`.
+
+**Not the branch.** PR #29 touches nothing in imageview or the file
+picker. 12/12 with `--repeat-each=3` on the same build straight after.
+
+**Mechanism:** unknown. The picker's folder scan never listed the seeded
+file within the budget; one sighting, full-suite load only.
+
+**Verdict:** flake, logged; watch for a second sighting before digging.
+
+---
+
 ## 2026-09-23 — sidebar notify badge: CI-only, on a runner 4x slower than the dev box
 
 **Seen during:** the GitHub Actions `ci` run for the PR #26 head

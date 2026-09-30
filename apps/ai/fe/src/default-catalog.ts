@@ -17,9 +17,19 @@ import type { agentproto } from '@wash/ui';
 export function defaultCatalog(
   catalogs: Pick<agentproto.CatalogView, 'id' | 'available'>[],
   recent: Pick<agentproto.Session, 'catalog' | 'cwd'>[] = [],
+  pref = '',
 ): string {
   const usable = catalogs.filter((c) => c.available);
   if (usable.length === 0) return '';
+  // An explicitly chosen default beats history: the person said what
+  // "start an agent" means, and the launcher should open on it rather
+  // than on whatever they happened to run last (docs/PLACES.md §4.5).
+  // Still subject to the availability check below — a default whose key
+  // was since cleared must not preselect a row that fails.
+  if (pref) {
+    const hit = usable.find((c) => c.id === pref);
+    if (hit) return hit.id;
+  }
   // A catalog that can no longer start (its key cleared, its adapter
   // uninstalled) must not win: the form would open on a row that fails.
   for (const r of recent) {

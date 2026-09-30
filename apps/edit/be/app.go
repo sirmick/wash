@@ -34,6 +34,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"github.com/sirmick/wash/internal/places"
 	"github.com/sirmick/wash/internal/version"
 	"io"
 	"io/fs"
@@ -120,6 +121,13 @@ func init() {
 		},
 		Assets:  sub,
 		OnReady: onReady,
+		OnSpawnResult: func(c *sdk.Conn, appID, instanceID string, err error) {
+			group.OnSpawnResult(c, appID, instanceID, err)
+		},
+		OnInstanceGone: func(c *sdk.Conn, appID, instanceID string) {
+			group.OnInstanceGone(c, appID, instanceID)
+			onAgentInstanceGone(instanceID)
+		},
 		// The FE owns the dirty state, so the close handshake is answered
 		// there: see onCloseRequested.
 		OnCloseRequested: onCloseRequested,
@@ -161,8 +169,10 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// The relay must exist before the bus, since the bus chains unhandled
 	// messages into it.
 	initAgent(c)
+	group.SetSelf(instanceID)
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
+	pushPlaces(c, group.View())
 	registerPrefsHandlers(bus)
 	registerFindHandlers(bus)
 	registerAgentHandlers(bus)
@@ -228,7 +238,68 @@ type termClosedEvent struct {
 
 // ----- handler registration -----
 
+// group is this window's Places membership — the other three apps it is
+// bound to (docs/PLACES.md). Built at package scope so the AppDef callbacks
+// always have something to talk to; the instance id arrives in onReady.
+var group = places.New("com.wash.edit", "", pushPlaces)
+
+// pushPlaces hands the FE the current group so the icon bar can draw which
+// apps are reachable and which tint the group carries — and adopts the
+// group's Agent session as the conversation this editor belongs to, which is
+// how an Agent's editor learns its owner now that it is the group's editor
+// (apps/ai/be/editor.go). That drives the taskbar title and the resumable
+// "back to the agent" button, exactly as editor.show used to.
+func pushPlaces(c places.Conn, v places.View) {
+	_ = c.SendAppMsg(map[string]any{"kind": "places", "group": v.Group, "members": v.Members})
+	if v.Key == "" {
+		// Not cleared on the agent leaving: the key is what reopens the
+		// conversation through agentd once its window is gone.
+		return
+	}
+	agentMu.Lock()
+	if inst := v.Members[places.AppAgent]; inst != "" {
+		owner = inst
+	}
+	agentMu.Unlock()
+	if sc, ok := c.(*sdk.Conn); ok && adoptOwner(sc, v.Key, v.Title) {
+		tellFEOwner(sc)
+	}
+}
+
+// placesClickReq is the icon bar being clicked: which app to bring forward,
+// and the project root the window is open on (only the FE knows it — it
+// changes when a folder is opened).
+type placesClickReq struct {
+	Target string `json:"target"`
+	Cwd    string `json:"cwd"`
+}
+
 func registerHandlers(b *sdk.Bus) {
+	sdk.HandleVoid(b, "places_click", func(c *sdk.Conn, _ string, req placesClickReq) error {
+		abs, err := editFS.Confine(req.Cwd)
+		if err != nil {
+			log.Printf("edit: places click %s cwd=%q: %v", req.Target, req.Cwd, err)
+			return sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
+		}
+		if err := group.Click(c, req.Target, abs, "", 0, 0); err != nil {
+			log.Printf("edit: places click %s: %v", req.Target, err)
+		}
+		return nil
+	})
+	// An invitation carrying a file opens it, which is what makes the
+	// Agent's "show me this file" land in the group's editor rather than a
+	// new one.
+	group.Register(b, func(c places.Conn, req places.Show) {
+		if req.Path == "" {
+			return
+		}
+		abs, err := editFS.Confine(req.Path)
+		if err != nil {
+			log.Printf("edit: places show path=%q: %v", req.Path, err)
+			return
+		}
+		_ = bus.Emit("cmd.open_file", editorShowReq{Path: abs, Line: req.Line, Col: req.Col})
+	})
 	// cmd.* — FE-owned passthrough. The bus pattern routes any kind
 	// starting with "cmd." into this single handler, which echoes the
 	// message back unchanged so test drivers and other apps targeting

@@ -19,11 +19,12 @@
 // directory it asked the router for, and a terminal window appears.
 // wash-term learning to START in that directory is the term track's half.
 //
-// "Open terminal in project folder" is offered in two places — the session's row in the
-// Agents manager's Running pane, and the controller's own Session menu —
-// because the row naming a session and the window showing it are two views
-// of one thing. Both are driven here: they are separate windows of the
-// same binary, and either could lose the verb on its own.
+// A terminal in the project folder is offered in two places — the session's
+// row in the Agents manager's Running pane ("Open terminal in project
+// folder", a new window each time), and the controller's own Session menu
+// ("Show terminal", the Places verb: its bound terminal, reused). Both are
+// driven here: they are separate windows of the same binary, and either
+// could lose the verb on its own.
 
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -65,7 +66,10 @@ test.describe('agent handoff', () => {
     await expect(page.locator('wash-app-term').first()).toBeVisible({ timeout: 25_000 });
   });
 
-  test("Open terminal in project folder on the controller's Session menu does the same", async ({ page, router }) => {
+  // The controller's own Session menu is the Places verb (docs/PLACES.md):
+  // this window's terminal, opened in the project folder the first time and
+  // brought back after — not a new one per click, as the row verb above is.
+  test("Show terminal on the controller's Session menu opens its bound terminal once", async ({ page, router }) => {
     const dir = mkdtempSync(join(tmpdir(), 'wash-agent-term-menu-'));
     const win = await startAgentIn(page, router.url, dir);
 
@@ -75,10 +79,23 @@ test.describe('agent handoff', () => {
     // disabled item would pass silently and fail on the log wait instead.
     const item = page.locator('[data-testid="ai-menu-open-terminal"]');
     await expect(item).toBeEnabled({ timeout: 15_000 });
+    await expect(item).toHaveText(/Show terminal/);
     await item.click();
 
-    await router.waitForLog(new RegExp(`wash-ai: open terminal cwd=${dir}$`, 'm'), 15_000, cursor);
-    await expect(page.locator('wash-app-term').first()).toBeVisible({ timeout: 25_000 });
+    const escaped = dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await router.waitForLog(new RegExp(`places: com\\.wash\\.ai open com\\.wash\\.term dir="${escaped}"`), 15_000, cursor);
+    await expect(page.locator('wash-app-term')).toHaveCount(1, { timeout: 25_000 });
+    await expect(win.getByTestId('places-term')).toHaveAttribute('data-bound', 'true');
+
+    // Again: the same terminal, not a second one. It opened over the Agent
+    // window's menu bar, so bring the Agent forward first, as a person would.
+    const aiWin = Number(await win.getAttribute('data-wash-window'));
+    await page.evaluate((w) => window.wash.focusWindow(w), aiWin);
+    const again = router.logCursor();
+    await win.locator('[data-testid="ai-menubar-session"]').click();
+    await page.locator('[data-testid="ai-menu-open-terminal"]').click();
+    await router.waitForLog(/places: com\.wash\.ai show com\.wash\.term /, 15_000, again);
+    await expect(page.locator('wash-app-term')).toHaveCount(1);
   });
 
   for (const surface of ['controller', 'manager'] as const) {

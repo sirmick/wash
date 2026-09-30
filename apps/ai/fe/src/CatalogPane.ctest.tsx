@@ -39,10 +39,15 @@ const mine: agentproto.CatalogView = {
   slots: [slot('frontier', 'opencode', 'openrouter/x', { connection: 'opencode@openrouter', effort: 'high' }), slot('coding', 'opencode', 'openrouter/y', { connection: 'opencode@openrouter' }), slot('small', 'opencode', 'openrouter/z', { connection: 'opencode@openrouter' })],
 };
 
-const mount = (catalogs: agentproto.CatalogView[], results: Record<string, CatalogResult> = {}) => {
+const mount = (
+  catalogs: agentproto.CatalogView[],
+  results: Record<string, CatalogResult> = {},
+  launch: agentproto.LaunchPrefs = {},
+) => {
   const [list, setCatalogs] = createSignal(catalogs);
   const saved: [string, agentproto.CatalogSpec][] = [];
   const deleted: string[] = [];
+  const defaults: [string, string][] = [];
   const r = render(() => (
     <CatalogPane
       catalogs={list()}
@@ -50,11 +55,13 @@ const mount = (catalogs: agentproto.CatalogView[], results: Record<string, Catal
       connections={connections}
       adapterOptions={adapterOptions}
       results={results}
+      launch={launch}
       onSave={(id, s) => saved.push([id, s])}
       onDelete={(id) => deleted.push(id)}
+      onDefault={(c, m) => defaults.push([c, m])}
     />
   ));
-  return { ...r, saved, deleted, setCatalogs };
+  return { ...r, saved, deleted, defaults, setCatalogs };
 };
 
 const options = (el: HTMLElement) => [...(el as HTMLSelectElement).options].map((o) => o.value);
@@ -188,4 +195,59 @@ test('draftOf and specOf round-trip a catalog, leaving empty fields out', () => 
     },
   });
   expect(specOf(draftOf(auto))).toEqual({ name: 'OpenRouter', adapter: 'opencode', connection: 'opencode@openrouter' });
+});
+
+// The default row: what "start an agent" means when nobody says otherwise
+// (docs/PLACES.md §4.5). Editing it sends the WHOLE launch block, because
+// agent_set_launch replaces it.
+test('the default picker offers the catalogs that can start, and No default', () => {
+  const r = mount([pro, auto, { ...mine, available: false, note: 'no key' }]);
+  const sel = r.getByTestId('ai-default-catalog-select') as HTMLSelectElement;
+  expect(options(sel)).toEqual(['', 'anthropic-pro', 'openrouter']);
+  // A catalog that cannot start is not offerable as a default.
+  expect(options(sel)).not.toContain('mine');
+});
+
+test('picking a default reports it, and clears the model with it', () => {
+  const r = mount([pro, auto], {}, { catalog: 'auto-gone', model: 'stale' });
+  fireEvent.input(r.getByTestId('ai-default-catalog-select'), { target: { value: 'anthropic-pro' } });
+  // The model is cleared on a catalog change: a model id from the old
+  // catalog means nothing in the new one.
+  expect(r.defaults).toEqual([['anthropic-pro', '']]);
+});
+
+test('the model select appears only once a default catalog is chosen', () => {
+  expect(mount([pro, auto]).queryByTestId('ai-default-model-select')).toBeNull();
+  const r = mount([pro, auto], {}, { catalog: 'anthropic-pro' });
+  const sel = r.getByTestId('ai-default-model-select') as HTMLSelectElement;
+  // A curated catalog offers its slots, then anything else its adapter
+  // reported — sonnet and haiku ARE this catalog's coding and small slots,
+  // so they appear once as slots rather than twice.
+  expect(options(sel)).toEqual(['frontier', 'coding', 'small']);
+  fireEvent.input(sel, { target: { value: 'coding' } });
+  expect(r.defaults).toEqual([['anthropic-pro', 'coding']]);
+});
+
+test('a curated default lists its frontier adapter\'s other models', () => {
+  // The catalog itself carries no adapter — its slots do. Reading
+  // catalog.adapter here (undefined) silently offered no models at all.
+  const sparse: agentproto.CatalogView = {
+    id: 'sparse', name: 'Sparse', available: true,
+    slots: [slot('frontier', 'claude', 'opus'), slot('coding', 'claude', 'opus'), slot('small', 'claude', 'opus')],
+  };
+  const r = mount([sparse], {}, { catalog: 'sparse' });
+  expect(options(r.getByTestId('ai-default-model-select'))).toEqual(['frontier', 'coding', 'small', 'sonnet', 'haiku']);
+});
+
+test('a stored default that can no longer start stays visible, disabled', () => {
+  // Otherwise the select reads "No default" while every launch still
+  // resolves against the broken one.
+  const broken = { ...mine, available: false, note: 'no key' };
+  const r = mount([pro, broken], {}, { catalog: 'mine' });
+  const sel = r.getByTestId('ai-default-catalog-select') as HTMLSelectElement;
+  expect(options(sel)).toContain('mine');
+  const opt = [...sel.options].find((o) => o.value === 'mine')!;
+  expect(opt.disabled).toBe(true);
+  expect(opt.textContent).toContain('cannot start here');
+  expect(sel.value).toBe('mine');
 });

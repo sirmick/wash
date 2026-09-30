@@ -248,17 +248,31 @@ func publishCatalogs(pol agentpolicy.Policy, keys map[string]string) []agentprot
 // startProfile is what a start request launches: the catalog's model with
 // Advanced's settings on top, or, with no catalog, an adapter on its
 // defaults (wash ai --agent).
+//
+// A request that names NEITHER falls back to the stored default catalog
+// (LaunchPrefs.Catalog). That is what makes `AgentStart{Cwd}` alone a valid
+// request, which is what the Editor's "new agent here", the Places agent icon
+// and `wash ai <dir>` all send — the resolution lives here, once, rather than
+// in each caller (docs/PLACES.md §4.5). With no default set the caller still
+// gets the old error and picks for itself.
 func startProfile(pol agentpolicy.Policy, req agentproto.AgentStart) (swarm.AgentProfile, sessionLaunch, error) {
 	var p swarm.AgentProfile
+	catalog, model := req.Catalog, req.Model
+	if catalog == "" && req.Agent == "" && pol.Launch != nil && pol.Launch.Catalog != "" {
+		catalog = pol.Launch.Catalog
+		if model == "" {
+			model = pol.Launch.Model
+		}
+	}
 	switch {
-	case req.Catalog != "":
+	case catalog != "":
 		catalogs, bad := loadCatalogs(pol)
 		var err error
-		if p, err = resolveCatalog(catalogs, bad, req.Catalog, req.Model); err != nil {
+		if p, err = resolveCatalog(catalogs, bad, catalog, model); err != nil {
 			return p, sessionLaunch{}, err
 		}
 	case req.Agent != "":
-		p = swarm.AgentProfile{Provider: req.Agent, Model: req.Model}
+		p = swarm.AgentProfile{Provider: req.Agent, Model: model}
 	default:
 		return p, sessionLaunch{}, errors.New("choose a catalog, or an agent")
 	}
@@ -271,7 +285,11 @@ func startProfile(pol agentpolicy.Policy, req agentproto.AgentStart) (swarm.Agen
 	// A catalog carries no permissions (validateCatalog), so nothing here
 	// can restrict or auto-approve; the launch's own Mode and Yolo are
 	// applied once the session exists (startSession).
-	return p, sessionLaunch{connection: p.Connection, catalog: req.Catalog, model: req.Model}, nil
+	// The RESOLVED catalog/model, not the request's: this is what history
+	// records, and Restart replays it. A start that fell back to the default
+	// must remember what it actually ran, or restarting it later would
+	// resolve against whatever the default has since become.
+	return p, sessionLaunch{connection: p.Connection, catalog: catalog, model: model}, nil
 }
 
 // catalogFromSpec is a catalog as the Catalog tab writes it, in the shape
@@ -318,11 +336,22 @@ func deleteCatalog(id string) error {
 			return fmt.Errorf("agents.json has no catalog %q", id)
 		}
 		delete(p.Catalogs, id)
+		// A default naming a catalog that no longer exists would fail
+		// every start that relies on it, and every later save of the
+		// launch prefs (setLaunch validates the whole block). A built-in
+		// merely reverts to what wash ships, so only clear when it is gone.
+		if p.Launch != nil && p.Launch.Catalog == id {
+			catalogs, _ := loadCatalogs(*p)
+			if _, ok := catalogs[id]; !ok {
+				p.Launch.Catalog, p.Launch.Model = "", ""
+			}
+		}
 		return nil
 	})
 }
 
-// setLaunch stores the launcher's remembered permission default.
+// setLaunch stores the launcher's remembered default: the catalog and model
+// "start an agent" means, and the permissions it starts with.
 func setLaunch(prefs agentproto.LaunchPrefs) error {
 	for adapter, mode := range prefs.Mode {
 		if _, ok := adapterByID(adapter); !ok {
@@ -332,10 +361,35 @@ func setLaunch(prefs agentproto.LaunchPrefs) error {
 			return fmt.Errorf("invalid mode for %s", adapter)
 		}
 	}
+	stored := agentpolicy.Load(agentpolicy.Path())
+	unchanged := stored.Launch != nil && stored.Launch.Catalog == prefs.Catalog && stored.Launch.Model == prefs.Model
+	if prefs.Catalog != "" && !unchanged {
+		// Validated the same way a start would resolve it, so a default
+		// cannot be saved that every later launch would fail on. A model
+		// that is a slot name or an id is settled by resolveCatalog.
+		// Only when it CHANGES: the FE sends the whole block for a mode
+		// or yolo edit, and a default that has since gone bad (a
+		// hand-edited catalog) must not make those edits silently fail.
+		catalogs, bad := loadCatalogs(stored)
+		if _, err := resolveCatalog(catalogs, bad, prefs.Catalog, prefs.Model); err != nil {
+			return err
+		}
+	} else if prefs.Model != "" {
+		return errors.New("a default model needs a default catalog")
+	}
 	return agentpolicy.Update(agentpolicy.Path(), func(p *agentpolicy.Policy) error {
 		p.Launch = nil
-		if len(prefs.Mode) > 0 || prefs.Yolo {
-			p.Launch = &agentpolicy.LaunchPrefs{Mode: maps.Clone(prefs.Mode), Yolo: prefs.Yolo}
+		// Every field counts toward "is there anything to store" — a default
+		// catalog with no mode and no yolo is a real setting, and dropping
+		// the block because the PERMISSION fields are empty would discard it
+		// silently on save.
+		if prefs.Catalog != "" || prefs.Model != "" || len(prefs.Mode) > 0 || prefs.Yolo {
+			p.Launch = &agentpolicy.LaunchPrefs{
+				Catalog: prefs.Catalog,
+				Model:   prefs.Model,
+				Mode:    maps.Clone(prefs.Mode),
+				Yolo:    prefs.Yolo,
+			}
 		}
 		return nil
 	})
@@ -346,7 +400,12 @@ func publishLaunch(pol agentpolicy.Policy) agentproto.LaunchPrefs {
 	if pol.Launch == nil {
 		return agentproto.LaunchPrefs{}
 	}
-	return agentproto.LaunchPrefs{Mode: maps.Clone(pol.Launch.Mode), Yolo: pol.Launch.Yolo}
+	return agentproto.LaunchPrefs{
+		Catalog: pol.Launch.Catalog,
+		Model:   pol.Launch.Model,
+		Mode:    maps.Clone(pol.Launch.Mode),
+		Yolo:    pol.Launch.Yolo,
+	}
 }
 
 // The Catalog tab's and the Permissions row's writes. Only a manager may
@@ -398,9 +457,18 @@ func registerCatalogHandlers(bus *sdk.Bus) {
 // check workspace members get, so a model the adapter does not offer fails
 // here, naming the ones it does, rather than running on its default.
 func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error) {
-	p, launch, err := startProfile(hostedPolicy(), req)
+	pol := hostedPolicy()
+	p, launch, err := startProfile(pol, req)
 	if err != nil {
 		return nil, err
+	}
+	// A start that named nothing (the Places agent icon, the Editor's "new
+	// agent here", `wash ai <dir>`) cannot say a mode: the adapter is only
+	// known once the default resolves, here. It gets the remembered mode
+	// the launcher would have filled in. Not yolo — auto-approve is only
+	// ever switched on by a launch that asked for it.
+	if req.Mode == "" && req.Agent == "" && req.Catalog == "" && pol.Launch != nil {
+		req.Mode = pol.Launch.Mode[p.Provider]
 	}
 	h, err := startHostedCapability(p.Provider, req.Cwd, svcConn, launch)
 	if err != nil {

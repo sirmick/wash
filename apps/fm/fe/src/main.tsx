@@ -20,7 +20,8 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, PLACES_FILES, PlacesBar, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import type { PlacesView } from '@wash/ui';
 import type { BulkConflict, BulkJob } from '@wash/ui';
 import type { FileClient, FileTreeColumn } from '@wash/ui';
 import {
@@ -453,6 +454,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // (no manual click-timer state — we lean on native dblclick.)
   let pathInputEl!: HTMLInputElement;
   const send = (msg: unknown) => window.wash.sendAppMsg(props.instance, msg);
+  // This window's Places group (docs/PLACES.md): which of the Agent, Editor
+  // and Terminal are bound to it, and the tint the group carries. Pushed by
+  // the BE on every change.
+  const [places, setPlaces] = createSignal<PlacesView>({ group: '', members: {} });
   // openExts: the session file-association table (extensions, no dot, lower-
   // case) any app registered to open. null until the BE replies to
   // get_open_exts (requested on mount). Used by openFile to pick open-in-app
@@ -636,6 +641,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // fs_event).
     if (bus.tryResolve(m)) return;
     switch (m.kind) {
+      case 'places':
+        setPlaces({ group: (m.group as string) ?? '', members: (m.members as Record<string, string>) ?? {} });
+        return;
       case 'bulk.state': {
         // The HOST's queue, not this window's (docs/SIDEBAR.md M3a): a
         // copy outlives the fm window that started it, so these rows
@@ -3061,28 +3069,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         >
           <Download size={14} />
         </Button>
-        <Button
-          variant="ghost"
-          data-testid="fm-open-terminal"
-          title={`Open terminal in this folder: ${viewDir()}`}
-          aria-label="Open terminal in this folder"
-          disabled={!viewDir()}
-          style={{ padding: '4px 8px', 'min-width': '30px' }}
-          onClick={() => openTerminalHere(viewDir())}
-        >
-          <Terminal size={14} />
-        </Button>
-        <Button
-          variant="ghost"
-          data-testid="fm-open-text-editor"
-          title={`Open text editor in this folder: ${viewDir()}`}
-          aria-label="Open text editor in this folder"
-          disabled={!viewDir()}
-          style={{ padding: '4px 8px', 'min-width': '30px' }}
-          onClick={() => openWith('com.wash.edit', viewDir())}
-        >
-          <FileText size={14} />
-        </Button>
         <Button variant="ghost" data-testid="fm-sort" title="Sort" style={{ padding: '4px 8px', 'min-width': '30px' }} onClick={openSortMenu}>
           <ArrowUpDown size={14} />
         </Button>
@@ -3096,6 +3082,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         >
           {previewOpen() ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
         </Button>
+        {/* The other apps, bound to this window (docs/PLACES.md). Top
+            right, where these two buttons used to be ad hoc: one click
+            brings the group's Terminal, Editor or Agent forward, or opens
+            one here in the folder being shown and binds it. Replaces the
+            toolbar's "open terminal / editor here", which opened a new
+            window every time. The row context menu keeps its own verbs —
+            those act on the clicked folder, not the one being viewed. */}
+        <PlacesBar
+          self={PLACES_FILES}
+          view={places()}
+          onOpen={(target) => send({ kind: 'places_click', target, cwd: viewDir() })}
+          disabled={viewDir() ? undefined : 'No folder is open'}
+          // An unbound icon opens in the folder being shown — say which, as
+          // the buttons this replaced did.
+          describe={() => viewDir()}
+          style={{ 'margin-left': 'auto' }}
+        />
         {/* Hidden native pickers backing the Upload buttons — the only
             way to read OS files from the browser. */}
         <input

@@ -57,11 +57,14 @@ test.describe('the Agent window and its editor', () => {
     const win = await startAgentSession(page, undefined, { cwd: dir });
     const editors = page.locator('wash-app-edit');
 
-    // The button opens an editor on the session's folder…
-    const button = win.locator('[data-testid="ai-show-editor"]');
+    // The Places bar's Editor icon (docs/PLACES.md) opens an editor on the
+    // session's folder, bound to this window…
+    const button = win.locator('[data-testid="places-edit"]');
     await expect(button).toBeEnabled({ timeout: 20_000 });
+    await expect(button).toHaveAttribute('data-bound', 'false');
     await button.click();
     await expect(editors).toHaveCount(1, { timeout: 20_000 });
+    await expect(button).toHaveAttribute('data-bound', 'true');
     const edit = editors.first();
     await expect(edit.locator('[data-testid="edit-sidebar"]')).toContainText(dir);
     await expect(edit.locator('[data-testid="edit-entry-notes.md"]')).toBeVisible();

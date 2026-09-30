@@ -26,6 +26,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/sirmick/wash/internal/loginenv"
+	"github.com/sirmick/wash/internal/places"
 	"github.com/sirmick/wash/internal/version"
 	"io"
 	"io/fs"
@@ -328,6 +329,8 @@ func init() {
 		Assets:           sub,
 		OnReady:          onReady,
 		OnCloseRequested: onCloseRequested,
+		OnSpawnResult:    func(c *sdk.Conn, appID, instanceID string, err error) { group.OnSpawnResult(c, appID, instanceID, err) },
+		OnInstanceGone:   func(c *sdk.Conn, appID, instanceID string) { group.OnInstanceGone(c, appID, instanceID) },
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-term",
@@ -335,6 +338,21 @@ func init() {
 		Assets:   def.Assets,
 		Run:      run,
 	})
+}
+
+// registerPlaces wires the icon bar: a click from the FE, and the invitation
+// that arrives when another window adds this one to its group.
+func registerPlaces(b *sdk.Bus) {
+	sdk.HandleVoid(b, "places_click", func(c *sdk.Conn, _ string, req placesClickReq) error {
+		// The FE names only the TAB in front; the folder is this BE's own
+		// record of that tab's cwd (OSC 7, else /proc). A terminal's cwd is
+		// never the frontend's to state.
+		if err := group.Click(c, req.Target, cwdOf(uint32(req.ChannelID)), "", 0, 0); err != nil {
+			log.Printf("term: places click %s: %v", req.Target, err)
+		}
+		return nil
+	})
+	group.Register(b, nil)
 }
 
 // Def is the AppDef for the standalone shim's sdk.Main call.
@@ -380,8 +398,25 @@ func parseFlags() {
 // goroutine — OpenChannel must not run on the SDK's read goroutine
 // (see internal/sdk/channel.go), but OnReady itself runs on the
 // foreground sync path so a goroutine is the safer pattern uniformly.
+// group is this window's Places membership — the other three apps it is
+// bound to (docs/PLACES.md). One window per process, so one of these.
+// group is this window's Places membership — the other three apps it is
+// bound to (docs/PLACES.md). Built at package scope so the AppDef callbacks
+// always have something to talk to; the instance id arrives in onReady.
+var group = places.New("com.wash.term", "", pushPlaces)
+
+// pushPlaces hands the FE the current group so the icon bar can draw which
+// apps are reachable and which tint the group carries.
+func pushPlaces(c places.Conn, v places.View) {
+	_ = c.SendAppMsg(map[string]any{"kind": "places", "group": v.Group, "members": v.Members})
+}
+
 func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	log.Printf("wash-term ready instance=%s window=%d", instanceID, windowID)
+	// The group has to name this window when it invites another, and the
+	// instance id is only known now.
+	group.SetSelf(instanceID)
+	pushPlaces(c, group.View())
 	openDir = resolveOpenDir(c.LaunchOpenPath())
 	if openDir != "" {
 		log.Printf("wash-term: open dir=%s", openDir)
@@ -505,6 +540,13 @@ type setTitleReq struct {
 	Title string `json:"title"`
 }
 
+// placesClickReq is the icon bar being clicked: which app to bring forward,
+// and the tab whose folder a new window should open in.
+type placesClickReq struct {
+	Target    string `json:"target"`
+	ChannelID uint64 `json:"channel_id"`
+}
+
 // restartTabReq replaces one tab's shell in place.
 type restartTabReq struct {
 	ChannelID uint64 `json:"channel_id"`
@@ -544,6 +586,7 @@ type closeTabReq struct {
 }
 
 func registerHandlers(b *sdk.Bus) {
+	registerPlaces(b)
 	sdk.HandlePersist(b)
 	sdk.HandleVoid(b, "resize", func(_ *sdk.Conn, _ string, req resizeReq) error {
 		if req.ChannelID == 0 || req.Cols == 0 || req.Rows == 0 {

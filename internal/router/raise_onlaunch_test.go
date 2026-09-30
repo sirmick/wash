@@ -136,3 +136,105 @@ func TestLaunchOrRaiseRaisesExisting(t *testing.T) {
 	waitClose(t, appDone)
 	waitClose(t, shellDone)
 }
+
+// waitReveal drains shell ctrl frames until a window.reveal arrives, and
+// reports which window it named — or 0 if none arrived in the frames read.
+func waitReveal(t *testing.T, e wire.FrameTransport, frames int) uint32 {
+	t.Helper()
+	for i := 0; i < frames; i++ {
+		if v, ok := readCtrl(t, e).(wire.ShellWindowReveal); ok {
+			return v.WindowID
+		}
+	}
+	return 0
+}
+
+// A raise the user did NOT click — an app raising itself — must tell the
+// shells to bring the window into view: focus alone is invisible when the
+// window sits in another viewport cell. The user's own focus click must NOT,
+// or a reload (which refocuses every window as it mounts) would pan the
+// camera around the desktop (docs/PLACES.md; web/shell revealWindow).
+//
+// Absence is the hard half to prove. Two windows: the user focuses the
+// first, then the second's app raises itself. A ping/pong after the focus
+// proves the shell's read loop has FINISHED handling it (the loop is
+// sequential), so a reveal it wrongly sent is already queued — and, being
+// the same class as the correct reveal, must be read before it. The pong
+// alone is not enough: it rides ClassControl and can overtake.
+func TestAppRaiseRevealsButUserFocusDoesNot(t *testing.T) {
+	reg := NewRegistry()
+	r := NewRouter(Config{}, reg, func(format string, args ...any) { t.Logf("router: "+format, args...) })
+
+	shellPair := wiretest.NewPipePair()
+	shell := shellPair.EndB()
+	shellDone := make(chan struct{})
+	go func() { defer close(shellDone); _ = r.HandleShell(context.Background(), shellPair.EndA()) }()
+
+	type upApp struct {
+		pair *wiretest.PipePair
+		end  wire.FrameTransport
+		win  uint32
+		done chan struct{}
+	}
+	start := func(id, element string) upApp {
+		m := singleWinManifest()
+		m.ID, m.Element = id, element
+		pair := wiretest.NewPipePair()
+		a := upApp{pair: pair, end: pair.EndB(), done: make(chan struct{})}
+		go func() { defer close(a.done); _ = r.HandleApp(context.Background(), pair.EndA(), m, nil) }()
+		writeCtrl(t, a.end, wire.NewIdentity(id, ProtocolVersion, "0.9.0"))
+		ack, ok := readCtrl(t, a.end).(wire.IdentityAck)
+		if !ok || ack.WindowID == 0 {
+			t.Fatalf("%s: expected IdentityAck with a window, got %+v", id, ack)
+		}
+		a.win = ack.WindowID
+		if mp, ok := readEvt(t, a.end).(wire.EvtWindowMapped); !ok || mp.Win != a.win {
+			t.Fatalf("%s: expected EvtWindowMapped, got %+v", id, mp)
+		}
+		waitWindowUpsert(t, shell, a.win)
+		return a
+	}
+	one := start("com.wash.net", "wash-app-net")
+	two := start("com.wash.music", "wash-app-music")
+
+	// The user clicks window one.
+	writeCtrl(t, shell, wire.NewShellWindowFocus(one.win))
+	writeCtrl(t, shell, wire.NewShellPing(7))
+	for i := 0; ; i++ {
+		if i > 100 {
+			t.Fatal("no pong within 100 frames")
+		}
+		v := readCtrl(t, shell)
+		if rv, ok := v.(wire.ShellWindowReveal); ok {
+			t.Fatalf("the user's own focus click produced a reveal for window %d", rv.WindowID)
+		}
+		if p, ok := v.(wire.ShellPong); ok && p.Seq == 7 {
+			break
+		}
+	}
+
+	// Window two's app raises itself — the path Places, notifications and
+	// the Agent's "show editor" use.
+	writeEvt(t, two.end, wire.NewEvtWindowRaise(two.win))
+	got := waitReveal(t, shell, 30)
+	if got == one.win {
+		t.Fatalf("the user's own focus click produced a reveal for window %d", one.win)
+	}
+	if got != two.win {
+		t.Fatalf("an app's self-raise sent no reveal for window %d (got %d)", two.win, got)
+	}
+
+	// Raising again while it already has focus changes no stacking, but the
+	// user may have panned away from it since — it must still reveal.
+	writeEvt(t, two.end, wire.NewEvtWindowRaise(two.win))
+	if got := waitReveal(t, shell, 30); got != two.win {
+		t.Fatalf("a self-raise of the focused window sent no reveal (got %d)", got)
+	}
+
+	one.pair.Close()
+	two.pair.Close()
+	shellPair.Close()
+	waitClose(t, one.done)
+	waitClose(t, two.done)
+	waitClose(t, shellDone)
+}

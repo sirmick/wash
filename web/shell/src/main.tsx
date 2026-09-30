@@ -56,7 +56,9 @@ import {
   type WinState,
   nextGeomTok,
   markGeomPending,
+  windowById,
 } from './wm';
+import { clampToPlane, isOnScreen, isOrphaned } from './viewport-math';
 import { Desktop } from './desktop';
 import {
   chordReleased,
@@ -306,6 +308,13 @@ interface ShellSuperseded {
   msg: string;
 }
 
+// A window was raised by something other than the user clicking it (an app
+// raising itself, launchOrRaise). See pkg/wire/msgs_shell.go.
+interface ShellWindowReveal {
+  t: 'window.reveal';
+  window_id: number;
+}
+
 export interface ShellAppCrashed {
   t: 'app.crashed';
   instance_id: string;
@@ -340,6 +349,7 @@ type ShellCtrlMsg =
   | ShellAppMsgDeliver
   | ShellNotify
   | ShellAppCrashed
+  | ShellWindowReveal
   | ShellReload
   | ShellChannelBind
   | ShellAssetReadOK
@@ -408,6 +418,37 @@ function raiseWindow(w: WindowInfo): void {
   // restoreWindow raises + focuses on its own; focusWindow for the rest.
   if (w.state === 'minimized') window.wash.restoreWindow(w.windowID, w.origin);
   else window.wash.focusWindow(w.windowID, w.origin);
+}
+
+// revealWindow brings a window an app raised into view. The router's focus
+// patch has already raised it; without this, a window one viewport cell
+// over comes to the front where nobody can see it, and the click that asked
+// for it appears to do nothing.
+//
+// Only when NONE of it is on screen: if the user can see any part of it,
+// yanking the whole desktop sideways is worse than leaving the camera be.
+// A window not in the store yet (a spawn still loading its bundle) is left
+// alone — spawns already land in the current cell (handlePatch).
+//
+// Deliberately NOT skipped for a minimized window. This message goes out on
+// the control path while the un-minimize arrives as a session patch, which
+// can be held in the router's coalescing queue under load — so the store may
+// still say minimized when this lands. It does not matter: minimizing never
+// moves a window (wmstate.go setState only snapshots x/y into Restore*), so
+// its x/y is exactly where it is about to reappear.
+function revealWindow(origin: Origin, windowID: number): void {
+  const w = windowById(origin, windowID);
+  if (!w) return;
+  const cell = viewportFor(w);
+  // A maximized window is drawn filling the cell its restore rect's centre
+  // is in (window.tsx), not where that rect is — so "is any of it on
+  // screen" is a question about the cell, not the rect.
+  const visible =
+    w.state === 'maximized'
+      ? cell.vx === viewport().vx && cell.vy === viewport().vy
+      : isOnScreen(w, screenSize(), viewport());
+  if (visible) return;
+  setViewport(cell.vx, cell.vy);
 }
 
 // appIDForWindow resolves a window's app id from the router-attested
@@ -671,6 +712,9 @@ function makeHandlers(client: RouterClient): ClientHandlers {
       }
       case 'app.crashed':
         handleCrash(client, msg);
+        break;
+      case 'window.reveal':
+        revealWindow(client.origin, msg.window_id);
         break;
       case 'shell.reload': {
         // Dev-mode signal: only the LOCAL router may bounce the page (a
@@ -1309,7 +1353,66 @@ function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot, isLocal
     localShellID = msg.shell_id;
   }
   replaceSavedStates(client.origin, msg.app_state);
+  // Seed first-sight bookkeeping BEFORE the windows land. A snapshot is the
+  // router's full state, so every window in it already exists — none is a
+  // fresh spawn. Without this the set starts empty on every (re)connect and
+  // handlePatch's viewport auto-relocation mistakes the first upsert for
+  // each restored window (FloatingWindow.onMount calls focusWindow, and the
+  // router's focus() always emits one) for a spawn, shifting the whole
+  // session one cell per refresh until windows fall off the plane.
+  // Rebuilt rather than merged: the snapshot is authoritative, so ids it
+  // omits are gone and their entries would otherwise leak.
+  client.seenWindowIDs.clear();
+  for (const sw of msg.windows) client.seenWindowIDs.add(sw.window_id);
+  // Rescue BEFORE applying, by rewriting the snapshot's own coordinates —
+  // the same move handlePatch makes for a spawn. The windows are not in the
+  // store yet (each mounts behind its bundle), so a moveLocal afterwards
+  // would be a no-op and the window would mount off-plane until the
+  // router's echo arrived.
+  const rescued = rescueOrphans(msg.windows);
   applySessionSnapshot(client.origin, msg.windows, (id) => client.waitForBundle(id));
+  // After applying: the snapshot clears pending geometry for this origin,
+  // so a token marked before it would be wiped.
+  for (const m of rescued) {
+    const tok = nextGeomTok();
+    markGeomPending(client.origin, m.id, tok);
+    client.conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y, tok });
+  }
+}
+
+// rescueOrphans drags windows stranded outside the plane back onto it,
+// rewriting the snapshot entries in place and returning the moves to persist.
+//
+// Sessions predating the seenWindowIDs fix above have windows pushed past
+// cell (2,2) by repeated refreshes, and shrinking the browser strands
+// windows near the far edge the same way — the plane is sized from
+// innerWidth/innerHeight, and nothing reflows geometry on resize. Either
+// way the window is unreachable: the pager and taskbar only pan the camera,
+// which clamps to the grid, so there is no way back from the UI.
+//
+// Only fully-outside windows are touched (see isOrphaned); a partly
+// off-edge window still has a grabbable titlebar and is left alone.
+//
+// Only NORMAL windows. The router drops a move for a minimized or maximized
+// window (wmstate.go move), and restores it from its saved frame, so a
+// rescue there would change nothing but the FE's idea of where it is. A
+// maximized orphan is visible anyway — its frame anchors to the clamped cell.
+function rescueOrphans(wins: SessionWindow[]): Array<{ id: number; x: number; y: number }> {
+  const s = screenSize();
+  const moves: Array<{ id: number; x: number; y: number }> = [];
+  if (s.w <= 0 || s.h <= 0) return moves;
+  for (const sw of wins) {
+    if (sw.state !== 'normal') continue;
+    const r = { x: sw.x, y: sw.y, w: sw.w, h: sw.h };
+    if (!isOrphaned(r, s, VIEWPORTS_PER_AXIS)) continue;
+    const { x, y } = clampToPlane(r, s, VIEWPORTS_PER_AXIS);
+    if (x === sw.x && y === sw.y) continue;
+    shellLog('info', 'shell', `rescued orphaned window id=${sw.window_id} from (${sw.x},${sw.y}) to (${x},${y})`);
+    sw.x = x;
+    sw.y = y;
+    moves.push({ id: sw.window_id, x, y });
+  }
+  return moves;
 }
 
 // handleCrash marks the matching window crashed in the WM store so
@@ -1358,9 +1461,17 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   for (const p of msg.patches) {
     if (p.op === 'window.upsert' && p.window && !client.seenWindowIDs.has(p.window.window_id)) {
       if (vp.vx !== 0 || vp.vy !== 0) {
-        p.window.x = p.window.x + vp.vx * s.w;
-        p.window.y = p.window.y + vp.vy * s.h;
-        moves.push({ id: p.window.window_id, x: p.window.x, y: p.window.y });
+        // Clamped like the titlebar drag and sendToViewportRect. This is the
+        // one coordinate writer that runs without the user asking, so it is
+        // the one that must never be able to strand a window off-plane.
+        const { x, y } = clampToPlane(
+          { x: p.window.x + vp.vx * s.w, y: p.window.y + vp.vy * s.h, w: p.window.w, h: p.window.h },
+          s,
+          VIEWPORTS_PER_AXIS,
+        );
+        p.window.x = x;
+        p.window.y = y;
+        moves.push({ id: p.window.window_id, x, y });
       }
       client.seenWindowIDs.add(p.window.window_id);
     }

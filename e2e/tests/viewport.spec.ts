@@ -120,4 +120,50 @@ test.describe('viewport', () => {
     });
     expect(inOrigin).toBe(false);
   });
+
+  // Regression: a reload while parked on a non-(0,0) cell used to drag every
+  // restored window one cell further out. seenWindowIDs starts empty on a
+  // fresh RouterClient and was never seeded from the snapshot, so the first
+  // upsert for each window — FloatingWindow.onMount calls focusWindow, and
+  // the router's focus() always emits one — looked like a fresh spawn and
+  // got the new-window viewport offset, which was then persisted as a
+  // window.move. Repeat reloads walked windows off the plane entirely.
+  test('reload on a non-zero viewport leaves windows where they are', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await page.locator('[data-testid="pager-cell-1-1"]').click();
+    await expect(page.locator('[data-testid="pager-cell-1-1"]')).toHaveAttribute('data-active', 'true');
+    await page.locator('button[title="Apps"]').click();
+    await page.getByRole('button', { name: /About wash/ }).click();
+    await expect(page.locator('wash-app-about')).toBeVisible();
+
+    // Router-side truth, read through the shell's window registry so the
+    // assert survives any FE-only bookkeeping.
+    const before = await page.evaluate(() => {
+      const w = window.wash.windows().find((x) => x.element === 'wash-app-about');
+      return w ? { x: w.x, y: w.y } : null;
+    });
+    expect(before).not.toBeNull();
+
+    // Two reloads: one shift would be a bug, two proved it compounded.
+    for (let i = 0; i < 2; i++) {
+      await page.reload();
+      await expect(page.locator('wash-app-about')).toBeVisible();
+      // The cell is restored from localStorage, so we are still off-origin.
+      await expect(page.locator('[data-testid="pager-cell-1-1"]')).toHaveAttribute('data-active', 'true');
+    }
+
+    const after = await page.evaluate(() => {
+      const w = window.wash.windows().find((x) => x.element === 'wash-app-about');
+      return w ? { x: w.x, y: w.y } : null;
+    });
+    expect(after).toEqual(before);
+
+    // And it is still where the user left it, not stranded off-plane.
+    const stillInCell = await page.evaluate(() => {
+      const cell = document.querySelector('[data-testid="pager-cell-1-1"]');
+      return !!cell?.querySelector('[data-testid^="pager-window-"]');
+    });
+    expect(stillInCell).toBe(true);
+  });
 });

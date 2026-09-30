@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sirmick/wash/internal/places"
 	"github.com/sirmick/wash/internal/version"
 	"io/fs"
 	"log"
@@ -95,6 +96,8 @@ func init() {
 		OnReady:            onReady,
 		OnClipboardChanged: onClipboardChanged,
 		OnCloseRequested:   onCloseRequested,
+		OnSpawnResult:      func(c *sdk.Conn, appID, instanceID string, err error) { group.OnSpawnResult(c, appID, instanceID, err) },
+		OnInstanceGone:     func(c *sdk.Conn, appID, instanceID string) { group.OnInstanceGone(c, appID, instanceID) },
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-fm",
@@ -119,8 +122,13 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	fmFS = wfs.New(fmRoot)
 	launchDir = resolveLaunchDir(c.LaunchOpenPath())
 
+	// The group names this window when it invites another; the instance id
+	// is only known now.
+	group.SetSelf(instanceID)
+
 	bus = sdk.NewBus(c)
 	registerHandlers(bus)
+	pushPlaces(c, group.View())
 	// The host's bulk queue (docs/SIDEBAR.md M3a). fm renders the SERVICE's
 	// jobs, not this window's: a copy outlives the window that started it.
 	registerJobHandlers(bus)
@@ -244,7 +252,40 @@ type fsEvent struct {
 
 // ----- handler registration -----
 
+// group is this window's Places membership — the other three apps it is
+// bound to (docs/PLACES.md). Built at package scope so the AppDef callbacks
+// always have something to talk to; the instance id arrives in onReady.
+var group = places.New("com.wash.fm", "", pushPlaces)
+
+// pushPlaces hands the FE the current group so the icon bar can draw which
+// apps are reachable and which tint the group carries.
+func pushPlaces(c places.Conn, v places.View) {
+	_ = c.SendAppMsg(map[string]any{"kind": "places", "group": v.Group, "members": v.Members})
+}
+
+// placesClickReq is the icon bar being clicked: which app to bring forward,
+// and the folder the window is currently showing (viewDir, which only the
+// FE knows — it changes with every navigation).
+type placesClickReq struct {
+	Target string `json:"target"`
+	Cwd    string `json:"cwd"`
+}
+
 func registerHandlers(b *sdk.Bus) {
+	sdk.HandleVoid(b, "places_click", func(c *sdk.Conn, _ string, req placesClickReq) error {
+		// Confined like every other FE-supplied path here: the frontend
+		// names the folder, the BE decides whether it may be opened.
+		abs, err := fmFS.Confine(req.Cwd)
+		if err != nil {
+			log.Printf("fm: places click %s cwd=%q: %v", req.Target, req.Cwd, err)
+			return fsErr(err, req.Cwd)
+		}
+		if err := group.Click(c, req.Target, abs, "", 0, 0); err != nil {
+			log.Printf("fm: places click %s: %v", req.Target, err)
+		}
+		return nil
+	})
+	group.Register(b, nil)
 	c := b.Conn()
 	fmWatch = sdk.NewWatchClient(c) // intercepts the service's fs_event pushes
 

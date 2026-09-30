@@ -15,12 +15,12 @@ import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
 import { isManagerElement } from './role.ts';
 import type { Component } from 'solid-js';
-import { FilePen } from 'lucide-solid';
 import {
   AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuPicker, MenuSeparator,
-  Overlay, Select, Splitter, Tab,
+  Overlay, PLACES_AGENT, PlacesBar, Select, Splitter, Tab,
   agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
 } from '@wash/ui';
+import type { PlacesView } from '@wash/ui';
 import type {
   AgentStatus, PathHit, PathLinks, QuestionAnswers,
 } from '@wash/ui';
@@ -33,7 +33,9 @@ type WindowMessage =
   | { kind: 'restore_failed' }
   | { kind: 'draft'; text: string }
   | { kind: 'path_probe_ok'; id: string; hits: PathHit[] }
-  | { kind: 'confirm_close' };
+  | { kind: 'confirm_close' }
+  // This window's Places group (docs/PLACES.md).
+  | { kind: 'places'; group: string; members: Record<string, string> };
 type Incoming = agentproto.AgentdPush | WindowMessage;
 
 /** What only this window's backend handles; everything else is an agentd
@@ -48,6 +50,9 @@ type WindowRequest =
   // links, resolved against the session's folder, and where they open.
   | { kind: 'path_probe'; id: string; paths: string[] }
   | { kind: 'editor_show'; token?: string }
+  // The Places bar (docs/PLACES.md): bring the group's window of target
+  // forward, or open one in the session's folder and bind it.
+  | { kind: 'places_click'; target: string }
   | { kind: 'open_agents' };
 
 /** The roster as this window holds it: empty until agentd's first push. */
@@ -93,6 +98,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // Launched with --agent/--cwd: show what is starting rather than an
   // empty form that is about to be replaced.
   const [autostart, setAutostart] = createSignal<{ agent: string; cwd: string } | null>(null);
+  // This window's Places group: which of Files, Editor and Terminal are
+  // bound to it, and the tint the group carries.
+  const [places, setPlaces] = createSignal<PlacesView>({ group: '', members: {} });
   // Closing the window does not end the session — agentd owns the adapter
   // — so the user chooses what happens to it.
   const [confirmClose, setConfirmClose] = createSignal(false);
@@ -215,6 +223,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
       case 'workspace_result':
         if (!staleTranscript(m)) setWorkspaceResult(m);
+        break;
+      case 'places':
+        setPlaces({ group: m.group ?? '', members: m.members ?? {} });
         break;
       case 'autostart':
         setAutostart({ agent: m.agent, cwd: m.cwd });
@@ -339,10 +350,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // untouched launcher is what's showing — a user who set the
         // select (or a window that's already a session) is never fought.
         if (!catalogDefaulted && !sessionKey() && !autostart() && form().catalog === '') {
-          const d = defaultCatalog(roster().catalogs ?? [], roster().recent ?? []);
+          const launch = roster().launch ?? {};
+          const d = defaultCatalog(roster().catalogs ?? [], roster().recent ?? [], launch.catalog ?? '');
           if (d) {
             catalogDefaulted = true;
             patchForm({ catalog: d });
+            // Only the default's own model travels with it — a model from
+            // history belongs to a catalog we may not have chosen here.
+            if (d === launch.catalog && launch.model) patchForm({ model: launch.model });
             // Only if the user hasn't typed/picked one — the folder field
             // is editable from the moment the window opens.
             if (cwd() === '') patchForm({ cwd: defaultCwd(roster().recent ?? []) });
@@ -587,7 +602,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       }}
     >
       <div style={{ color: tokens.fg, font: tokens.type.titleSm }}>
-        Starting {autostart()?.agent}…
+        {/* No adapter named means the default catalog is being used and
+            agentd is resolving it — "Starting …" would read as a bug. */}
+        Starting {autostart()?.agent || 'agent'}…
       </div>
       <div style={{ font: tokens.type.monoMd }}>{autostart()?.cwd || 'Home'}</div>
     </div>
@@ -635,19 +652,18 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const menubar = (
     <MenuBar
       testidPrefix="ai-menubar"
+      // Files, Editor and Terminal, bound to this window (docs/PLACES.md).
+      // The Editor icon IS this window's editor — the one the transcript's
+      // file links open in (apps/ai/be/editor.go) — so there is one editor
+      // per Agent window however it is reached.
       trailing={
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!row()?.cwd}
-          title={row()?.cwd ? `Editor for ${row()!.cwd} — this session's files open here` : 'The session has no folder yet'}
-          onClick={showEditor}
-          data-testid="ai-show-editor"
-        >
-          <span style={{ display: 'inline-flex', 'align-items': 'center', gap: `${tokens.spaceXs}px` }}>
-            <FilePen size={14} /> Editor
-          </span>
-        </Button>
+        <PlacesBar
+          self={PLACES_AGENT}
+          view={places()}
+          onOpen={(target) => sendLocal({ kind: 'places_click', target })}
+          disabled={row()?.cwd ? undefined : 'The session has no folder yet'}
+          describe={() => row()?.cwd}
+        />
       }
       menus={[
         {
@@ -703,19 +719,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 data-testid="ai-menu-rename"
               />
               {/* Where the agent is working is exactly where a person
-                  wants a shell. Same verb the roster row offers, because
-                  the window showing a session and the row naming it are
-                  two views of one thing. */}
+                  wants a shell. The same verbs as the Places bar
+                  (docs/PLACES.md): this window's own terminal and file
+                  manager, opened in the project folder the first time and
+                  brought back after — never a new one per click, which is
+                  what the icons beside this menu do too. (The Agents
+                  manager's row verbs still open fresh windows: a row is any
+                  session, not this window's group.) */}
               <MenuItem
-                label="Open terminal in project folder"
+                label="Show terminal"
                 disabled={!row()?.cwd}
-                onClick={() => { close(); sendLocal({ kind: 'open_terminal', cwd: row()?.cwd ?? '' }); }}
+                onClick={() => { close(); sendLocal({ kind: 'places_click', target: 'com.wash.term' }); }}
                 data-testid="ai-menu-open-terminal"
               />
               <MenuItem
-                label="Open file manager in project folder"
+                label="Show file manager"
                 disabled={!row()?.cwd}
-                onClick={() => { close(); sendLocal({ kind: 'open_file_manager', cwd: row()?.cwd ?? '' }); }}
+                onClick={() => { close(); sendLocal({ kind: 'places_click', target: 'com.wash.fm' }); }}
                 data-testid="ai-menu-open-file-manager"
               />
               {/* Not a new editor each time: this window's own, rooted at
@@ -1066,8 +1086,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       connections={roster().connections ?? []}
       adapterOptions={roster().adapter_options ?? []}
       results={catalogResults()}
+      launch={roster().launch ?? {}}
       onSave={(id, catalog) => { setCatalogResult(id, {}); sendAgentd({ kind: 'agent_set_catalog', id, catalog }); }}
       onDelete={(id) => { setCatalogResult(id, {}); sendAgentd({ kind: 'agent_delete_catalog', id }); }}
+      // The whole block goes up: agent_set_launch replaces it, so sending
+      // only the catalog would clear the remembered permissions with it.
+      onDefault={(catalog, model) => sendAgentd({ kind: 'agent_set_launch', launch: { ...(roster().launch ?? {}), catalog, model } })}
     />
   );
 
