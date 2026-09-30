@@ -2,6 +2,7 @@ package login
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -10,15 +11,21 @@ import (
 // tests pin the two halves of that: the auto path re-asks and adopts,
 // and the explicit "new session" path does not.
 //
-// Neither test can fork: RouterBinary is empty, so any attempt to
-// actually spawn fails. That is the assertion — adopting is the only
-// way to come back without an error.
+// Neither test can fork: RouterBinary names a file that does not
+// exist, so any attempt to actually spawn fails. That is the assertion
+// — adopting is the only way to come back without an error. (Empty
+// would resolve "wash-router" via PATH, which on a host with wash
+// installed forks a real router.)
+
+func noRouter(t *testing.T) string {
+	return filepath.Join(t.TempDir(), "no-such-wash-router")
+}
 
 func TestSpawnIfNoneAdoptsSessionWonByAnotherRequest(t *testing.T) {
 	reg := &fakeRegistry{uidSessions: map[uint32][]Session{
 		1000: {{Pid: 1111, UID: 1000, SessID: "s-winner", Sock: "/run/wash/1000/sessions/s-winner.sock"}},
 	}}
-	sp := &Spawner{Sessions: reg, RunRoot: t.TempDir()}
+	sp := &Spawner{Sessions: reg, RouterBinary: noRouter(t), RunRoot: t.TempDir()}
 
 	got, adopted, err := sp.SpawnIfNone(Identity{UID: 1000, Name: "alice"}, "alice")
 	if err != nil {
@@ -34,7 +41,7 @@ func TestSpawnIfNoneAdoptsSessionWonByAnotherRequest(t *testing.T) {
 
 func TestSpawnIfNoneForksWhenTheUserTrulyHasNone(t *testing.T) {
 	reg := &fakeRegistry{uidSessions: map[uint32][]Session{}}
-	sp := &Spawner{Sessions: reg, RunRoot: t.TempDir()}
+	sp := &Spawner{Sessions: reg, RouterBinary: noRouter(t), RunRoot: t.TempDir()}
 
 	_, adopted, err := sp.SpawnIfNone(Identity{UID: 1000, Name: "alice"}, "alice")
 	if adopted {
@@ -56,7 +63,7 @@ func TestSpawnStillForksWhenSessionsExist(t *testing.T) {
 	reg := &fakeRegistry{uidSessions: map[uint32][]Session{
 		1000: {{Pid: 1111, UID: 1000, SessID: "s-a"}},
 	}}
-	sp := &Spawner{Sessions: reg, RunRoot: t.TempDir()}
+	sp := &Spawner{Sessions: reg, RouterBinary: noRouter(t), RunRoot: t.TempDir()}
 
 	if _, err := sp.Spawn(Identity{UID: 1000, Name: "alice"}, "second"); err == nil {
 		t.Errorf("Spawn adopted an existing session; it must always fork")
@@ -69,7 +76,7 @@ func TestSpawnCapRecheckedUnderTheLock(t *testing.T) {
 	reg := &fakeRegistry{uidSessions: map[uint32][]Session{
 		1000: {{Pid: 1111, UID: 1000, SessID: "s-a"}},
 	}}
-	sp := &Spawner{MaxPerUID: 1, Sessions: reg, RunRoot: t.TempDir()}
+	sp := &Spawner{MaxPerUID: 1, Sessions: reg, RouterBinary: noRouter(t), RunRoot: t.TempDir()}
 
 	if _, _, err := sp.SpawnIfNone(Identity{UID: 1000, Name: "alice"}, "alice"); err != nil {
 		t.Fatalf("at the cap but adoptable: want the existing session, got %v", err)
