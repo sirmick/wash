@@ -133,3 +133,12 @@ export function resizeRect(
   if (y < 0) { h += y; y = 0; }
   return { x, y, w, h };
 }
+
+// fitLeftOf shifts a frame left so its right edge ends within `free` px of
+// the cell starting at cellLeft — never left of the cell itself. A frame
+// wider than the free width is left at the cell's left edge.
+export function fitLeftOf(r: { x: number; w: number }, cellLeft: number, free: number): number {
+  const right = cellLeft + free;
+  if (r.x + r.w <= right) return r.x;
+  return Math.max(cellLeft, right - r.w);
+}

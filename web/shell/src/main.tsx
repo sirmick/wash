@@ -58,7 +58,7 @@ import {
   markGeomPending,
   windowById,
 } from './wm';
-import { clampToPlane, isOnScreen, isOrphaned } from './viewport-math';
+import { clampToPlane, fitLeftOf, isOnScreen, isOrphaned } from './viewport-math';
 import { Desktop } from './desktop';
 import {
   chordReleased,
@@ -1436,6 +1436,12 @@ function handleCrash(client: RouterClient, msg: ShellAppCrashed): void {
 // waitForBundle, so a window-in-flight isn't in `windows` yet — without
 // the set, every pre-bundle patch looks "fresh" and we'd re-relocate the
 // same window N times.
+// reservedRight is the width the session app's sidebar reserves at the
+// screen's right edge (--wash-reserved-right, which it keeps current).
+function reservedRight(): number {
+  return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10) || 0;
+}
+
 function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   // Apply app_state ops first so when a window upsert in the same
   // patch triggers a remount, wash:state carries the latest blob.
@@ -1458,17 +1464,27 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   const vp = viewport();
   const s = screenSize();
   const moves: Array<{ id: number; x: number; y: number }> = [];
+  const reserved = reservedRight();
   for (const p of msg.patches) {
     if (p.op === 'window.upsert' && p.window && !client.seenWindowIDs.has(p.window.window_id)) {
+      let { x, y } = p.window;
       if (vp.vx !== 0 || vp.vy !== 0) {
         // Clamped like the titlebar drag and sendToViewportRect. This is the
         // one coordinate writer that runs without the user asking, so it is
         // the one that must never be able to strand a window off-plane.
-        const { x, y } = clampToPlane(
-          { x: p.window.x + vp.vx * s.w, y: p.window.y + vp.vy * s.h, w: p.window.w, h: p.window.h },
+        ({ x, y } = clampToPlane(
+          { x: x + vp.vx * s.w, y: y + vp.vy * s.h, w: p.window.w, h: p.window.h },
           s,
           VIEWPORTS_PER_AXIS,
-        );
+        ));
+      }
+      // A new window opens clear of the right sidebar where it fits: the
+      // router cascades without knowing the sidebar is there, and a
+      // window whose titlebar buttons land under it cannot be closed.
+      if (p.window.state === 'normal') {
+        x = fitLeftOf({ x, w: p.window.w + 2 }, vp.vx * s.w, s.w - reserved);
+      }
+      if (x !== p.window.x || y !== p.window.y) {
         p.window.x = x;
         p.window.y = y;
         moves.push({ id: p.window.window_id, x, y });

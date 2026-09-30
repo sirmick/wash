@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { clampViewport, clampToPlane, isOnScreen, isOrphaned, viewportForRect, nextZ, sendToViewportRect, resizeRect } from './viewport-math.ts';
+import { clampViewport, clampToPlane, isOnScreen, isOrphaned, viewportForRect, nextZ, sendToViewportRect, resizeRect, fitLeftOf } from './viewport-math.ts';
 
 const PER = 3; // VIEWPORTS_PER_AXIS
 const screen = { w: 1000, h: 800 };
@@ -130,4 +130,11 @@ test('resizeRect: the minimum size stops the origin, not the far edge', () => {
 test('resizeRect: never past the plane top-left', () => {
   const r = { x: 20, y: 10, w: 400, h: 300 };
   assert.deepEqual(resizeRect(r, 'nw', -100, -100), { x: 0, y: 0, w: 420, h: 310 });
+});
+
+test('fitLeftOf: a frame over the reserved edge shifts left, within its cell', () => {
+  assert.equal(fitLeftOf({ x: 90, w: 852 }, 0, 940), 88);
+  assert.equal(fitLeftOf({ x: 40, w: 400 }, 0, 940), 40, 'already clear');
+  assert.equal(fitLeftOf({ x: 1100, w: 852 }, 1000, 940), 1088, 'relative to the cell');
+  assert.equal(fitLeftOf({ x: 60, w: 1200 }, 0, 940), 0, 'too wide: the cell edge');
 });
