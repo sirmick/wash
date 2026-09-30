@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.16.1
+Version:        0.17.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,11 @@ fi
 exit 0
 
 %changelog
+* Wed Sep 30 2026 sirmick <sirmick@gmail.com> - 0.17.0-1
+- Places: Agent, Files, Editor and Terminal windows bound into groups
+  from an icon bar; raised windows bring the camera to them; a reload
+  on a non-zero viewport no longer strands windows; a default agent
+  catalog for folder-opened agents; wash ai honours --open.
 * Wed Sep 16 2026 sirmick <sirmick@gmail.com> - 0.16.0-1
 - Optional AI provider service (com.wash.inference): OpenAI-compatible,
   Codex CLI and Claude CLI adapters behind one contract, credentials kept

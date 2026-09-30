@@ -1,3 +1,25 @@
+wash (0.17.0-1) unstable; urgency=low
+
+  * Places: the Agent, Files, Editor and Terminal windows each carry icons
+    for the other three. The first click opens that app in this window's
+    folder and binds the windows into a group; later clicks bring the
+    group's window back, wherever it is on the desktop, instead of opening
+    another. A group's windows share a tint. See docs/PLACES.md.
+  * A window an app raises itself (a Places click, a notification, the
+    Agent's "show editor") now brings the camera to it when none of it is
+    on screen.
+  * Reloading the page while on any viewport but the first no longer moves
+    every window one cell further out; windows already stranded off the
+    plane are brought back when the session loads.
+  * A default catalog in Agents -> Catalog decides what starts when an
+    agent is opened from a folder: the Editor, the Places agent icon and
+    `wash ai <dir>`. That start gets the mode remembered for its adapter.
+    Deleting the default catalog clears the default, so it can no longer
+    make later launcher settings fail to save without saying so.
+  * wash ai now honours --open.
+
+ -- Michael <sirmick@gmail.com>  Wed, 30 Sep 2026 15:00:00 -0700
+
 wash (0.16.1-1) unstable; urgency=low
 
   * Save As no longer discards another tab's unsaved edits without saying
