@@ -16,6 +16,18 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-30 — fm-be "request_id is required": a race in the test, fixed
+
+**Seen during:** GitHub Actions e2e for PR #30 (`ce72024e`): 734 passed /
+1 failed. `fm-be.spec.ts:185` sent `create_file` without an id and checked
+`existsSync` straight after the `msg.ok` ack.
+
+**Mechanism:** the ack means the message was queued, not handled; the BE
+writes the file a moment later. Green on this box every run, lost on a
+slower runner. **Fixed** by polling for the file (the spec, not the BE).
+
+---
+
 ## 2026-09-30 — chrome-windows resize + clipboard-secure mirror: once each, full-suite load
 
 **Seen during:** `make e2e-test` (multicall) on `places-followups`

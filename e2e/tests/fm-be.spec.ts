@@ -192,7 +192,9 @@ test.describe('fm BE app_msg surface', () => {
     const target = join(router.fmRoot, 'no-id.txt');
     const noAwait = await router.sendAppMsg(inst, { kind: 'create_file', path: target });
     expect(noAwait).toEqual({}); // {} maps to msg.ok in the fixture
-    // Filesystem still got updated even without correlation.
-    expect(existsSync(target)).toBe(true);
+    // Filesystem still got updated even without correlation — eventually:
+    // the ack means the message was queued, not handled, so the BE may not
+    // have written yet (a slow CI runner lost this race).
+    await expect.poll(() => existsSync(target), { timeout: 10_000 }).toBe(true);
   });
 });
