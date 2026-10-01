@@ -7,7 +7,7 @@ package agentproto
 // show an error.
 
 // AgentSetCatalog stores one catalog under agents.json `catalogs`, whole,
-// as the Catalog tab holds it. For a built-in catalog this is its override;
+// as the Setup tab holds it. For a built-in catalog this is its override;
 // for any other id it is the user's own.
 type AgentSetCatalog struct {
 	ID      string      `json:"id"`

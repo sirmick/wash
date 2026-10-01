@@ -81,6 +81,11 @@ type AppDef struct {
 	// instanceID is non-empty on success; err is non-nil on failure.
 	OnSpawnResult func(c *Conn, appID, instanceID string, err error)
 
+	// OnTaggedSpawnResult delivers the reply to a SpawnRequestTagged,
+	// with the tag it was sent with. Unset, those replies go to
+	// OnSpawnResult like any other.
+	OnTaggedSpawnResult func(c *Conn, tag uint64, appID, instanceID string, err error)
+
 	// OnPrepareSpawnResult delivers the router's reply to a
 	// PrepareSpawn call. On success, the app receives the minted
 	// instance id, the attach token to pass through to the child

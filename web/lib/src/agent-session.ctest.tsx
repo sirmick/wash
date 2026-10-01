@@ -26,6 +26,37 @@ test('agent thoughts render markdown like assistant messages', () => {
   expect(container.querySelector('strong')?.textContent).toBe('inspect');
 });
 
+// Thinking is collapsed with a running character count, and an opened
+// panel stays open while chunks keep arriving (each replaces the event).
+test('thoughts collapse, count their characters, and stay open as they stream', () => {
+  const [events, setEvents] = createSignal<agentproto.Event[]>([{ seq: 7, kind: 'thought', text: 'abc', at_ms: 0 }]);
+  const { getByTestId } = render(() => <AgentSession events={events} />);
+  const panel = getByTestId('agent-thought') as HTMLDetailsElement;
+  expect(panel.open).toBe(false);
+  expect(getByTestId('agent-thought-chars').textContent).toBe('· 3 chars');
+
+  panel.open = true;
+  fireEvent(panel, new Event('toggle'));
+  setEvents([{ seq: 7, kind: 'thought', text: 'abcdef', at_ms: 0 }]);
+  const again = getByTestId('agent-thought') as HTMLDetailsElement;
+  expect(again.open).toBe(true);
+  expect(getByTestId('agent-thought-chars').textContent).toBe('· 6 chars');
+});
+
+// Older transcripts hold a per-call yolo approval row; it is not shown.
+test('routine yolo approvals are hidden, other verdicts shown', () => {
+  const events: agentproto.Event[] = [
+    { seq: 1, kind: 'decision', status: 'allow', title: 'Bash', detail: 'ls', reason: 'yolo', at_ms: 0 },
+    { seq: 2, kind: 'decision', status: 'allow', title: 'Read', detail: '/etc/x', reason: "yolo, outside this session's folders", at_ms: 0 },
+    { seq: 3, kind: 'decision', status: 'cancelled', title: 'Bash', detail: 'rm', reason: 'nobody answered in time', at_ms: 0 },
+  ];
+  const { queryAllByTestId } = render(() => <AgentSession events={() => events} />);
+  expect(queryAllByTestId('agent-decision').map((r) => r.textContent)).toEqual([
+    expect.stringContaining('/etc/x'),
+    expect.stringContaining('rm'),
+  ]);
+});
+
 test('human prompts stay literal markdown text', () => {
   const events: agentproto.Event[] = [{
     seq: 1,

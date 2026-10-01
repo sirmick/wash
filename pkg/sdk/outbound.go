@@ -337,6 +337,15 @@ func (c *Conn) SpawnRequestOpen(appID, path string) error {
 	return c.writeEvt(wire.NewEvtSpawnRequestOpen(appID, path))
 }
 
+// SpawnRequestTagged is SpawnRequestOpen (path may be empty) whose reply
+// carries tag and is delivered to AppDef.OnTaggedSpawnResult instead of
+// OnSpawnResult — for a caller that must tell its own spawn's reply from
+// another spawn of the same app in flight at the same time. tag must be
+// non-zero.
+func (c *Conn) SpawnRequestTagged(appID, path string, tag uint64) error {
+	return c.writeEvt(wire.NewEvtSpawnRequestTagged(appID, path, tag))
+}
+
 // IdleInhibit tells the router not to self-exit for idleness while this
 // app is doing something that outlives the browser — or releases that
 // hold. Requires the "idle_inhibit" capability in the app's manifest.

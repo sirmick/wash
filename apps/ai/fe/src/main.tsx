@@ -8,7 +8,7 @@ import { applyWorkspacePatch } from './workspace-patch';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import { HistoryPanel, historyAction, historySignature } from './HistoryPanel.tsx';
 import { defaultCatalog, defaultCwd } from './default-catalog.ts';
-import { Launcher, startMessage, emptyForm, type LaunchForm } from './Launcher.tsx';
+import { Launcher, startMessage, emptyForm, labelStyle, type LaunchForm } from './Launcher.tsx';
 import { CatalogPane, type CatalogResult } from './CatalogPane.tsx';
 import { Connections, type KeyResult } from './Connections.tsx';
 import { isStaleTranscript } from './transcript-guard.ts';
@@ -91,7 +91,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // the keys. Machine configuration is a different job from starting a
   // session, and lived at the bottom of the launcher until the launcher
   // was too tall for its pane.
-  const [managerTab, setManagerTab] = createSignal<'new' | 'catalog' | 'connections'>('new');
+  const [managerTab, setManagerTab] = createSignal<'new' | 'setup'>('new');
   const cwd = () => form().cwd;
   const [starting, setStarting] = createSignal(false);
   const [picking, setPicking] = createSignal(false);
@@ -624,8 +624,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         onPickFolder={() => setPicking(true)}
         starting={starting()}
         error={error()}
-        hasDefaultPrompt={!!roster().has_default_prompt}
-        onOpenPrompt={openPrompt}
       />
 
       <FilePicker
@@ -1095,24 +1093,42 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     />
   );
 
-  // Keys for the connections catalogs name (OpenRouter's). A tab of its
-  // own: pasting a key is the first thing a new box needs, and it was easy
-  // to miss at the foot of the catalog list.
-  const connectionsPane = (
-    <div style={{ padding: `${tokens.spaceMd}px` }}>
-      <Connections
-        keys={roster().keys ?? []}
-        results={keyResults()}
-        onSave={(name, value) => { setKeyResult(name, {}); sendAgentd({ kind: 'agent_set_key', name, value }); }}
-        onTest={(name, value) => { setKeyResult(name, { busy: true }); sendAgentd({ kind: 'agent_test_key', name, value }); }}
-      />
-    </div>
+  // Setup is the machine's agent configuration on one tab: the keys
+  // connections need (OpenRouter's) first — pasting a key is the first thing
+  // a new box needs — then the default prompt, then the catalogs and the
+  // default catalog.
+  const setupPane = (
+    <>
+      <div style={{ padding: `${tokens.spaceMd}px ${tokens.spaceMd}px 0`, display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceLg}px` }}>
+        <Connections
+          keys={roster().keys ?? []}
+          results={keyResults()}
+          onSave={(name, value) => { setKeyResult(name, {}); sendAgentd({ kind: 'agent_set_key', name, value }); }}
+          onTest={(name, value) => { setKeyResult(name, { busy: true }); sendAgentd({ kind: 'agent_test_key', name, value }); }}
+        />
+        {/* A prompt that silently prefixes every new session is the kind
+            of magic that gets blamed on the agent, so its state is a
+            sentence, not just a button. */}
+        <section data-testid="ai-default-prompt" style={{ display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceXs}px` }}>
+          <span style={labelStyle}>default prompt</span>
+          <span style={{ display: 'flex', 'align-items': 'center', gap: `${tokens.spaceSm}px`, font: tokens.type.textSm }}>
+            <span data-testid="ai-prompt-status" style={{ color: tokens.fgMuted }}>
+              {roster().has_default_prompt ? 'A default prompt will be sent first.' : 'No default prompt.'}
+            </span>
+            <Button variant="ghost" size="sm" data-testid="ai-prompt-open" onClick={openPrompt}>
+              {roster().has_default_prompt ? 'Edit…' : 'Set…'}
+            </Button>
+          </span>
+        </section>
+      </div>
+      {catalogPane}
+    </>
   );
 
   // The manager is a stable workspace rather than a sequence of modes:
   // start a session in the upper-left, find an older one below it, and
-  // keep the live roster visible on the right throughout. The Catalog and
-  // Connections tabs swap the left column for the machine's configuration.
+  // keep the live roster visible on the right throughout. The Setup tab swaps
+  // the left column for the machine's configuration.
   //
   // The launcher takes exactly the height its content needs and History
   // the rest. It used to be a fixed 36% row with a 220px floor, which at
@@ -1157,14 +1173,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           >
             <div role="tablist" data-testid="agents-tabs" style={{ display: 'flex', 'align-items': 'flex-end', padding: `${tokens.spaceSm}px ${tokens.spaceMd}px 0`, 'border-bottom': `1px solid ${tokens.borderMenu}`, 'flex-shrink': 0 }}>
               <Tab role="tab" active={managerTab() === 'new'} aria-selected={managerTab() === 'new'} data-testid="agents-tab-new" onClick={() => setManagerTab('new')}>New session</Tab>
-              <Tab role="tab" active={managerTab() === 'catalog'} aria-selected={managerTab() === 'catalog'} data-testid="agents-tab-catalog" onClick={() => setManagerTab('catalog')}>Catalog</Tab>
-              <Tab role="tab" active={managerTab() === 'connections'} aria-selected={managerTab() === 'connections'} data-testid="agents-tab-connections" onClick={() => setManagerTab('connections')}>Connections</Tab>
+              <Tab role="tab" active={managerTab() === 'setup'} aria-selected={managerTab() === 'setup'} data-testid="agents-tab-setup" onClick={() => setManagerTab('setup')}>Setup</Tab>
             </div>
             <Show
               when={managerTab() === 'new'}
               fallback={
-                <section data-testid={managerTab() === 'catalog' ? 'agents-catalog-pane' : 'agents-connections-pane'} style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
-                  {managerTab() === 'catalog' ? catalogPane : connectionsPane}
+                <section data-testid="agents-setup-pane" style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
+                  {setupPane}
                 </section>
               }
             >

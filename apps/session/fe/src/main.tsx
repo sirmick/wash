@@ -27,7 +27,7 @@ import { PrivWidget, PrivUnlockOverlay } from '@wash/ui';
 import type { Pack, PrivReq, PrivUnlockState } from '@wash/ui';
 import { toBlob } from 'html-to-image';
 import { Camera, Search, PanelRightOpen } from 'lucide-solid';
-import { Sidebar, type SidebarMode } from './sidebar/Sidebar';
+import { Sidebar, SIDEBAR_OPEN_WIDTH, SIDEBAR_TAB_WIDTH, type SidebarMode } from './sidebar/Sidebar';
 import { Section, type SectionState } from './sidebar/Section';
 import { ViewportWidget } from './sidebar/ViewportWidget';
 import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
@@ -428,9 +428,9 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // Keep --wash-reserved-right in sync with sidebar mode so the
   // shell's window.tsx can shrink maximized windows away from the
   // sidebar — otherwise titlebar controls (close, restore) fall
-  // under it. 300 = SIDEBAR_OPEN_WIDTH; 14 = SIDEBAR_TAB_WIDTH.
+  // under it.
   createEffect(() => {
-    const px = sidebarMode() === 'open' ? 300 : 14;
+    const px = sidebarMode() === 'open' ? SIDEBAR_OPEN_WIDTH : SIDEBAR_TAB_WIDTH;
     document.documentElement.style.setProperty('--wash-reserved-right', `${px}px`);
   });
   // Section helpers. Widgets call autoExpandSection when an event
@@ -2199,10 +2199,10 @@ const Pager: Component<{
   screen: () => { w: number; h: number };
 }> = (props) => {
   const perAxis = window.wash.viewports().perAxis;
-  // SIDEBAR_OPEN_WIDTH is 300px; section body has 10px horizontal
-  // padding (Section.tsx) → ~280px of usable width. We compute the
-  // cell width from `perAxis` so any future N×N config Just Works.
-  const PAGER_USABLE_W = 280 - PAGER_PAD * 2;
+  // The section body has 10px horizontal padding (Section.tsx), so the
+  // usable width is SIDEBAR_OPEN_WIDTH - 20. We compute the cell width
+  // from `perAxis` so any future N×N config Just Works.
+  const PAGER_USABLE_W = SIDEBAR_OPEN_WIDTH - 20 - PAGER_PAD * 2;
   const cellW = () => Math.floor((PAGER_USABLE_W - (perAxis - 1) * PAGER_GAP) / perAxis);
   const cellH = () => {
     const s = props.screen();
@@ -2432,7 +2432,7 @@ const WindowPill: Component<{
       type="button"
       data-testid="taskbar-pill"
       data-attention={props.attention ? 'true' : undefined}
-      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, middle- or right-click to close`}
+      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, middle-click to close, right-click for the window menu`}
       onClick={visit}
       onDblClick={() => {
         // Snap the camera to the cell holding this window, then focus
@@ -2443,9 +2443,12 @@ const WindowPill: Component<{
         window.wash.setViewport(v.vx, v.vy);
         visit();
       }}
+      // The window's own titlebar menu, rendered by the shell so the two
+      // cannot drift, plus Move to 0,0 and Quit for a window that has gone
+      // missing or stopped answering.
       onContextMenu={(ev) => {
         ev.preventDefault();
-        window.wash.closeWindow(props.win.windowID, props.win.origin);
+        window.wash.openWindowMenu(props.win.windowID, ev.clientX, ev.clientY, props.win.origin);
       }}
       // Middle-click closes, the way it does on every browser tab strip and
       // every other taskbar. It goes through window.wash.closeWindow, so the

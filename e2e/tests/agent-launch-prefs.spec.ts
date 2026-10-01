@@ -26,6 +26,12 @@ test('the Permissions row is remembered in agents.json and applied at start', as
 
   // Codex has never run here: no presets to offer yet, and it says so.
   await chooseAgent(manager, 'codex');
+  // Permissions sit in a collapsed expander, like Advanced; its summary
+  // still says what the next start gets.
+  const perms = manager.locator('[data-testid="ai-permissions"]');
+  await expect(perms).not.toHaveAttribute('open', /.*/);
+  await expect(manager.locator('[data-testid="ai-permissions-summary"]')).toHaveText("Codex's default");
+  await perms.locator('summary').click();
   const mode = manager.locator('[data-testid="ai-mode-select"]');
   await expect(mode).toBeDisabled();
   await expect(mode.locator('option').first()).toContainText('after it has run once');
@@ -48,6 +54,7 @@ test('the Permissions row is remembered in agents.json and applied at start', as
   await router.waitForLog(/agentd: launch default mode=map\[codex:read-only\] yolo=true/, 15_000, cursor);
   const file = JSON.parse(readFileSync(join(router.xdgConfigHome, 'wash', 'agents.json'), 'utf8'));
   expect(file.launch).toEqual({ mode: { codex: 'read-only' }, yolo: true });
+  await expect(manager.locator('[data-testid="ai-permissions-summary"]')).toHaveText('Read-only · auto-approve on');
 
   // Second session starts that way, and the row and the transcript say so.
   const before = await page.locator('wash-app-ai').count();
@@ -63,6 +70,7 @@ test('the Permissions row is remembered in agents.json and applied at start', as
   await expect(page.locator('wash-app-session')).toBeVisible();
   const again = await openAgents(page);
   await chooseAgent(again, 'codex');
+  await expect(again.locator('[data-testid="ai-permissions-summary"]')).toHaveText('Read-only · auto-approve on', { timeout: 15_000 });
   await expect(again.locator('[data-testid="ai-mode-select"]')).toHaveValue('read-only', { timeout: 15_000 });
   await expect(again.locator('[data-testid="ai-yolo"]')).toBeChecked();
 });

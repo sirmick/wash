@@ -129,14 +129,9 @@ test.describe('managed agent sessions', () => {
     // logging one.
     await expect(win.getByText('Permission outcome: allow')).toBeVisible({ timeout: 20_000 });
     await expect(win.getByRole('button', { name: /^Allow(\s|$)/ })).toHaveCount(0);
-    // Every auto-approval is announced, not silent: a decision row naming
-    // the verdict and yolo as its reason.
-    const decision = win.locator('[data-testid="agent-decision"]').filter({ hasText: 'Auto-approved' });
-    await expect(decision).toBeVisible({ timeout: 10_000 });
-    await expect(decision).toContainText('yolo');
-    // Visible as a line, not as a stub: the row once shrank to 4px in the
-    // transcript's flex column, a green dash with its text clipped away.
-    expect((await decision.boundingBox())!.height).toBeGreaterThan(12);
+    // A routine auto-approval is not a transcript row: the session said
+    // once that yolo is on, and a row per call was noise.
+    await expect(win.locator('[data-testid="agent-decision"]').filter({ hasText: 'Auto-approved' })).toHaveCount(0);
   });
 
   test('the approval mode is on the window, and changing it reaches the agent', async ({ page, router }) => {

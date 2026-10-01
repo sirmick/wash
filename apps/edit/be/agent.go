@@ -83,8 +83,8 @@ func initAgent(c *sdk.Conn) {
 			key := ownerKey
 			agentMu.Unlock()
 			for _, r := range state.Rows {
-				if r.Key == key && r.Title != "" && adoptOwner(c, key, r.Title) {
-					tellFEOwner(c)
+				if r.Key == key && r.Title != "" {
+					adoptOwner(c, key, r.Title)
 				}
 			}
 		},
@@ -164,14 +164,6 @@ func adoptOwner(c *sdk.Conn, key, title string) bool {
 		log.Printf("edit: title for session %s: %v", key, err)
 	}
 	return true
-}
-
-// tellFEOwner lets the FE offer the way back to the conversation.
-func tellFEOwner(c *sdk.Conn) {
-	agentMu.Lock()
-	key, title := ownerKey, ownerTitle
-	agentMu.Unlock()
-	_ = c.SendAppMsg(map[string]any{"kind": "agent.owner", "key": key, "title": title})
 }
 
 // onAgentInstanceGone forgets an Agent window that closed, so the editor is
@@ -316,9 +308,7 @@ func registerAgentHandlers(b *sdk.Bus) {
 		}
 		owner = from.InstanceID
 		agentMu.Unlock()
-		if adoptOwner(c, req.Key, req.Title) {
-			tellFEOwner(c)
-		}
+		adoptOwner(c, req.Key, req.Title)
 		if err := c.Raise(); err != nil {
 			log.Printf("edit: raise for %s: %v", from.InstanceID, err)
 		}
@@ -330,24 +320,6 @@ func registerAgentHandlers(b *sdk.Bus) {
 			return sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 		}
 		return bus.Emit("cmd.open_file", editorShowReq{Path: abs, Line: req.Line, Col: req.Col})
-	})
-	// agent.show_owner: the way back to the conversation that opened this
-	// editor. Asks agentd to focus the session by key rather than raising
-	// the instance directly: agentd reopens a window for a session whose
-	// own was closed, and only the window's app may raise it anyway.
-	sdk.HandleVoid(b, "agent.show_owner", func(c *sdk.Conn, _ string, _ struct{}) error {
-		agentMu.Lock()
-		key := ownerKey
-		agentMu.Unlock()
-		if key == "" {
-			return nil
-		}
-		return agentproto.SendAgentd(c, agentproto.Focus{Key: key})
-	})
-	// agent.owner_ask: the FE asking what it missed, for a reload.
-	sdk.HandleVoid(b, "agent.owner_ask", func(c *sdk.Conn, _ string, _ struct{}) error {
-		tellFEOwner(c)
-		return nil
 	})
 	// agent.path_probe: which tokens in an agent tab's transcript are files
 	// under the session's folder, so only those become links.

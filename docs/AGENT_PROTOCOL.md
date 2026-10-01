@@ -342,7 +342,7 @@ AgentResume reopens a stored session: session/load replays it, and an Agent wind
 
 #### AgentSetCatalog
 
-AgentSetCatalog stores one catalog under agents.json `catalogs`, whole, as the Catalog tab holds it.
+AgentSetCatalog stores one catalog under agents.json `catalogs`, whole, as the Setup tab holds it.
 
 | Field | Type | |
 |---|---|---|
@@ -508,7 +508,7 @@ CatalogSpec is a catalog as written: a name and either an adapter (an auto catal
 
 #### CatalogView
 
-CatalogView is a catalog as the launcher and the Catalog tab show it.
+CatalogView is a catalog as the launcher and the Setup tab show it.
 
 | Field | Type | |
 |---|---|---|
@@ -519,7 +519,7 @@ CatalogView is a catalog as the launcher and the Catalog tab show it.
 | `available` | `boolean` | Available is every slot (or the adapter) startable here; Note says why not. |
 | `note?` | `string` |  |
 | `slots?` | `SlotView[]` |  |
-| `builtin?` | `boolean` | Builtin is a catalog wash ships (catalogs.json); Overridden says agents.json changes it. A catalog that is neither is the user's own. The Catalog tab offers "reset" for an overridden built-in and "delete" for the user's own. |
+| `builtin?` | `boolean` | Builtin is a catalog wash ships (catalogs.json); Overridden says agents.json changes it. A catalog that is neither is the user's own. The Setup tab offers "reset" for an overridden built-in and "delete" for the user's own. |
 | `overridden?` | `boolean` |  |
 
 #### ClaimDenied

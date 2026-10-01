@@ -58,7 +58,7 @@ import {
   markGeomPending,
   windowById,
 } from './wm';
-import { clampToPlane, isOnScreen, isOrphaned } from './viewport-math';
+import { clampToPlane, fitLeftOf, isOnScreen, isOrphaned } from './viewport-math';
 import { Desktop } from './desktop';
 import {
   chordReleased,
@@ -71,7 +71,7 @@ import {
 } from './switcher';
 import { SwitcherOverlay } from './switcher-ui';
 import { shouldSwallowDesktopKey } from './keyguard';
-import { FloatingWindow } from './window';
+import { FloatingWindow, openWindowMenu } from './window';
 import {
   CatalogApp,
   PanelDesc,
@@ -1436,6 +1436,12 @@ function handleCrash(client: RouterClient, msg: ShellAppCrashed): void {
 // waitForBundle, so a window-in-flight isn't in `windows` yet — without
 // the set, every pre-bundle patch looks "fresh" and we'd re-relocate the
 // same window N times.
+// reservedRight is the width the session app's sidebar reserves at the
+// screen's right edge (--wash-reserved-right, which it keeps current).
+function reservedRight(): number {
+  return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10) || 0;
+}
+
 function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   // Apply app_state ops first so when a window upsert in the same
   // patch triggers a remount, wash:state carries the latest blob.
@@ -1458,17 +1464,34 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   const vp = viewport();
   const s = screenSize();
   const moves: Array<{ id: number; x: number; y: number }> = [];
+  const resizes: Array<{ id: number; w: number; h: number }> = [];
+  const reserved = reservedRight();
   for (const p of msg.patches) {
     if (p.op === 'window.upsert' && p.window && !client.seenWindowIDs.has(p.window.window_id)) {
+      let { x, y } = p.window;
       if (vp.vx !== 0 || vp.vy !== 0) {
         // Clamped like the titlebar drag and sendToViewportRect. This is the
         // one coordinate writer that runs without the user asking, so it is
         // the one that must never be able to strand a window off-plane.
-        const { x, y } = clampToPlane(
-          { x: p.window.x + vp.vx * s.w, y: p.window.y + vp.vy * s.h, w: p.window.w, h: p.window.h },
+        ({ x, y } = clampToPlane(
+          { x: x + vp.vx * s.w, y: y + vp.vy * s.h, w: p.window.w, h: p.window.h },
           s,
           VIEWPORTS_PER_AXIS,
-        );
+        ));
+      }
+      // A new window opens clear of the right sidebar: the router
+      // cascades without knowing the sidebar is there, and a window whose
+      // titlebar buttons land under it cannot be closed. Narrowed rather
+      // than moved where it can be, so the cascade survives.
+      if (p.window.state === 'normal' && reserved > 0) {
+        const fit = fitLeftOf({ x, w: p.window.w + 2 }, vp.vx * s.w, s.w - reserved, 480);
+        x = fit.x;
+        if (fit.w - 2 !== p.window.w) {
+          p.window.w = fit.w - 2;
+          resizes.push({ id: p.window.window_id, w: p.window.w, h: p.window.h });
+        }
+      }
+      if (x !== p.window.x || y !== p.window.y) {
         p.window.x = x;
         p.window.y = y;
         moves.push({ id: p.window.window_id, x, y });
@@ -1490,6 +1513,11 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
     const tok = nextGeomTok();
     markGeomPending(client.origin, m.id, tok);
     client.conn.sendCtrl({ t: 'window.move', window_id: m.id, x: m.x, y: m.y, tok });
+  }
+  for (const r of resizes) {
+    const tok = nextGeomTok();
+    markGeomPending(client.origin, r.id, tok);
+    client.conn.sendCtrl({ t: 'window.resize', window_id: r.id, w: r.w, h: r.h, tok });
   }
 }
 
@@ -2225,6 +2253,15 @@ window.wash = {
   },
   closeWindow(id, origin) {
     wmSend(origin ?? originForWindow(id), id, { t: 'window.close_clicked', window_id: id });
+  },
+  // Quit skips the app's close handshake: the router ends the process
+  // (SIGTERM, then SIGKILL) as it does for a close the app agreed to. For
+  // a window whose app will not, or cannot, answer.
+  quitWindow(id, origin) {
+    wmSend(origin ?? originForWindow(id), id, { t: 'window.close_clicked', window_id: id, force: true });
+  },
+  openWindowMenu(id, x, y, origin) {
+    openWindowMenu(origin ?? originForWindow(id), id, x, y);
   },
   moveWindow(id, x, y, origin) {
     // Tagged commit: the store holds our geometry against in-flight

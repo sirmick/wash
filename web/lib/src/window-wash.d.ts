@@ -276,6 +276,12 @@ interface WashGlobals {
   // resolved by bare id against the merged window list.
   focusWindow(id: number, origin?: string): void;
   closeWindow(id: number, origin?: string): void;
+  // quitWindow ends the window's app without asking it (no close
+  // handshake): unsaved work is lost. The taskbar menu's Quit.
+  quitWindow(id: number, origin?: string): void;
+  // openWindowMenu opens the window's own titlebar menu at viewport
+  // (x, y), with the taskbar's extras (Move to 0,0, Quit).
+  openWindowMenu(id: number, x: number, y: number, origin?: string): void;
   moveWindow(id: number, x: number, y: number, origin?: string): void;
   resizeWindow(id: number, w: number, h: number, origin?: string): void;
   minimizeWindow(id: number, origin?: string): void;

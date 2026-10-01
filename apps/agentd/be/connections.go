@@ -56,7 +56,7 @@ func connections(pol agentpolicy.Policy) map[string]agentpolicy.Connection {
 	return out
 }
 
-// publishConnections is every connection, sorted by id, for the Catalog tab
+// publishConnections is every connection, sorted by id, for the Setup tab
 // to offer a slot.
 func publishConnections(pol agentpolicy.Policy) []agentproto.ConnectionView {
 	all := connections(pol)

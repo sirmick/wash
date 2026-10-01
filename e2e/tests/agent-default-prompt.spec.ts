@@ -22,13 +22,18 @@ test.use({
   },
 });
 
-// The default prompt belongs to the Agents manager's New pane: it governs
-// sessions not yet started, so it sits beside the button that starts them
-// rather than on any one session's controller.
+// The default prompt belongs to the Agents manager's Setup tab: it governs
+// sessions not yet started, so it is machine configuration rather than a
+// control on any one session's controller.
+async function openSetup(manager: Locator): Promise<Locator> {
+  await manager.locator('[data-testid="agents-tab-setup"]').click();
+  return manager;
+}
+
 async function openManager(page: Page, url: string) {
   await page.goto(url);
   await expect(page.locator('wash-app-session')).toBeVisible();
-  return openAgents(page);
+  return openSetup(await openAgents(page));
 }
 
 async function setPrompt(page: Page, manager: Locator, text: string) {
@@ -68,6 +73,7 @@ test('a stored default prompt reaches the agent, ahead of what you typed', async
 
   // Start a session with a prompt of your own. agentd opens a controller
   // for it; the transcript is there, not in the manager.
+  await manager.locator('[data-testid="agents-tab-new"]').click();
   await chooseAgent(manager, 'codex');
   await manager.getByRole('button', { name: 'Start session' }).click();
   const controller = page.locator('wash-app-ai');
@@ -99,7 +105,7 @@ test('the stored prompt survives a browser reload', async ({ page, router }) => 
   await expect(page.locator('wash-app-session')).toBeVisible();
   // Raise-or-launch: whether the shell restored the manager or not, what
   // is on screen now is a fresh mount that knows nothing the tab typed.
-  const after = await openAgents(page);
+  const after = await openSetup(await openAgents(page));
   await expect(after.locator('[data-testid="ai-prompt-status"]'))
     .toHaveText('A default prompt will be sent first.', { timeout: 20_000 });
 

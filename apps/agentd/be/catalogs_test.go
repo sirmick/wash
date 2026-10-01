@@ -93,7 +93,7 @@ func TestAgentsJSONReplacesACatalogWhole(t *testing.T) {
 		t.Error("an override leaked into the built-in catalogs")
 	}
 	// A partial catalog is invalid, not merged: agents.json says the whole
-	// of what the Catalog tab showed.
+	// of what the Setup tab showed.
 	_, bad = loadCatalogs(catalogsPolicy(t, map[string]string{"anthropic-pro": `{"name":"Half","slots":{"frontier":{"provider":"claude"}}}`}))
 	if bad["anthropic-pro"] == nil {
 		t.Error("a partial override was accepted")
@@ -196,7 +196,7 @@ func TestStartProfile(t *testing.T) {
 }
 
 // The launcher's view: a catalog is greyed with the reason it cannot start;
-// the Catalog tab's view: which are built in, which are overridden, and an
+// the Setup tab's view: which are built in, which are overridden, and an
 // invalid catalog still lists what it has.
 func TestPublishCatalogsGreysWhatCannotStart(t *testing.T) {
 	dir := t.TempDir()
@@ -285,7 +285,7 @@ func TestSlotIsAnAgentProfile(t *testing.T) {
 	}
 }
 
-// The Catalog tab writes a catalog whole into agents.json; the launcher sees
+// The Setup tab writes a catalog whole into agents.json; the launcher sees
 // it on the next read. A built-in's override is removed by delete, and an
 // invalid catalog is refused rather than saved greyed.
 func TestSetAndDeleteCatalogWriteAgentsJSON(t *testing.T) {
@@ -480,5 +480,40 @@ func TestDeletingTheDefaultCatalogClearsTheDefault(t *testing.T) {
 	}
 	if l := hostedPolicy().Launch; l == nil || l.Catalog != "anthropic-pro" {
 		t.Fatalf("reverting a built-in cleared the default: %+v", l)
+	}
+}
+
+// A start that names nothing runs the default only if it can start here;
+// otherwise what the launcher would preselect (default-catalog.ts): the
+// catalog used last, else the first that can start.
+func TestPickStartCatalog(t *testing.T) {
+	views := []agentproto.CatalogView{
+		{ID: "anthropic", Available: false, Note: "no ANTHROPIC_API_KEY key set"},
+		{ID: "gemini", Available: true},
+		{ID: "openai", Available: true},
+	}
+	recent := []agentproto.Session{{Catalog: "anthropic"}, {Catalog: "openai"}, {Catalog: "gemini"}}
+	for _, tc := range []struct {
+		name   string
+		recent []agentproto.Session
+		pref   string
+		want   string
+	}{
+		{"usable default wins over history", recent, "gemini", "gemini"},
+		{"unusable default falls to history, skipping unusable entries", recent, "anthropic", "openai"},
+		{"no history: the first that can start", nil, "anthropic", "gemini"},
+		{"no default: history", recent, "", "openai"},
+		{"a deleted default is no different", nil, "gone", "gemini"},
+	} {
+		if got := pickStartCatalog(views, tc.recent, tc.pref); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	none := []agentproto.CatalogView{{ID: "anthropic", Note: "no ANTHROPIC_API_KEY key set"}}
+	if got := pickStartCatalog(none, recent, "anthropic"); got != "" {
+		t.Fatalf("nothing can start, got %q", got)
+	}
+	if err := noCatalogError(none, "anthropic"); !strings.Contains(err.Error(), "no ANTHROPIC_API_KEY key set") {
+		t.Errorf("the error should name the default's reason: %v", err)
 	}
 }

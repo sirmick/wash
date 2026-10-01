@@ -329,8 +329,10 @@ func init() {
 		Assets:           sub,
 		OnReady:          onReady,
 		OnCloseRequested: onCloseRequested,
-		OnSpawnResult:    func(c *sdk.Conn, appID, instanceID string, err error) { group.OnSpawnResult(c, appID, instanceID, err) },
-		OnInstanceGone:   func(c *sdk.Conn, appID, instanceID string) { group.OnInstanceGone(c, appID, instanceID) },
+		OnTaggedSpawnResult: func(c *sdk.Conn, tag uint64, appID, instanceID string, err error) {
+			group.OnSpawnResult(c, tag, appID, instanceID, err)
+		},
+		OnInstanceGone: func(c *sdk.Conn, appID, instanceID string) { group.OnInstanceGone(c, appID, instanceID) },
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-term",

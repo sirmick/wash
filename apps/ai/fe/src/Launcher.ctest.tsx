@@ -59,8 +59,6 @@ const mount = (initial: Partial<LaunchForm> = {}, over: { catalogs?: agentproto.
       onPickFolder={() => {}}
       starting={false}
       error=""
-      hasDefaultPrompt={false}
-      onOpenPrompt={() => {}}
     />
   ));
   return { ...r, form, setCatalogs, started, launches };
@@ -155,6 +153,16 @@ test('the Permissions row is the remembered default, and goes with the start', (
   ]);
   fireEvent.click(getByTestId('ai-start'));
   expect(started[0]).toMatchObject({ catalog: 'anthropic-pro', mode: 'plan', yolo: true });
+});
+
+// Permissions are collapsed like Advanced, so the summary line has to say
+// what the next start gets — above all, that auto-approve is on.
+test('the Permissions expander starts collapsed and summarises the default', () => {
+  const { getByTestId } = mount({ catalog: 'anthropic-pro' }, { launch: { mode: { claude: 'acceptEdits' } } });
+  expect((getByTestId('ai-permissions') as HTMLDetailsElement).open).toBe(false);
+  expect(getByTestId('ai-permissions-summary').textContent).toBe('Accept edits');
+  fireEvent.click(getByTestId('ai-yolo'));
+  expect(getByTestId('ai-permissions-summary').textContent).toBe('Accept edits · auto-approve on');
 });
 
 test('the mode is remembered per adapter, and an adapter never seen has no presets to offer', () => {

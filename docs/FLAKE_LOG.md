@@ -16,6 +16,37 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-09-30 — fm-be "request_id is required": a race in the test, fixed
+
+**Seen during:** GitHub Actions e2e for PR #30 (`ce72024e`): 734 passed /
+1 failed. `fm-be.spec.ts:185` sent `create_file` without an id and checked
+`existsSync` straight after the `msg.ok` ack.
+
+**Mechanism:** the ack means the message was queued, not handled; the BE
+writes the file a moment later. Green on this box every run, lost on a
+slower runner. **Fixed** by polling for the file (the spec, not the BE).
+
+---
+
+## 2026-09-30 — chrome-windows resize + clipboard-secure mirror: once each, full-suite load
+
+**Seen during:** `make e2e-test` (multicall) on `places-followups`
+(`becd0275`, spawn tags + catalog fallback): 734 passed / 2 failed / 18
+skipped. `chrome-windows.spec.ts:308` (drag resize handle commits
+geometry) and `clipboard-secure.spec.ts:204` (BE-set clipboard mirrors to
+the system clipboard) each failed once.
+
+**Not the branch.** The branch touches spawn replies and agentd's catalog
+resolution, neither on either path. 10/10 with `--repeat-each=5` on the
+same build straight after. The same suite on the 0.17.0 review branch
+earlier the same day was clean on both (its one flake was imageview, below).
+
+**Verdict:** flakes, logged; three different specs in two runs today, all
+passing in isolation — worth watching whether full-suite load on this box
+is creeping up.
+
+---
+
 ## 2026-09-30 — imageview open dialog: picker entry never appeared, once, under full-suite load
 
 **Seen during:** `make e2e-test` (multicall) on the PR #29 review branch

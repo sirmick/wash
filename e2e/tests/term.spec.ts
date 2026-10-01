@@ -98,6 +98,28 @@ test.describe('terminal app', () => {
     await expect.poll(() => activeBufferText(page)).not.toContain('tab-two');
   });
 
+  // As in a browser: a double-click on the strip's empty space opens a tab;
+  // one on a tab still renames it rather than opening another.
+  test('double-clicking empty tab-bar space opens a tab, a tab renames', async ({ page, router }) => {
+    await page.goto(router.url);
+    await page.locator('button[title="Apps"]').click();
+    await page.locator('[data-testid="start-menu"]').getByRole('button', { name: 'Terminal', exact: true }).click();
+    await expect(page.locator('wash-app-term')).toBeVisible();
+    await expect.poll(() => activeBufferText(page), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
+
+    const tab = page.locator('button[data-testid^="term-tab-"]:not([data-testid^="term-tab-close"])').first();
+    await tab.dblclick();
+    await expect(page.locator('input[data-testid^="term-tab-rename-"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-testid="term-host"]')).toHaveCount(1);
+
+    // Just left of the + button is the strip's spacer.
+    const plus = await page.locator('[data-testid="term-new-tab"]').boundingBox();
+    expect(plus).not.toBeNull();
+    await page.mouse.dblclick(plus!.x - 24, plus!.y + plus!.height / 2);
+    await expect(page.locator('[data-testid="term-host"]')).toHaveCount(2);
+  });
+
   test('closing a tab leaves the window with the other tab', async ({ page, router }) => {
     await page.goto(router.url);
     await page.locator('button[title="Apps"]').click();

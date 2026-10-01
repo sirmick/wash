@@ -273,7 +273,7 @@ after answering "status?" and needed a prod each time.
   (`{"catalogs":{"anthropic-pro":{"name":"Mine","slots":{"frontier":{"provider":"claude","model":"opus[1m]"},…}}}}`),
   or adds one: a name and three slots, or a name and an `adapter` (with an
   optional `connection`) for an adapter's own list. The Agents window's
-  Catalog tab writes the same section (`agent_set_catalog`,
+  Setup tab writes the same section (`agent_set_catalog`,
   `agent_delete_catalog`); resetting a built-in deletes its override. A
   catalog that fails the profile rules, names an unknown adapter or
   connection, or sets `approval`, `capability`, `subagents` or `configs` in
@@ -320,7 +320,7 @@ after answering "status?" and needed a prod each time.
   session's connection is recorded in History and the transcript head, and a
   resume launches through it again.
 - **Keys** live in `~/.config/wash/keys.json`, beside `agents.json` and not
-  in it, written 0600. The Connections tab saves, tests
+  in it, written 0600. The Setup tab saves, tests
   (`GET https://openrouter.ai/api/v1/key`) and clears them; after saving, the
   window sees only "set" and the last four characters, and no log carries a
   value. A key is injected into the environment of adapters on connections

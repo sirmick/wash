@@ -202,6 +202,8 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 			if c.def.OnPrepareSpawnResult != nil {
 				c.def.OnPrepareSpawnResult(c, m.ReqID, m.InstanceID, m.AttachToken, m.Binary, nil)
 			}
+		} else if m.Tag != 0 && c.def.OnTaggedSpawnResult != nil {
+			c.def.OnTaggedSpawnResult(c, m.Tag, m.AppID, m.InstanceID, nil)
 		} else if c.def.OnSpawnResult != nil {
 			c.def.OnSpawnResult(c, m.AppID, m.InstanceID, nil)
 		}
@@ -216,6 +218,8 @@ func (c *Conn) dispatchEvt(payload []byte) error {
 			if c.def.OnPrepareSpawnResult != nil {
 				c.def.OnPrepareSpawnResult(c, m.ReqID, "", "", "", fmt.Errorf("%s: %s", m.Code, m.Msg))
 			}
+		} else if m.Tag != 0 && c.def.OnTaggedSpawnResult != nil {
+			c.def.OnTaggedSpawnResult(c, m.Tag, m.AppID, "", fmt.Errorf("%s: %s", m.Code, m.Msg))
 		} else if c.def.OnSpawnResult != nil {
 			c.def.OnSpawnResult(c, m.AppID, "", fmt.Errorf("%s: %s", m.Code, m.Msg))
 		}

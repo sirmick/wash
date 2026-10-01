@@ -99,3 +99,55 @@ export function sendToViewportRect(r: Rect, screen: Size, perAxis: number, vx: n
     y: Math.round(Math.max(0, Math.min(maxY, r.y + (vy - cur.vy) * screen.h))),
   };
 }
+
+// Which sides a resize handle moves.
+export type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+const MIN_W = 160;
+const MIN_H = 80;
+
+// resizeRect is the geometry after dragging edge by (dx, dy). A west or
+// north side moves the origin so the opposite side stays where it was —
+// including at the minimum size, where the origin stops rather than the
+// far edge being pushed away.
+export function resizeRect(
+  r: { x: number; y: number; w: number; h: number },
+  edge: ResizeEdge,
+  dx: number,
+  dy: number,
+): { x: number; y: number; w: number; h: number } {
+  let { x, y, w, h } = r;
+  if (edge.includes('e')) w = Math.max(MIN_W, Math.round(r.w + dx));
+  if (edge.includes('s')) h = Math.max(MIN_H, Math.round(r.h + dy));
+  if (edge.includes('w')) {
+    w = Math.max(MIN_W, Math.round(r.w - dx));
+    x = r.x + r.w - w;
+  }
+  if (edge.includes('n')) {
+    h = Math.max(MIN_H, Math.round(r.h - dy));
+    y = r.y + r.h - h;
+  }
+  // Never off the plane's top-left edge: a titlebar above y=0 is one
+  // nobody can grab again.
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  return { x, y, w, h };
+}
+
+// fitLeftOf makes a frame end within `free` px of the cell starting at
+// cellLeft. It keeps x — the router's cascade, which is what keeps a new
+// window from landing squarely on the one before it — and narrows the
+// frame, unless that would leave it under minW; then it shifts left instead
+// (never past the cell's left edge), narrowing only what still overhangs.
+export function fitLeftOf(
+  r: { x: number; w: number },
+  cellLeft: number,
+  free: number,
+  minW: number,
+): { x: number; w: number } {
+  const right = cellLeft + free;
+  if (r.x + r.w <= right) return r;
+  if (right - r.x >= minW) return { x: r.x, w: right - r.x };
+  const x = Math.max(cellLeft, right - Math.max(r.w, minW));
+  return { x, w: Math.min(r.w, right - x) };
+}

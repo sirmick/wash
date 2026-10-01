@@ -121,8 +121,8 @@ func init() {
 		},
 		Assets:  sub,
 		OnReady: onReady,
-		OnSpawnResult: func(c *sdk.Conn, appID, instanceID string, err error) {
-			group.OnSpawnResult(c, appID, instanceID, err)
+		OnTaggedSpawnResult: func(c *sdk.Conn, tag uint64, appID, instanceID string, err error) {
+			group.OnSpawnResult(c, tag, appID, instanceID, err)
 		},
 		OnInstanceGone: func(c *sdk.Conn, appID, instanceID string) {
 			group.OnInstanceGone(c, appID, instanceID)
@@ -261,8 +261,8 @@ func pushPlaces(c places.Conn, v places.View) {
 		owner = inst
 	}
 	agentMu.Unlock()
-	if sc, ok := c.(*sdk.Conn); ok && adoptOwner(sc, v.Key, v.Title) {
-		tellFEOwner(sc)
+	if sc, ok := c.(*sdk.Conn); ok {
+		adoptOwner(sc, v.Key, v.Title)
 	}
 }
 

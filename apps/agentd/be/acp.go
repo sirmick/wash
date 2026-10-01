@@ -1061,13 +1061,14 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	// Host-side yolo: the user asked wash to stop asking. Checked AFTER the
 	// policy, never before — an explicit deny rule is a decision the user
 	// already made, and a convenience toggle must not quietly reverse it.
-	// Announced in the transcript every time, because an agent that is
-	// being auto-approved must not look like one that is being watched.
+	// Logged, not narrated: a row per call ("Auto-approved · yolo") was
+	// most of some transcripts and said nothing new. That the session is
+	// auto-approved is announced once, when yolo is switched on (setYolo),
+	// and the tool call's own row shows what ran.
 	if h.autoApproved() {
 		subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
 		log.Printf("agentd: acp decide key=%s tool=%s decision=allow reason=yolo subject=%q",
 			h.key, preq.ToolName, subject)
-		h.decision(DecisionAllow, "yolo", preq.ToolName, subject)
 		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
 	}
 

@@ -1,4 +1,4 @@
-// Component test (Tier B) for the Catalog tab: a curated catalog is three
+// Component test (Tier B) for the Setup tab: a curated catalog is three
 // model slots, an auto one is an adapter; an edit is a draft until Save
 // sends the whole catalog; a built-in with an override resets, the user's
 // own deletes; a new catalog needs an id.

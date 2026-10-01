@@ -993,19 +993,24 @@ func (inst *AppInstance) handleWindowDestroy(m wire.EvtWindowDestroy) error {
 // handleSpawnRequest enforces the spawn capability and forks a new
 // child if the request is allowed.
 func (inst *AppInstance) handleSpawnRequest(m wire.EvtSpawnRequest) error {
+	refuse := func(code, msg string) error {
+		e := wire.NewEvtSpawnErr(m.AppID, code, msg)
+		e.Tag = m.Tag
+		return inst.WriteEvt(e)
+	}
 	if !inst.Manifest.HasCapability(CapSpawn) {
-		return inst.WriteEvt(wire.NewEvtSpawnErr(m.AppID, wire.ErrCodeForbidden, "spawn capability not declared"))
+		return refuse(wire.ErrCodeForbidden, "spawn capability not declared")
 	}
 	target := inst.router.reg.ByID(m.AppID)
 	if target == nil || !target.Enabled() {
-		return inst.WriteEvt(wire.NewEvtSpawnErr(m.AppID, wire.ErrCodeNotFound, "unknown app id"))
+		return refuse(wire.ErrCodeNotFound, "unknown app id")
 	}
 	if target.Manifest.ProtocolVersion != ProtocolVersion {
-		return inst.WriteEvt(wire.NewEvtSpawnErr(m.AppID, wire.ErrCodeIncompatibleProtocol, "protocol mismatch"))
+		return refuse(wire.ErrCodeIncompatibleProtocol, "protocol mismatch")
 	}
 	// Spawn in a goroutine so we don't block this app's read loop on
 	// the child's handshake.
-	go inst.router.spawnChild(target, inst, m.Open)
+	go inst.router.spawnChild(target, inst, m.Open, m.Tag)
 	return nil
 }
 
@@ -1158,7 +1163,7 @@ func (r *Router) takeTokenPending(token string) *tokenPending {
 // openPath, when set, is forwarded as `--open <path>` argv (the open
 // routing seam); argv is per-process, so such a spawn always starts a
 // fresh instance rather than raising an existing one.
-func (r *Router) spawnChild(target *Entry, requester *AppInstance, openPath string) {
+func (r *Router) spawnChild(target *Entry, requester *AppInstance, openPath string, tag uint64) {
 	var inst *AppInstance
 	var err error
 	if args := openArgs(openPath); args != nil {
@@ -1168,12 +1173,16 @@ func (r *Router) spawnChild(target *Entry, requester *AppInstance, openPath stri
 	}
 	if err != nil {
 		r.log("spawn %s: %v", target.Manifest.ID, err)
-		if werr := requester.WriteEvt(wire.NewEvtSpawnErr(target.Manifest.ID, wire.ErrCodeInternal, err.Error())); werr != nil {
+		reply := wire.NewEvtSpawnErr(target.Manifest.ID, wire.ErrCodeInternal, err.Error())
+		reply.Tag = tag
+		if werr := requester.WriteEvt(reply); werr != nil {
 			r.log("spawn %s: err reply to instance=%s lost: %v", target.Manifest.ID, requester.InstanceID, werr)
 		}
 		return
 	}
-	if werr := requester.WriteEvt(wire.NewEvtSpawnOk(target.Manifest.ID, inst.InstanceID)); werr != nil {
+	ok := wire.NewEvtSpawnOk(target.Manifest.ID, inst.InstanceID)
+	ok.Tag = tag
+	if werr := requester.WriteEvt(ok); werr != nil {
 		r.log("spawn %s: ok reply to instance=%s lost: %v (spawned instance=%s)", target.Manifest.ID, requester.InstanceID, werr, inst.InstanceID)
 	}
 	r.noteOpenRouted(openPath, target.Manifest.ID, "spawn.request")
