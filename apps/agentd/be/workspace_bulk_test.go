@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
+	"github.com/sirmick/wash/internal/agentproto"
 	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/internal/workspacemcp"
 )
@@ -380,7 +382,7 @@ func TestMemberTierResolvesFromTheOrchestratorsStack(t *testing.T) {
 		t.Fatalf("member on its own catalog = %+v", own.LaunchSettings)
 	}
 	// A member reads its role and task, never its model.
-	if brief := memberBrief(*rev, "a1"); strings.Contains(brief, rev.LaunchSettings.Model) {
+	if brief := memberBrief(*rev, "", "a1"); strings.Contains(brief, rev.LaunchSettings.Model) {
 		t.Fatal("the member brief carries a model string")
 	}
 
@@ -545,5 +547,123 @@ func TestAssignmentIDsAndWaitingStatus(t *testing.T) {
 	}
 	if m := swarm.GetMember(s.View("lead"), w.Lead); m.Status != "reviewing" {
 		t.Fatalf("status set with waiting was dropped: %q", m.Status)
+	}
+}
+
+// A launch that failed takes the changed fields alone, as the receipt
+// promises ("omitted fields stay"): one wrong model string cost three calls
+// when the correction had to restate name and instructions (Redoubt,
+// WASH-R02). The role template is not put on twice.
+func TestAFailedLaunchTakesAPatchOfChangedFields(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // every launch fails
+	withPolicy(t, agentpolicy.Policy{})
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "claude", catalog: "anthropic", cwd: root}
+	call := func(args string) (any, error) {
+		return ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(args)})
+	}
+	if _, err := call(`{"workspace":{"name":"Team"},"roles":{"architect":{"instructions":"You design."}},"members":{"arch":{"name":"Architect","role":"architect","lifetime":"resident","instructions":"Own the plan.","model":"opus[1m]","effort":"high"}}}`); err != nil {
+		t.Fatal(err)
+	}
+	failed := swarm.GetMember(s.View("lead"), "arch")
+	if failed.State != "failed" || failed.Session != "" {
+		t.Fatalf("launch with no adapter on PATH: %+v", failed)
+	}
+	if _, err := call(`{"members":{"arch":{"model":"opus"}}}`); err != nil {
+		t.Fatalf("a patch to a failed launch was refused: %v", err)
+	}
+	again := swarm.GetMember(s.View("lead"), "arch")
+	if again.ID != failed.ID || again.Name != "Architect" || again.Role != "architect" || again.Instructions != "You design.\n\nOwn the plan." || again.Model != "opus" || again.LaunchSettings.Effort != "high" {
+		t.Fatalf("patched member = %+v (settings %+v)", again, again.LaunchSettings)
+	}
+	// A key that launched (or is launching) still takes no silent change.
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		swarm.GetMember(w, "arch").Session = "arch-s"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(`{"members":{"arch":{"model":"sonnet"}}}`); err == nil || !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("a launched member was patched: %v", err)
+	}
+}
+
+// A task on a node whose needs are not done starts with override on the
+// member, as it does on assignment_update, instead of launch, wait, assign
+// (Redoubt, WASH-R06).
+func TestOverrideOnLaunchStartsATaskEarly(t *testing.T) {
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex", cwd: root}
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qaFileCall(t, ws, h, "plan_set", map[string]any{"nodes": map[string]any{"K4": map[string]any{"title": "Design"}, "K5": map[string]any{"title": "Build", "needs": []string{"K4"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	member := map[string]any{"name": "Impl", "lifetime": "resident", "instructions": "Build it.", "node": "K5", "task": "Build K5."}
+	_, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"preview": true, "members": map[string]any{"impl": member}})
+	if err == nil || !strings.Contains(err.Error(), "needs K4") || !strings.Contains(err.Error(), `override:"<reason>" on the member`) {
+		t.Fatalf("task on a gated node: %v", err)
+	}
+	member["override"] = "design is agreed in the thread; building in parallel"
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"preview": true, "members": map[string]any{"impl": member}}); err != nil {
+		t.Fatalf("override on the member refused: %v", err)
+	}
+	delete(member, "task")
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"preview": true, "members": map[string]any{"impl": member}}); err == nil || !strings.Contains(err.Error(), "override goes with a task") {
+		t.Fatalf("override without a task: %v", err)
+	}
+}
+
+// A reviewer is refused before anything commits when the adapter this host
+// last ran is at a version Wash has not verified, and about says so first;
+// enforcement:"unverified" is the owner's recorded way through (Redoubt,
+// WASH-R01: six of nine members failed at launch, committed).
+func TestReviewerRefusedBeforeCommitOnAnUnverifiedAdapter(t *testing.T) {
+	withPolicy(t, agentpolicy.Policy{})
+	adapterMemMu.Lock()
+	adapterMem = map[string]agentproto.AdapterOptions{"claude": {Adapter: "claude", Version: "0.85.0"}}
+	adapterMemMu.Unlock()
+	t.Cleanup(resetAdapterMemoryForTest)
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "claude", catalog: "anthropic", cwd: root}
+	about := ws.about(h)
+	claude := about.Permissions["reviewer_capability_profiles"].(map[string]any)["claude"].(map[string]any)
+	if claude["installed_version"] != "0.85.0" || claude["available"] != false {
+		t.Fatalf("about on an unverified adapter: %v", claude)
+	}
+	reviewer := map[string]any{"name": "Red", "role": "reviewer", "lifetime": "resident", "instructions": "Review.", "capability": "reviewer"}
+	_, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"red": reviewer}})
+	if err == nil || !strings.Contains(err.Error(), "0.85.0") || !strings.Contains(err.Error(), `enforcement:"unverified"`) {
+		t.Fatalf("reviewer on an unverified adapter passed preview: %v", err)
+	}
+	if s.View("lead") != nil {
+		t.Fatal("preview committed")
+	}
+	reviewer["enforcement"] = "unverified"
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"red": reviewer}}); err != nil {
+		t.Fatalf("enforcement unverified refused: %v", err)
+	}
+	delete(reviewer, "capability")
+	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"red": reviewer}}); err == nil || !strings.Contains(err.Error(), "enforcement goes with") {
+		t.Fatalf("enforcement without the capability: %v", err)
+	}
+	// The launch path agrees, and the verified versions still need no flag.
+	info := acp.Implementation{Name: claudeAdapter, Version: "0.85.0"}
+	if _, err := reviewerMetadata("claude", info, ""); err == nil {
+		t.Fatal("launch on an unverified adapter without the flag")
+	}
+	if meta, err := reviewerMetadata("claude", info, "unverified"); err != nil || meta == nil {
+		t.Fatalf("launch with enforcement unverified: %v %v", meta, err)
+	}
+	resetAdapterMemoryForTest()
+	if about := ws.about(h); about.Permissions["reviewer_capability_profiles"].(map[string]any)["claude"].(map[string]any)["installed_version"] != nil {
+		t.Fatal("about claims a version no session reported")
 	}
 }

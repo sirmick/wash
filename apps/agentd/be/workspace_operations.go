@@ -367,6 +367,15 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 					}
 					m.Emoji = *p.Emoji
 				}
+				// A handoff is written for the orchestrator to act on (end,
+				// relaunch with handoff_from). Written by a resident with no
+				// assignment, it completed nothing and so told nobody: an
+				// Architect sat idle two hours before the orchestrator asked.
+				if handoff != "" && m.ID != w.Lead {
+					if _, err := swarm.AddMessage(w, m.ID, w.Lead, "lifecycle", m.Name+" ("+memberRef(*m)+") wrote its handoff: "+handoff+". When its open work is reported, end it and launch its replacement with handoff_from:\""+memberRef(*m)+"\".", "", "", ""); err != nil {
+						return err
+					}
+				}
 				for _, u := range p.QA {
 					q, err := swarm.UpdateQA(w, m, u)
 					if err != nil {

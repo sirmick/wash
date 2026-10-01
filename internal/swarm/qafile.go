@@ -43,6 +43,9 @@ func QAFileFor(w *Workspace, id string) QAFile {
 	}
 	add(q.Creator)
 	add(q.Assignee)
+	for _, id := range q.Participants {
+		add(id)
+	}
 	for _, e := range q.Events {
 		add(e.Author)
 	}

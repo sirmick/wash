@@ -157,9 +157,16 @@ func workspaceApprovals(w *swarm.Workspace) []agentproto.WorkspaceApproval {
 // orchestrator hears about it, unless the workspace says otherwise.
 const defaultContextWarn = 0.6
 
-// contextNudges tells each orchestrator, once per member, when a member has
-// used most of its context window: DOC1 found a lead at 630K by accident,
-// after it had stalled. The fix then is a handoff and a fresh member.
+// contextRewarn is how much more of the window a member uses between one
+// warning and the next.
+const contextRewarn = 0.1
+
+// contextNudges tells each orchestrator when a member has used most of its
+// context window: DOC1 found a lead at 630K by accident, after it had
+// stalled. The fix then is a handoff and a fresh member. Once at the
+// threshold, then at each further tenth: warned once, a member that kept
+// working to 45% was never heard of again, and the orchestrator's one chance
+// to time the handoff was wherever the first note had landed.
 func (ws *workspaceService) contextNudges() {
 	for _, w := range ws.store.Snapshot().Workspaces {
 		if w.State != "active" {
@@ -172,14 +179,25 @@ func (ws *workspaceService) contextNudges() {
 		_, _, usage := workspaceRuntime(&w)
 		for _, m := range w.Members {
 			u, ok := usage[m.ID]
-			if m.ID == w.Lead || m.State == "ended" || !ok || u.Size <= 0 || float64(u.Used) < warn*float64(u.Size) {
+			if m.ID == w.Lead || m.State == "ended" || !ok || u.Size <= 0 {
 				continue
 			}
+			share := float64(u.Used) / float64(u.Size)
+			if share < warn {
+				continue
+			}
+			step := int((share - warn) / contextRewarn)
 			key := "context:" + m.ID
+			if step > 0 {
+				key = fmt.Sprintf("context:%s:%d", m.ID, step)
+			}
 			if slices.Contains(w.Nudged, key) {
 				continue
 			}
-			body := fmt.Sprintf("%s has used %d%% of its context window (%d of %d tokens). Before it stalls: have it write a handoff (member_update handoff), end it, and launch a replacement with handoff_from:%q.", m.Name, int(100*float64(u.Used)/float64(u.Size)), u.Used, u.Size, memberRef(m))
+			body := fmt.Sprintf("%s has used %d%% of its context window (%d of %d tokens). Before it stalls: have it write a handoff (member_update handoff), end it, and launch a replacement with handoff_from:%q.", m.Name, int(100*share), u.Used, u.Size, memberRef(m))
+			if step > 0 {
+				body = fmt.Sprintf("%s is still running at %d%% of its context window (%d of %d tokens). Have it write its handoff at the next commit boundary (member_update handoff), end it, and launch a replacement with handoff_from:%q.", m.Name, int(100*share), u.Used, u.Size, memberRef(m))
+			}
 			_ = ws.store.Mutate(workspaceLeadSession(w), false, func(w *swarm.Workspace, _ *swarm.Member) error {
 				swarm.NudgeOnce(w, key, body)
 				return nil

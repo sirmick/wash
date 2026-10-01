@@ -248,7 +248,7 @@ func TestAHandoffReachesTheReplacement(t *testing.T) {
 			t.Fatalf("handoff_file %s outside the project was accepted", bad)
 		}
 	}
-	brief := memberBrief(swarm.Member{ID: "new", Instructions: "Write pages.", Handoff: "Pages 1–14 written", LaunchSettings: &swarm.AgentProfile{Provider: "codex"}}, "")
+	brief := memberBrief(swarm.Member{ID: "new", Instructions: "Write pages.", Handoff: "Pages 1–14 written", LaunchSettings: &swarm.AgentProfile{Provider: "codex"}}, "", "")
 	if !strings.Contains(brief, "## Handoff from the member you replace") || !strings.Contains(brief, "Pages 1–14") {
 		t.Fatal(brief)
 	}
@@ -280,5 +280,31 @@ func TestNudgesComeBackInTheCallThatCausedThem(t *testing.T) {
 	}
 	if next, _ := s.Next("lead"); len(next) != 0 {
 		t.Fatalf("the nudge was also queued: %+v", next)
+	}
+}
+
+// A thread's revision, which its transitions need, is on the plan's detail
+// view: no read tool returned it, so orchestrators grepped the thread files
+// (Redoubt, WASH-R07).
+func TestPlanDetailCarriesThreadRevisions(t *testing.T) {
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	w, _ := s.Setup("lead", "codex", root, "Team", root)
+	seedPlan(t, s, "lead", "K5")
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex"}
+	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": w.Lead, "type": "question", "body": "Which bound?", "qa": map[string]any{"id": "K5-bound", "action": "open", "node": "K5", "title": "Bound"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qaFileCall(t, ws, h, "member_update", map[string]any{"qa_updates": []map[string]any{{"id": "K5-bound", "action": "reply", "body": "64?"}}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := qaFileCall(t, ws, h, "plan_get", map[string]any{"node": "K5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threads := got.(map[string]any)["detail"].([]map[string]any)[0]["threads"].([]map[string]any)
+	if len(threads) != 1 || threads[0]["id"] != "K5-bound" || threads[0]["revision"] != int64(2) || threads[0]["state"] != "open" {
+		t.Fatalf("threads on the plan: %v", threads)
 	}
 }

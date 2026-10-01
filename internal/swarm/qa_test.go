@@ -340,3 +340,46 @@ func TestQAFileRoundTripsWithShortenedPaths(t *testing.T) {
 		t.Fatal("someone's Markdown read as a thread")
 	}
 }
+
+// A thread opened on a member's behalf answers to that member too, as it
+// does to anyone who has written on it: the orchestrator framing an
+// implementer's question for the Architect no longer relays the ruling.
+func TestThreadAnswersReachOnBehalfOfAndEveryoneWhoWrote(t *testing.T) {
+	s, lead, _ := qaStore(t)
+	if err := qaChange(s, "lead", QAUpdate{ID: "Q2", Action: "open", Node: "K5", Title: "Shape", Assignee: "reviewer", Body: "Which shape?", OnBehalfOf: "writer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := qaChange(s, "lead", QAUpdate{ID: "Q3", Action: "open", Node: "K5", Title: "Nobody", Assignee: "reviewer", Body: "?", OnBehalfOf: "nobody"}); err == nil {
+		t.Fatal("on_behalf_of an unknown member")
+	}
+	if err := qaChange(s, "lead", QAUpdate{ID: "Q2", Action: "reply", Body: "more", OnBehalfOf: "writer"}); err == nil {
+		t.Fatal("on_behalf_of on a reply")
+	}
+	if err := s.Mutate("other-session", false, func(w *Workspace, m *Member) error {
+		msg, err := AddMessage(w, m.ID, lead, "question", "Does R2 care?", "", "", "")
+		if err != nil {
+			return err
+		}
+		return LinkQA(w, "Q2", msg)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("reviewer-session", false, func(w *Workspace, m *Member) error {
+		return NotifyQA(w, QA(w, "Q2"), m.ID, "Round")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, msg := range s.View("lead").Messages {
+		if msg.Thread == "Q2" && msg.Type == "answer" {
+			got[msg.Recipient] = msg.State
+		}
+	}
+	if len(got) != 3 || got["writer"] != "queued" || got["other"] != "queued" || got[lead] != "queued" || got["reviewer"] != "" {
+		t.Fatalf("notified %v", got)
+	}
+	var b strings.Builder
+	if err := WriteQAThread(&b, *QA(s.View("lead"), "Q2"), func(id string) string { return id }, false); err != nil || !strings.Contains(b.String(), "On behalf of: writer") {
+		t.Fatalf("thread file names no participant: %v\n%s", err, b.String())
+	}
+}

@@ -608,3 +608,69 @@ func TestEndingARemindedMemberStillTellsTheOrchestrator(t *testing.T) {
 		t.Fatal("the orchestrator was not told the node has nobody on it")
 	}
 }
+
+// A resident with work open takes one more assignment, queued: its handover
+// waits until the open one resolves, then goes out as the member's next
+// turn. A third is refused, and nothing queues behind an ephemeral member.
+// Without the queue, the next step after a progress report could only be an
+// instruction off the plan (Redoubt, WASH-R05).
+func TestASecondAssignmentQueuesBehindTheOpenOne(t *testing.T) {
+	s, _ := fixture(t)
+	first, err := s.Assign("lead-session", "worker", "", "", "Build timers", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Assign("lead-session", "worker", "", "", "Wire the timers in", "Use the monotonic clock.", "")
+	if err != nil || second.State != "queued" {
+		t.Fatalf("second assignment %+v, %v", second, err)
+	}
+	if _, err := s.Assign("lead-session", "worker", "", "", "A third", "", ""); err == nil || !errors.Is(err, ErrActiveAssignment) || !strings.Contains(err.Error(), second.ID) {
+		t.Fatalf("a third assignment: %v", err)
+	}
+	next, err := s.Next("worker-session")
+	if err != nil || len(next) != 1 || next[0].Assignment != first.ID {
+		t.Fatalf("the queued handover went out with the first: %+v %v", next, err)
+	}
+	if err := s.Complete("worker-session", first.ID, "Timers built.", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TurnEnded("worker-session", []string{next[0].ID}, false); err != nil {
+		t.Fatal(err)
+	}
+	w := s.View("lead-session")
+	if i := slices.IndexFunc(w.Assignments, func(a Assignment) bool { return a.ID == second.ID }); i < 0 || w.Assignments[i].State != "assigned" {
+		t.Fatalf("the queued assignment was not promoted: %+v", w.Assignments)
+	}
+	next, err = s.Next("worker-session")
+	if err != nil || len(next) != 1 || next[0].Assignment != second.ID || !strings.Contains(next[0].Body, "monotonic") {
+		t.Fatalf("the promoted assignment's instructions did not go out: %+v %v", next, err)
+	}
+	if err := s.Mutate("lead-session", true, func(w *Workspace, m *Member) error {
+		w.Members = append(w.Members, Member{ID: "eph", Name: "Once", Session: "eph-session", Lifetime: "ephemeral", State: "available", Creator: m.ID, Node: "K1"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Assign("lead-session", "eph", "", "", "One job", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Assign("lead-session", "eph", "", "", "Another", "", ""); err == nil || !strings.Contains(err.Error(), "ephemeral") {
+		t.Fatalf("an ephemeral member queued work it will never take: %v", err)
+	}
+}
+
+// A retried create with the same request_id but other instructions is a
+// different assignment, not the first one again.
+func TestAssignRetryMatchesTheBodyToo(t *testing.T) {
+	s, _ := fixture(t)
+	a, err := s.Assign("lead-session", "worker", "", "", "Build timers", "First brief.", "req-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.Assign("lead-session", "worker", "", "", "Build timers", "First brief.", "req-1"); err != nil || again.ID != a.ID {
+		t.Fatalf("identical retry: %+v %v", again, err)
+	}
+	if _, err := s.Assign("lead-session", "worker", "", "", "Build timers", "A different brief.", "req-1"); err == nil {
+		t.Fatal("a request_id reused with other instructions was taken as a retry")
+	}
+}

@@ -505,7 +505,7 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 	}
 
 	settings := memberSettings(member)
-	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, sessionLaunch{connection: settings.Connection, catalog: member.Catalog, model: member.Model, capability: settings.Capability, member: true, noSubagents: settings.Subagents == "deny"})
+	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, sessionLaunch{connection: settings.Connection, catalog: member.Catalog, model: member.Model, capability: settings.Capability, enforcement: settings.Enforcement, member: true, noSubagents: settings.Subagents == "deny"})
 	var initialConfigs map[string]string
 	if err == nil {
 		options := child.configsSnapshot()
@@ -575,14 +575,14 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 			if by == nil {
 				by = swarm.GetMember(w, w.Lead)
 			}
-			task, err := swarm.NewAssignment(w, by, v, "", "", member.InitialTask)
+			task, err := swarm.NewAssignment(w, by, v, "", member.InitialOverride, member.InitialTask)
 			if err != nil {
 				return fmt.Errorf("initial task: %w", err)
 			}
 			initialAssignment = task
 			assignment = task.ID
 		}
-		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", memberBrief(member, assignment), "", assignment, "")
+		_, e := swarm.AddMessage(w, v.Creator, v.ID, "instruction", memberBrief(member, w.Root, assignment), "", assignment, "")
 		return e
 	})
 	if err != nil {
@@ -616,17 +616,29 @@ func memberSettings(m swarm.Member) swarm.AgentProfile {
 }
 
 // memberBrief is a member's first message: its role, how a member works
-// (the same guide about gives it), and its initial task (assignment), or,
-// without one, to wait for it. Members run on cheap models: short,
-// numbered, one thing per line.
-func memberBrief(m swarm.Member, assignment string) string {
+// (the same guide about gives it, with where it runs), and its initial task
+// (assignment), or, without one, to wait for it. Members run on cheap
+// models: short, numbered, one thing per line.
+func memberBrief(m swarm.Member, root, assignment string) string {
 	var b strings.Builder
 	b.WriteString(m.Instructions)
 	b.WriteString("\n\n## How you work\n\nYou are " + memberRef(m) + ", a member of a Wash workspace")
 	if m.Node != "" {
 		b.WriteString(", on plan node " + m.Node)
 	}
-	b.WriteString(". The orchestrator is \"orchestrator\".\n")
+	b.WriteString(". The orchestrator is \"orchestrator\".")
+	// Members work in different directories (worktrees under the project),
+	// and a relative path in a message resolved differently for each: two
+	// reviewers reported a progress file "does not exist in my worktree".
+	if root != "" {
+		if m.Cwd != "" && m.Cwd != root {
+			b.WriteString(" You work in " + m.Cwd + "; the project root is " + root + ".")
+		} else {
+			b.WriteString(" You work in the project root, " + root + ".")
+		}
+		b.WriteString(" Other members work in other directories: a path in a message is absolute, or relative to the project root.")
+	}
+	b.WriteString("\n")
 	for i, step := range workspacemcp.MemberGuide {
 		b.WriteString("\n" + itoa(uint64(i+1)) + ". " + step)
 	}
