@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# wash-connect — print the URL (with token) for the router wash-start is
+# running, for pasting into a browser on another machine. The host name is
+# this machine's reverse-DNS name on its primary interface, unless
+# WASH_CONNECT_HOST says otherwise.
+#
+# Environment (all optional):
+#   WASH_CONNECT_HOST     hostname or IP to put in the URL (skips the DNS lookup)
+#   WASH_LISTEN           host:port wash-start serves on  (default 0.0.0.0:10000)
+#   WASH_SCREEN_SESSION   screen session name             (default wash)
+#   WASH_TOKEN_FILE       token file wash-start used      (default ~/.local/state/wash/router.token)
+
+set -euo pipefail
+
+session="${WASH_SCREEN_SESSION:-wash}"
+listen="${WASH_LISTEN:-0.0.0.0:10000}"
+token_file="${WASH_TOKEN_FILE:-$HOME/.local/state/wash/router.token}"
+
+if ! screen -S "$session" -Q select . >/dev/null 2>&1; then
+  printf 'wash-connect: screen session %s is not running (wash-start)\n' "$session" >&2
+  exit 1
+fi
+
+if [[ ! -r "$token_file" ]]; then
+  printf 'wash-connect: token file is unavailable: %s\n' "$token_file" >&2
+  exit 1
+fi
+
+token="$(tr -d '\r\n' < "$token_file")"
+if [[ -z "$token" ]]; then
+  printf 'wash-connect: token file is empty: %s\n' "$token_file" >&2
+  exit 1
+fi
+
+if [[ -n "${WASH_CONNECT_HOST:-}" ]]; then
+  host="$WASH_CONNECT_HOST"
+else
+  for command_name in ip resolvectl dig; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+      printf 'wash-connect: required command not found: %s (or set WASH_CONNECT_HOST)\n' "$command_name" >&2
+      exit 1
+    fi
+  done
+
+  route_line="$(ip -4 route get 1.1.1.1 2>/dev/null | head -1)"
+  interface="$(awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}' <<<"$route_line")"
+  primary_ip="$(awk '{for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}' <<<"$route_line")"
+  if [[ -z "$interface" || -z "$primary_ip" ]]; then
+    printf 'wash-connect: could not determine the primary IPv4 interface and address\n' >&2
+    exit 1
+  fi
+
+  dns_line="$(resolvectl dns "$interface" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//')"
+  read -r -a dns_servers <<<"$dns_line"
+  host=""
+  for dns_server in "${dns_servers[@]}"; do
+    host="$(dig +short -x "$primary_ip" @"$dns_server" 2>/dev/null | head -1)"
+    [[ -n "$host" ]] && break
+  done
+  host="${host%.}"
+  if [[ -z "$host" ]]; then
+    printf 'wash-connect: no reverse-DNS record found for %s (%s); set WASH_CONNECT_HOST\n' \
+      "$primary_ip" "$interface" >&2
+    exit 1
+  fi
+fi
+port="${listen##*:}"
+printf 'https://%s:%s/?token=%s\n' "$host" "$port" "$token"

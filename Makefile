@@ -1278,6 +1278,19 @@ push:
 	@echo "════ push: CI-equivalent gate passed ✓ — pushing ════"
 	git push $(ARGS)
 
+# Host scripts: run the built router as a persistent screen session with
+# HTTPS + token (wash-start), print its URL for another machine
+# (wash-connect), pull+rebuild+restart (wash-update). Symlinked, so a
+# `git pull` updates them in place. HOST_BINDIR=~/bin to put them elsewhere.
+HOST_BINDIR ?= $(HOME)/.local/bin
+.PHONY: install-host-scripts
+install-host-scripts:
+	@mkdir -p $(HOST_BINDIR)
+	@for s in wash-start wash-connect wash-update; do \
+	  ln -sfn $(abspath scripts/host/$$s) $(HOST_BINDIR)/$$s && echo "$(HOST_BINDIR)/$$s -> scripts/host/$$s"; \
+	done
+	@case ":$$PATH:" in *":$(HOST_BINDIR):"*) ;; *) echo "note: $(HOST_BINDIR) is not on PATH";; esac
+
 # Dev mode: Vite serves the shell with HMR at :5173 and proxies /ws to
 # the router at 0.0.0.0:11000. Open http://localhost:5173/ in a
 # browser. Editing files under web/shell/src triggers HMR; editing
