@@ -22,8 +22,8 @@ page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 // serve them. A 404 there left every icon blank without failing the boot.
 const missing = [];
 page.on('response', (r) => {
-  const u = new URL(r.url());
-  if (r.status() >= 400 && u.origin === new URL(URL).origin && !u.pathname.startsWith('/tinyemu/')) {
+  const u = new globalThis.URL(r.url());
+  if (r.status() >= 400 && u.origin === new globalThis.URL(URL).origin && !u.pathname.startsWith('/tinyemu/')) {
     missing.push(`${r.status()} ${u.pathname}`);
   }
 });
