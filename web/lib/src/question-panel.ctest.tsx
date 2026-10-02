@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest';
+import { createSignal } from 'solid-js';
 import { cleanup, fireEvent, render, screen } from '@solidjs/testing-library';
 import type * as agentproto from './agent-protocol.gen';
 import { QuestionPanel } from './question-panel';
@@ -56,4 +57,23 @@ test('a single choice toggles, and decline answers nothing', async () => {
   expect(screen.getByTestId('question-option-go-1').getAttribute('aria-checked')).toBe('true');
   await fireEvent.click(screen.getByTestId('question-decline-set1'));
   expect(onAnswer).toHaveBeenCalledWith('set1', 'decline');
+});
+
+// The roster re-sends every pending question as a fresh object on any
+// update (a transcript line, a state change). A half-answered set must keep
+// its answers across that, not remount empty.
+test('answers survive the same question set arriving as a new object', async () => {
+  const onAnswer = vi.fn();
+  const qs: agentproto.Question[] = [
+    { id: 'clock', question: 'Which clock?', options: [{ label: 'Monotonic' }, { label: 'Wall' }] },
+    { id: 'targets', question: 'Which targets?', multi: true, options: [{ label: 'rv32' }, { label: 'x86' }] },
+  ];
+  const [list, setList] = createSignal([pending(qs)]);
+  render(() => <QuestionPanel onAnswer={onAnswer} questions={list} />);
+  await fireEvent.click(screen.getByTestId('question-option-clock-0'));
+  setList([pending(qs)]);
+  expect(screen.getByTestId('question-option-clock-0').getAttribute('aria-checked')).toBe('true');
+  await fireEvent.click(screen.getByTestId('question-option-targets-1'));
+  await fireEvent.click(screen.getByRole('button', { name: /^Submit/ }));
+  expect(onAnswer).toHaveBeenCalledWith('set1', 'accept', { clock: { selected: ['Monotonic'] }, targets: { selected: ['x86'] } });
 });
