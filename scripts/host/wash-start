@@ -42,10 +42,19 @@ screen -S "$session" -X quit >/dev/null 2>&1 || true
 screen -dmS "$session" -L -Logfile "$log" \
   "$router" --listen "$listen" --auth-token-file "$token_file"
 
-for _ in $(seq 1 50); do
+# The session appears as soon as screen forks, so seeing it once proves
+# nothing; a router that dies on startup (port taken, bad flag) takes the
+# session with it within a second or two. Require it to still be there.
+up=0
+for _ in $(seq 1 30); do
   if screen -S "$session" -Q select . >/dev/null 2>&1; then
-    printf 'wash-start: screen session %s is running with HTTPS on %s\n' "$session" "$listen"
-    exit 0
+    up=$((up + 1))
+    if (( up >= 15 )); then
+      printf 'wash-start: screen session %s is running with HTTPS on %s\n' "$session" "$listen"
+      exit 0
+    fi
+  else
+    up=0
   fi
   sleep 0.1
 done
