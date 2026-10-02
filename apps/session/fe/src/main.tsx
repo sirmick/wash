@@ -660,7 +660,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // every read, and the start menu reads its groups from rows, keyboard
   // handlers and the flyout alike.
   const menuGroups = createMemo(() =>
-    recentGroups(recent(), agentRecent(), (id) => catalog().find((a) => a.id === id)?.name, agentRows()),
+    recentGroups(recent(), agentRecent(), (id) => catalog().find((a) => a.id === id)?.name, agentRows(),
+      (id) => catalog().some((a) => a.id === id)),
   );
   const setPin = (appID: string, on: boolean) => {
     window.wash.sendAppMsg(props.instance, { kind: 'launcher.pin', app_id: appID, on });
