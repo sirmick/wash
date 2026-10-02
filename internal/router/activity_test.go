@@ -28,6 +28,22 @@ func journalRouter(t *testing.T, cfg Config) (*Router, *logCapture, wire.FrameTr
 	if _, ok := readCtrl(t, pair.EndB()).(wire.ShellCatalog); !ok {
 		t.Fatalf("expected ShellCatalog first")
 	}
+	// HandleShell writes the catalog before it registers the shell, so a
+	// test that counts shells (observe's roster) could run in between and
+	// see none. Wait for the registration.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		r.mu.Lock()
+		n := len(r.shells)
+		r.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("shell never registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	return r, lc, pair.EndB(), func() {
 		pair.Close()
 		waitClose(t, done)

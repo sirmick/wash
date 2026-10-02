@@ -270,17 +270,13 @@ bug list — all fully landed; see `git log` if you need their content.)
   to their session, hidden-sidebar badge, single-click reattach, launcher
   defaults (last-used, else claude), window attention flag. See §5 for the
   as-built notes, including the two places the plan was wrong.
-- [ ] **Agent UX phase Next (0.15)** — messenger consolidation. Design
-  doc landed 2026-08-24: **docs/AGENT_MESSENGER.md**, M1–M5. The list
-  merge (live + stored, one row, one search) is M1 and wants the three
-  time representations reconciled first; one window per host is M2 and
-  needs BOTH spawn paths made instancing-aware, since `EvtSpawnRequest`
-  ignores `Instancing` entirely today (`internal/router/app_session.go:995-1010`
-  calls `spawnChild` unconditionally, unlike the launch paths).
-  **M5 shipped 2026-08-24**, ahead of M1 — the three defects this entry
-  used to list as live are fixed (`web/lib/src/agent-status.ts:70-75`
-  renders `failed` red; `apps/session/fe/src/sidebar/awareness.ts:254-259`
-  counts only `working`). M1–M4 remain.
+- [x] **Agent UX phase Next (0.15)** — superseded 2026-09-14. The
+  messenger plan (docs/AGENT_MESSENGER.md M1–M4: one merged list, one window
+  per host, compose in place) was not built; the app split instead into the
+  singleton Agents manager (`com.wash.agents`) and one hidden `com.wash.ai`
+  controller per session. M5 (one status vocabulary) shipped 2026-08-24.
+  Open agent-app gaps are listed in docs/AGENT_APP.md §0 "Known gaps";
+  workspace items in docs/AGENT_SWARM_BACKLOG.md.
 - [ ] **fm/edit: surface access-denied + "relaunch as root"** — **issue #6**
   (full implementation prompt is a comment there). Part A is now mostly
   done and the old description was stale: edit HAS a status-bar error

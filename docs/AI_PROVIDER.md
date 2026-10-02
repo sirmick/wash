@@ -1,7 +1,11 @@
 # AI provider — bounded inference for wash apps
 
 Status: **foundational v1 and the experimental Session Summary are implemented;
-automatic observation and Mission Commander remain design**.
+automatic observation and Mission Commander remain design** here. Since
+2026-09-17 those parts are superseded by [COMMANDER.md](COMMANDER.md) (§7–9
+below), where the activity journal, `observe` and automatic briefs are
+built. This is the one-shot inference service, not the coding-agent app
+([AGENT_APP.md](AGENT_APP.md)).
 
 Goal, in one line: **give wash apps one small, stable way to ask the user's
 chosen model for a tool-free, one-shot result, without turning each app into

@@ -11,7 +11,7 @@
 // are naturally not byte-stable; everything else is.)
 
 import { test, expect, displaySkipReason } from '../fixtures/router';
-import { closeButtonOf, openAgents, startAgentSession, windowOf } from '../fixtures/agents';
+import { closeButtonOf, freshHistory, openAgents, startAgentSession, windowOf } from '../fixtures/agents';
 import type { Page, Locator } from '@playwright/test';
 import { mkdirSync, writeFileSync, existsSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -297,6 +297,10 @@ test.describe('screenshots', () => {
     await openApp(page, 'com.wash.fm');
     await expect(win(page, 'wash-app-fm')).toBeVisible();
     await settle(page, 300);
+    // Sized at the top-left (where its grip is reachable), then posed: at
+    // its default size it would run under the open sidebar and the taskbar.
+    await moveWinTo(page, win(page, 'wash-app-fm'), 40, 40);
+    await resizeWinTo(page, win(page, 'wash-app-fm'), 630, 490);
     await moveWinTo(page, win(page, 'wash-app-fm'), 612 + jit(48), 452 + jit(34));
 
     // The Agent — wash's day-one AI seat — lower-left, mid-conversation
@@ -665,10 +669,33 @@ test.describe('agent screenshot', () => {
     if (g && b) {
       await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
       await page.mouse.down();
-      await page.mouse.move(b.x + 760, b.y + 530, { steps: 12 });
+      await page.mouse.move(b.x + 760, b.y + 640, { steps: 12 });
       await page.mouse.up();
     }
     await page.waitForTimeout(700);
     await w.screenshot({ path: join(SHOTS, 'agent.png') });
+  });
+
+  // The Agents manager: the launcher, with a live session in Running and
+  // the conversation it came from in History.
+  test('agents', async ({ page, router }) => {
+    test.setTimeout(60_000);
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    const aiApp = await startAgentSession(page, 'Why is the checkout test flaky?', { cwd: PROJ });
+    await expect(aiApp.getByText('Comparing sequence numbers')).toBeVisible({ timeout: 20_000 });
+    await expect(aiApp.locator('[data-testid="agent-stop"]')).toHaveCount(0, { timeout: 20_000 });
+    // Reopened so its lists are asked again, after the turn; that also raises it.
+    await freshHistory(page);
+    const manager = windowOf(page, page.locator('wash-app-agents'));
+    const tb = await manager.locator('.wash-titlebar').boundingBox();
+    if (tb) {
+      await page.mouse.move(tb.x + 90, tb.y + tb.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(40 + 90, 40 + tb.height / 2, { steps: 16 });
+      await page.mouse.up();
+    }
+    await page.waitForTimeout(700);
+    await manager.screenshot({ path: join(SHOTS, 'agents.png') });
   });
 });

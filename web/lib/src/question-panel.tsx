@@ -5,7 +5,7 @@
 // questions in prose left the person to answer them in prose; this is the
 // structured form of the same thing (agentd question.go).
 
-import { For, Show, createEffect, createSignal, on } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, on } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import type * as agentproto from './agent-protocol.gen';
 import { tokens } from './tokens';
@@ -119,14 +119,24 @@ const QuestionSetCard: Component<{ q: agentproto.PendingQuestion; onAnswer?: Que
 };
 
 /** Every waiting question set of one session, scrollable, above its composer. */
-export const QuestionPanel: Component<QuestionPanelProps> = (props) => (
-  <Show when={props.questions().length}>
+export const QuestionPanel: Component<QuestionPanelProps> = (props) => {
+  // The roster re-sends every pending set as a fresh object on any update.
+  // <For> keys by reference, so a fresh object would remount its card and
+  // drop the answers in progress; reuse the object already shown for an id
+  // (a set's content never changes under the same id).
+  const sets = createMemo<agentproto.PendingQuestion[]>((prev) => {
+    const shown = new Map(prev.map((q) => [q.id, q]));
+    return props.questions().map((q) => shown.get(q.id) ?? q);
+  }, []);
+  return (
+  <Show when={sets().length}>
     <div data-testid="question-panel" style={{
       flex: 'none', 'max-height': '55%', 'overflow-y': 'auto', 'overscroll-behavior': 'contain',
       'border-top': `2px solid ${tokens.accentAmber}`, background: tokens.bgMenu,
       padding: `${tokens.spaceMd}px`, display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceLg}px`,
     }}>
-      <For each={props.questions()}>{(q) => <QuestionSetCard q={q} onAnswer={props.onAnswer} />}</For>
+      <For each={sets()}>{(q) => <QuestionSetCard q={q} onAnswer={props.onAnswer} />}</For>
     </div>
   </Show>
-);
+  );
+};

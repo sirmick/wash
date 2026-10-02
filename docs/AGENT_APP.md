@@ -1,4 +1,187 @@
-# Agent sessions over ACP — replacing the intercept tier
+# The Agents app — coding agents over ACP
+
+This is the entry point for wash's coding-agent feature. §0 describes what
+the code does today (0.17.x) and links to the deeper documents; §1 onward is
+the design record of the move to the Agent Client Protocol, kept because
+most of its decisions still hold. Where the record and §0 disagree, §0 is
+current.
+
+## 0. The app today (as of 2026-10-02)
+
+### What it is
+
+wash starts a coding agent itself, over the
+[Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC on the
+adapter's stdio), and owns what the agent touches: the files it reads and
+writes go through wash and are confined to the session's folders, the
+commands it runs are wash PTYs shown live in the transcript, and every
+permission request goes through wash's approval queue. A `claude` typed into
+a wash terminal is an ordinary command; nothing watches it (§12).
+
+| The Agents manager | A session's Agent window |
+|---|---|
+| ![Agents manager](screenshots/agents.png) | ![Agent window](screenshots/agent.png) |
+
+### The processes
+
+| Piece | Where | Role |
+|---|---|---|
+| `com.wash.agentd` | `apps/agentd/be` | Background service. Owns every adapter process, the roster, the approval queue, questions, transcripts, history, catalogs/keys and workspaces. Sessions outlive their windows. |
+| `com.wash.agents` "Agents" | `apps/agents/be` (same bundle as ai) | Singleton manager window: launcher, History, Setup, and the Running list with per-row verbs. The start-menu entry. |
+| `com.wash.ai` "Agent" | `apps/ai/be`, `apps/ai/fe` | One hidden, multi-instance controller window per live session. agentd grants one controller lease per session. |
+| `<AgentSession>` | `web/lib/src/agent-session.tsx` | The transcript + composer + status line component, shared by the Agent window and wash-edit's agent tabs. Owns no session state. |
+| protocol | `internal/agentproto` | Every agentd message as Go structs; TS and [AGENT_PROTOCOL.md](AGENT_PROTOCOL.md) are generated (`make gen-agent-protocol`, checked in `make unit-test`). |
+| ACP client | `internal/acp` | Hand-rolled ACP v1 client. A v2 handshake hard-errors (§12b). |
+
+The desktop sidebar rail shows counts, answers permission asks, and its door
+opens the Agents manager (on that host, for a remote host). Agent questions
+post desktop notifications whose click lands on the asking session.
+
+### Adapters
+
+The table in `apps/agentd/be/adapters.go`: **Claude Code**
+(`claude-agent-acp`, npm `@agentclientprotocol/claude-agent-acp`),
+**Codex** (`codex-acp`, npm `@agentclientprotocol/codex-acp`),
+**OpenCode** (`opencode acp`, npm `opencode-ai`) and **Gemini CLI**
+(`gemini --experimental-acp`, no npm fallback). A binary on `PATH` wins,
+else `npx --yes <package>`; an adapter that can't launch is greyed with the
+reason. wash's packages ship no adapter and no Node dependency. Claude,
+Codex and OpenCode are verified against real adapters (§6); Gemini is in the
+table but no verification run is recorded. `agents.json` can override an
+adapter's command, args, env and MCP servers
+(`e2e/tests/agent-adapter-config.spec.ts`).
+
+### Starting a session
+
+From the Agents manager's **New session** tab: pick a **catalog** and a
+**model** (a slot — `frontier`/`coding`/`small` — or a model the adapter
+reported), a folder, and optionally Permissions (the adapter's mode, yolo)
+and Advanced (the adapter's own options by id). Start opens an Agent window.
+Other doors send just a folder and get the default catalog: the Places agent
+icon, wash-edit's "new agent here", and `wash ai <dir>`
+(`wash ai --agent claude --cwd DIR` names an adapter on its defaults). The
+remembered launch mode is applied to those too; yolo never is.
+
+Built-in catalogs are in `apps/agentd/be/catalogs.json`: an "auto" catalog
+per adapter (Anthropic, OpenAI, Gemini, OpenCode, OpenRouter) whose models
+are whatever the adapter last reported (`agent-adapters.json`), and pro and
+budget catalogs for Anthropic, OpenAI and OpenRouter (open-weight models
+only, chosen by `tools/openrouter-eval`). Details and the tables: §6
+"Catalogs, connections and keys".
+
+### Setup tab
+
+One tab for the machine's agent configuration
+(`apps/ai/fe/src/main.tsx` `setupPane`):
+
+- **Keys** — the OpenRouter key, saved to `~/.config/wash/keys.json` (0600,
+  plain JSON — no keychain), tested against OpenRouter, shown afterwards
+  only as "set" + last four. Connections (`opencode@openrouter`,
+  `claude@openrouter`) inject it into the adapter's environment.
+- **Default prompt** — `$XDG_CONFIG_HOME/wash/agent-default-prompt.txt`,
+  sent as the first prompt of every new session (visible in the
+  transcript; not repeated on resume).
+- **Catalogs** — every catalog editable, built-ins resettable, overrides
+  written to `agents.json`; and the default catalog.
+
+### In a session (the Agent window)
+
+- Streamed transcript: Markdown, tables, images, tool calls, live ACP
+  terminals (agentd owns the pty — [AGENT_TERMINAL.md](AGENT_TERMINAL.md)),
+  thinking collapsed with a live count, file paths as links that open in
+  **this window's own editor** at the line.
+- Composer: slash commands, Attach… (sent as `resource_link`), pasted
+  images, drafts sent from other apps (`agent_draft`; wash-edit's "send
+  selection to agent").
+- Status bar: mode, usage, background tasks. Session menu: yolo, rename,
+  Show terminal / file manager / editor (this window's bound ones,
+  [PLACES.md](PLACES.md)), and every setting the adapter exposes (model,
+  effort, …) as a pop-out picker.
+- File menu: Save transcript, Detach (window closes, session keeps running),
+  Terminate. Closing the window asks which.
+- Extra folders: the Running row's "Also allow a folder…" widens `fs/*`
+  and terminal confinement to another root; removable from the session.
+
+### Permissions, auto-approve and questions
+
+- A tool call with no matching rule asks. The ask shows inline, in the
+  Running list and in the rail; answering anywhere answers everywhere.
+  "Always allow" writes a rule to `~/.config/wash/agents.json`
+  (`internal/agentpolicy`).
+- Unanswered asks resolve to *defer* (the adapter's own handling), never to
+  allow: 30 s of desktop time (3 min before the first rule exists), 30 min
+  wall-clock ceiling; with no desktop attached, immediately
+  (`apps/agentd/be/ask.go`).
+- **Yolo** (per session, or remembered from the launcher) auto-approves
+  host-side; the transcript says it is on, without a row per approval.
+- **Questions**: Claude Code's `AskUserQuestion` arrives as an ACP
+  elicitation form and renders in the question panel above the composer
+  (`web/lib/src/question-panel.tsx`); it waits without a timeout. Workspace
+  members' `decision_request` uses the same panel.
+
+### History, resume and persistence
+
+Transcripts are written to disk as they happen
+(`$XDG_STATE_HOME/wash/agent-transcripts/`), so they outlive the session.
+History (below the launcher) lists sessions people started, with full-text
+search over what was said, an "all" toggle for workspace members, Rename,
+Delete and "Delete older than…". Picking a live session focuses it; a
+finished one resumes over `session/load` through the same connection and
+settings. Agent windows and the manager restore across a browser reload;
+agentd's idle hold keeps the wash session from being reaped while an agent
+works. No fork verb.
+
+### Workspaces (multi-agent teams)
+
+Every session is offered the built-in `wash_workspace` MCP server. An agent
+that calls `workspace_configure` becomes the **orchestrator**: its window
+grows a team sidebar, a Plan tab (the plan as a node graph) and a Questions
+tab, and it launches **members** by catalog slot, messages them, assigns work
+on plan nodes, accepts nodes, and keeps per-thread QA files. Members are
+ordinary sessions with a reduced tool set; reviewers can be made read-only
+(`capability:"reviewer"`, Claude Code and OpenCode only). A supervisor tells
+the orchestrator when work stalls. Workspaces survive a wash restart. The
+fourteen tools: [AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md); design:
+[AGENT_SWARM.md](AGENT_SWARM.md); open work:
+[AGENT_SWARM_BACKLOG.md](AGENT_SWARM_BACKLOG.md).
+
+### Elsewhere on the desktop
+
+- **wash-edit agent tabs** — an agent in the editor's bottom pane, beside
+  terminals, its file links opening in that editor
+  ([AGENT_TABS.md](AGENT_TABS.md)).
+- **Remote hosts** — the Agents manager opened on host B shows B's
+  sessions; the rail has a door per host. Hosts are not merged in the app.
+
+### Known gaps / not done
+
+- **wash-term agent pane** (§9) — never built; adopting an agent's ACP
+  terminal as a wash-term or wash-edit tab (AGENT_TERMINAL M4) — not started.
+- **wash-edit agent tabs** are not restored on reload, and closing one does
+  not ask about the session (AGENT_TABS §7).
+- **Fork** — not offered, though Claude's adapter advertises it (GH #21).
+- **History and Running are two lists**; the merged list, compose-in-place
+  and taskbar count of [AGENT_MESSENGER.md](AGENT_MESSENGER.md) were not
+  built (the manager/controller split replaced that plan).
+- **Keys** are plain JSON (0600); no keychain / Secret Service.
+- **OpenCode** does its own file and shell I/O, so folder confinement does
+  not apply to it — approvals are the only gate.
+- A wrong key on `claude@openrouter` hangs the turn instead of failing.
+- A catalog slot naming a model the adapter no longer offers is only caught
+  at start, not greyed beforehand.
+- Reviewer read-only enforcement is pinned to specific claude-agent-acp and
+  OpenCode versions; Codex and Gemini reviewers are refused.
+- Gemini CLI is unverified; ACP v2 is unsupported.
+- Workspace store (`workspaces.json`) is append-only, with no retention and
+  no archive browser for ended workspaces (docs/Todo.md).
+- No agent frontend outside wash (VS Code, TUI) — AGENT_SWARM_BACKLOG §5.
+- wash-term still honours an `exec_tab` verb from agentd that nothing sends.
+- The desktop-*operating* AI ([AGENT.md](AGENT.md)) is unbuilt; the
+  activity journal / commander is partly built ([COMMANDER.md](COMMANDER.md)).
+
+---
+
+# Design record: agent sessions over ACP (2026-08)
 
 Goal, in one line: **wash launches the coding agent over the Agent Client
 Protocol and reads its tool calls, state and permission requests off a
@@ -8,9 +191,9 @@ inferred the same things by intercepting an agent harness we do not own.**
 This supersedes the mechanism in `docs/AGENT_TERM.md` M1–M4, M6 and M7.
 That document's M5 (smart paste) is independent and unaffected.
 
-Status: **M0–M3 built** (source-agnostic ask queue, `internal/acp`, shared
-matcher, agentd hosting sessions), verified against two real adapters.
-M4 onward is design.
+Status: M0–M5 and M7 built, M6 built as ACP terminals rendered in the
+transcript (not as a wash-term pane), M8 as per-host managers — see §11.
+Sections below keep their original wording except where marked.
 
 Decisions already made (discussion 2026-08-03):
 
@@ -331,19 +514,20 @@ after answering "status?" and needed a prod each time.
   `"model":"coding"` (AGENT_SWARM_BULK.md, API 3.3), or a model id, or name
   their own `catalog`; a reviewer that must not write adds
   `capability:"reviewer"` beside it.
-- **The Agents window** has three tabs in its left column: New session (the
-  launcher, sized to its content, with History below), Catalog (every
-  catalog editable: an adapter and connection, or three slots) and
-  Connections (the keys). Machine configuration was at the bottom of the
-  launcher until the launcher grew taller than its fixed pane and hid its
-  own Start button.
+- **The Agents window** has two tabs in its left column: New session (the
+  launcher, sized to its content, with History below) and Setup (keys,
+  the default prompt, then every catalog editable — an adapter and
+  connection, or three slots — and the default catalog). Catalog and
+  Connections were separate tabs until 0.17.1 (`62a4c658`). Machine
+  configuration was at the bottom of the launcher until the launcher grew
+  taller than its fixed pane and hid its own Start button.
 
 **So Node is a prerequisite for the managed tier as a whole**, not just for
 Claude, and the "Codex first because its adapter is static" argument does
 not survive contact. Ordering is now a preference, not a constraint.
 
-Packaging follows the wash-display precedent regardless: the managed tier
-is **opt-in in deb/rpm/apk**, the base package gains nothing mandatory, and
+Packaging: wash's deb/rpm/apk ship no adapter and depend on no Node; the
+user installs an adapter (or Node, for npx), and
 an absent adapter is a greyed launcher row with a reason rather than a
 failed spawn. `Adapter.launch()` prefers a globally-installed binary and
 falls back to `npx --yes <package>`, which is how most boxes will have it.
@@ -429,7 +613,13 @@ New `apps/agentd/be/acp.go`:
 
 ## 8. Terminals and files
 
-`terminal/create` means the agent asks *us* to run its commands. It gets a
+`terminal/create` means the agent asks *us* to run its commands. *As
+built* (AGENT_TERMINAL.md M1–M3): agentd owns the pty and the transcript
+renders it live; it is not a wash-term tab. The plan below — a real
+wash-term tab with a tail line and a focus link — is AGENT_TERMINAL M4, not
+started.
+
+*Original plan:* it gets a
 real wash-term tab: scrollback, copy-paste, split panes, and a human who can
 type into it. The transcript shows one tail line and a link that focuses the
 tab.
@@ -454,7 +644,7 @@ when wash-edit became its second consumer.
 |---|---|---|
 | **`com.wash.agents`** | singleton manager window | owns the launcher, live roster, history, and row-addressed verbs; it subscribes to agentd's global roster |
 | **`com.wash.ai`** | standalone controller window, `InstancingMulti`, one per live session | renders only one `<AgentSession>`; agentd enforces an exclusive controller lease and sends a keyed session view rather than the global roster |
-| **wash-term** | a pane in the layout tree | `Group.tabs` is `number[]` — the tree never asks what a channel is, so `layout.ts` needs **no change**. Needs a non-colliding id space, a renderer branch in `main.tsx`, and a prune rule matching TERM_LAYOUT §238 |
+| **wash-term** *(not built)* | a pane in the layout tree | `Group.tabs` is `number[]` — the tree never asks what a channel is, so `layout.ts` needs **no change**. Needs a non-colliding id space, a renderer branch in `main.tsx`, and a prune rule matching TERM_LAYOUT §238 |
 | **wash-edit** | a side panel | third consumer; already embeds `terminal.tsx`, so the seam exists |
 
 The compelling case is the term pane: `terminal/create` can open the agent's
@@ -552,6 +742,11 @@ code than the problem is worth.
 Ordered standalone-first: the app is the thing to judge, so it ships and
 gets used before anything is deleted and before the embedded surfaces are
 built.
+
+Status 2026-10-02: M0–M5 and M7 done. M6 shipped as `terminal/*` + `fs/*`
+served by agentd and rendered in the transcript; the wash-term pane was not
+built. M8 shipped as per-host Agents managers (SIDEBAR.md M2), not a merge
+of B's sessions into A.
 
 - **M0 — source-agnostic ask queue.** §4. No user-visible change.
 - **M1 — `internal/acp`.** Client + adapter probe table, unit-tested against

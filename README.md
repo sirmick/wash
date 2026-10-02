@@ -20,7 +20,7 @@ windows, a workspace pager, a system sidebar — where the window
 manager runs *in the browser* and each application is an independent,
 one-file program that a transport-only **router** supervises.
 
-License: **AGPL-3.0**. Current version: **0.14.1**.
+License: **AGPL-3.0**. Current version: **0.17.2**.
 
 ---
 
@@ -45,7 +45,7 @@ License: **AGPL-3.0**. Current version: **0.14.1**.
 - [Filesystem](#filesystem)
 - [Repository layout](#repository-layout)
 - [Documentation](#documentation)
-- [Testing](#testing)
+- [Building & testing each part](#building--testing-each-part)
 
 ---
 
@@ -73,7 +73,8 @@ turns it into a **single static binary plus a browser**:
   reimplemented userland.
 - **AI is a seat at the desk, not a chat box.** The **Agent** app speaks
   [ACP](https://agentclientprotocol.com) to a local adapter (Claude Code,
-  Codex, Gemini CLI), and wash — not the agent — owns what it touches:
+  Codex, OpenCode — and through it OpenRouter's open-weight models —
+  or Gemini CLI), and wash — not the agent — owns what it touches:
   the files it reads and writes are confined to the folder you picked,
   and the commands it runs are wash PTYs you can watch live and type
   into. Sessions outlive their window and show up on the sidebar roster.
@@ -92,22 +93,24 @@ turns it into a **single static binary plus a browser**:
 
 | | |
 |---|---|
-| **Agent** — an ACP agent with a seat on the desktop · *Midnight theme* | **Files** — tree + preview, live watch, mutations · *Midnight theme* |
-| ![agent](docs/screenshots/agent.png) | ![file manager](docs/screenshots/fm.png) |
-| **Terminal** — tabbed xterm.js over real local PTYs · *Midnight theme* | **Editor** — CodeMirror 6, file tree, tabs, embedded terminal · *Tokyo theme* |
-| ![terminal](docs/screenshots/term.png) | ![editor](docs/screenshots/edit.png) |
-| **Image Viewer** — thumbnail list + zoom/pan, bytes over the wire · *Seoul theme* | **Music** — native player, one folder, recursive list · *Seoul theme* |
-| ![image viewer](docs/screenshots/imageview.png) | ![music](docs/screenshots/music.png) |
-| **Washamp** — a Webamp (Winamp-skinned) audio player · *Midnight theme* | **Radio** — curated SomaFM + Radio Browser, ICY metadata · *Tokyo theme* |
-| ![washamp](docs/screenshots/washamp.png) | ![radio](docs/screenshots/radio.png) |
-| **System Monitor** — live `/proc` CPU/mem/net, per-process kill · *Oslo theme* | **Disks** — partitions, md/LVM/btrfs/ZFS, SMART · *Oslo theme* |
-| ![system monitor](docs/screenshots/top.png) | ![disks](docs/screenshots/disks.png) |
-| **Services** — systemd/openrc/procd units, start/stop · *Seoul theme* | **Packages** — apt/dnf/apk search, install, upgrade · *Copland theme* |
-| ![services](docs/screenshots/services.png) | ![packages](docs/screenshots/packages.png) |
-| **Network** — interfaces, VLAN switch, firewall, plan→apply→verify · *Oslo theme* | **Settings** — wallpaper, clock, taskbar, theme packs · *Seoul theme* |
-| ![network](docs/screenshots/net.png) | ![settings](docs/screenshots/settings.png) |
-| **Connect** — SSH to another host + LAN mDNS "On your network" · *Copland theme* | **About** — build / router / host facts, live process table · *Tokyo theme* |
-| ![connect](docs/screenshots/connect.png) | ![about](docs/screenshots/about.png) |
+| **Agent** — an ACP agent with a seat on the desktop · *Midnight theme* | **Agents** — start a session from a catalog; Running and History · *Midnight theme* |
+| ![agent](docs/screenshots/agent.png) | ![agents manager](docs/screenshots/agents.png) |
+| **Files** — tree + preview, live watch, mutations · *Midnight theme* | **Terminal** — tabbed xterm.js over real local PTYs · *Midnight theme* |
+| ![file manager](docs/screenshots/fm.png) | ![terminal](docs/screenshots/term.png) |
+| **Editor** — CodeMirror 6, file tree, tabs, embedded terminal · *Tokyo theme* | **Image Viewer** — thumbnail list + zoom/pan, bytes over the wire · *Seoul theme* |
+| ![editor](docs/screenshots/edit.png) | ![image viewer](docs/screenshots/imageview.png) |
+| **Music** — native player, one folder, recursive list · *Seoul theme* | **Washamp** — a Webamp (Winamp-skinned) audio player · *Midnight theme* |
+| ![music](docs/screenshots/music.png) | ![washamp](docs/screenshots/washamp.png) |
+| **Radio** — curated SomaFM + Radio Browser, ICY metadata · *Tokyo theme* | **System Monitor** — live `/proc` CPU/mem/net, per-process kill · *Oslo theme* |
+| ![radio](docs/screenshots/radio.png) | ![system monitor](docs/screenshots/top.png) |
+| **Disks** — partitions, md/LVM/btrfs/ZFS, SMART · *Oslo theme* | **Services** — systemd/openrc/procd units, start/stop · *Seoul theme* |
+| ![disks](docs/screenshots/disks.png) | ![services](docs/screenshots/services.png) |
+| **Packages** — apt/dnf/apk search, install, upgrade · *Copland theme* | **Network** — interfaces, VLAN switch, firewall, plan→apply→verify · *Oslo theme* |
+| ![packages](docs/screenshots/packages.png) | ![network](docs/screenshots/net.png) |
+| **Settings** — wallpaper, clock, taskbar, theme packs · *Seoul theme* | **Connect** — SSH to another host + LAN mDNS "On your network" · *Copland theme* |
+| ![settings](docs/screenshots/settings.png) | ![connect](docs/screenshots/connect.png) |
+| **About** — build / router / host facts, live process table · *Tokyo theme* |  |
+| ![about](docs/screenshots/about.png) |  |
 
 **Display** — real X11/Wayland clients (here Chromium and `xclock`)
 launched from a wash terminal, composited into native wash windows by
@@ -132,11 +135,13 @@ setup to `~/.profile` and `~/.bashrc`.
 git clone https://github.com/sirmick/wash.git
 cd wash
 make wash            # build the multicall layout directly into ./out/ (the shipped layout)
-make run             # or: ./out/wash-router  — serves http://localhost:11000/
+make run             # or: ./out/wash-router  — serves https://localhost:11000/
 ```
 
-Open **`http://localhost:11000/`**. The session app boots
-automatically; click the launcher (bottom-left) to open apps.
+Open the **`https://localhost:11000/?token=…`** URL the router prints at
+startup (self-signed cert — accept it once; the token is also saved to a
+file, named on the next log line). The session app boots automatically;
+click the launcher (bottom-left) to open apps.
 
 `make wash` builds one **multicall** binary (`out/wash`) with a `wash-<app>`
 symlink per app beside it — exactly what the deb/rpm/apk packages ship, so dev
@@ -146,7 +151,7 @@ layout:
 
 ```bash
 make wash-standalone        # one ELF per app under ./out/singlecall/  (+ wash-display if wlroots is present)
-./out/singlecall/wash-router   # serves http://localhost:11000/
+./out/singlecall/wash-router   # serves https://localhost:11000/
 ```
 
 Everything is a `make` verb: `make wash` (multicall) / `make wash-standalone` to build,
@@ -164,17 +169,20 @@ wash has two front ends, for two situations.
 ### Single-user (localhost / dev)
 
 `wash-router` serves the shell and the WebSocket itself on
-`0.0.0.0:11000`. Open `http://localhost:11000/`. There is **no
-authentication** — anyone who can reach the socket gets the desktop —
-so bind it to loopback and reach it over an SSH tunnel or Tailscale.
-The router prints a warning if `--listen` isn't loopback. This is the
-mode the Quickstart above starts.
+`0.0.0.0:11000`, over self-signed HTTPS, gated by a random **token**: open
+the `https://…:11000/?token=…` URL it prints (the token is a single shared
+secret, not a user login — anyone holding it gets the desktop). Prefer
+binding to loopback and reaching it over an SSH tunnel or Tailscale; the
+router prints a warning if `--listen` isn't loopback. `--auth-token-file`
+keeps the token across restarts; `--no-auth` drops the gate (trusted
+loopback dev only). This is the mode the Quickstart above starts.
 
 ### One machine serving the LAN (persistent single-user)
 
 For a box that should keep serving wash after you log out, without
 wash-login: `make install-host-scripts` symlinks three scripts from
-`scripts/host/` into `~/.local/bin`.
+`scripts/host/` into `~/.local/bin` (`HOST_BINDIR=` to change). They run
+the router from this checkout and need GNU `screen`.
 
 ```bash
 make wash && make install-host-scripts
@@ -187,6 +195,8 @@ The token lives in `~/.local/state/wash/router.token` and survives
 restarts, so existing browser cookies keep working; the log is beside
 it. `WASH_LISTEN`, `WASH_BRANCH`, `WASH_CONNECT_HOST` and
 `WASH_SCREEN_SESSION` override the defaults (see each script's header).
+Port 10000 is also wash-login's default, so on a box running the
+`wash-login` package set `WASH_LISTEN` to another port.
 
 ### Multi-user (production)
 
@@ -196,7 +206,7 @@ browser users and gives each one isolated session(s):
 ```bash
 # Behind a TLS terminator (nginx / Caddy / Tailscale-serve):
 sudo setcap cap_setuid,cap_setgid,cap_kill+ep /usr/bin/wash-login   # or: make wash-login-deploy
-wash-login --cookie-secure                                          # default :11000
+wash-login --cookie-secure                                          # default :10000
 ```
 
 1. The browser hits `/login`; wash-login authenticates against the
@@ -293,11 +303,20 @@ The chrome:
 |---|---|---|---|
 | **session** | `com.wash.session` | desktop | The desktop chrome — taskbar, launcher, wallpaper, workspace pager, system banner, and the right-hand sidebar widget host. Autoboots on connect. Watches `~/.config/wash/desktop.json` and live-reloads. Acts as the gateway that subscribes to the background services and feeds their state to the sidebar widgets. |
 
+Window handling lives in the browser shell: windows resize from every
+edge and corner; right-clicking a taskbar button opens the window menu
+(**Move to 0,0** brings a lost window home, sized to fit; **Quit** ends
+the app without asking; middle-click still closes); new windows open
+clear of the sidebar; and a window an app raises itself (a Places click,
+a notification) is **revealed** — the camera moves to it when none of it
+is on screen.
+
 Windowed apps (open from the launcher):
 
 | App | ID | Surface | What it does |
 |---|---|---|---|
-| **ai** — Agent | `com.wash.ai` | window | AI agent session — talks [ACP](https://agentclientprotocol.com) to a local adapter (Claude Code, Codex, Gemini CLI, OpenCode…), so the agent is a *desktop app*, not a tab in a browser. Streamed transcript with markdown / tables / images / tool calls, inline permission prompts (or per-session yolo), the agent's own modes, settings and slash commands rendered as real controls, a folder picker that becomes the session's sandbox, and session resume from history. Files run, read and written go through wash — see the `agentd` service below. |
+| **agents** — Agents | `com.wash.agents` | window | The agent app's front door (singleton): start a session from a *catalog* and model (Anthropic, OpenAI, OpenRouter, … — `catalogs.json`, editable), searchable History with resume, the Running list with per-session verbs, and a Setup tab for keys, the default prompt and catalogs. See [AGENT_APP.md](docs/AGENT_APP.md). |
+| **ai** — Agent | `com.wash.ai` | window (hidden) | One window per live agent session, opened by Agents — talks [ACP](https://agentclientprotocol.com) to a local adapter (Claude Code, Codex, OpenCode, Gemini CLI), so the agent is a *desktop app*, not a tab in a browser. Streamed transcript with markdown / tables / images / tool calls and file links into the window's own editor, inline permission prompts (or per-session yolo), the agent's questions as a form, the agent's own modes, settings and slash commands rendered as real controls, and — when the agent sets one up over MCP — a workspace sidebar with its team of member agents and the plan graph. Files run, read and written go through wash — see the `agentd` service below. |
 | **fm** — Files | `com.wash.fm` | window | File manager — tree + preview, plus a thumbnail **folder-grid** for image folders. List, read, write, rename, delete, chmod/chown, symlink, live `fswatch`. Per-extension icons and display hints (executable / read-only / broken-link colours, setuid badge, mount-point & device icons). Double-click opens a file in its registered app (images → Image Viewer, text/code → Editor) or falls back to the preview pane. Upload from the OS (picker + external drag-drop, recursive dirs). Cut/copy/paste + drag-drop move synced across windows via the router clipboard (cross-host moves are rejected for now). Sandboxable with `--fs-root`. |
 | **term** — Terminal | `com.wash.term` | window | Terminal emulator — tabbed xterm.js over local PTYs (`internal/pty`). `--exec ARGS` runs a one-shot command; `--login` starts a login shell (used by the Root Terminal). |
 | **edit** — Editor | `com.wash.edit` | window | Text editor — CodeMirror 6 with a sidebar tree, tabs, an embedded terminal pane, and a file picker. Reloads on external change. "Open in fm" spawns the file manager (uses `spawn`). Registered to open text/code files (`--open`). |
@@ -314,7 +333,7 @@ Windowed apps (open from the launcher):
 | **radio** — Radio | `com.wash.radio` | window | Internet radio — curated SomaFM + Radio Browser "popular" + paste-a-URL. The BE proxies the stream and surfaces ICY now-playing metadata. |
 | **vscode-workbench** — VS Code | `com.wash.vscode.workbench` | window | Full VS Code (code-server) embedded in a wash window via the per-instance HTTP/WS **ingress** proxy. One window per folder; backed by the `vscode` service (below). |
 | **connect** — Remote | `com.wash.connect` | window | Connect to another host over SSH and run **its** apps in this desktop — their windows composite in, tinted with the host's colour, over your single existing connection (no extra ports opened). Per-host app-launch dropdown, bookmarks, and an `ssh-add` unlock flow for passphrased keys. Fronts the `remote` supervisor (below). See [Remote apps](#remote-apps). |
-| **settings** | `com.wash.settings` | window | Desktop preferences — wallpaper, clock format, taskbar position. Writes `~/.config/wash/desktop.json` atomically; session fswatches and reloads. |
+| **settings** | `com.wash.settings` | window | Desktop preferences — theme packs, custom wallpaper, clock format, taskbar position — plus the panels other apps supply (VS Code, Network, Display, Remote, …; see [docs/SETTINGS.md](docs/SETTINGS.md)). Writes `~/.config/wash/desktop.json` atomically; session fswatches and reloads. |
 | **about** — About wash | `com.wash.about` | window | Build / router / host facts plus a live Go-runtime process table polled from the router. The launch-flow smoke test. |
 | **test** | `com.wash.test` | window | E2E target — hidden from the catalog unless `--show-hidden`. Drives the Playwright suite. Built with `make test-app`. |
 
@@ -322,7 +341,7 @@ Background services (no window — they feed sidebar widgets and back the apps a
 
 | App | ID | Surface | What it does |
 |---|---|---|---|
-| **agentd** — Agents | `com.wash.agentd` | background | The agent host. Owns every ACP adapter process (so a session outlives the window that started it and shows on the roster + sidebar widget), enforces the approval policy, and serves ACP's own capabilities from wash rather than the agent's own hands: `fs/read_text_file` + `fs/write_text_file` confined to the session folder, and `terminal/*` on wash PTYs — so a command the agent runs appears as a live terminal in the transcript, and its output survives the process. Agent sessions run through the Agent app over ACP; a `claude` typed into a wash terminal is an ordinary shell command, not a roster row. |
+| **agentd** — Agents | `com.wash.agentd` | background | The agent host. Owns every ACP adapter process (so a session outlives the window that started it and shows on the roster + sidebar widget), enforces the approval policy, and serves ACP's own capabilities from wash rather than the agent's own hands: `fs/read_text_file` + `fs/write_text_file` confined to the session folder, and `terminal/*` on wash PTYs — so a command the agent runs appears as a live terminal in the transcript, and its output survives the process. It also hosts multi-agent workspaces (the `wash_workspace` MCP server it injects into every session) and keeps transcripts on disk. Agent sessions run through the Agent app over ACP; a `claude` typed into a wash terminal is an ordinary shell command, not a roster row. |
 | **bulk** — Bulk Ops | `com.wash.bulk` | background | Singleton job queue + worker for recursive delete / move / copy. fm enqueues jobs; conflicts block until the user resolves them in the sidebar widget. |
 | **notify** — Notifications | `com.wash.notify` | background | Notification service — any app posts notifications; notify keeps capped history and feeds the sidebar widget; the router also fans them out as transient toasts. |
 | **priv** — Privileged Actions | `com.wash.priv` | background | The single privilege primitive. Other apps ask priv to run / spawn a registered binary as root; the user approves in a queue UI; the sudo password lives only in BE memory with an idle timeout. Windows backed by root wear a red **ROOT** stripe. |
@@ -330,6 +349,7 @@ Background services (no window — they feed sidebar widgets and back the apps a
 | **audio** | `com.wash.audio` | background | Audio control-plane — aggregates now-playing/transport state from Washamp / Music / Radio and feeds the sidebar Audio widget. |
 | **fswatch** — FS Watch | `com.wash.fswatch` | background | Filesystem-watch service — one watch per path, shared by every app that asks (fm, session, remote) through `sdk.WatchClient`, so N windows on a directory don't cost N inotify instances. Fans changes back out as `app_msg`. |
 | **vscode** (service) | `com.wash.vscode` | background | Manages the code-server process + the ingress route that the VS Code window connects through. |
+| **hostgw** — Host Awareness | `com.wash.hostgw` | background | Runs on every router and republishes that host's service state (notify / bulk / priv / net / audio / …) to attached shells, so the sidebar can show a *remote* host's state too ([docs/SIDEBAR.md](docs/SIDEBAR.md)). |
 | **remote** | `com.wash.remote` | background | Remote-host supervisor — opens and superintends the SSH connections wash-connect drives, reports per-host status (incl. auth-needed), and registers the multiplexed "peer" wire the shell splices to each host. See [Remote apps](#remote-apps). |
 
 Not an app but supervised the same way: **wash-display**, a native C++
@@ -340,19 +360,26 @@ X11/Wayland clients launched from a wash terminal map as
 **Cross-app wiring:** services → journal/syslogs (log deep-links);
 packages / services / journal / syslogs → priv (privileged actions);
 fm → bulk (file jobs); net → netd (apply); Washamp / Music / Radio →
-audio (now-playing); connect → remote (SSH supervision); ai / edit /
-term → agentd (agent sessions, transcripts, approvals); session →
+audio (now-playing); connect → remote (SSH supervision); agents / ai /
+edit → agentd (agent sessions, transcripts, approvals); session →
 notify / bulk / priv / audio / net / remote / agentd (sidebar widgets).
 All of it travels as router-attested `app_msg` —
 apps never hold references to each other, only the router does.
 
+**Places.** Agent, Files, Editor and Terminal each carry icons for the
+other three in their menu bar. The first click opens that app in this
+window's folder and binds the two into a group (one tint per group);
+every later click brings the group's window back, wherever it is,
+instead of opening another. See [docs/PLACES.md](docs/PLACES.md).
+
 ## CLI tools
 
 These are CLIs (no FE, no window) but they're how you drive a running
-wash from a shell. Both land in `out/` after a normal `make`.
+wash from a shell. They land in `out/` after `make wash`.
 
 | Tool | What it does |
 |---|---|
+| **wash** | The multicall binary itself: `wash <app>` runs an app without its symlink, `wash list-apps`, `wash launch …` (= wash-launch), `wash open <file\|url>` (hand a file to its registered app; also answers as `xdg-open` inside wash terminals). |
 | **wash-launch** | `wash-launch <app-id>` spawns an app from the terminal. `wash-launch msg <instance> <json>` relays an `app_msg`, optionally awaiting a reply. Finds the router via `WASH_CONTROL_SOCKET`. |
 | **wash-sudo** | A sudo-shaped CLI for wash-priv: `wash-sudo cmd args…`. Approval + password happen in the browser, never in the terminal. `--window` opens a root wash-term; `--app <id>` spawns a registered app as root. |
 | **wash-login** | The multi-user front door (see [Connecting](#connecting)) — browser auth, per-user session routers. |
@@ -464,16 +491,34 @@ sudo apk add --allow-untrusted ./wash-alpine-3.21-amd64.apk
 
 These are **stable filenames** (no version) that always resolve to the
 newest release — the page at
-<https://github.com/sirmick/wash/releases/latest> has the same files if you'd
-rather click. **amd64 only** for now (CI builds amd64); arm64/riscv64 and
-OpenWRT build from source (below). Once installed, start a single-user
-session with `wash-router` and open <http://localhost:11000/>.
+<https://github.com/sirmick/wash/releases/latest> has the same files (plus
+the native versioned names, e.g. `wash_0.17.2-1_amd64.deb`) if you'd rather
+click. CI builds **amd64** for all four, plus **Debian 13 arm64**
+(`wash-debian-13-arm64.deb`); other arm64/riscv64 rows and OpenWRT build
+from source (below). Once installed, start a single-user session with
+`wash-router` and open the `https://localhost:11000/?token=…` URL it prints.
+
+**Multi-user:** each release also carries a `wash-login-<distro>-<arch>`
+package (same names with `wash-login-` in place of `wash-`) — the
+authenticated front door on :10000 (ships a systemd / OpenRC service). It depends on
+`wash` at the same version, so install both:
+
+```bash
+curl -fLO https://github.com/sirmick/wash/releases/latest/download/wash-login-ubuntu-24.04-amd64.deb
+sudo apt install -y ./wash-ubuntu-24.04-amd64.deb ./wash-login-ubuntu-24.04-amd64.deb
+```
+
+**Upgrading:** re-run the same commands — `apt install ./…deb`,
+`dnf install <url>` and `apk add ./…apk` replace an older installed
+version. Upgrade `wash` and `wash-login` together (the version pin
+between them is exact).
 
 ### Build from source
 
 ```bash
-./packaging/run_matrix.sh                       # all rows → dist/packages/<tag>/
-WASH_PKG_VERSION=0.9.4 ./packaging/run_matrix.sh # pin the version
+make all-package                       # all rows → dist/packages/<row>/
+make amd64-ubuntu24-wash-package       # one row (the full leaf list is in COMMANDS.md)
+WASH_PKG_VERSION=0.9.4 make all-package   # pin the version (default: root VERSION)
 ```
 
 Each row does a two-stage Docker build: it builds the package
@@ -482,9 +527,9 @@ then installs it into a *fresh* image and runs smoke tests, the
 distro-integration tests, and a boot check. Packaging sources live in
 `debian/`, `rpm/wash.spec`, and `alpine/APKBUILD`; the package installs
 the `wash-*` binaries into `/usr/bin` and creates the `wash` group +
-`wash-system` user for the multi-user front door. CI runs the same
-matrix and attaches the artifacts to tagged releases
-([`.github/workflows/matrix.yml`](.github/workflows/matrix.yml)). The
+`wash-system` user for the multi-user front door. CI runs the amd64 rows (plus Debian arm64) of the same
+matrix and attaches the packages to tagged releases
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). The
 distro backends and install layout are documented in
 [docs/MATRIX.md](docs/MATRIX.md).
 
@@ -501,13 +546,19 @@ distro backends and install layout are documented in
 --show-hidden               # include manifest.hidden apps in the catalog
 --control-socket PATH       # default /tmp/wash-<uid>.sock (or "none")
 --screenshot-dir DIR        # default /tmp/wash-screenshots (or "none")
+--auth-token TOKEN          # explicit token for the TCP listener (default: random, printed at startup)
+--auth-token-file PATH      # persist/reuse the token here (survives restarts; default per-pid file)
+--no-auth                   # no token gate — trusted-loopback dev only
 --http                      # serve plain HTTP (default is self-signed HTTPS)
 --tls-cert PATH             # PEM cert for the HTTPS listener (default: cached self-signed)
 --tls-key PATH              # PEM key matching --tls-cert
 --dev                       # watch binaries; auto-reload on rebuild
 --listen-unix PATH          # ctl socket for SCM_RIGHTS handoff (multi-user)
 --name NAME                 # human-readable session name (multi-user)
---idle-timeout DUR          # self-exit when idle (default 30m under --listen-unix)
+--idle-timeout DUR          # self-exit when idle (default 24h under --listen-unix)
+--login-env on|off|auto     # adopt the login shell's env (~/.profile PATH); auto = --listen-unix only
+--log-file PATH             # redirect stdout+stderr here
+--no-activity               # turn the activity journal off
 --version
 ```
 
@@ -531,8 +582,9 @@ well.
 
 The bare `wash-router` is single-principal: the router and the apps it
 spawns all run as one trusted Unix user, on a localhost-trust
-boundary. There is **no authentication beyond "you can reach the
-socket."** Bind to `127.0.0.1` and expose via SSH tunnel or Tailscale;
+boundary. Its only gate is a **single shared token** (see
+[Single-user](#single-user-localhost--dev)) — whoever holds it gets the
+whole desktop as that user. Bind to `127.0.0.1` and expose via SSH tunnel or Tailscale;
 the router warns when `--listen` isn't loopback. For real multi-user
 access, front it with [`wash-login`](#multi-user-production), which
 gives each browser user a session router under their own uid.
@@ -594,7 +646,7 @@ channel-binding registry, bundle delivery, the control socket — is in
 
 ### The SDK
 
-App authors get `internal/sdk`: `sdk.Main(&sdk.AppDef{…})` does the
+App authors get `pkg/sdk` (on the wire types in `pkg/wire`): `sdk.Main(&sdk.AppDef{…})` does the
 manifest probe, handshake, and event loop; callbacks
 (`OnReady`, `OnMapped`, `OnAppMsg`, `OnCloseRequested`, …) deliver
 window and message events. On top sit a typed message **bus** (request
@@ -646,12 +698,22 @@ another. Full spec in [docs/WIRE.md](docs/WIRE.md); QoS detail in
 Apps declare capabilities in their manifest; the router enforces them:
 
 - **`spawn`** — may call `SpawnRequest(app_id)` to launch other apps.
-  Held by `session`, `edit`, `services`. The router refuses spawn
-  requests from apps that don't declare it.
+  Held by `session`, `fm`, `edit`, `term`, `services`, `settings`, `ai`,
+  `agentd`. The router refuses spawn requests from apps that don't
+  declare it.
+- **`open`** — may hand a file path to whichever app registered for its
+  extension (narrower than `spawn`: the caller can't pick the target).
+  Held by `session`, `fm`, `term`.
 - **`prepare_spawn`** — may call `PrepareSpawn(app_id)` to have the
   router mint a pending-attach record (instance_id + token) for a
   child the app forks itself (e.g. wash-priv wrapping a binary in
   sudo). Held by `priv`.
+- **`restart`** (cycle a background singleton — `settings`),
+  **`windows`** (more than one window per instance) and **`env-publish`**
+  (merge `WASH_*` env into later spawns) — both `wash-display`'s, plus
+  the activity-journal pair **`activity_note`** / **`observe`** and
+  **`idle_inhibit`**. The full list, with what each guards, is in
+  `pkg/wire/manifest.go`.
 
 Reserved app ids (currently just `com.wash.priv`) are served **only**
 from a uid-0-owned binary or one under a declared trusted dir
@@ -673,15 +735,18 @@ path-taking operation. With no root, apps are unconfined.
 ## Repository layout
 
 ```
-cmd/                wash (multicall), wash-router, wash-login,
-                    wash-launch, wash-sudo, wash-priv-fakesudo
+cmd/                wash (multicall), wash-router, wash-login, wash-launch,
+                    wash-sudo, wash-mount, wash-fswatchd, washnet-* / washvm-*
+                    (net + VM test tooling), wash-priv-fakesudo
+pkg/
+  wire/             frame codec, transports, message types, manifest + caps
+  sdk/              app SDK (handshake, dispatch, bus, state, filepicker)
 apps/<name>/be,fe   each app: Go backend + embedded web-component bundle
 internal/
-  wire/             frame codec, transports, message types
   router/           router + WM state + control socket + HTTP
   runner/           per-binary entrypoints (router, login, launch)
   login/            multi-user auth, /proc session registry, picker
-  sdk/              app SDK (handshake, dispatch, bus, state, filepicker)
+  places/           the Places group protocol (Agent/Files/Editor/Terminal)
   fs/  fswatch/     read accessor + sandbox; refcounted fsnotify
   bulkops/          queue + worker for wash-bulk
   pty/  proc/       PTY sessions; /proc readers for top
@@ -712,8 +777,11 @@ docs/               see below
 | [DISCOVERY.md](docs/DISCOVERY.md) | LAN mDNS auto-discovery ("On your network") for Connect, and the Settings Remote panel. |
 | [MOUNT.md](docs/MOUNT.md) | Mounting another host's filesystem over SFTP (FUSE), surfaced through the Remote panel. |
 | [STORAGE.md](docs/STORAGE.md) | The Disks app — block devices, md/LVM/btrfs/ZFS, SMART, the real-kernel VM gate. |
-| [AGENT_APP.md](docs/AGENT_APP.md) | Agent sessions over ACP — `wash-ai` + `agentd`, the approval policy, why the intercept tier was retired. |
+| [AGENT_APP.md](docs/AGENT_APP.md) | **Start here for agents.** The Agents app today (manager + per-session windows + `agentd`, adapters, catalogs and keys, permissions, questions, history, known gaps), then the ACP design record. |
+| [AGENT_SWARM.md](docs/AGENT_SWARM.md) / [AGENT_SWARM_BULK.md](docs/AGENT_SWARM_BULK.md) | Multi-agent workspaces over MCP — orchestrator, members, the plan graph, QA threads; the fourteen-tool contract. |
 | [AGENT_TERMINAL.md](docs/AGENT_TERMINAL.md) / [AGENT_TABS.md](docs/AGENT_TABS.md) | ACP's terminal + filesystem capabilities served from wash, and agent tabs inside the editor. |
+| [PLACES.md](docs/PLACES.md) | Places — Agent/Files/Editor/Terminal bound into tinted groups; the group protocol and window reveal. |
+| [SETTINGS.md](docs/SETTINGS.md) / [SIDEBAR.md](docs/SIDEBAR.md) | App-supplied Settings panels; the right-hand sidebar and its host awareness (`hostgw`). |
 | [AUDIO.md](docs/AUDIO.md) | The audio control-plane service that aggregates now-playing for the sidebar widget. |
 | [MUSIC.md](docs/MUSIC.md) / [RADIO.md](docs/RADIO.md) | The native Music player and the internet Radio app. |
 | [IMAGES.md](docs/IMAGES.md) | The image pipeline — thumbnails over wire raw channels, fm folder preview, the viewer. |
@@ -738,13 +806,14 @@ common flows, but you can also drive any single subsystem directly:
 | **wash-display** (native compositor) | `make wash-standalone` (auto when wlroots present) / `WASH_DISPLAY=1 make wash-standalone` | local smoke harness only (not in CI) — see [`wash-display/README.md`](wash-display/README.md) | CMake + system wlroots/wayland `-dev` libs |
 | **wash-vm** (in-browser RISC-V VM) | `make -C wash-vm/image all` | `wash-vm/test/*.mjs` (ad-hoc repro scripts) | Docker only |
 
-`make unit-test` runs `go vet` + `go test` + the FE unit tiers; `make
-e2e-test` the Playwright suite (standalone layout). `make all-test` is the
-whole pyramid — unit + `multicall-smoke` + e2e + the kvm `net-test` /
-`disks-test` gates (the VM tiers boot the **multicall** layout in-VM, so
-that argv[0]-dispatch surface is covered without re-running the whole e2e
-suite twice); `make net-test` and `make disks-test` run those gates alone;
-`make all-package` the packaging matrix. `make coverage` produces the
+`make unit-test` runs `go vet` + `go test` + the FE unit tiers + the
+`check-*` drift guards; `make test-race` the Go suite under `-race`; `make
+e2e-test` the Playwright suite (against the shipped **multicall** layout).
+`make all-test` is the whole pyramid — unit + e2e + `standalone-smoke`
+(the per-app-binary layout's spawn surface, without re-running the whole
+suite) + the kvm `net-test` / `disks-test` gates; `make net-test` and
+`make disks-test` run those gates alone; `make all-package` the packaging
+matrix; `make push` runs what CI runs and pushes only if green. `make coverage` produces the
 merged go-unit + e2e report under `coverage/`. (`make verify` stays a quick
 go-only gate: vet + test + static-ELF.) `make screenshots` regenerates the
 `docs/screenshots/` shots.

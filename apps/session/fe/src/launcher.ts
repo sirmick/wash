@@ -248,9 +248,11 @@ const pathItem = (e: RecentEntry, icon: string): RecentItem => ({
 });
 
 /** recentGroups folds the launcher store and agentd's session history into
- * the start menu's rows: Files, Edit, Agent, Radio always (an empty one
- * says so in its flyout, so where to look is learnable before there is
- * anything to find), then one row per other app that has recent files —
+ * the start menu's rows: Files, Edit, Agent, Radio whenever this box has
+ * the app (an empty one says so in its flyout, so where to look is
+ * learnable before there is anything to find; a box without the app — the
+ * in-browser VM has no Agents or Radio — gets no row to dead-end in), then
+ * one row per other app that has recent files —
  * an image opened last week must not stop being reachable because it has
  * no named row. Newest first, capped per group. */
 export function recentGroups(
@@ -258,11 +260,12 @@ export function recentGroups(
   agents: ReadonlyArray<agentproto.Session>,
   appName: (appID: string) => string | undefined,
   rows: ReadonlyArray<LiveRow> = [],
+  installed: (appID: string) => boolean = () => true,
   cap = RECENT_FLYOUT_CAP,
 ): RecentGroup[] {
   const newest = [...recent].sort((a, b) => b.at - a.at);
   const paths = (appID: string) => newest.filter((e) => e.path && e.app_id === appID);
-  const groups: RecentGroup[] = [
+  const fixed: RecentGroup[] = [
     {
       id: FM_APP_ID,
       label: 'Files',
@@ -303,7 +306,10 @@ export function recentGroups(
         .map((e) => ({ kind: 'station' as const, key: 'n:' + e.name, label: e.name ?? '', icon: 'radio', entry: e })),
     },
   ];
-  const named = new Set(groups.map((g) => g.id));
+  // Named even when not installed, so its entries don't come back as an
+  // "other app" row.
+  const named = new Set(fixed.map((g) => g.id));
+  const groups = fixed.filter((g) => installed(g.id));
   const others: string[] = [];
   for (const e of newest) {
     if (e.path && !named.has(e.app_id) && !others.includes(e.app_id)) others.push(e.app_id);
