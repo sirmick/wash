@@ -178,6 +178,22 @@ KB. Their real problem was volume, fixed separately in agentd.
 pegged near 256 with `queue_full` climbing means the lane is still the
 problem; Interactive near zero means it is the FE's own render path.
 
+### Places, window handling, host scripts — DONE, shipped in 0.17.0–0.17.2
+
+- **Places** (0.17.0; spawn tags 0.17.1): Agent, Files, Editor and
+  Terminal carry icons for the other three; the first click binds a group
+  in this window's folder, later clicks raise the group's window.
+  Design and as-built notes: [PLACES.md](PLACES.md).
+- **Window reveal** (0.17.0): a window an app raises itself moves the
+  camera to it when none of it is on screen; a reload on a non-first
+  viewport no longer strands windows off the plane.
+- **Edge resize + taskbar window menu** (0.17.1): resize from every side
+  and corner; right-click a taskbar button for Move to 0,0 / Quit; new
+  windows open clear of the sidebar.
+- **Host scripts** (0.17.2): `make install-host-scripts` links
+  `scripts/host/{wash-start,wash-connect,wash-update}` into `~/.local/bin`
+  for one machine serving the LAN from a checkout (README → Connecting).
+
 ## Conventions this repo holds to
 
 - **Both halves.** A test that crosses a process boundary asserts the
@@ -198,5 +214,5 @@ Recorded rather than silently tolerated; each has a Todo entry.
   files, many in Go and TS comments that would go stale silently. The
   rename wants its own change with a link check, not a drive-by.
 - **`COMMANDS.md` sits at the repo root**, outside `docs/`.
-- **`Sweeps.md` and `Review-findings.md` do not exist yet** — no sweep has
-  been run under these rules.
+- **`Sweeps.md` and `Review-findings.md` exist** but only the 2026-09-08
+  apps sweep has been run under these rules.

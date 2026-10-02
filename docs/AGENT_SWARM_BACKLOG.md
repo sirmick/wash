@@ -360,18 +360,12 @@ What is still open:
   reported option list (`State.AdapterOptions`), and the Catalog tab and
   the Model select offer it; what is still missing is greying a slot whose
   pinned model is not in that list before anyone starts it.
-- **`wash ai <dir>` with no agent (S)** still starts the first installed
-  adapter on its defaults rather than the default catalog.
 - **A keychain (M).** keys.json is plain JSON protected by mode 0600; use the
   Secret Service where one exists.
-- **Reviewers off Claude Code (M).** A reviewer member on Codex or OpenCode
-  is read-only by instruction only (item 4's last bullet). OpenCode's
-  permission config could deny `edit` and `bash` outright for
+- **Reviewers off Claude Code (M).** OpenCode reviewers are done
+  (`66f031d2`: write/edit/bash denied through `OPENCODE_CONFIG_CONTENT`,
+  pinned to OpenCode 1.18.32). Codex and Gemini still refuse
   `capability:"reviewer"`.
-- **`wash ai` ignores the launch default (S).** The launcher sends
-  agents.json's `launch` (mode, yolo) with each start; a CLI start sends
-  nothing and begins on the adapter's default. Decide whether the CLI
-  should read the same default.
 - **Finding 3 of the tally shakedown (haiku + plan mode reports sonnet):
   reproduced and fixed 2026-09-25.** Claude Code re-picks the model when
   its mode changes: model haiku then mode plan came back as sonnet a moment
@@ -400,9 +394,10 @@ What is still open:
 - **Two `wash-agentd` processes** (a dev build and /usr/local) served at
   once in pass 5. Nothing reports which one owns a workspace; about could
   carry the binary path and start time.
-- **Nothing typechecks the app frontends.** `tsc --noEmit` on
-  `apps/ai/fe` fails on existing errors (import extensions, `variant`
-  types, `node:test` types); only e2e is typechecked by `make`.
+- Done since this list was written: `wash ai <dir>` and every other
+  folder-only start resolve the default catalog and the remembered mode
+  (not yolo) — `startSession` in `apps/agentd/be/catalogs.go`; the app
+  frontends typecheck under `make check-types`.
 
 ## 4. Comparison with other multi-agent dev tools
 

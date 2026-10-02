@@ -1,7 +1,8 @@
 # Places — the other apps, bound to this one
 
-Status: **built, not yet committed** (2026-09-30). M1–M3 are in the working
-tree; §7 records where the build departed from the design and why. Supersedes
+Status: **shipped** — M1–M3 in 0.17.0, tagged spawns and the default-catalog
+fallback in 0.17.1. §7 records where the build departed from the design and
+why. Supersedes
 the path-matching draft of the same date (see §3 for why that was dropped).
 
 Related: [ARCHITECTURE.md](ARCHITECTURE.md) (app vs chrome),

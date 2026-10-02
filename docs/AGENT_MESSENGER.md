@@ -1,5 +1,13 @@
 # The agent app as a messenger — one list, one window, one vocabulary
 
+> **Status: superseded 2026-09-14; kept for history.** M1–M4 were not
+> built. The app went a different way: a singleton **Agents** manager
+> (`com.wash.agents` — launcher, History, Setup, Running list) plus one
+> hidden `com.wash.ai` controller window per session (commits `0af89842`,
+> `5502c75a`). History and Running are still two lists. M5 (one status
+> vocabulary, `web/lib/src/agent-status.ts`) shipped and stands. Current
+> picture: [AGENT_APP.md](AGENT_APP.md) §0.
+
 Status: **plan of record** (2026-08-24), 0.15 scope. **M5 is done**
 (shipped 2026-08-24, ahead of M1 — its three defects were wrong today,
 independent of any merge). This is the design

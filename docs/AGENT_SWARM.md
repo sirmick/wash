@@ -570,8 +570,10 @@ declarative workflow engine are outside the initial slice.
   role-based read-only behavior remain agent instructions; dependencies are the
   plan's needs, which gate the start of work.
 - A real Codex adapter called the injected tool both before and after session
-  reload. Claude session creation succeeded, but its prompt failed with expired
-  OAuth credentials. A real Claude tool round trip remains unverified.
+  reload. At first writing Claude's prompt failed with expired OAuth
+  credentials; since then Claude Code orchestrators and members have run
+  whole teams through the tools (the Redoubt runs, the tally shakedown,
+  `e2e/tests/agent-shakedown-live.spec.ts`), and OpenCode members too.
 
 
 ## Sidebar activity and context counts

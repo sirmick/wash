@@ -1,5 +1,10 @@
 # Session prompt — getting a dropped agent session back
 
+> **Status: done 2026-08-20 (`036d25bf`, HISTORY M1–M4); kept for
+> history.** The History menu it describes was later removed: History is
+> now a pane of the Agents manager, fed by the transcript index. Line
+> references below are to the code of that date.
+
 Goal, in one line: **the History menu must offer the session you just lost, and
 a session that comes back must come back whole.** Today it hides the first and
 strips the settings off the second.

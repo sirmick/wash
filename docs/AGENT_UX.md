@@ -1,6 +1,8 @@
 # Agent UX — one mental model, every door opens
 
-Status: **phase Now shipped** (2026-08-21). Grounded audit of the agent
+Status: **phase Now shipped** (2026-08-21); phase Next superseded by the
+Agents manager / per-session controller split (2026-09-14) — current
+picture in [AGENT_APP.md](AGENT_APP.md) §0. Grounded audit of the agent
 feature's navigation layer + a two-phase plan. Phase "Now" (§5) is
 polish-release scope and is **done** — see §5 for what each item became;
 phase "Next" (§6) now has that doc — [AGENT_MESSENGER.md](AGENT_MESSENGER.md)
@@ -8,8 +10,9 @@ phase "Next" (§6) now has that doc — [AGENT_MESSENGER.md](AGENT_MESSENGER.md)
 
 Related: [SIDEBAR.md](SIDEBAR.md) (the agent control surface),
 [AGENT_APP.md](AGENT_APP.md) (the app's contract),
-[AGENT_TERM.md](AGENT_TERM.md) (term-embedded agents; their toast path is
-the one that already works), Todo.md §Agent UX.
+[AGENT_TERM.md](AGENT_TERM.md) (term-embedded agents — removed
+2026-08-04; at the time of this audit their toast path was the one that
+worked), Todo.md §Apps / UX.
 
 ---
 
@@ -151,15 +154,16 @@ turned out:
   roster, history, and launcher; session windows contain only their session.
 - Launcher defaults (agent + folder) — **shipped**, as N5. "Recent
   sessions inline" did not: it becomes part of the list merge.
-- Sessions-not-windows, history merged into the list, and one status
-  vocabulary — **open**, and the substance of AGENT_MESSENGER.md's M1–M5.
+- One status vocabulary — **shipped** (AGENT_MESSENGER M5,
+  `web/lib/src/agent-status.ts`).
+- Sessions-not-windows and history merged into the list — **not built**.
+  AGENT_MESSENGER M1–M4 were superseded on 2026-09-14 by the
+  manager/controller split; History and Running remain two lists.
 
-The mechanism finding that shaped that doc, recorded here because it
-contradicts this section's original assumption: `Instancing` is honoured
-on the `shell.launch` path and **ignored** by `EvtSpawnRequest`, which is
-what the start menu and all three of agentd's window-opening paths use.
-"Change `Instancing` for com.wash.ai" would therefore have changed only
-the doors, which already behave.
+The first mechanism finding recorded here — that `EvtSpawnRequest` ignores
+`Instancing` — was wrong, and AGENT_MESSENGER.md §4 corrects it:
+`handleSpawnRequest` → `spawnChild` → `launchOrRaise` honours it on every
+path that matters.
 
 ## 7. Non-goals
 
