@@ -170,6 +170,24 @@ so bind it to loopback and reach it over an SSH tunnel or Tailscale.
 The router prints a warning if `--listen` isn't loopback. This is the
 mode the Quickstart above starts.
 
+### One machine serving the LAN (persistent single-user)
+
+For a box that should keep serving wash after you log out, without
+wash-login: `make install-host-scripts` symlinks three scripts from
+`scripts/host/` into `~/.local/bin`.
+
+```bash
+make wash && make install-host-scripts
+wash-start      # router in a detached screen session, HTTPS + token on 0.0.0.0:10000
+wash-connect    # prints https://<this-host>:10000/?token=…  — paste it into any browser
+wash-update     # git pull --ff-only, pnpm install, make wash, wash-start
+```
+
+The token lives in `~/.local/state/wash/router.token` and survives
+restarts, so existing browser cookies keep working; the log is beside
+it. `WASH_LISTEN`, `WASH_BRANCH`, `WASH_CONNECT_HOST` and
+`WASH_SCREEN_SESSION` override the defaults (see each script's header).
+
 ### Multi-user (production)
 
 `wash-login` is a small privileged front door that authenticates

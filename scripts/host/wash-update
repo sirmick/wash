@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# wash-update — bring the host's checkout up to date and restart the
+# router wash-start runs: fetch, fast-forward the branch, pnpm install,
+# make wash, then wash-start. Refuses to touch a checkout with tracked
+# local changes.
+#
+# Environment (all optional):
+#   WASH_REPO      repository to update (default: the checkout this script lives in)
+#   WASH_BRANCH    branch to fast-forward             (default main)
+#   WASH_LISTEN    host:port passed on to wash-start  (default 0.0.0.0:10000)
+
+set -euo pipefail
+
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+repo="${WASH_REPO:-$(cd "$here/../.." && pwd)}"
+listen="${WASH_LISTEN:-0.0.0.0:10000}"
+branch="${WASH_BRANCH:-main}"
+
+if [[ ! -d "$repo/.git" && ! -f "$repo/.git" ]]; then
+  printf 'wash-update: repository not found at %s\n' "$repo" >&2
+  exit 1
+fi
+
+for command_name in git go node pnpm make; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf 'wash-update: required command not found: %s\n' "$command_name" >&2
+    exit 1
+  fi
+done
+
+cd "$repo"
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  printf 'wash-update: tracked local changes exist in %s; commit or stash them first\n' "$repo" >&2
+  exit 1
+fi
+
+printf 'Updating wash in %s (branch %s)...\n' "$repo" "$branch"
+git fetch --tags origin
+git checkout "$branch"
+git pull --ff-only origin "$branch"
+pnpm install --frozen-lockfile
+make wash
+
+printf 'Restarting wash on %s...\n' "$listen"
+exec env WASH_REPO="$repo" WASH_LISTEN="$listen" "$here/wash-start"
