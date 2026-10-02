@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.17.1
+Version:        0.17.2
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,10 @@ fi
 exit 0
 
 %changelog
+* Fri Oct 02 2026 sirmick <sirmick@gmail.com> - 0.17.2-1
+- Host scripts (wash-start, wash-connect, wash-update) with make
+  install-host-scripts; agent question answers survive session updates.
+
 * Wed Sep 30 2026 sirmick <sirmick@gmail.com> - 0.17.1-1
 - Places adopts only its own spawn (tagged spawn replies); an unstartable
   default catalog is skipped; Agents Setup tab and collapsed Permissions;
