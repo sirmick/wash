@@ -10,6 +10,17 @@ wash (0.17.2-1) unstable; urgency=low
   * Agents: a half-answered question set keeps its answers when the
     session updates. Any roster update re-sent the pending questions as
     new objects and remounted the panel, dropping the picks made so far.
+  * The in-browser RISC-V VM boots to a working desktop again. The router
+    sends a channel's unbind ahead of its last data frames; the VM's
+    bootstrap took the unbind as the end of shell.js and got 0 bytes. It
+    now completes on byte count, as the shell does. Also fixed there: the
+    first session snapshot threw in the shell (replayed mid-module-load),
+    and every chrome icon was blank (icons.svg served from a gone path).
+  * The start menu's Recent rows only name apps this box has.
+  * Documentation: the Agents app is documented as it is today, with its
+    known gaps; README, TESTING and COMMANDS brought up to date (HTTPS +
+    token, wash-login's :10000, release assets and upgrading). Screenshots
+    regenerated, with a new one of the Agents manager.
 
  -- Michael <sirmick@gmail.com>  Fri, 02 Oct 2026 11:30:00 -0700
 

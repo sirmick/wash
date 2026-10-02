@@ -207,7 +207,9 @@ exit 0
 %changelog
 * Fri Oct 02 2026 sirmick <sirmick@gmail.com> - 0.17.2-1
 - Host scripts (wash-start, wash-connect, wash-update) with make
-  install-host-scripts; agent question answers survive session updates.
+  install-host-scripts; agent question answers survive session updates;
+  the in-browser RISC-V VM boots to a working desktop again; Recent rows
+  only for installed apps; documentation and screenshots pass.
 
 * Wed Sep 30 2026 sirmick <sirmick@gmail.com> - 0.17.1-1
 - Places adopts only its own spawn (tagged spawn replies); an unstartable
