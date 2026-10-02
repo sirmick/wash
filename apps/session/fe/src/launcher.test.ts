@@ -280,7 +280,7 @@ test('recordPointer keeps only the latest samples', () => {
 });
 
 test('recent rows for apps this box does not have are left out', () => {
-  const store: RecentEntry[] = [{ app_id: 'com.wash.radio', name: 'Groove Salad', at: 2 }, { app_id: 'com.wash.fm', path: '/srv', at: 1 }];
+  const store: RecentEntry[] = [{ path: '', name: 'Groove Salad', app_id: 'com.wash.radio', at: 2 }, { app_id: 'com.wash.fm', path: '/srv', at: 1 }];
   const groups = recentGroups(store, [sess({ session_id: 's1' })], () => undefined, [],
     (id) => id === 'com.wash.fm' || id === 'com.wash.edit');
   assert.deepEqual(groups.map((g) => g.id), ['com.wash.fm', 'com.wash.edit']);
