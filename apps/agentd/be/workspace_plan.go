@@ -194,9 +194,11 @@ func (ws *workspaceService) planFileStatus(w *swarm.Workspace) agentproto.QADocu
 
 // planLines is the plan one line per node, in tree order, children indented
 // under their parent: id, state, title, what it still needs, and who is on
-// it with what they are doing.
+// it with what they are doing and how much context they have used (so a
+// handoff can be timed at a commit boundary rather than wherever the
+// warning lands).
 func planLines(w *swarm.Workspace) []string {
-	activity, _, _ := workspaceRuntime(w)
+	activity, _, usage := workspaceRuntime(w)
 	var out []string
 	var walk func(parent string, depth int)
 	walk = func(parent string, depth int) {
@@ -218,7 +220,11 @@ func planLines(w *swarm.Workspace) []string {
 			on := []string{}
 			for _, m := range w.Members {
 				if m.Node == n.ID && m.State != "ended" {
-					on = append(on, m.Name+" ("+activity[m.ID]+")")
+					doing := activity[m.ID]
+					if u, ok := usage[m.ID]; ok && u.Size > 0 {
+						doing += fmt.Sprintf(" · context %d%%", int(100*u.Used/u.Size))
+					}
+					on = append(on, m.Name+" ("+doing+")")
 				}
 			}
 			if len(on) > 0 {
@@ -269,10 +275,12 @@ func (ws *workspaceService) planGet(w *swarm.Workspace, raw json.RawMessage) (an
 				assignments = append(assignments, map[string]string{"id": a.ID, "member_id": a.Member, "state": a.State, "text": firstLine(a.Text, 120)})
 			}
 		}
-		threads := []string{}
+		// With the revision a resolve or edit needs: it was in no read
+		// tool's output, and orchestrators grepped the thread files for it.
+		threads := []map[string]any{}
 		for _, q := range w.QA {
 			if q.Node == n.ID {
-				threads = append(threads, q.ID+" ("+q.State+")")
+				threads = append(threads, map[string]any{"id": q.ID, "state": q.State, "title": firstLine(q.Title, 120), "assignee": q.Assignee, "revision": q.Revision})
 			}
 		}
 		details = append(details, map[string]any{"node": n, "unmet": swarm.Unmet(w, n.ID), "assignments": assignments, "threads": threads})

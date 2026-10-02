@@ -229,6 +229,9 @@ type sessionLaunch struct {
 	catalog, model string
 	// capability "reviewer" restricts the provider's tools (Claude, OpenCode).
 	capability string
+	// enforcement "unverified" launches a reviewer on an adapter version
+	// Wash has not verified, by the owner's recorded choice.
+	enforcement string
 	// member is a session launched into a workspace rather than one that
 	// may lead it: its bridge lists only the tools it may call, and it
 	// cannot approve its own way out of plan mode.
@@ -447,7 +450,7 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 	h.adapterInfo = res.AgentInfo
 	switch {
 	case capability != "":
-		h.sessionMeta, err = reviewerMetadata(agentID, res.AgentInfo)
+		h.sessionMeta, err = reviewerMetadata(agentID, res.AgentInfo, launch.enforcement)
 	case launch.noSubagents:
 		h.sessionMeta, err = noSubagentMetadata(res.AgentInfo)
 	}

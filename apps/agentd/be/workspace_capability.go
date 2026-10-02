@@ -63,15 +63,82 @@ func unsupportedLaunchSetting(provider, capability string, noSubagents bool, suf
 	return nil
 }
 
-func reviewerMetadata(provider string, info acp.Implementation) (map[string]any, error) {
-	if provider == "opencode" {
-		if info.Name != "OpenCode" || !slices.Contains(reviewerVerifiedOpenCode, info.Version) {
-			return nil, fmt.Errorf("reviewer capability unsupported by %s %s: requires verified OpenCode %s", info.Name, info.Version, strings.Join(reviewerVerifiedOpenCode, " or "))
-		}
-		return nil, nil
+// reviewerAdapter is the adapter each provider's reviewer profile is checked
+// against, and the versions it was verified on.
+func reviewerAdapter(provider string) (name string, verified []string) {
+	switch provider {
+	case "claude":
+		return claudeAdapter, reviewerVerifiedVersions
+	case "opencode":
+		return "OpenCode", reviewerVerifiedOpenCode
 	}
-	if provider != "claude" || info.Name != "@agentclientprotocol/claude-agent-acp" || !slices.Contains(reviewerVerifiedVersions, info.Version) {
-		return nil, fmt.Errorf("reviewer capability unsupported by %s %s: requires verified claude-agent-acp %s; mode names are not read-only guarantees", info.Name, info.Version, strings.Join(reviewerVerifiedVersions, " or "))
+	return "", nil
+}
+
+// unverifiedReviewer says why capability:"reviewer" will not launch on the
+// adapter a provider's session reported, or nil when it will. An adapter
+// Wash does not know is refused outright; a known adapter at a version not
+// yet verified is refused unless enforcement is "unverified", the owner's
+// recorded choice to run the same allowlist anyway. The pin itself is right
+// (unknown versions must be reviewed before Wash claims their launch
+// metadata works); the failure used to be terminal, with the capability
+// dropped and no record that it had been (Redoubt, six reviewers).
+func unverifiedReviewer(provider string, info acp.Implementation, enforcement string) error {
+	name, verified := reviewerAdapter(provider)
+	if name == "" || info.Name != name {
+		return fmt.Errorf("reviewer capability unsupported by %s %s: Wash enforces it through %s only; mode names are not read-only guarantees", info.Name, info.Version, name)
+	}
+	if slices.Contains(verified, info.Version) || enforcement == "unverified" {
+		return nil
+	}
+	return fmt.Errorf("reviewer capability unverified on %s %s: its launch metadata was verified on %s. Install a verified version, or launch with enforcement:\"unverified\" to apply the same tool allowlist unverified (recorded on the member and in its Reviewed-by trailer)", info.Name, info.Version, strings.Join(verified, " or "))
+}
+
+// reviewerHost is what this host can say about capability:"reviewer" for a
+// provider before any session starts: the adapter version its last session
+// reported (adapter memory), whether that version is verified, and so
+// whether a reviewer launches here. A fresh machine gets the newest adapter
+// and found out at launch, after the members were committed.
+func reviewerHost(provider string) map[string]any {
+	name, verified := reviewerAdapter(provider)
+	out := map[string]any{"adapter": name, "verified_versions": verified}
+	installed := loadAdapterMemory()[provider].Version
+	switch {
+	case installed == "":
+		out["installed_version"] = nil
+		out["available"] = "unknown until a " + provider + " session has run on this host"
+	case slices.Contains(verified, installed):
+		out["installed_version"] = installed
+		out["available"] = true
+	default:
+		out["installed_version"] = installed
+		out["available"] = false
+		out["unless"] = `enforcement:"unverified" on the member, or a verified adapter version installed`
+	}
+	return out
+}
+
+// reviewerHostCheck refuses a reviewer before it is committed when the
+// adapter this host last ran is known to be unverified; a host that has
+// never run the provider is checked at launch.
+func reviewerHostCheck(settings swarm.AgentProfile) error {
+	if settings.Capability != "reviewer" {
+		return nil
+	}
+	name, _ := reviewerAdapter(settings.Provider)
+	installed := loadAdapterMemory()[settings.Provider].Version
+	if name == "" || installed == "" {
+		return nil
+	}
+	return unverifiedReviewer(settings.Provider, acp.Implementation{Name: name, Version: installed}, settings.Enforcement)
+}
+
+func reviewerMetadata(provider string, info acp.Implementation, enforcement string) (map[string]any, error) {
+	if err := unverifiedReviewer(provider, info, enforcement); err != nil {
+		return nil, err
+	}
+	if provider == "opencode" {
+		return nil, nil
 	}
 	return map[string]any{"claudeCode": map[string]any{"options": map[string]any{
 		"tools":           []string{"Read", "Glob", "Grep"},
@@ -165,6 +232,7 @@ func memberLaunch(w swarm.Workspace, m swarm.Member) sessionLaunch {
 	if m.LaunchSettings != nil {
 		l.connection = m.LaunchSettings.Connection
 		l.capability = m.LaunchSettings.Capability
+		l.enforcement = m.LaunchSettings.Enforcement
 		l.noSubagents = m.LaunchSettings.Subagents == "deny"
 	}
 	return l

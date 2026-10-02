@@ -618,8 +618,9 @@ func TestAssignmentBatchNamesTheFailingUpdate(t *testing.T) {
 	create := func(member, text string) map[string]any {
 		return map[string]any{"action": "create", "member_id": member, "text": text}
 	}
-	err = assign(create("K5-implementer", "Build"), create("K5-red", "Review"), create("K5-red", "Review again"))
-	if err == nil || !strings.Contains(err.Error(), `update 2: member "K5-red": member already has an active assignment: update 1 of this batch created it`) {
+	// A resident takes one open and one queued; the third is the conflict.
+	err = assign(create("K5-implementer", "Build"), create("K5-red", "Review"), create("K5-red", "Review again"), create("K5-red", "A third"))
+	if err == nil || !strings.Contains(err.Error(), `update 3: member "K5-red": member already has an active assignment, and `) || !strings.Contains(err.Error(), "queued behind it") || !strings.Contains(err.Error(), "update 2 of this batch created it") {
 		t.Fatalf("batch conflict error = %v", err)
 	}
 	if got := s.View("lead").Assignments; len(got) != 0 {
@@ -628,7 +629,10 @@ func TestAssignmentBatchNamesTheFailingUpdate(t *testing.T) {
 	if _, err = s.Assign("lead", "red", "", "", "Review", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	err = assign(create("K5-implementer", "Build"), create("K5-red", "Review again"))
+	if _, err = s.Assign("lead", "red", "", "", "Review again", "", ""); err != nil {
+		t.Fatal("a second assignment did not queue:", err)
+	}
+	err = assign(create("K5-implementer", "Build"), create("K5-red", "A third"))
 	if err == nil || !strings.Contains(err.Error(), `update 1: member "K5-red": member already has an active assignment`) || strings.Contains(err.Error(), "of this batch") {
 		t.Fatalf("conflict with an existing assignment = %v", err)
 	}
@@ -670,25 +674,25 @@ func TestFlashMessageReturnsTheCreatedMessageID(t *testing.T) {
 // empty plan and asked to leave plan mode, which woke the orchestrator.
 func TestMemberBriefCarriesTheTaskOrSaysWait(t *testing.T) {
 	m := swarm.Member{ID: "m1", Instructions: "You implement K5.", InitialTask: "PLAN FIRST, no code yet.", LaunchSettings: &swarm.AgentProfile{Provider: "claude"}}
-	withTask := memberBrief(m, "a1")
+	withTask := memberBrief(m, "", "a1")
 	if !strings.HasPrefix(withTask, "You implement K5.") || !strings.Contains(withTask, "## Your assignment (a1)") || !strings.HasSuffix(withTask, "PLAN FIRST, no code yet.") || strings.Contains(withTask, "no assignment yet") {
 		t.Fatalf("brief with task: %q", withTask)
 	}
 	m.InitialTask = ""
-	if idle := memberBrief(m, ""); !strings.Contains(idle, "Do not start work") || strings.Contains(idle, "Your assignment (") || strings.Contains(idle, "ExitPlanMode") {
+	if idle := memberBrief(m, "", ""); !strings.Contains(idle, "Do not start work") || strings.Contains(idle, "Your assignment (") || strings.Contains(idle, "ExitPlanMode") {
 		t.Fatalf("brief without task: %q", idle)
 	}
 	m.LaunchSettings.Configs = map[string]string{"mode": "plan"}
-	if idle := memberBrief(m, ""); !strings.Contains(idle, "Do not start work") || !strings.Contains(idle, "Do not write a plan or call ExitPlanMode until you have an assignment") {
+	if idle := memberBrief(m, "", ""); !strings.Contains(idle, "Do not start work") || !strings.Contains(idle, "Do not write a plan or call ExitPlanMode until you have an assignment") {
 		t.Fatalf("plan-mode brief without task: %q", idle)
 	}
 	m.Adjusted = map[string]string{"mode": "default"}
-	if idle := memberBrief(m, ""); strings.Contains(idle, "ExitPlanMode") {
+	if idle := memberBrief(m, "", ""); strings.Contains(idle, "ExitPlanMode") {
 		t.Fatalf("brief ignores the orchestrator's live mode change: %q", idle)
 	}
 	m.Adjusted = nil
 	m.InitialTask = "PLAN FIRST, no code yet."
-	if withTask := memberBrief(m, "a1"); strings.Contains(withTask, "ExitPlanMode") {
+	if withTask := memberBrief(m, "", "a1"); strings.Contains(withTask, "ExitPlanMode") {
 		t.Fatalf("plan-mode brief with task told not to plan: %q", withTask)
 	}
 	dir := t.TempDir()
@@ -804,5 +808,109 @@ func TestOrchestratorYoloReachesMembersWithoutTheirOwnApproval(t *testing.T) {
 	live["s-follows"].toggleYolo(true)
 	if yolo("lead") || yolo("s-asks") {
 		t.Error("a member's switch reached other sessions")
+	}
+}
+
+// A handoff is written for the orchestrator to act on. Written by a
+// resident with nothing to complete, it used to tell nobody: an Architect
+// sat idle two hours before the orchestrator thought to ask (Redoubt,
+// WASH-R03). Now the orchestrator hears, with the path.
+func TestAHandoffTellsTheOrchestrator(t *testing.T) {
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	w, err := s.Setup("lead", "claude", root, "Team", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "arch", Key: "architect", Name: "Architect", Session: "arch-s", State: "available", Lifetime: "resident", Creator: m.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	res, err := qaFileCall(t, ws, &hosted{sessionID: "arch-s"}, "member_update", map[string]any{"handoff": "Branch m1-arch at 3f2c; trap: the migration runs twice."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _ := res.(map[string]any)["handoff"].(string)
+	var told []swarm.Message
+	for _, msg := range s.View("lead").Messages {
+		if msg.Recipient == w.Lead && msg.Type == "lifecycle" {
+			told = append(told, msg)
+		}
+	}
+	if path == "" || len(told) != 1 || told[0].State != "queued" || !strings.Contains(told[0].Body, "Architect (architect) wrote its handoff: "+path) || !strings.Contains(told[0].Body, `handoff_from:"architect"`) {
+		t.Fatalf("handoff %q told %+v", path, told)
+	}
+	// The orchestrator's own handoff is for its successor, not for itself.
+	if _, err := qaFileCall(t, ws, &hosted{sessionID: "lead"}, "member_update", map[string]any{"handoff": "Where I was."}); err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range s.View("lead").Messages {
+		if msg.Recipient == w.Lead && msg.Type == "lifecycle" && msg.Sender == w.Lead {
+			t.Fatal("the orchestrator was told about its own handoff")
+		}
+	}
+}
+
+// Wash reports a member's context use at the threshold and at each tenth
+// after, not once: a member that kept working past the first note was
+// never heard of again (Redoubt, WASH-R10). plan_get shows the share.
+func TestContextUseIsReportedAtEachTenthAndShownOnThePlan(t *testing.T) {
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	w, err := s.Setup("lead", "claude", root, "Team", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Plan = []swarm.Node{{ID: "K5", Title: "Timer", State: "active", Revision: 1}}
+		w.Members = append(w.Members, swarm.Member{ID: "impl", Key: "impl", Name: "Impl", Session: "ctx-impl-s", State: "available", Lifetime: "resident", Creator: m.ID, Node: "K5", Usage: &swarm.Usage{Used: 55, Size: 100}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	notes := func() (n int, last string) {
+		for _, msg := range s.View("lead").Messages {
+			if msg.Recipient == w.Lead && msg.Sender == "wash" && strings.Contains(msg.Body, "context window") {
+				n, last = n+1, msg.Body
+			}
+		}
+		return n, last
+	}
+	use := func(used int64) {
+		if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+			swarm.GetMember(w, "impl").Usage.Used = used
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ws.contextNudges()
+		ws.contextNudges()
+	}
+	ws.contextNudges()
+	if n, _ := notes(); n != 0 {
+		t.Fatal("warned below the threshold")
+	}
+	use(62)
+	if n, last := notes(); n != 1 || !strings.Contains(last, "62%") || !strings.Contains(last, `handoff_from:"impl"`) {
+		t.Fatalf("at the threshold: %d %q", n, last)
+	}
+	use(68)
+	if n, _ := notes(); n != 1 {
+		t.Fatal("warned again within the same tenth")
+	}
+	use(73)
+	if n, last := notes(); n != 2 || !strings.Contains(last, "still running at 73%") {
+		t.Fatalf("one tenth on: %d %q", n, last)
+	}
+	got, err := qaFileCall(t, ws, &hosted{sessionID: "lead"}, "plan_get", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := got.(map[string]any)["nodes"].([]string); len(lines) != 1 || !strings.Contains(lines[0], "Impl (") || !strings.Contains(lines[0], "· context 73%)") {
+		t.Fatalf("plan lines: %q", lines)
 	}
 }
