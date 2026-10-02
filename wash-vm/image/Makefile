@@ -71,11 +71,17 @@ $(WASM_BIN): wasm/Dockerfile $(wildcard $(TINYEMU)/*.c) $(wildcard $(TINYEMU)/*.
 	docker run --rm -v $(DIST):/out wash-wasm-rv-builder bash -c \
 	  'cp js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm /out/'
 
+# The rootfs carries the wash multicall binary (apps + their embedded FE), so
+# it is stale whenever wash's own sources change, not just this recipe.
+# Without these, `make vm` kept serving an old wash inside the VM.
+WASH_SRCS := $(shell cd $(REPO_ROOT) && git ls-files -- cmd internal pkg apps web/shell web/lib wash-vm/guest go.mod go.sum 2>/dev/null | sed 's|^|$(REPO_ROOT)/|')
+
 $(ROOTFS): rootfs/build.sh rootfs/Dockerfile rootfs/wash_riscv64_defconfig \
            rootfs/post-build.sh rootfs/busybox.fragment rootfs/users.table \
            rootfs/overlay/etc/init.d/S99wash-router \
            rootfs/overlay/etc/init.d/S98wash-diag \
-           rootfs/overlay/etc/sudoers.d/wash-nopasswd
+           rootfs/overlay/etc/sudoers.d/wash-nopasswd \
+           $(WASH_SRCS)
 	mkdir -p $(DIST)
 	REPO_ROOT=$(REPO_ROOT) DIST=$(DIST) ./rootfs/build.sh
 

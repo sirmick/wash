@@ -109,8 +109,9 @@ server.on('request', async (req, res) => {
   // Chrome assets served at the page origin — wash-router would
   // serve these from its embedded FS when transport=ws, but for the
   // in-VM router (fd:3 transport) the FE never sees them without
-  // this route. Mirrors the file layout in
-  // internal/runner/router/assets/.
+  // this route. Served from the shell build (web/shell/dist — the same
+  // files the router embeds): build-icons writes icons.svg there and vite
+  // copies wash-logo.svg in from web/shell/public. run-browser.sh builds it.
   //   /icons.svg     — Lucide sprite (referenced via <use href="/icons.svg#name">)
   //   /wash-logo.svg — taskbar / start-button icon used by the session app
   {
@@ -121,7 +122,7 @@ server.on('request', async (req, res) => {
     const bare = url.split('?')[0];
     const fname = CHROME.get(bare);
     if (fname) {
-      const target = resolve(DEMO_ROOT, '../../internal/runner/router/assets/', fname);
+      const target = resolve(DEMO_ROOT, '../../web/shell/dist/', fname);
       try {
         const st = await stat(target);
         res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Content-Length': st.size });

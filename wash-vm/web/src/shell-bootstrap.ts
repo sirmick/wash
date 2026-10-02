@@ -10,7 +10,8 @@
 //        - { t: "asset.read.ok", req_id: 1, channel_id, ... }   → record id
 //        - raw frames on channel_id                              → accumulate
 //        - { t: "asset.read.err", req_id: 1, code, msg }         → reject
-//        - { t: "channel.unbind", channel_id }                   → resolve
+//        - { t: "channel.unbind", channel_id }                   → stream ended
+//      Resolve once `size` bytes are in — the unbind can overtake the data.
 //        - everything else                                       → buffer
 //   3. Resolve with shell.js bytes + a buffer of non-asset bytes the
 //      caller must replay to the (newly-loaded) shell so it doesn't
@@ -64,6 +65,12 @@ class FrameParser {
       this.buf = this.buf.subarray(total);
       out.push({ flags, channel, payload });
     }
+  }
+  /** Bytes fed but not yet a whole frame; clears them. */
+  takeRest(): Uint8Array {
+    const rest = this.buf;
+    this.buf = new Uint8Array(0);
+    return rest;
   }
 }
 
@@ -129,6 +136,7 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
   let assetChannelID = -1;
   let assetSize = 0;
   let assetEncoding = ''; // '' | 'gzip' — router content-coding to undo before import
+  let assetUnbound = false; // channel.unbind seen — may precede the last data frame
   const assetChunks: Uint8Array[] = [];
   const replayChunks: Uint8Array[] = [];
   // Phase tracks the bootstrap state:
@@ -216,7 +224,9 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
     // login handshake before the asset phase; on login.ok (or a reattach to a
     // live router) it flips phase to 'asset' and sends asset.read, then the same
     // loop processes any further frames as asset frames.
-    for (const f of parser.feed(bytes)) {
+    const frames = parser.feed(bytes);
+    for (let fi = 0; fi < frames.length; fi++) {
+      const f = frames[fi];
       if (phase === 'gate') {
         // The front responded — stop retrying session.open.
         gateAcked = true; clearGateRetry();
@@ -253,7 +263,36 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
         } else if (msg?.t === 'asset.read.err' && msg.req_id === reqID) {
           reject(new Error(`asset.read.err [${msg.code}]: ${msg.msg ?? ''}`));
         } else if (msg?.t === 'channel.unbind' && msg.channel_id === assetChannelID && assetChannelID >= 0) {
-          // Asset stream finished. Concat + resolve.
+          assetUnbound = true;
+          if (completeAsset(frames, fi)) return;
+        } else if (msg?.t === 'channel.bind' && msg.channel_id === assetChannelID) {
+          // No-op: the asset.read.ok already told us about the channel.
+        } else {
+          // Not ours — re-encode the original frame for replay.
+          replayChunks.push(encodeFrame(f.channel, f.payload, f.flags));
+        }
+      } else if (f.channel === assetChannelID && assetChannelID >= 0) {
+        assetChunks.push(new Uint8Array(f.payload));
+        if (completeAsset(frames, fi)) return;
+      } else {
+        // Raw bytes on some other channel — buffer for the shell.
+        replayChunks.push(encodeFrame(f.channel, f.payload));
+      }
+    }
+  });
+
+  // completeAsset resolves the bootstrap once every byte of shell.js is in,
+  // and reports whether it did. Completion is by byte count, as in the real
+  // shell (wash-fetch.ts maybeCompleteAsset): the router's QoS sends the
+  // control-class channel.unbind ahead of the bulk-class data frames, so the
+  // unbind routinely arrives first and is not the end of the bytes. Without a
+  // size, the unbind is all there is to go on. Frames after the completing
+  // one in this batch, and a partial frame still in the parser, are kept for
+  // the shell rather than dropped.
+  function completeAsset(frames: ParsedFrame[], fi: number): boolean {
+    const got = assetChunks.reduce((n, c) => n + c.length, 0);
+    if (assetSize > 0 ? got < assetSize : !assetUnbound) return false;
+    {
           const total = assetChunks.reduce((n, c) => n + c.length, 0);
           const out = new Uint8Array(total);
           let off = 0;
@@ -278,34 +317,43 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
             finish: (forward) => {
               log(`bs: finish() called, replay=${replay.length}B, buffered=${postAssetBuffer.length} chunks`);
               forwardFn = forward;
-              // Frame-decode replay + buffered chunks so we see what
-              // the shell will actually receive. The shell only does
-              // anything useful on channel.bind {kind:bundle} → raw
-              // → channel.unbind, so we should see all three.
-              const peekDump = (label: string, bytes: Uint8Array) => {
-                try {
-                  const fs = new FrameParser().feed(bytes);
-                  for (const f of fs) {
-                    if (f.channel === 0) {
-                      try {
-                        const msg = JSON.parse(dec.decode(f.payload)) as { t?: string; kind?: string; channel_id?: number; instance_id?: string };
-                        log(`bs: flush[${label}] ctrl t=${msg?.t} kind=${msg?.kind ?? ''} ch=${msg?.channel_id ?? ''}`);
-                      } catch { log(`bs: flush[${label}] ctrl <non-json> len=${f.payload.length}`); }
-                    } else {
-                      log(`bs: flush[${label}] raw ch=${f.channel} len=${f.payload.length}`);
+              // The shell calls finish while its module is still evaluating
+              // (registering its transport), so a synchronous flush runs its
+              // ctrl handlers against module bindings not yet initialized —
+              // a session.snapshot reached setSuperseded in its TDZ and threw,
+              // losing the rest of the batch. Flush on the next task instead;
+              // until then phase stays 'buffering', so bytes that land in
+              // between queue behind the replay rather than overtaking it.
+              setTimeout(() => {
+                // Frame-decode replay + buffered chunks so we see what
+                // the shell will actually receive. The shell only does
+                // anything useful on channel.bind {kind:bundle} → raw
+                // → channel.unbind, so we should see all three.
+                const peekDump = (label: string, bytes: Uint8Array) => {
+                  try {
+                    const fs = new FrameParser().feed(bytes);
+                    for (const f of fs) {
+                      if (f.channel === 0) {
+                        try {
+                          const msg = JSON.parse(dec.decode(f.payload)) as { t?: string; kind?: string; channel_id?: number; instance_id?: string };
+                          log(`bs: flush[${label}] ctrl t=${msg?.t} kind=${msg?.kind ?? ''} ch=${msg?.channel_id ?? ''}`);
+                        } catch { log(`bs: flush[${label}] ctrl <non-json> len=${f.payload.length}`); }
+                      } else {
+                        log(`bs: flush[${label}] raw ch=${f.channel} len=${f.payload.length}`);
+                      }
                     }
-                  }
-                } catch (e) { log(`bs: flush[${label}] parse err: ${(e as Error).message}`); }
-              };
-              peekDump('replay', replay);
-              forward(replay);
-              for (let i = 0; i < postAssetBuffer.length; i++) {
-                peekDump(`buf${i}`, postAssetBuffer[i]);
-                forward(postAssetBuffer[i]);
-              }
-              postAssetBuffer.length = 0;
-              phase = 'passthrough';
-              log(`bs: phase=passthrough (after replay+buffered flush)`);
+                  } catch (e) { log(`bs: flush[${label}] parse err: ${(e as Error).message}`); }
+                };
+                peekDump('replay', replay);
+                forward(replay);
+                for (let i = 0; i < postAssetBuffer.length; i++) {
+                  peekDump(`buf${i}`, postAssetBuffer[i]);
+                  forward(postAssetBuffer[i]);
+                }
+                postAssetBuffer.length = 0;
+                phase = 'passthrough';
+                log(`bs: phase=passthrough (after replay+buffered flush)`);
+              }, 0);
             },
           });
           if (assetEncoding === 'gzip') {
@@ -316,21 +364,16 @@ export async function bootstrapShell(deps: BootstrapDeps, path = '/shell.js', re
           } else {
             resolve(buildResult(out));
           }
-          return; // stop processing more frames in this batch
-        } else if (msg?.t === 'channel.bind' && msg.channel_id === assetChannelID) {
-          // No-op: the asset.read.ok already told us about the channel.
-        } else {
-          // Not ours — re-encode the original frame for replay.
-          replayChunks.push(encodeFrame(f.channel, f.payload, f.flags));
-        }
-      } else if (f.channel === assetChannelID && assetChannelID >= 0) {
-        assetChunks.push(new Uint8Array(f.payload));
-      } else {
-        // Raw bytes on some other channel — buffer for the shell.
-        replayChunks.push(encodeFrame(f.channel, f.payload));
-      }
+          // A late unbind for the asset channel goes through too: the shell
+          // ignores an unbind for a channel it has no fetch on.
+          for (const rest of frames.slice(fi + 1)) {
+            postAssetBuffer.push(encodeFrame(rest.channel, rest.payload, rest.flags));
+          }
+          const tail = parser.takeRest();
+          if (tail.length) postAssetBuffer.push(tail);
+          return true;
     }
-  });
+  }
 
   if (phase === 'gate') {
     // Kick the in-guest login front: it emits login.required on SessionOpen.
