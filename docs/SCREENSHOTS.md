@@ -68,15 +68,17 @@ imageview's default scan order is `$WASH_IMAGEVIEW_DIR → ~/Pictures → ~`, bu
 To shoot an app under a given theme pack, write
 `<xdgConfigHome>/wash/desktop.json` = `{"pack":"<id>"}` **before** `page.goto`.
 wash-session reads it at spawn and the shell applies the scheme to the document
-root, so every open window re-skins. The five packs: `midnight` (default dark),
-`tokyo`, `seoul` (light), `copland` (Mac OS 9 light), `oslo` (dark slate). The
+root, so every open window re-skins. The six packs (`web/lib/src/packs.ts`):
+`midnight` (default dark), `tokyo`, `seoul` (light), `copland` (Mac OS 9 light),
+`oslo` (dark slate), `dreamtime` (black, dot-painting wallpaper). The
 `THEME` map in the capture assigns one per app so the README grid shows the
 range — same desktop, different packs.
 
 ### The Agent shots run a real agent — with scripted words
 
-`agent.png` and the Agent window in the montage drive the **real**
-`com.wash.ai` + `agentd` stack against the e2e fake ACP adapter
+`agent.png`, `agents.png` (the Agents manager, reopened after a turn so
+its Running and History lists are current) and the Agent window in the
+montage drive the **real** `com.wash.agents` + `com.wash.ai` + `agentd` stack against the e2e fake ACP adapter
 (`e2e/fixtures/acp-fake`, staged by `make` at `out/e2e/codex-acp` — hence
 `screenshots:` depends on that target). Everything in the frame is genuine:
 the transcript renderer, the markdown/table paths, the status bar, the
@@ -126,3 +128,11 @@ Spawned apps inherit the router env (`spawn.go` = `append(os.Environ(), …)`).
 When checking `/proc/<pid>/environ`, make sure you're inspecting the app the
 **current** router spawned — orphaned app processes from a previous capture run
 give false "env missing" negatives.
+
+### Window sizes are CSS pixels at a 1600×1000 viewport
+
+The PNGs are 2× (3200×2000), but `moveWinTo` / `resizeWinTo` take CSS
+pixels: the open sidebar starts near x=1260 and the taskbar near y=960. A
+window posed past those runs under them (the montage's Files window did,
+once the sidebar widened in 0.17.1). Size a window while it is somewhere its
+bottom-right grip is reachable, then move it.
