@@ -661,7 +661,10 @@ func neverLaunched(m *swarm.Member) bool { return m.State == "failed" && m.Sessi
 func redefinition(w *swarm.Workspace, prior *swarm.Member, given map[string]json.RawMessage) (*memberSpec, error) {
 	base := memberSpec{Name: prior.Name, Catalog: prior.Catalog, Model: prior.Model, Cwd: prior.Cwd, Instructions: ownInstructions(w, *prior), Lifetime: prior.Lifetime, Task: prior.InitialTask, Override: prior.InitialOverride, CanSpawn: prior.CanSpawn, Node: prior.Node, Role: prior.Role}
 	if ls := prior.LaunchSettings; ls != nil {
-		base.Capability, base.Enforcement, base.Approval, base.Effort, base.Subagents = ls.Capability, ls.Enforcement, ls.Approval, ls.Effort, ls.Subagents
+		// Provider too: without it a member defined on another adapter than
+		// its catalog's fell back to the catalog's on a patch, silently —
+		// the redefine path skips the "different launch settings" guard.
+		base.Provider, base.Capability, base.Enforcement, base.Approval, base.Effort, base.Subagents = ls.Provider, ls.Capability, ls.Enforcement, ls.Approval, ls.Effort, ls.Subagents
 		base.Configs = maps.Clone(ls.Configs)
 	}
 	encoded, err := json.Marshal(base)

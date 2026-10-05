@@ -564,7 +564,7 @@ func TestAFailedLaunchTakesAPatchOfChangedFields(t *testing.T) {
 	call := func(args string) (any, error) {
 		return ws.call(context.Background(), h, workspacemcp.Call{Name: "workspace_configure", Arguments: json.RawMessage(args)})
 	}
-	if _, err := call(`{"workspace":{"name":"Team"},"roles":{"architect":{"instructions":"You design."}},"members":{"arch":{"name":"Architect","role":"architect","lifetime":"resident","instructions":"Own the plan.","model":"opus[1m]","effort":"high"}}}`); err != nil {
+	if _, err := call(`{"workspace":{"name":"Team"},"roles":{"architect":{"instructions":"You design."}},"members":{"arch":{"name":"Architect","role":"architect","lifetime":"resident","instructions":"Own the plan.","provider":"claude","model":"opus[1m]","effort":"high"}}}`); err != nil {
 		t.Fatal(err)
 	}
 	failed := swarm.GetMember(s.View("lead"), "arch")
@@ -577,6 +577,11 @@ func TestAFailedLaunchTakesAPatchOfChangedFields(t *testing.T) {
 	again := swarm.GetMember(s.View("lead"), "arch")
 	if again.ID != failed.ID || again.Name != "Architect" || again.Role != "architect" || again.Instructions != "You design.\n\nOwn the plan." || again.Model != "opus" || again.LaunchSettings.Effort != "high" {
 		t.Fatalf("patched member = %+v (settings %+v)", again, again.LaunchSettings)
+	}
+	// The provider the member was defined on is part of the base the patch
+	// lands on, like every other launch setting.
+	if again.LaunchSettings.Provider != "claude" {
+		t.Fatalf("patch moved the member off its provider: %+v", again.LaunchSettings)
 	}
 	// A key that launched (or is launching) still takes no silent change.
 	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
