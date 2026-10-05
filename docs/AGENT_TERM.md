@@ -7,8 +7,11 @@
 >
 > What survives, and is still described accurately here: the approval
 > queue's semantics (§12), the roster's liveness and sort order (§7), the
-> session history behind Resume/Fork (§13), and the notification plumbing
+> session history behind Resume (§13), and the notification plumbing
 > (§9.2) — all of it now fed by agentd's ACP host instead of by terminals.
+> Two details of §13 no longer hold: Resume reopens a session over ACP
+> `session/load` in an Agent window, not a wash-term tab via `exec_tab`
+> (which nothing sends now), and there is no Fork verb.
 >
 > **§10 / §9.5 (smart paste) is NOT superseded** and remains live.
 >

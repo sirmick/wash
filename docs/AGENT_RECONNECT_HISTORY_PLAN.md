@@ -1,5 +1,12 @@
 # Agent Reconnect and History Plan
 
+> **Status: implemented 2026-08-19 (`a5021c78`), then reshaped 2026-09-14;
+> kept for history.** Reload restore and reattach work as planned. The
+> launcher and History no longer live in the Agent window: they moved to
+> the Agents manager (`com.wash.agents`) when it was split from the
+> per-session controllers, and a single click reattaches (AGENT_UX N4).
+> Current picture: [AGENT_APP.md](AGENT_APP.md) §0.
+
 ## Goal
 
 Make Agent windows preserve their attached session across a browser reload,

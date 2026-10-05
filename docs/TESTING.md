@@ -7,9 +7,11 @@ The [README test matrix](../README.md#building--testing-each-part) is the
 quick "how do I run X" reference; this doc is the why + the depth.
 
 ```sh
-make unit-test           # go vet + go test + FE-unit + component
-make e2e-test            # Playwright
+make unit-test           # go vet + go test + FE-unit + component + check-* guards
+make test-race           # go unit suite under -race
+make e2e-test            # Playwright, against the multicall layout
 make all-test            # every tier, both layouts (see COMMANDS.md)
+make push                # what CI runs, then git push only if green
 ```
 
 ---
@@ -28,7 +30,8 @@ pure kernels.
 | **FE component** | `vitest` + `vite-plugin-solid` + `jsdom` (`*.ctest.tsx`) | real component mount + DOM/events | `pnpm exec vitest run` |
 | **e2e** | Playwright (Chromium) | the whole stack, on the host | `pnpm -C e2e exec playwright test <spec>` |
 | **VM-backed e2e** | Playwright + a real Alpine microvm | the wash UI served *over the wire* from inside a booted VM (§ below) | `make net-test` |
-| **Distro packaging** | Docker matrix | deb/rpm/apk/openwrt install + boot | `./packaging/run_matrix.sh` |
+| **In-browser VM** | chromium + the RISC-V WASM VM | the demo boots and the desktop mounts | `make browser-vm-test` |
+| **Distro packaging** | Docker matrix | deb/rpm/apk/openwrt install + boot | `make all-package` / one leaf, `make openwrt-smoke` |
 
 Roughly (counts drift — the test run prints the live tally): ~370 Go test
 functions across 31 packages, ~175 FE unit cases (21 files), ~17 component
@@ -51,18 +54,22 @@ Coverage (below) makes this concrete: app BEs read 0% at the unit layer but
 
 ## make test verbs
 
-| Flag | Effect |
+| Verb | What it runs |
 |---|---|
-| *(none)* | build + FE-unit + component + go-unit + e2e, `--standalone` layout |
-| `--multicall` / `--both` | exercise the single multi-call `wash` binary layout (and/or both) |
-| `--no-unit` / `--no-e2e` / `--no-build` | skip a stage (e.g. `--no-build` reuses `out/`) |
-| `--filter <pat>` / `--workers <N>` | passed through to Playwright |
-| `--coverage` | instrument + merge go-unit & e2e coverage into one report (§ Coverage) |
-| `--vm` | also run the VM-backed net e2e for real (§ VM-backed e2e) |
-| `--distro` / `--only-distro` | the Docker packaging matrix |
+| `make unit-test` | build (test app) + FE-unit + component + `check-pkg-binaries` / `check-imports` / `check-versions` / `check-design` / `check-interactive` / `check-types` / `check-agent-protocol` + `go vet` + `go test` (excl. `wash-vm/vm`) |
+| `make test-race` | the same Go packages under `-race` (in CI and `make push`) |
+| `make e2e-test` | the full Playwright suite against the **multicall** layout (what ships) |
+| `make standalone-smoke` | the per-app-binary layout (`out/singlecall/`): launch/spawn specs only |
+| `make browser-vm-test` | boot the in-browser RISC-V VM in chromium; self-skips without `make browser-image-vm` |
+| `make net-test` / `make disks-test` | the kvm VM gates (§ VM-backed e2e; `vm-disks-test`) |
+| `make all-test` | unit + e2e + standalone-smoke + net-test + disks-test |
+| `make test-all` | all-test + `all-package` (the whole pyramid) |
+| `make coverage` | instrumented build → merged go-unit + e2e report (§ Coverage) |
+| `make <arch>-<distro>-<pkg>-package` / `make all-package` / `make openwrt-smoke` | the Docker packaging matrix (leaf list in [COMMANDS.md](../COMMANDS.md)) |
+| `make push` | unit-test + test-race + e2e-test + the four amd64 wash packages + openwrt-smoke, then `git push` (`ARGS=` for push args) |
 
-It exits non-zero on the first failing tier; output streams to stdout
-(`make all-test 2>&1 | tee /tmp/test.log` to capture).
+Each verb exits non-zero on the first failing step. Pipe through `tee`, not
+`tail` — `make … | tail` reports tail's exit status, not make's.
 
 ---
 
@@ -87,12 +94,11 @@ because the e2e suite drove them; `internal/router` ~73%, `sdk` ~69%,
 ### How e2e coverage is captured
 
 Go's `-cover` only flushes counters on a *graceful* exit. The router stops
-apps with `SIGTERM`, and the SDK installs **no** signal handler in normal
-operation — so an instrumented app killed by `SIGTERM` would write nothing.
-`internal/sdk/coverage.go` installs a `SIGTERM`/`SIGINT` handler **gated
-entirely on `GOCOVERDIR` being set** that exits via `os.Exit` (which runs
-the runtime coverage hook). Outside a coverage run `GOCOVERDIR` is unset,
-no handler is installed, and shutdown behaviour is byte-for-byte unchanged.
+apps with `SIGTERM`, so an instrumented app killed by `SIGTERM` would write
+nothing. On a coverage run (`GOCOVERDIR` set) `pkg/sdk/terminate.go` makes
+sure a `SIGTERM`/`SIGINT` handler exists even when the app registered no
+`sdk.OnTerminate` hook, and that handler exits via `os.Exit` (which runs the
+runtime coverage hook).
 
 ### Known coverage gaps
 
@@ -106,8 +112,8 @@ no handler is installed, and shutdown behaviour is byte-for-byte unchanged.
 - **priv lock / reject / idle-wipe / `secureUnlock`**: e2e covers the
   approve→unlock→exec happy path; the reject/lock/idle/secure-erase paths
   are unit-test candidates (pure-ish `queue.go` state machine).
-- **`internal/sdk` coercion helpers**, **`internal/router` dev-reload**
-  (only runs with `--dev`), **`internal/wire` error branches**: expected
+- **`pkg/sdk` coercion helpers**, **`internal/router` dev-reload**
+  (only runs with `--dev`), **`pkg/wire` error branches**: expected
   low-value tail.
 
 The FE tiers report ~100% of the *kernels under test* but a small fraction
@@ -116,7 +122,7 @@ design.
 
 ---
 
-## VM-backed e2e (`--vm`)
+## VM-backed e2e (`make net-test`)
 
 `net-vm-gate` / `net-vm-multi` boot a **real Alpine microvm** under
 qemu/KVM and point Chromium at a proxy fronting it: the browser loads a
@@ -127,17 +133,17 @@ real in-guest commit-confirm transaction with live auto-revert.
 
 ```sh
 make net-test                       # build the images + run the net gates + net-vm e2e
-make e2e-vm                         # equivalent make entry point
+make e2e-vm                         # just the two net-vm specs (builds their artifacts)
 ```
 
-`--vm` preflights `/dev/kvm` + `qemu-system-x86_64` + `docker` (aborts with
-the missing list) and builds three artifacts the specs need:
+They need `/dev/kvm` + `qemu-system-x86_64` + `docker`, and three artifacts
+(`make e2e-vm` builds them):
 `out/vm/{vmlinuz,initramfs.gz}` (the image — `scripts/build-vm-image-alpine.sh`,
 renders an Alpine+NetworkManager rootfs via Docker), `out/vm-chrome/`
 (the host chrome), and `out/washvm-run` (the host VM runner/proxy). Without
 those the specs **self-skip** with a one-line "run `make net-test`" hint —
 they don't fail. A FE/shell change that affects the VM-served UI requires a
-rebuild (`--vm` re-bakes the image), since the shell is served from inside
+rebuild (`make e2e-vm` re-bakes the image), since the shell is served from inside
 the VM.
 
 > These specs are not in the default `make e2e-test` build (the artifacts +
@@ -149,12 +155,15 @@ the VM.
 
 ## CI
 
-`.github/workflows/ci.yml` runs `make unit-test` + `make e2e-test` (then the
-package builds) on every push to `main` and
-every PR, in two parallel jobs: **unit** (`--no-e2e`: build + FE unit + go
-unit) and **e2e** (`--no-unit`: build + Playwright, with Chromium + e2e
-deps installed). The VM-backed and distro tiers are not in CI (they need
-KVM / Docker-in-Docker); run them locally.
+`.github/workflows/ci.yml` runs on every push to `main`, every PR and every
+`v*` tag, as two parallel jobs — **unit** (`make unit-test` + `make
+test-race`) and **e2e** (`make e2e-test` + `make standalone-smoke`, with
+Chromium + e2e deps installed) — then **package** (the amd64
+ubuntu24/debian13/fedora40/alpine321 wash packages, arm64 debian13, and
+`openwrt-smoke`), then on a tag **release** (publishes the packages; see
+the README's Packaging section for the asset names). The kvm VM tiers
+(`net-test`, `disks-test`) and `browser-vm-test` are not in CI; run them
+locally. `make push` runs the CI set locally before pushing.
 
 ---
 

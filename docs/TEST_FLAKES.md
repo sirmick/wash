@@ -34,7 +34,7 @@ lost keystroke.
    local `main` when the phase is fully green, worktree removed before the next phase.
    Remember: `e2e/` is not a pnpm workspace member — in a fresh worktree run
    `pnpm install --ignore-workspace` inside `e2e/`.
-2. **Green gate**: commit only on `make build` + `make unit-test` green; before merging a phase
+2. **Green gate**: commit only on `make wash` + `make unit-test` green; before merging a phase
    run `make test-race` and `make e2e-test` (NOT raw playwright — the login fixture needs the
    multicall layout). Do not push.
 3. **One numbered item = one commit**, message style `test(<area>): <what>` or

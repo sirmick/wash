@@ -13,18 +13,20 @@ make wash-multicall     alias of `make wash`
 
 ## RUN / DEV
 ```
-make run                run the LAST-BUILT router → http://localhost:11000/   (does NOT rebuild — run `make wash` to refresh)
+make run                run the LAST-BUILT router → https://localhost:11000/?token=… (URL printed at startup; does NOT rebuild — run `make wash` to refresh)
 make dev                router :11000 + Vite HMR → http://localhost:5173/      (auto-rebuilds FE; the iteration loop)
 ```
 
-## TEST   (standalone by default; each builds its own prereqs)
+## TEST   (each builds its own prereqs)
 ```
-make unit-test          go vet + go test ./... (excl wash-vm/vm) + FE-unit (node --test) + component (vitest)
-make e2e-test           full Playwright suite (standalone layout)
-make multicall-smoke    multicall layout's unique surface: build it + go test -tags=multicall ./cmd/wash + bundle/launch e2e specs
+make unit-test          go vet + go test ./... (excl wash-vm/vm) + FE-unit (node --test) + component (vitest) + the check-* drift guards
+make test-race          the same Go unit packages under -race
+make e2e-test           full Playwright suite (multicall layout — the one that ships)
+make standalone-smoke   per-app-binary layout's unique surface: build out/singlecall/ + launch/spawn e2e specs against it
+make browser-vm-test    boot the in-browser RISC-V VM in chromium, assert the desktop mounts (self-skips without `make browser-image-vm`)
 make net-test           net-matrix + vm-net-test + net-vm e2e   (builds openwrt+distro images; needs /dev/kvm)
 make disks-test         vm-disks-test real-kernel storage gate   (builds alpine image; needs /dev/kvm)
-make all-test           unit + multicall-smoke + e2e + net + disks  (the VM tiers boot multicall in-VM = deep multicall coverage)
+make all-test           unit + e2e + standalone-smoke + net + disks
 make coverage           instrumented build → merged go-unit + e2e coverage report under coverage/
 make verify             quick go-only gate: go vet + go test + static-ELF check
 make test-all           all-test + all-package (the whole pyramid)
@@ -72,14 +74,15 @@ make all-clean          everything (+ node_modules + Go build cache)   [spares t
 
 ## PUSH
 ```
-make push               run exactly what CI runs (unit + e2e + the 4 amd64 packages + openwrt-smoke),
+make push               run what CI runs (unit + test-race + e2e + the 4 amd64 packages + openwrt-smoke),
                         then `git push` ONLY if all green.  ARGS= for push args, e.g. make push ARGS="origin HEAD"
 ```
 
 ## CI  (.github/workflows/)
-- **ci.yml** — on push/PR: `unit` (make unit-test) + `e2e` (make e2e-test) in parallel → `package` (needs tests:
-  amd64 ubuntu/debian/fedora/alpine wash packages + openwrt-smoke) → `release` (publishes .deb/.rpm/.apk to the
-  Releases page **only on a `vX.Y.Z` tag**).
+- **ci.yml** — on push/PR: `unit` (make unit-test + test-race) + `e2e` (make e2e-test + standalone-smoke) in
+  parallel → `package` (needs tests: amd64 ubuntu/debian/fedora/alpine + arm64 debian wash packages + openwrt-smoke)
+  → `release` (publishes wash + wash-login .deb/.rpm/.apk to the Releases page **only on a `vX.Y.Z` tag**, under
+  stable names `wash[-login]-<distro>-<arch>.<ext>` plus the native versioned names).
 - **demo.yml** — rebuilds + deploys the GitHub-Pages browser-VM demo on **every** push to main (PRs build-only).
 - **prebuild.yml** — caches the VM kernel/firmware/wasm blobs; fires only on `wash-vm/image/{firmware,kernel,wasm}` / `tinyemu` changes.
 

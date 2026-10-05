@@ -2,10 +2,11 @@
 # wash-connect — print the URL, with token, of the router wash-install
 # runs, for pasting into a browser on another machine; and what it is
 # serving. The host name is this machine's reverse-DNS name on its primary
-# interface unless WASH_CONNECT_HOST says otherwise.
+# interface (its address when there is none), unless the unit's --listen
+# names one address or WASH_CONNECT_HOST says otherwise.
 #
 # Environment (all optional):
-#   WASH_CONNECT_HOST   hostname or IP for the URL (skips the DNS lookup)
+#   WASH_CONNECT_HOST   hostname or IP for the URL (skips the lookup)
 #   WASH_TOKEN_FILE     token file the router mints (default ~/.local/state/wash/router.token)
 
 set -euo pipefail
@@ -21,8 +22,9 @@ if ! systemctl --user is-active --quiet wash 2>/dev/null; then
   exit 1
 fi
 listen="$(grep -o -- '--listen [^ ]*' "$unit" 2>/dev/null | head -1 | cut -d' ' -f2 || true)"
+listen="${listen:-0.0.0.0:10000}"
 port="${listen##*:}"
-port="${port:-10000}"
+listen_host="${listen%:*}"
 
 if [[ ! -r "$token_file" ]]; then
   printf 'wash-connect: token file is unavailable: %s\n' "$token_file" >&2
@@ -36,13 +38,14 @@ fi
 
 if [[ -n "${WASH_CONNECT_HOST:-}" ]]; then
   host="$WASH_CONNECT_HOST"
+elif [[ -n "$listen_host" && "$listen_host" != 0.0.0.0 && "$listen_host" != "[::]" ]]; then
+  # Bound to one address: that is the only one that answers.
+  host="$listen_host"
 else
-  for command_name in ip resolvectl dig; do
-    if ! command -v "$command_name" >/dev/null 2>&1; then
-      printf 'wash-connect: required command not found: %s (or set WASH_CONNECT_HOST)\n' "$command_name" >&2
-      exit 1
-    fi
-  done
+  if ! command -v ip >/dev/null 2>&1; then
+    printf 'wash-connect: ip(8) not found; set WASH_CONNECT_HOST\n' >&2
+    exit 1
+  fi
   route_line="$(ip -4 route get 1.1.1.1 2>/dev/null | head -1)"
   interface="$(awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}' <<<"$route_line")"
   primary_ip="$(awk '{for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}' <<<"$route_line")"
@@ -50,17 +53,22 @@ else
     printf 'wash-connect: could not determine the primary IPv4 interface and address; set WASH_CONNECT_HOST\n' >&2
     exit 1
   fi
-  dns_line="$(resolvectl dns "$interface" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//')"
-  read -r -a dns_servers <<<"$dns_line"
+  # Prefer the reverse-DNS name (asking the interface's own resolvers, so a
+  # LAN router's PTR records win over a global resolver's); fall back to the
+  # bare address when there is no name or no resolvectl/dig to ask.
   host=""
-  for dns_server in "${dns_servers[@]}"; do
-    host="$(dig +short -x "$primary_ip" @"$dns_server" 2>/dev/null | head -1)"
-    [[ -n "$host" ]] && break
-  done
-  host="${host%.}"
+  if command -v resolvectl >/dev/null 2>&1 && command -v dig >/dev/null 2>&1; then
+    dns_line="$(resolvectl dns "$interface" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//')"
+    read -r -a dns_servers <<<"$dns_line"
+    for dns_server in "${dns_servers[@]}"; do
+      host="$(dig +short +time=2 +tries=1 -x "$primary_ip" @"$dns_server" 2>/dev/null | head -1)"
+      [[ -n "$host" ]] && break
+    done
+    host="${host%.}"
+  fi
   if [[ -z "$host" ]]; then
-    printf 'wash-connect: no reverse-DNS record found for %s (%s); set WASH_CONNECT_HOST\n' "$primary_ip" "$interface" >&2
-    exit 1
+    printf 'wash-connect: no reverse-DNS name for %s (%s); using the address\n' "$primary_ip" "$interface" >&2
+    host="$primary_ip"
   fi
 fi
 

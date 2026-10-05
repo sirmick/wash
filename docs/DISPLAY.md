@@ -8,8 +8,8 @@ browser shell.
 It is deliberately staged so the gating interface (the wire contract) lands and is
 tested long before any compositor C++ exists. See [§9 Commit ladder](#9-commit-ladder).
 
-Related: [WIRE.md](WIRE.md), [ARCHITECTURE.md](ARCHITECTURE.md), [INGRESS.md](INGRESS.md)
-(the other "embed a foreign UI in a wash window" path — ingress is for web apps,
+Related: [WIRE.md](WIRE.md), [ARCHITECTURE.md](ARCHITECTURE.md), the `/app/` ingress
+([SETTINGS.md](SETTINGS.md) §3a, [REMOTE.md](REMOTE.md) §17 — the other "embed a foreign UI in a wash window" path: ingress is for web apps,
 this is for native GUI apps).
 
 ---

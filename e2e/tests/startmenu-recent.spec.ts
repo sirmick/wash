@@ -24,7 +24,9 @@ function seed(root: string): void {
 
 test.use({
   routerOpts: {
-    apps: ['session', 'about', 'fm', 'edit'],
+    // agents + radio: the menu has a Recent row only for an app this box
+    // has, and the aim test below crosses the Agent and Radio rows.
+    apps: ['session', 'about', 'fm', 'edit', 'agents', 'radio'],
     fmRoot: true,
     fmSeed: seed,
   },

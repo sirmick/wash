@@ -5,7 +5,9 @@ opens windows, calls app actions, clicks and types into surfaces that have
 no API. This is the concrete form of wash's "AI as a day-1 service" thesis
 — not a chat panel, an operator.
 
-Unbuilt — design only. Depends on the display layer (`docs/DISPLAY.md`,
+Unbuilt — design only (still true 2026-10-02). Not the coding-agent
+**Agents** app (`com.wash.agents` / `com.wash.ai` / `com.wash.agentd`),
+which is built — see [AGENT_APP.md](AGENT_APP.md). Depends on the display layer (`docs/DISPLAY.md`,
 `docs/DISPLAY_ENV.md`) and the background-service tier
 (`docs/ARCHITECTURE.md`).
 
