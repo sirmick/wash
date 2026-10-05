@@ -212,16 +212,18 @@ func TestReplacePlanRefusedWhileWorkIsOpen(t *testing.T) {
 }
 
 // The same reason to start early is one override on the node, however many
-// members start on it; and a reviewer launched with its enforcement
-// unverified says so in the Reviewed-by trailer it earns.
-func TestOverridesRecordOnceAndUnverifiedReviewsSaySo(t *testing.T) {
+// members start on it; and a reviewer whose read-only restriction the
+// adapter did not enforce says so in the Reviewed-by trailer it earns.
+func TestOverridesRecordOnceAndUnenforcedReviewsSaySo(t *testing.T) {
 	s, _ := planStore(t)
 	seed(t, s)
 	if err := setPlan(s, "lead", map[string]*NodePatch{"M1": {State: str("done")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Mutate("lead", true, func(w *Workspace, _ *Member) error {
-		GetMember(w, "red").LaunchSettings = &AgentProfile{Provider: "claude", Capability: "reviewer", Enforcement: "unverified"}
+		red := GetMember(w, "red")
+		red.LaunchSettings = &AgentProfile{Provider: "claude", Capability: "reviewer"}
+		red.Applied = &Applied{Enforcement: "unverified"}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

@@ -35,13 +35,34 @@ type AgentProfile struct {
 	// member's work stays in its transcript and the workspace's accounting.
 	// "" and "allow" leave it available.
 	Subagents string `json:"subagents,omitempty"`
-	// Enforcement is how far capability:"reviewer" is vouched for.
-	// "verified" ("" too) launches only on an adapter version whose launch
-	// metadata Wash has checked; "unverified" launches the same tool
-	// allowlist on any version, and says so on the member and in every
-	// Reviewed-by trailer it earns. The owner's choice, recorded, rather
-	// than dropping the capability and the record with it.
+	// Enforcement is what capability:"reviewer" requires of the adapter.
+	// "" ("advisory" too) launches on any provider and records in
+	// Member.Applied how far the read-only restriction actually held;
+	// "adapter" refuses to launch unless the adapter enforces it at a
+	// version Wash has verified. Wash is agnostic to the provider, so the
+	// advisory default is the rule and the strict value the exception.
 	Enforcement string `json:"enforcement,omitempty"`
+}
+
+// Applied is what a launch did with a member's advisory settings: the
+// provider decides what it can enforce, Wash records the outcome instead of
+// refusing. Read beside LaunchSettings, which is what was asked.
+type Applied struct {
+	// Enforcement of capability "reviewer": "adapter" (the adapter's own
+	// tool allowlist, verified, plus Wash's host guards), "unverified"
+	// (the same allowlist on an adapter version Wash has not verified), or
+	// "host" (Wash's guards only: file writes and terminals refused through
+	// its ACP layer, edit/execute permissions denied, coordination tools
+	// scoped; the adapter's own tools unrestricted).
+	Enforcement string `json:"enforcement,omitempty"`
+	// Subagents is how subagents "deny" held: "denied" (the adapter's
+	// subagent tool removed) or "instructed" (the adapter has no such
+	// control; the member is told not to).
+	Subagents string `json:"subagents,omitempty"`
+	// Notes are launch settings the adapter did not offer or did not keep,
+	// one line each, e.g. a model id not in its list; the session runs on
+	// what the adapter chose instead.
+	Notes []string `json:"notes,omitempty"`
 }
 
 type Usage struct {
@@ -72,6 +93,9 @@ type Member struct {
 	Model          string            `json:"model,omitempty"`
 	LaunchSettings *AgentProfile     `json:"launch_settings,omitempty"`
 	InitialConfigs map[string]string `json:"initial_configs,omitempty"`
+	// Applied is what the launch made of the advisory settings (reviewer
+	// enforcement, subagents, settings the adapter did not take).
+	Applied *Applied `json:"applied,omitempty"`
 	// Adjusted are settings the orchestrator changed on the live member
 	// (member_control configure), applied over LaunchSettings on every
 	// resume. Kept apart so the keyed launch definition stays as declared.

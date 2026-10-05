@@ -32,7 +32,7 @@ func TestProfileAppliesModelBeforeEffortAndVerifiesSettings(t *testing.T) {
 		}
 		order := []string{}
 		model, thinking := "fast", "low"
-		effective, err := configureWorkspaceSession(settings, profileOptions(model, thinking), func(id, value string) ([]acp.ConfigOption, error) {
+		effective, _, err := configureWorkspaceSession(settings, profileOptions(model, thinking), func(id, value string) ([]acp.ConfigOption, error) {
 			order = append(order, id)
 			if id == "provider_model" {
 				model = value
@@ -57,7 +57,7 @@ func TestProfileAppliesModelBeforeEffortAndVerifiesSettings(t *testing.T) {
 func TestProfileAppliesModeBeforeModel(t *testing.T) {
 	options := append(profileOptions("fast", "low"), acp.ConfigOption{ID: "mode", Category: "mode", CurrentValue: "default", Options: []acp.ConfigOptionValue{{Value: "default"}, {Value: "plan"}}})
 	order := []string{}
-	_, err := configureWorkspaceSession(swarm.AgentProfile{Model: "smart", Effort: "high", Configs: map[string]string{"mode": "plan"}}, options, func(id, value string) ([]acp.ConfigOption, error) {
+	_, _, err := configureWorkspaceSession(swarm.AgentProfile{Model: "smart", Effort: "high", Configs: map[string]string{"mode": "plan"}}, options, func(id, value string) ([]acp.ConfigOption, error) {
 		order = append(order, id)
 		for i := range options {
 			if options[i].ID == id {
@@ -74,31 +74,49 @@ func TestProfileAppliesModeBeforeModel(t *testing.T) {
 	}
 }
 
-func TestProfileRejectsUnsupportedConflictingAndCoercedSettings(t *testing.T) {
-	for _, settings := range []swarm.AgentProfile{
-		{Model: "unknown"}, {Effort: "high"}, {Configs: map[string]string{"unknown": "value"}},
-		{Model: "smart", Configs: map[string]string{"provider_model": "fast"}},
+// Settings are advisory: a value the adapter does not offer is skipped and
+// noted, never sent, and the session starts on what the adapter has (a
+// catalog written against one host's model list cost every launch on
+// another's). What still fails is a contradiction in the request and an
+// adapter that errors on a value it offered; a value it coerces is noted.
+func TestProfileNotesUnofferedSettingsAndRejectsConflicts(t *testing.T) {
+	for _, c := range []struct {
+		settings swarm.AgentProfile
+		note     string
+	}{
+		{swarm.AgentProfile{Model: "unknown"}, `provider_model="unknown" not applied: not offered by the adapter; it runs "fast" (available: fast, smart)`},
+		{swarm.AgentProfile{Effort: "high"}, `thought_level="high" not applied: the adapter exposes no thought_level setting`},
+		{swarm.AgentProfile{Configs: map[string]string{"unknown": "value"}}, `unknown="value" not applied: the adapter has no such setting`},
 	} {
-		if _, err := configureWorkspaceSession(settings, profileOptions("fast", "low"), func(string, string) ([]acp.ConfigOption, error) {
-			t.Fatal("invalid option reached adapter")
+		options := profileOptions("fast", "low")
+		if c.settings.Effort != "" {
+			options = options[:1] // no thought_level option at all
+		}
+		effective, notes, err := configureWorkspaceSession(c.settings, options, func(string, string) ([]acp.ConfigOption, error) {
+			t.Fatal("unoffered option reached adapter")
 			return nil, nil
-		}); err == nil {
-			t.Fatal("accepted", settings)
-		}
-	}
-	for _, fail := range []bool{false, true} {
-		_, err := configureWorkspaceSession(swarm.AgentProfile{Model: "smart"}, profileOptions("fast", "low"), func(string, string) ([]acp.ConfigOption, error) {
-			if fail {
-				return nil, errors.New("provider error")
-			}
-			return profileOptions("fast", "low"), nil
 		})
-		if err == nil {
-			t.Fatal("ignored provider failure/coercion")
+		if err != nil || len(notes) != 1 || notes[0] != c.note || effective["provider_model"] != "fast" {
+			t.Fatalf("%+v: effective=%v notes=%v err=%v", c.settings, effective, notes, err)
 		}
 	}
-	if _, err := configureWorkspaceSession(swarm.AgentProfile{Effort: "high"}, nil, func(string, string) ([]acp.ConfigOption, error) { return nil, nil }); err == nil {
-		t.Fatal("missing thinking accepted")
+	if _, _, err := configureWorkspaceSession(swarm.AgentProfile{Model: "smart", Configs: map[string]string{"provider_model": "fast"}}, profileOptions("fast", "low"), func(string, string) ([]acp.ConfigOption, error) {
+		t.Fatal("conflicting request reached adapter")
+		return nil, nil
+	}); err == nil || !strings.Contains(err.Error(), "conflicting") {
+		t.Fatal("a contradiction was accepted:", err)
+	}
+	if _, _, err := configureWorkspaceSession(swarm.AgentProfile{Model: "smart"}, profileOptions("fast", "low"), func(string, string) ([]acp.ConfigOption, error) {
+		return nil, errors.New("provider error")
+	}); err == nil {
+		t.Fatal("ignored provider failure")
+	}
+	// Offered, set without error, and not kept: the session runs, on record.
+	_, notes, err := configureWorkspaceSession(swarm.AgentProfile{Model: "smart"}, profileOptions("fast", "low"), func(string, string) ([]acp.ConfigOption, error) {
+		return profileOptions("fast", "low"), nil
+	})
+	if err != nil || !reflect.DeepEqual(notes, []string{`provider_model="smart" not kept by the adapter; it runs "fast"`}) {
+		t.Fatalf("coercion: notes=%v err=%v", notes, err)
 	}
 }
 func TestWorkspaceGetAndConfigure(t *testing.T) {

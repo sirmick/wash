@@ -504,11 +504,12 @@ func Accept(w *Workspace, m *Member, id string, gates []Gate) (Accepted, error) 
 		if len(line) > 120 {
 			line = strings.ToValidUTF8(line[:120], "") + "…"
 		}
-		// A review that ran with its read-only allowlist unverified says so
-		// where the review is cited, so the merge record shows which
-		// verdicts rest on enforcement and which on the owner's say-so.
-		if r.LaunchSettings != nil && r.LaunchSettings.Capability == "reviewer" && r.LaunchSettings.Enforcement == "unverified" {
-			line += " [enforcement unverified]"
+		// A review whose read-only restriction the adapter did not enforce
+		// (or enforced unverified) says so where the review is cited, so
+		// the merge record shows which verdicts rest on enforcement and
+		// which on instruction.
+		if r.Applied != nil && r.Applied.Enforcement != "" && r.Applied.Enforcement != "adapter" {
+			line += " [enforcement " + r.Applied.Enforcement + "]"
 		}
 		verdicts[r.ID] = r.Name + ": " + line
 	}

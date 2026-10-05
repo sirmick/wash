@@ -2,7 +2,7 @@ package workspacemcp
 
 import "github.com/sirmick/wash/internal/version"
 
-const APIVersion = "4.1.0"
+const APIVersion = "4.2.0"
 
 // The server instructions sit in the system prompt of every session Wash
 // hosts, on every turn, and most of those sessions never lead a team: a few
@@ -90,9 +90,9 @@ func About(member bool) Discovery {
 		d.Reference = map[string]any{
 			"configure":       "Omitted fields stay; null deletes. max_active and max_members are top-level fields. workspace_configure commits the configuration, then launches: a launch that fails is retried with member_control resume, or its key takes the changed fields alone (its committed definition stays). preview returns ids only for what already exists: address new members by key.",
 			"workspace_file":  "from reads .wash/workspace.toml: name, max_active, max_members, catalog, qa_dir, plan_file, legend, context_warn, [supervisor], [roles.<role>] instructions, [members.<key>]. Fields in the call win; members merge by key.",
-			"models":          "A member's model is a slot of the workspace catalog (frontier, coding, small; frontier when omitted) or a model id from caller.config_options or view=state; never guess an id. Model ids are catalog-specific: caller.catalog is the one this host serves you from. members[key].catalog picks another catalog. An adapter's own list (e.g. anthropic) has no slots.",
-			"roles":           "roles.<role>.instructions go before each new member's own. A reviewer that must not write also sets capability:\"reviewer\" (enforced only where permissions.reviewer_capability_profiles says).",
-			"launch_settings": "capability:\"reviewer\" and subagents:\"deny\" are refused before anything commits where the provider, or the adapter version this host last ran, cannot enforce them: permissions.reviewer_capability_profiles says which, and what is installed. enforcement:\"unverified\" launches a reviewer on an unverified adapter version with the same tool allowlist, recorded on the member and in its Reviewed-by trailer.",
+			"models":          "A member's model is a slot of the workspace catalog (frontier, coding, small; frontier when omitted) or a model id from caller.config_options or view=state; never guess an id. A model id the adapter does not offer at launch is not a failure: the member runs on the adapter's default and applied.notes on the member says so. Model ids are catalog-specific: caller.catalog is the one this host serves you from. members[key].catalog picks another catalog. An adapter's own list (e.g. anthropic) has no slots.",
+			"roles":           "roles.<role>.instructions go before each new member's own. A reviewer that must not write also sets capability:\"reviewer\": Wash's host guards apply on every provider, the adapter's own tool allowlist where permissions.reviewer_capability_profiles says.",
+			"launch_settings": "Wash is agnostic to the provider: capability:\"reviewer\", subagents:\"deny\" and a model string are advisory. A member launches whatever its provider can enforce; the configure receipt's advisories (preview too) say what will not hold, and the member's applied records what did: enforcement adapter|unverified|host, subagents denied|instructed, and settings the adapter did not take (a model id not in its list runs on its default). enforcement:\"adapter\" on a reviewer is the one way to refuse instead.",
 			"assignments":     "A member does one assignment at a time. A resident may hold one more, queued: its instructions are delivered when the open one resolves. An instruction with assignment_id steers open work; the next step is a new assignment. On create, text is the one-line title and body the instructions; both reach the member.",
 			"threads":         "message_send qa:{action:open, on_behalf_of} opens a thread for the member whose question it is. Answers and resolutions reach the thread's creator, assignee, on_behalf_of and everyone who has written on it.",
 			"handoff":         "Wash reports a member's context use at context_warn (0–1, default 0.6) and each tenth after; plan_get shows each member's share. member_update handoff writes .wash/local/handoffs/<key>.md and tells you; end the member and relaunch with handoff_from:<key>. For one that cannot write its own, handoff_file.",

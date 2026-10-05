@@ -74,21 +74,29 @@ func (ws *workspaceService) about(h *hosted) workspacemcp.Discovery {
 	permissions["approval_order"] = "host policy rules, then session auto-approval, then human approval (or cancellation if unavailable/disabled)"
 	permissions["filesystem_enforcement"] = "unknown: provider-specific; not verified by Wash workspace discovery"
 	// Per provider: the adapter and versions the profile is verified on,
-	// the version this host last ran, and so whether a reviewer launches
-	// here now. Read before staffing a review panel, not after it failed.
+	// the version this host last ran, and so the enforcement a reviewer
+	// launched now would record. A reviewer launches on every provider;
+	// this says how much of its read-only restriction the adapter carries.
 	claude := reviewerHost("claude")
-	claude["provider"], claude["tools"], claude["enforcement"] = "claude", []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "provider tool allowlist plus host write/terminal denial; not an OS sandbox"
+	claude["provider"], claude["tools"], claude["adapter_enforcement"] = "claude", []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "provider tool allowlist plus host write/terminal denial; not an OS sandbox"
 	opencode := reviewerHost("opencode")
-	opencode["provider"], opencode["tools"], opencode["enforcement"] = "opencode", []string{"read", "glob", "grep", "todowrite", "scoped Wash coordination"}, "write, edit, patch, bash, task, webfetch and skill tools removed and denied by launch configuration; not an OS sandbox"
+	opencode["provider"], opencode["tools"], opencode["adapter_enforcement"] = "opencode", []string{"read", "glob", "grep", "todowrite", "scoped Wash coordination"}, "write, edit, patch, bash, task, webfetch and skill tools removed and denied by launch configuration; not an OS sandbox"
 	permissions["reviewer_capability_profiles"] = map[string]any{
 		"claude": claude, "opencode": opencode,
-		"codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported",
-		"unverified": `a known adapter at a version not in verified_versions refuses capability:"reviewer" at configure (and preview); enforcement:"unverified" on the member launches the same tool allowlist anyway, recorded on the member and in its Reviewed-by trailer`,
+		"codex":  map[string]any{"enforcement": enforcementHost, "launches": true, "note": "read-only mode uses a writable sandbox; the adapter's own tools are not restricted"},
+		"gemini": map[string]any{"enforcement": enforcementHost, "launches": true},
+		"levels": map[string]string{
+			enforcementAdapter:    "the adapter's verified tool allowlist, plus Wash's host guards",
+			enforcementUnverified: "the same allowlist on an adapter version Wash has not verified",
+			enforcementHost:       "Wash's host guards only: file writes and terminals refused through its ACP layer, edit/execute permissions denied, coordination tools scoped; the adapter's own tools unrestricted, so read-only rests on instruction",
+		},
+		"recorded": `on the member as applied.enforcement, in the configure receipt's advisories, and as [enforcement <level>] on its Reviewed-by trailer when less than "adapter"`,
+		"strict":   `enforcement:"adapter" on the member refuses to launch (at configure and preview, where this host has run the provider) unless the adapter enforces it at a verified version`,
 	}
 	permissions["launch_setting_support"] = map[string]any{
 		"reviewer":                     providerCapability["reviewer"],
 		"subagents":                    providerCapability["subagents"],
-		"scope":                        `which providers can enforce capability:"reviewer" and subagents:"deny"; configuring either on another provider is rejected before the member is committed`,
+		"scope":                        `which providers' adapters enforce capability:"reviewer" and subagents:"deny" themselves. Both are advisory: on another provider the member launches, Wash applies its host guards, the receipt's advisories say so, and applied on the member records what held (subagents "denied" or "instructed")`,
 		"instructing_a_member_instead": "a member told not to spawn agents is not the same as one that cannot: can_spawn:false removes its Wash spawning authority only",
 	}
 	permissions["approval_profiles"] = map[string]any{

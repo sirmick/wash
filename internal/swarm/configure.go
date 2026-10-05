@@ -104,8 +104,8 @@ func ValidateProfile(p AgentProfile) error {
 	if p.Enforcement != "" && p.Capability != "reviewer" {
 		return errors.New(`enforcement goes with capability "reviewer"`)
 	}
-	if p.Enforcement != "" && p.Enforcement != "verified" && p.Enforcement != "unverified" {
-		return errors.New(`enforcement must be "verified" or "unverified"`)
+	if p.Enforcement != "" && p.Enforcement != "advisory" && p.Enforcement != "adapter" {
+		return errors.New(`enforcement must be "advisory" or "adapter"`)
 	}
 	if p.Capability == "reviewer" {
 		for id := range p.Configs {

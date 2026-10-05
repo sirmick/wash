@@ -67,6 +67,10 @@ type hosted struct {
 	// adapterInfo is how the adapter introduced itself at initialize:
 	// its package name and version (adapter memory, reviewer contract).
 	adapterInfo acp.Implementation
+	// applied is what this adapter made of a workspace member's advisory
+	// launch settings (reviewer enforcement, subagents); spawn records it
+	// on the member with the settings it did not take.
+	applied swarm.Applied
 	// conn is the service connection, used to push transcript events to
 	// the windows watching this session.
 	conn *sdk.Conn

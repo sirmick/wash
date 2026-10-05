@@ -37,11 +37,14 @@ var reviewerVerifiedVersions = []string{"0.81.1", "0.81.2"}
 // restriction is its launch environment, so it needs no session metadata.
 var reviewerVerifiedOpenCode = []string{"1.18.32"}
 
-// providerCapability is which launch settings a provider can actually
-// enforce. The launch path checked this with literal comparisons of its own,
-// so an orchestrator could configure a member Wash would never start and only
-// learn of it from the failure: both gates now read this table, and discovery
-// publishes it. A provider absent from a list does not support that setting.
+// providerCapability is which launch settings a provider's adapter can
+// enforce itself. Wash is agnostic to the provider: a setting the adapter
+// cannot enforce is advisory, not a refusal. The member launches, Wash's own
+// host guards apply where they can, and Member.Applied records what held, so
+// the record says which reviews rest on enforcement and which on
+// instruction. Only enforcement:"adapter" on a member turns this table into
+// a gate. Discovery publishes it. A provider absent from a list does not
+// enforce that setting.
 var providerCapability = map[string][]string{
 	// capability:"reviewer" — read/search only, enforced by the adapter.
 	"reviewer": {"claude", "opencode"},
@@ -50,17 +53,55 @@ var providerCapability = map[string][]string{
 	"subagents": {"claude"},
 }
 
-// unsupportedLaunchSetting says why a provider cannot take a launch setting,
-// or returns nil. suffix distinguishes a refusal before launch from one that
-// already cost a session.
-func unsupportedLaunchSetting(provider, capability string, noSubagents bool, suffix string) error {
-	if capability != "" && (capability != "reviewer" || !slices.Contains(providerCapability["reviewer"], provider)) {
-		return fmt.Errorf("capability %q unsupported by %s%s", capability, provider, suffix)
+// Enforcement levels Member.Applied records for capability:"reviewer".
+const (
+	enforcementAdapter    = "adapter"    // the adapter's verified tool allowlist, plus host guards
+	enforcementUnverified = "unverified" // the same allowlist on an adapter version Wash has not verified
+	enforcementHost       = "host"       // Wash's host guards only; the adapter's own tools unrestricted
+)
+
+// reviewerEnforcement is how far capability:"reviewer" holds on the adapter
+// a session reported, and why in one line when it is less than the adapter's
+// own verified allowlist. Nothing here refuses: that is the caller's call,
+// and only when the member asked for enforcement:"adapter".
+func reviewerEnforcement(provider string, info acp.Implementation) (level, note string) {
+	name, verified := reviewerAdapter(provider)
+	switch {
+	case name == "" || info.Name != name:
+		return enforcementHost, fmt.Sprintf("reviewer restriction on %s %s is Wash's host guards only (file writes and terminals refused, edit/execute denied, coordination scoped); the adapter's own tools are not restricted and mode names are not read-only guarantees", info.Name, info.Version)
+	case slices.Contains(verified, info.Version):
+		return enforcementAdapter, ""
+	default:
+		return enforcementUnverified, fmt.Sprintf("reviewer tool allowlist applied on %s %s, not among the versions Wash verified it on (%s)", info.Name, info.Version, strings.Join(verified, ", "))
 	}
-	if noSubagents && !slices.Contains(providerCapability["subagents"], provider) {
-		return fmt.Errorf("subagents \"deny\" unsupported by %s (supported by %s)%s", provider, strings.Join(providerCapability["subagents"], ", "), suffix)
+}
+
+// launchAdvisories is what an orchestrator should know about a member's
+// advisory settings before it launches: which of them this provider, or the
+// adapter version this host last ran, will not enforce. Returned with the
+// configure receipt (preview too), so a review panel staffed on a provider
+// with no tool allowlist is told so up front rather than discovered in a
+// merge trailer.
+func launchAdvisories(settings swarm.AgentProfile) []string {
+	var out []string
+	if settings.Capability == "reviewer" {
+		name, _ := reviewerAdapter(settings.Provider)
+		installed := loadAdapterMemory()[settings.Provider].Version
+		switch {
+		case name == "":
+			out = append(out, fmt.Sprintf(`capability "reviewer" on %s: host guards only; the adapter's own tools are not restricted (enforcement "host")`, settings.Provider))
+		case installed == "":
+			out = append(out, fmt.Sprintf(`capability "reviewer" on %s: enforcement is decided at launch; no %s session has run on this host yet`, settings.Provider, settings.Provider))
+		default:
+			if level, note := reviewerEnforcement(settings.Provider, acp.Implementation{Name: name, Version: installed}); level != enforcementAdapter {
+				out = append(out, fmt.Sprintf("capability \"reviewer\": %s (enforcement %q)", note, level))
+			}
+		}
 	}
-	return nil
+	if settings.Subagents == "deny" && !slices.Contains(providerCapability["subagents"], settings.Provider) {
+		out = append(out, fmt.Sprintf(`subagents "deny" on %s: the adapter has no subagent control; the member is instructed not to spawn (enforced by %s only)`, settings.Provider, strings.Join(providerCapability["subagents"], ", ")))
+	}
+	return out
 }
 
 // reviewerAdapter is the adapter each provider's reviewer profile is checked
@@ -75,70 +116,80 @@ func reviewerAdapter(provider string) (name string, verified []string) {
 	return "", nil
 }
 
-// unverifiedReviewer says why capability:"reviewer" will not launch on the
-// adapter a provider's session reported, or nil when it will. An adapter
-// Wash does not know is refused outright; a known adapter at a version not
-// yet verified is refused unless enforcement is "unverified", the owner's
-// recorded choice to run the same allowlist anyway. The pin itself is right
-// (unknown versions must be reviewed before Wash claims their launch
-// metadata works); the failure used to be terminal, with the capability
-// dropped and no record that it had been (Redoubt, six reviewers).
-func unverifiedReviewer(provider string, info acp.Implementation, enforcement string) error {
-	name, verified := reviewerAdapter(provider)
-	if name == "" || info.Name != name {
-		return fmt.Errorf("reviewer capability unsupported by %s %s: Wash enforces it through %s only; mode names are not read-only guarantees", info.Name, info.Version, name)
-	}
-	if slices.Contains(verified, info.Version) || enforcement == "unverified" {
+// strictReviewer says why a member that asked for enforcement:"adapter" will
+// not launch on the adapter a session reported, or nil when it will. The pin
+// (reviewerVerifiedVersions) is right — unknown versions must be reviewed
+// before Wash claims their launch metadata works — but it gates only the
+// member that asked to be gated; everyone else launches and is recorded.
+func strictReviewer(provider string, info acp.Implementation) error {
+	level, note := reviewerEnforcement(provider, info)
+	if level == enforcementAdapter {
 		return nil
 	}
-	return fmt.Errorf("reviewer capability unverified on %s %s: its launch metadata was verified on %s. Install a verified version, or launch with enforcement:\"unverified\" to apply the same tool allowlist unverified (recorded on the member and in its Reviewed-by trailer)", info.Name, info.Version, strings.Join(verified, " or "))
+	return fmt.Errorf(`enforcement "adapter" cannot be met: %s. Install a verified version, or drop enforcement to launch with what holds recorded on the member (applied.enforcement) and in its Reviewed-by trailer`, note)
 }
 
 // reviewerHost is what this host can say about capability:"reviewer" for a
 // provider before any session starts: the adapter version its last session
-// reported (adapter memory), whether that version is verified, and so
-// whether a reviewer launches here. A fresh machine gets the newest adapter
-// and found out at launch, after the members were committed.
+// reported (adapter memory), and the enforcement a reviewer launched now
+// would record. A fresh machine gets the newest adapter and used to find
+// out at launch, after the members were committed.
 func reviewerHost(provider string) map[string]any {
 	name, verified := reviewerAdapter(provider)
 	out := map[string]any{"adapter": name, "verified_versions": verified}
 	installed := loadAdapterMemory()[provider].Version
 	switch {
+	case name == "":
+		out["installed_version"] = nil
+		out["enforcement"] = enforcementHost
 	case installed == "":
 		out["installed_version"] = nil
-		out["available"] = "unknown until a " + provider + " session has run on this host"
-	case slices.Contains(verified, installed):
-		out["installed_version"] = installed
-		out["available"] = true
+		out["enforcement"] = "unknown until a " + provider + " session has run on this host; a verified version records \"adapter\", any other \"unverified\""
 	default:
+		level, _ := reviewerEnforcement(provider, acp.Implementation{Name: name, Version: installed})
 		out["installed_version"] = installed
-		out["available"] = false
-		out["unless"] = `enforcement:"unverified" on the member, or a verified adapter version installed`
+		out["enforcement"] = level
 	}
+	out["launches"] = true
 	return out
 }
 
-// reviewerHostCheck refuses a reviewer before it is committed when the
-// adapter this host last ran is known to be unverified; a host that has
-// never run the provider is checked at launch.
+// reviewerHostCheck refuses, before it is committed, a reviewer that asked
+// for enforcement:"adapter" on a provider whose adapter cannot give it, or
+// whose version this host last ran is unverified. Advisory reviewers (the
+// default) pass; a host that has never run the provider is checked at
+// launch.
 func reviewerHostCheck(settings swarm.AgentProfile) error {
-	if settings.Capability != "reviewer" {
+	if settings.Capability != "reviewer" || settings.Enforcement != "adapter" {
 		return nil
 	}
 	name, _ := reviewerAdapter(settings.Provider)
+	if name == "" {
+		return fmt.Errorf(`enforcement "adapter" cannot be met on %s: no adapter Wash enforces a reviewer through (%s). Drop enforcement to launch with host guards only, recorded`, settings.Provider, strings.Join(providerCapability["reviewer"], ", "))
+	}
 	installed := loadAdapterMemory()[settings.Provider].Version
-	if name == "" || installed == "" {
+	if installed == "" {
 		return nil
 	}
-	return unverifiedReviewer(settings.Provider, acp.Implementation{Name: name, Version: installed}, settings.Enforcement)
+	return strictReviewer(settings.Provider, acp.Implementation{Name: name, Version: installed})
 }
 
-func reviewerMetadata(provider string, info acp.Implementation, enforcement string) (map[string]any, error) {
-	if err := unverifiedReviewer(provider, info, enforcement); err != nil {
-		return nil, err
+// reviewerMetadata is the session metadata that restricts a reviewer's tools
+// on the adapter a session reported, and the enforcement level that results.
+// claude-agent-acp takes an allowlist (applied verified or not; a version
+// difference changes what Wash can vouch for, not whether to try); OpenCode's
+// restriction is its launch environment; any other adapter gets no metadata
+// and Wash's host guards alone. Refuses only a member that asked for
+// enforcement:"adapter" and cannot have it.
+func reviewerMetadata(provider string, info acp.Implementation, enforcement string) (meta map[string]any, level string, err error) {
+	level, _ = reviewerEnforcement(provider, info)
+	if enforcement == "adapter" {
+		if err := strictReviewer(provider, info); err != nil {
+			return nil, level, err
+		}
 	}
-	if provider == "opencode" {
-		return nil, nil
+	if level == enforcementHost || provider == "opencode" {
+		return nil, level, nil
 	}
 	return map[string]any{"claudeCode": map[string]any{"options": map[string]any{
 		"tools":           []string{"Read", "Glob", "Grep"},
@@ -146,7 +197,7 @@ func reviewerMetadata(provider string, info acp.Implementation, enforcement stri
 		"settingSources":  []string{}, "strictMcpConfig": true,
 		"allowDangerouslySkipPermissions": false,
 		"settings":                        map[string]any{"disableAllHooks": true},
-	}}}, nil
+	}}}, level, nil
 }
 func reviewerWorkspaceTool(name string) bool {
 	switch name {
@@ -240,14 +291,16 @@ func memberLaunch(w swarm.Workspace, m swarm.Member) sessionLaunch {
 
 // noSubagentMetadata removes Claude's own subagent tool, for a member whose
 // profile says subagents "deny": its work then stays in its own transcript
-// and the workspace's accounting, instead of in background agents.
-func noSubagentMetadata(info acp.Implementation) (map[string]any, error) {
-	if info.Name != "@agentclientprotocol/claude-agent-acp" {
-		return nil, fmt.Errorf("subagents \"deny\" unsupported by %s %s; no session started", info.Name, info.Version)
+// and the workspace's accounting, instead of in background agents. Another
+// adapter has no such control: no metadata, and the member is recorded as
+// "instructed" — told not to spawn, not prevented.
+func noSubagentMetadata(info acp.Implementation) (meta map[string]any, applied string) {
+	if info.Name != claudeAdapter {
+		return nil, "instructed"
 	}
 	return map[string]any{"claudeCode": map[string]any{"options": map[string]any{
 		"disallowedTools": []string{"Agent", "Task"},
-	}}}, nil
+	}}}, "denied"
 }
 
 // workspaceApprovalPolicy is the decision path's one view of workspace-scoped

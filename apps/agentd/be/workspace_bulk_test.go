@@ -624,11 +624,13 @@ func TestOverrideOnLaunchStartsATaskEarly(t *testing.T) {
 	}
 }
 
-// A reviewer is refused before anything commits when the adapter this host
-// last ran is at a version Wash has not verified, and about says so first;
-// enforcement:"unverified" is the owner's recorded way through (Redoubt,
-// WASH-R01: six of nine members failed at launch, committed).
-func TestReviewerRefusedBeforeCommitOnAnUnverifiedAdapter(t *testing.T) {
+// A reviewer launches on any provider; what the adapter enforces is advisory
+// and recorded, not a refusal (Redoubt, WASH-R01: six of nine members failed
+// at launch, committed, with no way forward but dropping the capability —
+// the worst state, unenforced and unrecorded). about says what a reviewer
+// launched now would record, the receipt's advisories say so per member
+// before commit, and enforcement:"adapter" is the one way to be refused.
+func TestReviewerIsAdvisedAndRecordedNotRefused(t *testing.T) {
 	withPolicy(t, agentpolicy.Policy{})
 	adapterMemMu.Lock()
 	adapterMem = map[string]agentproto.AdapterOptions{"claude": {Adapter: "claude", Version: "0.85.0"}}
@@ -639,33 +641,43 @@ func TestReviewerRefusedBeforeCommitOnAnUnverifiedAdapter(t *testing.T) {
 	ws := &workspaceService{store: s}
 	h := &hosted{sessionID: "lead", agent: "claude", catalog: "anthropic", cwd: root}
 	about := ws.about(h)
-	claude := about.Permissions["reviewer_capability_profiles"].(map[string]any)["claude"].(map[string]any)
-	if claude["installed_version"] != "0.85.0" || claude["available"] != false {
+	profiles := about.Permissions["reviewer_capability_profiles"].(map[string]any)
+	claude := profiles["claude"].(map[string]any)
+	if claude["installed_version"] != "0.85.0" || claude["enforcement"] != "unverified" || claude["launches"] != true {
 		t.Fatalf("about on an unverified adapter: %v", claude)
 	}
+	if codex := profiles["codex"].(map[string]any); codex["enforcement"] != "host" || codex["launches"] != true {
+		t.Fatalf("about for a provider with no allowlist: %v", codex)
+	}
 	reviewer := map[string]any{"name": "Red", "role": "reviewer", "lifetime": "resident", "instructions": "Review.", "capability": "reviewer"}
-	_, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"red": reviewer}})
-	if err == nil || !strings.Contains(err.Error(), "0.85.0") || !strings.Contains(err.Error(), `enforcement:"unverified"`) {
-		t.Fatalf("reviewer on an unverified adapter passed preview: %v", err)
+	got, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"red": reviewer}})
+	if err != nil {
+		t.Fatalf("advisory reviewer refused in preview: %v", err)
+	}
+	advisories := got.(map[string]any)["advisories"].(map[string][]string)
+	if len(advisories["red"]) != 1 || !strings.Contains(advisories["red"][0], "0.85.0") || !strings.Contains(advisories["red"][0], `enforcement "unverified"`) {
+		t.Fatalf("preview advisories: %v", advisories)
 	}
 	if s.View("lead") != nil {
 		t.Fatal("preview committed")
 	}
-	reviewer["enforcement"] = "unverified"
-	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"red": reviewer}}); err != nil {
-		t.Fatalf("enforcement unverified refused: %v", err)
+	// Strict is the exception, and is refused where this host knows.
+	reviewer["enforcement"] = "adapter"
+	_, err = qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"red": reviewer}})
+	if err == nil || !strings.Contains(err.Error(), "0.85.0") || !strings.Contains(err.Error(), `enforcement "adapter" cannot be met`) {
+		t.Fatalf("strict reviewer on an unverified adapter passed preview: %v", err)
 	}
 	delete(reviewer, "capability")
 	if _, err := qaFileCall(t, ws, h, "workspace_configure", map[string]any{"workspace": map[string]string{"name": "Team"}, "preview": true, "members": map[string]any{"red": reviewer}}); err == nil || !strings.Contains(err.Error(), "enforcement goes with") {
 		t.Fatalf("enforcement without the capability: %v", err)
 	}
-	// The launch path agrees, and the verified versions still need no flag.
+	// The launch path agrees: unverified launches and records, strict refuses.
 	info := acp.Implementation{Name: claudeAdapter, Version: "0.85.0"}
-	if _, err := reviewerMetadata("claude", info, ""); err == nil {
-		t.Fatal("launch on an unverified adapter without the flag")
+	if meta, level, err := reviewerMetadata("claude", info, ""); err != nil || meta == nil || level != enforcementUnverified {
+		t.Fatalf("launch on an unverified adapter: %v %v %v", meta, level, err)
 	}
-	if meta, err := reviewerMetadata("claude", info, "unverified"); err != nil || meta == nil {
-		t.Fatalf("launch with enforcement unverified: %v %v", meta, err)
+	if _, _, err := reviewerMetadata("claude", info, "adapter"); err == nil {
+		t.Fatal("strict launch on an unverified adapter")
 	}
 	resetAdapterMemoryForTest()
 	if about := ws.about(h); about.Permissions["reviewer_capability_profiles"].(map[string]any)["claude"].(map[string]any)["installed_version"] != nil {

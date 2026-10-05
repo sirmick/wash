@@ -507,9 +507,10 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 	settings := memberSettings(member)
 	child, err := startHostedCapability(settings.Provider, member.Cwd, ws.conn, sessionLaunch{connection: settings.Connection, catalog: member.Catalog, model: member.Model, capability: settings.Capability, enforcement: settings.Enforcement, member: true, noSubagents: settings.Subagents == "deny"})
 	var initialConfigs map[string]string
+	var notes []string
 	if err == nil {
 		options := child.configsSnapshot()
-		initialConfigs, err = configureWorkspaceSession(settings, options, func(id, value string) ([]acp.ConfigOption, error) {
+		initialConfigs, notes, err = configureWorkspaceSession(settings, options, func(id, value string) ([]acp.ConfigOption, error) {
 			res, e := child.client.SetConfigOption(ctx, child.sessionID, id, value)
 			if e == nil {
 				child.applyConfigs(res.ConfigOptions)
@@ -561,6 +562,14 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		v.Session = child.sessionID
 		v.LaunchSettings = &settings
 		v.InitialConfigs = initialConfigs
+		// What the adapter made of the advisory settings, beside what was
+		// asked: the enforcement a reviewer got, whether subagents were
+		// removed or only forbidden, and the settings it did not take.
+		applied := child.applied
+		applied.Notes = notes
+		if applied.Enforcement != "" || applied.Subagents != "" || len(notes) > 0 {
+			v.Applied = &applied
+		}
 		v.AutoApprove = autoApprove
 		v.State = "available"
 		member = *v
@@ -807,8 +816,9 @@ func (ws *workspaceService) configureMember(ctx context.Context, h *hosted, id s
 	applied := map[string]string{}
 	if target := hostedBySession(m.Session); target != nil && target.sessionReady.Load() {
 		options := target.configsSnapshot()
+		var notes []string
 		var err error
-		applied, err = configureWorkspaceSession(swarm.AgentProfile{Configs: configs}, options, func(cid, value string) ([]acp.ConfigOption, error) {
+		applied, notes, err = configureWorkspaceSession(swarm.AgentProfile{Configs: configs}, options, func(cid, value string) ([]acp.ConfigOption, error) {
 			res, e := target.client.SetConfigOption(ctx, target.sessionID, cid, value)
 			if e == nil {
 				target.applyConfigs(res.ConfigOptions)
@@ -817,6 +827,12 @@ func (ws *workspaceService) configureMember(ctx context.Context, h *hosted, id s
 		})
 		if err != nil {
 			return nil, err
+		}
+		// A direct change to a live member is a command, not a launch
+		// preference: a value the adapter does not take is an error here,
+		// since the orchestrator asked for exactly it and nothing else.
+		if len(notes) > 0 {
+			return nil, errors.New(strings.Join(notes, "; "))
 		}
 	}
 	err := ws.store.Mutate(h.sessionID, true, func(w *swarm.Workspace, _ *swarm.Member) error {

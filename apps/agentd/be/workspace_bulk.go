@@ -344,6 +344,9 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			return nil, err
 		}
 	}
+	// Per member key: advisory settings this provider, or the adapter this
+	// host last ran, will not enforce. Part of the receipt, not a refusal.
+	advisories := map[string][]string{}
 	result, err := ws.store.Transaction(h.sessionID, "workspace_configure", p.Request, raw, p.Preview, func(s *swarm.Store) (any, error) {
 		current := s.View(h.sessionID)
 		if current == nil {
@@ -502,19 +505,17 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if err := knownProvider(settings.Provider); err != nil {
 					return fmt.Errorf("member %s: %w", key, err)
 				}
-				// Before committing, not at launch: a member configured with
-				// a setting its provider cannot enforce used to be written
-				// down and then fail to start, and resume failed the same way
-				// forever because it re-read the same settings.
-				if err := unsupportedLaunchSetting(settings.Provider, settings.Capability, settings.Subagents == "deny", ""); err != nil {
-					return fmt.Errorf("member %s: %w", key, err)
-				}
-				// And a reviewer on an adapter this host is known to run at
-				// an unverified version: the whole review panel of a project
-				// failed at launch, committed, with no way forward but
-				// dropping the capability.
+				// A setting the provider cannot enforce is advisory: the
+				// member launches, Wash's host guards apply, and the launch
+				// records what held. The receipt (preview too) says so now,
+				// so a review panel staffed on a provider with no tool
+				// allowlist is told before it is committed rather than in a
+				// merge trailer. Only enforcement:"adapter" refuses here.
 				if err := reviewerHostCheck(settings); err != nil {
 					return fmt.Errorf("member %s: %w", key, err)
+				}
+				if notes := launchAdvisories(settings); len(notes) > 0 {
+					advisories[key] = notes
 				}
 				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: swarm.WithRole(w, spec.Role, spec.Instructions), InitialTask: spec.Task, InitialOverride: spec.Override, Handoff: handoffs[key], Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Node: spec.Node, Role: spec.Role}
 				if redefine != nil {
@@ -552,7 +553,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				}
 			}
 		}
-		return map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "qa_dir": w.QADir, "plan_file": w.PlanFile, "legend": w.Legend, "max_active": w.MaxActive, "max_members": w.MaxMembers}}, nil
+		out := map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "qa_dir": w.QADir, "plan_file": w.PlanFile, "legend": w.Legend, "max_active": w.MaxActive, "max_members": w.MaxMembers}}
+		if len(advisories) > 0 {
+			out["advisories"] = advisories
+		}
+		return out, nil
 	})
 	if qaLocked {
 		ws.qaMu.Unlock()
