@@ -211,20 +211,36 @@ if [[ -n "$active" && "$dry" != "1" ]]; then
   say "Restarting in 5s — Ctrl-C keeps the current router."
   sleep 5
 fi
-# The screen session an earlier wash-start left, if any: same port.
-if command -v screen >/dev/null 2>&1 && screen -S wash -Q select . >/dev/null 2>&1; then
+# Whatever holds the port now that is not our unit has to go first, or the
+# unit binds, fails, and restarts every two seconds behind a router that
+# never stopped — which is what the first run did. The old wash-start's
+# screen session is the known case; it is found with `screen -ls`, which
+# unlike `screen -Q` works without a terminal (curl | bash has none).
+port="${listen##*:}"
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; }
+if command -v screen >/dev/null 2>&1 && screen -ls 2>/dev/null | grep -qE '[.]wash[[:space:]]'; then
   say "Stopping the screen session the previous wash-start ran"
   run screen -S wash -X quit
+fi
+if [[ "$dry" != "1" ]]; then
+  for _ in $(seq 1 50); do
+    port_busy || break
+    sleep 0.1
+  done
+  if port_busy && ! systemctl --user is-active --quiet wash; then
+    printf 'wash-install: port %s is in use by something that is not wash.service; stop it (ss -ltnp | grep :%s) or choose --listen\n' "$port" "$port" >&2
+    exit 1
+  fi
 fi
 run systemctl --user enable -q wash
 run systemctl --user restart wash
 if [[ "$dry" != "1" ]]; then
-  for _ in $(seq 1 50); do
-    systemctl --user is-active --quiet wash && break
-    sleep 0.1
-  done
-  if ! systemctl --user is-active --quiet wash; then
-    printf 'wash-install: wash.service did not stay up; see: journalctl --user -u wash -n 50\n' >&2
+  # Up means: still active after a moment, never restarted, and answering
+  # on the port. `is-active` alone is true the instant a unit starts.
+  sleep 2
+  if ! systemctl --user is-active --quiet wash || [[ "$(systemctl --user show wash -p NRestarts --value)" != "0" ]] || ! port_busy; then
+    printf 'wash-install: wash.service did not stay up on %s. Its log:\n' "$listen" >&2
+    journalctl --user -u wash -n 15 --no-pager >&2 || true
     exit 1
   fi
 fi
