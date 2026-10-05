@@ -40,9 +40,20 @@ func TestSupervisorFindsAWedgedMember(t *testing.T) {
 		return map[string]memberRuntime{"lead": {live: true, heard: st0}, "fmt": r}
 	}
 	now := st0.Add(6 * time.Minute)
-	got := newSupervisor().findings(w, rt(memberRuntime{live: true, busy: true, heard: st0}), now)
-	if keys(got) != "wedged:fmt" || !strings.Contains(got[0].text, "1 message(s) queued") || !strings.Contains(got[0].text, "fmt1") {
+	s := newSupervisor()
+	// One snapshot is not an alert: a member between a tool ending and its
+	// next output looked wedged and was not. The second check confirms.
+	if got := s.findings(w, rt(memberRuntime{live: true, busy: true, heard: st0}), now); len(got) != 0 {
+		t.Fatalf("wedged on first sight: %+v", got)
+	}
+	got := s.findings(w, rt(memberRuntime{live: true, busy: true, heard: st0}), now.Add(superviseEvery))
+	if keys(got) != "wedged:fmt" || !strings.Contains(got[0].text, "1 message(s) queued") || !strings.Contains(got[0].text, "fmt1") || !strings.Contains(got[0].text, "two checks") {
 		t.Fatalf("findings = %+v", got)
+	}
+	// A finding that went away between checks starts over.
+	s.findings(w, rt(memberRuntime{live: true, busy: true, tool: true, heard: st0}), now.Add(2*superviseEvery))
+	if got := s.findings(w, rt(memberRuntime{live: true, busy: true, heard: st0}), now.Add(3*superviseEvery)); len(got) != 0 {
+		t.Fatalf("a lapsed finding fired on one sight: %+v", got)
 	}
 	for name, r := range map[string]memberRuntime{
 		"a tool is open":     {live: true, busy: true, tool: true, heard: st0},
@@ -50,7 +61,9 @@ func TestSupervisorFindsAWedgedMember(t *testing.T) {
 		"it spoke recently":  {live: true, busy: true, heard: now.Add(-time.Minute)},
 		"a question is open": {live: true, busy: true, asks: true, heard: st0},
 	} {
-		if got := newSupervisor().findings(w, rt(r), now); strings.Contains(keys(got), "wedged") {
+		s := newSupervisor()
+		s.findings(w, rt(r), now)
+		if got := s.findings(w, rt(r), now.Add(superviseEvery)); strings.Contains(keys(got), "wedged") {
 			t.Errorf("%s, and still wedged: %+v", name, got)
 		}
 	}
@@ -59,7 +72,10 @@ func TestSupervisorFindsAWedgedMember(t *testing.T) {
 // A wedged orchestrator cannot be told; the owner is.
 func TestSupervisorTellsTheOwnerAboutAWedgedOrchestrator(t *testing.T) {
 	w := supWorkspace()
-	got := newSupervisor().findings(w, map[string]memberRuntime{"lead": {live: true, busy: true, heard: st0}, "fmt": {live: true, busy: true, tool: true}}, st0.Add(6*time.Minute))
+	s := newSupervisor()
+	rt := map[string]memberRuntime{"lead": {live: true, busy: true, heard: st0}, "fmt": {live: true, busy: true, tool: true}}
+	s.findings(w, rt, st0.Add(6*time.Minute))
+	got := s.findings(w, rt, st0.Add(6*time.Minute+superviseEvery))
 	if len(got) != 1 || !got[0].owner {
 		t.Fatalf("findings = %+v", got)
 	}
@@ -136,11 +152,17 @@ func TestSupervisorFindsUndeliveredMail(t *testing.T) {
 	w.Messages = []swarm.Message{{ID: "m", Recipient: "fmt", Type: "instruction", State: "queued", Created: st0.UnixMilli()}}
 	now := st0.Add(6 * time.Minute)
 	rt := map[string]memberRuntime{"lead": {live: true, busy: true, heard: now}, "fmt": {live: true, takesATurn: true}}
-	if got := newSupervisor().findings(w, rt, now); keys(got) != "queued:fmt" {
+	s := newSupervisor()
+	if got := s.findings(w, rt, now); len(got) != 0 {
+		t.Fatalf("undelivered on first sight: %+v", got)
+	}
+	if got := s.findings(w, rt, now.Add(superviseEvery)); keys(got) != "queued:fmt" || !strings.Contains(got[0].text, "nothing has been delivered to it yet") {
 		t.Fatalf("findings = %+v", got)
 	}
 	w.MaxActive = 0
-	if got := newSupervisor().findings(w, rt, now); len(got) != 0 {
+	s = newSupervisor()
+	s.findings(w, rt, now)
+	if got := s.findings(w, rt, now.Add(superviseEvery)); len(got) != 0 {
 		t.Fatalf("mail held by max_active reported: %+v", got)
 	}
 }

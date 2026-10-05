@@ -38,6 +38,9 @@ type messageChange struct {
 	Request    string          `json:"request_id,omitempty"`
 	Thread     string          `json:"thread_id,omitempty"`
 	QA         *swarm.QAUpdate `json:"qa,omitempty"`
+	// Priority "checkpoint" (instructions only) leads the recipient's next
+	// turn and supersedes the sender's earlier queued instructions to it.
+	Priority string `json:"priority,omitempty"`
 }
 
 func resolveMember(s *swarm.Store, session, id string) (string, error) {
@@ -211,15 +214,23 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			Members []string          `json:"member_ids"`
 			Node    string            `json:"node,omitempty"`
 			Configs map[string]string `json:"configs,omitempty"`
+			// Body is appended to a checkpoint's instruction.
+			Body string `json:"body,omitempty"`
 		}
 		if err := decodeWorkspace(c.Arguments, &p); err != nil {
 			return nil, err
 		}
-		if !slices.Contains([]string{"pause", "resume", "end", "interrupt", "configure"}, p.Action) {
+		if !slices.Contains([]string{"pause", "resume", "end", "interrupt", "checkpoint", "configure"}, p.Action) {
 			return nil, errors.New("invalid member action")
 		}
 		if (p.Action == "configure") != (len(p.Configs) > 0) {
 			return nil, errors.New("configs are required for configure and only for configure")
+		}
+		if p.Body != "" && p.Action != "checkpoint" {
+			return nil, errors.New("body goes with checkpoint")
+		}
+		if len(p.Body) > 2000 {
+			return nil, errors.New("a checkpoint body is at most 2000 bytes")
 		}
 		w := ws.store.View(h.sessionID)
 		if w == nil {
@@ -270,6 +281,8 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				result, err = ws.configureMember(ctx, h, id, p.Configs)
 			} else if p.Action == "interrupt" {
 				result, err = ws.interrupt(id, m)
+			} else if p.Action == "checkpoint" {
+				result, err = ws.checkpoint(h, id, m, p.Body)
 			} else if p.Action == "resume" && m.Session == "" && m.Key != "" {
 				err = ws.store.Mutate(h.sessionID, true, func(w *swarm.Workspace, _ *swarm.Member) error {
 					m := swarm.GetMember(w, id)
@@ -524,6 +537,9 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				if !slices.Contains([]string{"instruction", "question", "answer", "progress"}, msg.Type) {
 					return nil, errors.New("invalid message type")
 				}
+				if msg.Priority != "" && (msg.Priority != "checkpoint" || msg.Type != "instruction") {
+					return nil, errors.New(`priority is "checkpoint", on an instruction`)
+				}
 				if (msg.Thread != "" || msg.QA != nil) && len(msg.Body) > swarm.ReportLimit {
 					return nil, fmt.Errorf("a message on a QA thread is at most %d bytes (got %d): put the detail in a file and give its path", swarm.ReportLimit, len(msg.Body))
 				}
@@ -555,6 +571,10 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 					v, err := swarm.AddMessage(w, m.ID, target.ID, msg.Type, msg.Body, msg.Reply, msg.Assignment, msg.Request)
 					if err != nil {
 						return err
+					}
+					if msg.Priority != "" {
+						v.Priority = msg.Priority
+						swarm.Supersede(w, m.ID, target.ID, v.ID)
 					}
 					if msg.QA != nil {
 						q := swarm.QA(w, msg.Thread)

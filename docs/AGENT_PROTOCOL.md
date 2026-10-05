@@ -276,6 +276,7 @@ AgentProfile describes launch settings and an optional enforced capability profi
 | `effort?` | `string` |  |
 | `configs?` | `Record<string, string>` |  |
 | `subagents?` | `string` | Subagents "deny" removes the provider's own subagent tool, so the member's work stays in its transcript and the workspace's accounting. "" and "allow" leave it available. |
+| `enforcement?` | `string` | Enforcement is what capability:"reviewer" requires of the adapter. "" ("advisory" too) launches on any provider and records in Member.Applied how far the read-only restriction actually held; "adapter" refuses to launch unless the adapter enforces it at a version Wash has verified. Wash is agnostic to the provider, so the advisory default is the rule and the strict value the exception. |
 
 #### AgentPrompt
 
@@ -447,6 +448,16 @@ AgentTestKey checks a key against its provider: the typed value, or the stored o
 |---|---|---|
 | `name` | `string` |  |
 | `value?` | `string` |  |
+
+#### Applied
+
+Applied is what a launch did with a member's advisory settings: the provider decides what it can enforce, Wash records the outcome instead of refusing.
+
+| Field | Type | |
+|---|---|---|
+| `enforcement?` | `string` | Enforcement of capability "reviewer": "adapter" (the adapter's own tool allowlist, verified, plus Wash's host guards), "unverified" (the same allowlist on an adapter version Wash has not verified), or "host" (Wash's guards only: file writes and terminals refused through its ACP layer, edit/execute permissions denied, coordination tools scoped; the adapter's own tools unrestricted). |
+| `subagents?` | `string` | Subagents is how subagents "deny" held: "denied" (the adapter's subagent tool removed) or "instructed" (the adapter has no such control; the member is told not to). |
+| `notes?` | `string[]` | Notes are launch settings the adapter did not offer or did not keep, one line each, e.g. a model id not in its list; the session runs on what the adapter chose instead. |
 
 #### Ask
 
@@ -708,12 +719,14 @@ No fields.
 | `role?` | `string` |  |
 | `instructions?` | `string` |  |
 | `initial_task?` | `string` |  |
+| `initial_override?` | `string` | InitialOverride is why the initial task starts before what its node needs is done; recorded on the node when the task is assigned. |
 | `handoff?` | `string` | Handoff is the handoff a member launched with handoff_from reads in its first message: what the member it replaces had done and knew. |
 | `usage?` | `Usage` |  |
 | `catalog?` | `string` | Catalog and Model are what the member was asked to run on: the catalog (the workspace's unless the member named one) and the model as given, a slot name or an id. LaunchSettings is what that resolved to, with the member's own settings on top, fixed when its key was reserved: a later catalog change moves no running member. |
 | `model?` | `string` |  |
 | `launch_settings?` | `AgentProfile` |  |
 | `initial_configs?` | `Record<string, string>` |  |
+| `applied?` | `Applied` | Applied is what the launch made of the advisory settings (reviewer enforcement, subagents, settings the adapter did not take). |
 | `adjusted_configs?` | `Record<string, string>` | Adjusted are settings the orchestrator changed on the live member (member_control configure), applied over LaunchSettings on every resume. Kept apart so the keyed launch definition stays as declared. |
 | `auto_approve?` | `boolean` | AutoApprove is whether host auto-approval is on for this member now: set from Approval at launch, and by the human's toggle afterwards. Kept here, not on the session, so a restart (which pauses rather than ends a member) does not silently switch it off; it ends with the workspace, never outliving the job it was granted for. |
 | `id` | `string` |  |
@@ -749,6 +762,9 @@ No fields.
 | `request_id?` | `string` |  |
 | `delivery` | `string` |  |
 | `created_at` | `number` |  |
+| `dispatched_at?` | `number` | Dispatched is when the message went into a prompt; Settled when its delivery state last became terminal (delivered, uncertain, cancelled, superseded). With Created they are the watermarks an orchestrator reads to tell "in the member's transport queue" from "in the turn it is reasoning in" from "done" — the distinction two live workspaces could not make and so re-sent permissions and stop requests blind. |
+| `settled_at?` | `number` |  |
+| `priority?` | `string` | Priority "checkpoint" puts an instruction ahead of everything else queued for its recipient, as the one ask of its next turn, and supersedes the sender's earlier queued instructions to it: a stop or save request must not wait its turn behind the work it is stopping. |
 | `task?` | `boolean` | Task marks the instruction Assign wrote to hand its assignment over. Only that one goes stale when the assignment resolves: a later instruction naming the same assignment is a new ask about finished work, not a duplicate of this one. |
 | `questions?` | `QuestionSet` | Questions is a decision_request's question set; Answers the owner's answers on its decision_response. |
 | `answers?` | `Record<string, QuestionAnswer>` |  |
@@ -888,6 +904,7 @@ QADocumentStatus is where a file (or directory) Wash writes for the workspace st
 | `revision` | `number` |  |
 | `decision_refs` | `string[] \| null` |  |
 | `evidence?` | `string` |  |
+| `participants?` | `string[]` | Participants are members the thread was opened on behalf of: an implementer whose question the orchestrator framed for the Architect hears the answer itself, as anyone who has written on the thread does. |
 | `resumed?` | `boolean` | Resumed marks a thread resolved in an earlier workspace and read back from its QA file: its evidence is about that workspace's code. |
 | `archived?` | `boolean` | Archived marks a resolved thread read back as a header only: its events stay in its file until something needs them. |
 | `events` | `QAEvent[] \| null` |  |

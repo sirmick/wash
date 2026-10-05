@@ -351,3 +351,54 @@ func TestMemberSettingsCarryAdjustments(t *testing.T) {
 		t.Fatal("memberSettings changed the stored launch settings")
 	}
 }
+
+// checkpoint is the safe stop: a priority instruction to save and hand off
+// goes to the front of the member's queue and supersedes the orchestrator's
+// earlier queued instructions, in one call (Redoubt, R12: a free-text
+// "write your handoff" waited behind ten queued messages).
+func TestCheckpointLeadsTheQueueAndSupersedes(t *testing.T) {
+	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	w, _ := s.Setup("lead", "codex", t.TempDir(), "Team", "")
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "m", Key: "impl", Session: "m-session", Name: "Impl", State: "available", Lifetime: "resident"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	lead := &hosted{sessionID: "lead"}
+	call := func(name, raw string) (any, error) {
+		return ws.call(context.Background(), lead, workspacemcp.Call{Name: name, Arguments: json.RawMessage(raw)})
+	}
+	for _, body := range []string{"Fix the tests.", "Then the docs."} {
+		if _, err := call("message_send", `{"recipient":"impl","type":"instruction","body":"`+body+`"}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := call("member_control", `{"action":"interrupt","member_ids":["impl"],"body":"x"}`); err == nil || !strings.Contains(err.Error(), "body goes with checkpoint") {
+		t.Fatalf("body on interrupt: %v", err)
+	}
+	got, err := call("member_control", `{"action":"checkpoint","member_ids":["impl"],"body":"Successor launches at 09:00."}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := got.(map[string]any)["outcomes"].([]any)[0].(map[string]any)
+	result := outcome["result"].(map[string]any)
+	if outcome["error"] != nil || result["superseded"] != 2 || result["interrupt"] != nil {
+		t.Fatalf("checkpoint outcome: %+v", outcome)
+	}
+	batch, err := s.Next("m-session")
+	if err != nil || len(batch) != 1 || batch[0].Priority != "checkpoint" || !strings.Contains(batch[0].Body, "member_update {handoff}") || !strings.Contains(batch[0].Body, "Successor launches at 09:00.") {
+		t.Fatalf("the member's next turn: %+v %v", batch, err)
+	}
+	// message_send takes the same priority, on instructions only.
+	if _, err := call("message_send", `{"recipient":"impl","type":"question","body":"?","priority":"checkpoint"}`); err == nil {
+		t.Fatal("priority on a question")
+	}
+	if _, err := call("message_send", `{"recipient":"impl","type":"instruction","body":"Stop.","priority":"checkpoint"}`); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.Messages); n != 0 {
+		t.Fatalf("setup view mutated: %d", n)
+	}
+}

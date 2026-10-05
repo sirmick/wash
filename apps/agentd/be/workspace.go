@@ -891,6 +891,55 @@ func (ws *workspaceService) interrupt(id string, m *swarm.Member) (any, error) {
 	return out, nil
 }
 
+// checkpointInstruction is what a checkpoint tells the member to do. It is
+// the safe stop the live workspaces asked for: a free-text "please write
+// your handoff" queued behind ten earlier instructions reached a member
+// at 87% of its context with nothing saved.
+const checkpointInstruction = `Checkpoint: stop taking new work now.
+1. Let a running tool finish; start nothing new.
+2. Commit or save what is in progress so nothing is lost.
+3. Write your handoff with member_update {handoff}: branch state, what is done, what is next, traps. Branch state and traps first.
+4. Set waiting with reason "checkpoint" and end your turn. The orchestrator relaunches a successor with handoff_from.`
+
+// checkpoint is interrupt plus a checkpoint instruction: the member's turn
+// ends if one is running, and a priority instruction to save and hand off
+// goes to the front of its queue, superseding the orchestrator's earlier
+// queued instructions to it. One call, where the orchestrator used to
+// interrupt, then send, then watch the send wait behind the backlog.
+func (ws *workspaceService) checkpoint(h *hosted, id string, m *swarm.Member, extra string) (any, error) {
+	out := map[string]any{}
+	if target := hostedBySession(m.Session); target != nil && target.sessionReady.Load() {
+		res, err := ws.interrupt(id, m)
+		if err != nil {
+			return nil, err
+		}
+		out["interrupt"] = res
+	}
+	body := checkpointInstruction
+	if extra != "" {
+		body += "\n\n" + extra
+	}
+	var sent *swarm.Message
+	superseded := 0
+	err := ws.store.Mutate(h.sessionID, true, func(w *swarm.Workspace, lead *swarm.Member) error {
+		v, err := swarm.AddMessage(w, lead.ID, id, "instruction", body, "", "", "")
+		if err != nil {
+			return err
+		}
+		v.Priority = "checkpoint"
+		superseded = swarm.Supersede(w, lead.ID, id, v.ID)
+		sent = v
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	ws.signal()
+	out["message_id"], out["superseded"] = sent.ID, superseded
+	out["then"] = "the member writes its handoff (a lifecycle message names the file) and sets waiting; end it and relaunch with handoff_from"
+	return out, nil
+}
+
 // planExitDenied hands the orchestrator a member's finished plan. The member
 // asked to leave plan mode, which is the orchestrator's call; its turn has
 // ended, so the plan would otherwise reach nobody (observed: fished out of
@@ -1211,10 +1260,10 @@ func (ws *workspaceService) end(lead string) (*swarm.Workspace, error) {
 		}
 		for i := range w.Messages {
 			if w.Messages[i].State == "dispatched" {
-				w.Messages[i].State = "uncertain"
+				w.Messages[i].Settle("uncertain")
 			}
 			if w.Messages[i].State == "queued" {
-				w.Messages[i].State = "cancelled"
+				w.Messages[i].Settle("cancelled")
 			}
 			// Pending owner decisions stay recorded, unlike an ended
 			// member's: the QA file carries them, and the next workspace
@@ -1442,10 +1491,42 @@ func teamView(w *swarm.Workspace) map[string]any {
 			}
 		}
 		inbox := map[string]int{}
+		// Watermarks: what is in the member's transport queue, what is in
+		// the turn it is reasoning in, and when its last delivery settled.
+		// An orchestrator could not tell these apart and re-sent grants and
+		// stop requests blind (Redoubt, R12).
+		mail := map[string]any{}
+		var oldestQueued, lastDispatched, lastSettled int64
 		for _, msg := range w.Messages {
-			if msg.Recipient == m.ID && (msg.State == "queued" || msg.State == "dispatched" || msg.State == "uncertain") {
+			if msg.Recipient != m.ID {
+				continue
+			}
+			if msg.State == "queued" || msg.State == "dispatched" || msg.State == "uncertain" {
 				inbox[msg.State]++
 			}
+			if msg.State == "queued" && (oldestQueued == 0 || msg.Created < oldestQueued) {
+				oldestQueued = msg.Created
+			}
+			if msg.Dispatched > lastDispatched {
+				lastDispatched = msg.Dispatched
+			}
+			if msg.Settled > lastSettled {
+				lastSettled = msg.Settled
+			}
+		}
+		now := time.Now().UnixMilli()
+		ago := func(at int64) int64 { return max(0, (now-at)/1000) }
+		if oldestQueued > 0 {
+			mail["oldest_queued_s"] = ago(oldestQueued)
+		}
+		if lastDispatched > 0 {
+			mail["last_dispatched_s_ago"] = ago(lastDispatched)
+		}
+		if lastSettled > 0 {
+			mail["last_settled_s_ago"] = ago(lastSettled)
+		}
+		if inbox["dispatched"] > 0 {
+			mail["in_turn"] = inbox["dispatched"]
 		}
 		row := map[string]any{"id": m.ID, "key": m.Key, "name": m.Name, "state": m.State, "activity": activity[m.ID]}
 		for k, v := range map[string]string{"node": m.Node, "role": m.Role, "catalog": m.Catalog, "model": m.Model, "status": m.Status, "waiting": m.Waiting, "activity_detail": detail[m.ID]} {
@@ -1464,6 +1545,9 @@ func teamView(w *swarm.Workspace) map[string]any {
 		}
 		if len(inbox) > 0 {
 			row["undelivered"] = inbox
+		}
+		if len(mail) > 0 {
+			row["mail"] = mail
 		}
 		if s := settings[m.ID]; s != nil {
 			row["settings"] = s
@@ -1507,6 +1591,12 @@ func inboxLabel(w *swarm.Workspace, msg swarm.Message) string {
 	sender := msg.Sender
 	if from := swarm.GetMember(w, msg.Sender); from != nil {
 		sender = from.Name + " (" + from.ID + ")"
+		// Mail from a member that has since ended is history: a
+		// predecessor's "checkpoint written" arriving after its successor
+		// launched needs reading, not acting on.
+		if from.State == "ended" {
+			sender += ", ended"
+		}
 	}
 	return sender + " · " + msg.Type
 }

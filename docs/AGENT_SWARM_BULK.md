@@ -107,6 +107,19 @@ reviewer launched now would record, and `launch_setting_support` is informationa
 `member_control configure` on a live member is still exact: a value its adapter does not
 take is an error there, since it was asked for and nothing else.
 
+API 4.2 also makes delivery legible (R12, R13). A message carries `dispatched_at` and
+`settled_at` beside `created_at`, and a new terminal state `superseded`; `workspace_get team`
+shows each member's `mail` watermarks (`queued`, `in_turn`, `oldest_queued_s`,
+`last_dispatched_s_ago`, `last_settled_s_ago`), so "in its queue" and "in the turn it is
+reasoning in" are different answers. `message_send` takes `priority:"checkpoint"` on an
+instruction: it leads the recipient's next turn as its one ask and supersedes the sender's
+earlier queued instructions to it. `member_control checkpoint` is the safe stop: interrupt
+plus that instruction (save, write the handoff, set waiting), with `body` appended; the
+handoff lifecycle note (R03) follows. The supervisor's `wedged` and `undelivered` findings
+now need two consecutive checks and say since when they held and when the member's last
+delivery settled; the lifecycle message says when it was observed. Mail from a member that
+has ended is labelled `(…, ended)` in the orchestrator's inbox.
+
 ## Fourteen tools
 
 | Tool | Responsibility |
