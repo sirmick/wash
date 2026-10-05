@@ -181,6 +181,7 @@ make wash && make install-host-scripts
 wash-start      # router in a detached screen session, HTTPS + token on 0.0.0.0:10000
 wash-connect    # prints https://<this-host>:10000/?token=…  — paste it into any browser
 wash-update     # git pull --ff-only, pnpm install, make wash, wash-start
+wash-update --local   # the same without the pull: build and run what is checked out (local commits)
 ```
 
 The token lives in `~/.local/state/wash/router.token` and survives
