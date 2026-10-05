@@ -54,6 +54,12 @@ type supervisor struct {
 	stall     map[string]time.Time
 	// sent is what each workspace has been told, by finding key.
 	sent map[string]map[string]*sentFinding
+	// seen is when a wedged or undelivered finding was first observed. Both
+	// fire only on a second consecutive check: a single snapshot caught a
+	// member between a tool ending and its next output, or mail in the
+	// instant between a turn ending and dispatch, and the alert then
+	// contradicted the very next read (Redoubt, R13).
+	seen map[string]time.Time
 }
 
 type sentFinding struct {
@@ -69,7 +75,7 @@ type finding struct {
 }
 
 func newSupervisor() *supervisor {
-	return &supervisor{cpu: map[string]uint64{}, idleSince: map[string]time.Time{}, stall: map[string]time.Time{}, sent: map[string]map[string]*sentFinding{}}
+	return &supervisor{cpu: map[string]uint64{}, idleSince: map[string]time.Time{}, stall: map[string]time.Time{}, sent: map[string]map[string]*sentFinding{}, seen: map[string]time.Time{}}
 }
 
 // memberRuntime is what the supervisor reads of a member's session.
@@ -204,14 +210,42 @@ func (s *supervisor) findings(w *swarm.Workspace, runtime map[string]memberRunti
 		return id
 	}
 	queued := map[string]int{}
+	lastSettled := map[string]int64{}
 	ownerWait := false
 	for _, msg := range w.Messages {
 		if msg.State == "queued" {
 			queued[msg.Recipient]++
 		}
+		if msg.Settled > lastSettled[msg.Recipient] {
+			lastSettled[msg.Recipient] = msg.Settled
+		}
 		if msg.Type == "decision_request" && msg.State == "recorded" {
 			ownerWait = true
 		}
+	}
+	// confirmed is whether key was also observed on the previous check;
+	// the first sighting only starts the clock.
+	candidates := map[string]bool{}
+	confirmed := func(key string) bool {
+		candidates[key] = true
+		if _, ok := s.seen[key]; !ok {
+			s.seen[key] = now
+			return false
+		}
+		return true
+	}
+	defer func() {
+		for key := range s.seen {
+			if !candidates[key] {
+				delete(s.seen, key)
+			}
+		}
+	}()
+	settled := func(id string) string {
+		if at := lastSettled[id]; at > 0 {
+			return fmt.Sprintf("; its last delivery settled %s ago", now.Sub(time.UnixMilli(at)).Round(time.Second))
+		}
+		return "; nothing has been delivered to it yet"
 	}
 	activeWorkers := 0
 	for _, m := range w.Members {
@@ -229,15 +263,19 @@ func (s *supervisor) findings(w *swarm.Workspace, runtime map[string]memberRunti
 		}
 		working := r.tool || r.asks || r.cpuBusy || now.Sub(r.heard) < quiet
 		if r.busy && !working {
+			if !confirmed("wedged:" + m.ID) {
+				continue
+			}
 			silent := now.Sub(r.heard).Round(time.Second)
 			if m.ID == w.Lead {
 				out = append(out, finding{key: "wedged:" + m.ID, owner: true, text: fmt.Sprintf("The orchestrator has been in a turn for %s with nothing from it. Interrupt it from its window, or end it.", silent)})
 				continue
 			}
-			text := fmt.Sprintf("wedged: %s has been in a turn for %s with nothing from it (no output, no tool, no busy process)", name(m.ID), silent)
+			text := fmt.Sprintf("wedged: %s has been in a turn for %s with nothing from it (no output, no tool, no busy process; seen so on two checks since %s)", name(m.ID), silent, s.seen["wedged:"+m.ID].UTC().Format(time.TimeOnly))
 			if n := queued[m.ID]; n > 0 {
 				text += fmt.Sprintf("; %d message(s) queued for it", n)
 			}
+			text += settled(m.ID)
 			out = append(out, finding{key: "wedged:" + m.ID, text: text + ". Interrupt it (member_control interrupt); if that does not free it, end it and relaunch with handoff_file."})
 			continue
 		}
@@ -306,8 +344,8 @@ func (s *supervisor) findings(w *swarm.Workspace, runtime map[string]memberRunti
 				oldest = time.UnixMilli(msg.Created)
 			}
 		}
-		if now.Sub(oldest) >= quiet {
-			out = append(out, finding{key: "queued:" + m.ID, text: fmt.Sprintf("undelivered: %d message(s) for %s have been queued for %s, it is in no turn, and nothing is holding them. Check it before acting; if its session is stuck, end it and relaunch.", queued[m.ID], name(m.ID), now.Sub(oldest).Round(time.Second))})
+		if now.Sub(oldest) >= quiet && confirmed("queued:"+m.ID) {
+			out = append(out, finding{key: "queued:" + m.ID, text: fmt.Sprintf("undelivered: %d message(s) for %s have been queued for %s, it is in no turn, and nothing is holding them (seen so on two checks since %s)%s. Read its mail watermarks (workspace_get team) before acting; if its session is stuck, end it and relaunch.", queued[m.ID], name(m.ID), now.Sub(oldest).Round(time.Second), s.seen["queued:"+m.ID].UTC().Format(time.TimeOnly), settled(m.ID))})
 		}
 	}
 
@@ -404,7 +442,7 @@ func (ws *workspaceService) report(w *swarm.Workspace, found []finding, now time
 	lead := workspaceLeadSession(*w)
 	if len(due) > 0 {
 		var b strings.Builder
-		b.WriteString("Supervisor: work has stalled.\n")
+		fmt.Fprintf(&b, "Supervisor: work has stalled (observed %s).\n", now.UTC().Format(time.RFC3339))
 		// Only what is due: listing every current finding re-sent the ones
 		// whose backoff had not elapsed, and the ones already escalated past
 		// maxPrompts, without advancing either counter — so a finding the

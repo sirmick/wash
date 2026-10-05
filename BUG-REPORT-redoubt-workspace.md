@@ -282,6 +282,12 @@ explicitly supersede older instructions. A safe checkpoint operation should stop
 preserve any in-flight tool/session, and emit a handoff-ready event. Avoid requiring repeated
 free-text reminders or blind session termination.
 
+Addressed in API 4.2 (2026-10-04): messages carry `dispatched_at`/`settled_at` and a
+`superseded` state; `workspace_get team` shows per-member `mail` watermarks (queued, in_turn,
+oldest_queued_s, last_dispatched_s_ago, last_settled_s_ago); `message_send` takes
+`priority:"checkpoint"` (leads the next turn as its one ask, supersedes the sender's earlier
+queued instructions); `member_control checkpoint` is interrupt plus that instruction.
+
 ## WASH-R13 — Stall alerts can conflict with current member activity
 
 Status: observed contradictory snapshots; possible race/stale supervisor observation.
@@ -297,6 +303,11 @@ Desired: include observation time, member/session generation, last activity and 
 watermarks in the alert; revalidate before recommending end/relaunch. Distinguish a stale
 status string, a long tool call, a queue awaiting a turn boundary, and a dead adapter. Recovery
 should first preserve work and reconcile deliveries. This run did not establish a daemon crash.
+
+Addressed in API 4.2: `wedged` and `undelivered` fire only on two consecutive supervisor
+checks, say since when they held and when the member's last delivery settled, and the
+lifecycle message carries its observation time. Still open: the alert is free text, not
+structured fields; and the possible `agentRunning`-stuck blind spot is unconfirmed.
 
 ## WASH-R14 — Late predecessor confirmations create avoidable orchestration turns
 
@@ -315,6 +326,10 @@ annotate mail from ended/replaced members as historical. Deduplicate equivalent 
 notifications for the same recipient, or expose their shared provenance. Digest routine
 progress/confirmations without waking the owner's orchestrator for each one. Keep genuine
 questions, failures and results promptly visible.
+
+Partly addressed in API 4.2: mail from an ended member is labelled `(…, ended)` in the
+orchestrator's inbox. Open: a structured handoff-ready event, dedupe of thread/direct
+notifications, and the digest (R11).
 
 ## WASH-R15 — Message, QA event and thread identifiers need clearer affordances
 

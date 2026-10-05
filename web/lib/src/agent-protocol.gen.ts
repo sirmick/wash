@@ -145,6 +145,15 @@ export interface AgentProfile {
    * "" and "allow" leave it available.
    */
   subagents?: string;
+  /**
+   * Enforcement is what capability:"reviewer" requires of the adapter.
+   * "" ("advisory" too) launches on any provider and records in
+   * Member.Applied how far the read-only restriction actually held;
+   * "adapter" refuses to launch unless the adapter enforces it at a
+   * version Wash has verified. Wash is agnostic to the provider, so the
+   * advisory default is the rule and the strict value the exception.
+   */
+  enforcement?: string;
 }
 
 /**
@@ -361,6 +370,35 @@ export interface AgentTestKey {
   kind: 'agent_test_key';
   name: string;
   value?: string;
+}
+
+/**
+ * Applied is what a launch did with a member's advisory settings: the
+ * provider decides what it can enforce, Wash records the outcome instead of
+ * refusing. Read beside LaunchSettings, which is what was asked.
+ */
+export interface Applied {
+  /**
+   * Enforcement of capability "reviewer": "adapter" (the adapter's own
+   * tool allowlist, verified, plus Wash's host guards), "unverified"
+   * (the same allowlist on an adapter version Wash has not verified), or
+   * "host" (Wash's guards only: file writes and terminals refused through
+   * its ACP layer, edit/execute permissions denied, coordination tools
+   * scoped; the adapter's own tools unrestricted).
+   */
+  enforcement?: string;
+  /**
+   * Subagents is how subagents "deny" held: "denied" (the adapter's
+   * subagent tool removed) or "instructed" (the adapter has no such
+   * control; the member is told not to).
+   */
+  subagents?: string;
+  /**
+   * Notes are launch settings the adapter did not offer or did not keep,
+   * one line each, e.g. a model id not in its list; the session runs on
+   * what the adapter chose instead.
+   */
+  notes?: string[];
 }
 
 /**
@@ -705,6 +743,11 @@ export interface Member {
   instructions?: string;
   initial_task?: string;
   /**
+   * InitialOverride is why the initial task starts before what its node
+   * needs is done; recorded on the node when the task is assigned.
+   */
+  initial_override?: string;
+  /**
    * Handoff is the handoff a member launched with handoff_from reads in
    * its first message: what the member it replaces had done and knew.
    */
@@ -721,6 +764,11 @@ export interface Member {
   model?: string;
   launch_settings?: AgentProfile;
   initial_configs?: Record<string, string>;
+  /**
+   * Applied is what the launch made of the advisory settings (reviewer
+   * enforcement, subagents, settings the adapter did not take).
+   */
+  applied?: Applied;
   /**
    * Adjusted are settings the orchestrator changed on the live member
    * (member_control configure), applied over LaunchSettings on every
@@ -772,6 +820,23 @@ export interface Message {
   request_id?: string;
   delivery: string;
   created_at: number;
+  /**
+   * Dispatched is when the message went into a prompt; Settled when its
+   * delivery state last became terminal (delivered, uncertain, cancelled,
+   * superseded). With Created they are the watermarks an orchestrator
+   * reads to tell "in the member's transport queue" from "in the turn it
+   * is reasoning in" from "done" — the distinction two live workspaces
+   * could not make and so re-sent permissions and stop requests blind.
+   */
+  dispatched_at?: number;
+  settled_at?: number;
+  /**
+   * Priority "checkpoint" puts an instruction ahead of everything else
+   * queued for its recipient, as the one ask of its next turn, and
+   * supersedes the sender's earlier queued instructions to it: a stop or
+   * save request must not wait its turn behind the work it is stopping.
+   */
+  priority?: string;
   /**
    * Task marks the instruction Assign wrote to hand its assignment over.
    * Only that one goes stale when the assignment resolves: a later
@@ -943,6 +1008,12 @@ export interface QAThread {
   revision: number;
   decision_refs: string[] | null;
   evidence?: string;
+  /**
+   * Participants are members the thread was opened on behalf of: an
+   * implementer whose question the orchestrator framed for the Architect
+   * hears the answer itself, as anyone who has written on the thread does.
+   */
+  participants?: string[];
   /**
    * Resumed marks a thread resolved in an earlier workspace and read
    * back from its QA file: its evidence is about that workspace's code.

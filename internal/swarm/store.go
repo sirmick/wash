@@ -150,6 +150,19 @@ type Message struct {
 	RequestID  string `json:"request_id,omitempty"`
 	State      string `json:"delivery"`
 	Created    int64  `json:"created_at"`
+	// Dispatched is when the message went into a prompt; Settled when its
+	// delivery state last became terminal (delivered, uncertain, cancelled,
+	// superseded). With Created they are the watermarks an orchestrator
+	// reads to tell "in the member's transport queue" from "in the turn it
+	// is reasoning in" from "done" — the distinction two live workspaces
+	// could not make and so re-sent permissions and stop requests blind.
+	Dispatched int64 `json:"dispatched_at,omitempty"`
+	Settled    int64 `json:"settled_at,omitempty"`
+	// Priority "checkpoint" puts an instruction ahead of everything else
+	// queued for its recipient, as the one ask of its next turn, and
+	// supersedes the sender's earlier queued instructions to it: a stop or
+	// save request must not wait its turn behind the work it is stopping.
+	Priority string `json:"priority,omitempty"`
 	// Task marks the instruction Assign wrote to hand its assignment over.
 	// Only that one goes stale when the assignment resolves: a later
 	// instruction naming the same assignment is a new ask about finished
@@ -160,6 +173,29 @@ type Message struct {
 	Questions *QuestionSet              `json:"questions,omitempty"`
 	Answers   map[string]QuestionAnswer `json:"answers,omitempty"`
 }
+
+// Settle moves a message to a terminal delivery state and stamps when.
+func (msg *Message) Settle(state string) {
+	msg.State = state
+	msg.Settled = time.Now().UnixMilli()
+}
+
+// Supersede cancels from's queued instructions to to that are older than
+// keep, as "superseded": a checkpoint instruction takes their place. Returns
+// how many. The handover of an assignment (Task) is not an instruction the
+// sender can withdraw this way; it goes stale with its assignment.
+func Supersede(w *Workspace, from, to, keep string) int {
+	n := 0
+	for i := range w.Messages {
+		msg := &w.Messages[i]
+		if msg.Sender == from && msg.Recipient == to && msg.Type == "instruction" && msg.State == "queued" && msg.ID != keep && !msg.Task {
+			msg.Settle("superseded")
+			n++
+		}
+	}
+	return n
+}
+
 type Workspace struct {
 	// QAAuthors names the authors of threads read back from an earlier
 	// workspace's files, who are not members of this one.
@@ -260,7 +296,7 @@ func Open(path string) (*Store, error) {
 			}
 			for j := range w.Messages {
 				if w.Messages[j].State == "dispatched" {
-					w.Messages[j].State = "uncertain"
+					w.Messages[j].Settle("uncertain")
 				}
 			}
 		}
@@ -679,7 +715,7 @@ func (s *Store) Next(session string) ([]Message, error) {
 		batch, stale, setDone := pickDelivery(w, m)
 		// An instruction for an assignment already resolved is never sent.
 		for _, i := range stale {
-			w.Messages[i].State = "cancelled"
+			w.Messages[i].Settle("cancelled")
 		}
 		if len(batch) == 0 {
 			return nil
@@ -697,6 +733,7 @@ func (s *Store) Next(session string) ([]Message, error) {
 		for _, i := range batch {
 			msg := &w.Messages[i]
 			msg.State = "dispatched"
+			msg.Dispatched = time.Now().UnixMilli()
 			for j := range w.Assignments {
 				if w.Assignments[j].ID == msg.Assignment && w.Assignments[j].Member == m.ID && w.Assignments[j].State == "assigned" {
 					w.Assignments[j].State = "active"
@@ -758,6 +795,15 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 		owner = owner || msg.Sender == m.ID && msg.Type == "decision_request" && msg.State == "recorded"
 	}
 	asked, cut := false, false
+	// A checkpoint instruction is the one ask of the next turn, whatever
+	// was queued before it; the loop cuts every other ask behind it.
+	priority := -1
+	for i, msg := range w.Messages {
+		if msg.Recipient == m.ID && msg.State == "queued" && msg.Priority == "checkpoint" && !owner {
+			priority = i
+			break
+		}
+	}
 	for i, msg := range w.Messages {
 		if msg.Recipient != m.ID || msg.State != "queued" {
 			continue
@@ -779,11 +825,12 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 		}
 		held := msg.Type == "result" && slices.Contains(m.WaitingOn, msg.Assignment) ||
 			(msg.Type == "answer" || msg.Type == "progress") && slices.Contains(doers, msg.Sender)
-		if held && !setDone || cut {
+		// The cut spares the checkpoint: it is why the others were cut.
+		if held && !setDone || cut && i != priority {
 			continue
 		}
 		if m.ID != w.Lead && (msg.Type == "instruction" || msg.Type == "question") {
-			if asked {
+			if asked || priority >= 0 && i != priority {
 				cut = true
 				continue
 			}
@@ -794,14 +841,16 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 	// The owner's answer leads its turn: it is what the member waited for,
 	// and what it held back comes after.
 	slices.SortStableFunc(batch, func(a, b int) int {
-		ra, rb := w.Messages[a].Type == "decision_response", w.Messages[b].Type == "decision_response"
-		switch {
-		case ra && !rb:
-			return -1
-		case rb && !ra:
-			return 1
+		rank := func(i int) int {
+			switch {
+			case w.Messages[i].Type == "decision_response":
+				return 0
+			case w.Messages[i].Priority == "checkpoint":
+				return 1
+			}
+			return 2
 		}
-		return 0
+		return rank(a) - rank(b)
 	})
 	// A note wakes nobody busy: it goes out with the next turn something
 	// else starts. It does wake a member idle in a plain wait (no waiting
@@ -849,7 +898,7 @@ func (s *Store) TurnAbandoned(session string, messageIDs []string) error {
 	return s.Mutate(session, false, func(w *Workspace, _ *Member) error {
 		for i := range w.Messages {
 			if v := &w.Messages[i]; slices.Contains(messageIDs, v.ID) && v.State == "dispatched" {
-				v.State = "uncertain"
+				v.Settle("uncertain")
 			}
 		}
 		return nil
@@ -880,9 +929,9 @@ func (s *Store) turnEnded(session string, messageIDs []string, failed, stopped b
 			v := &w.Messages[i]
 			if slices.Contains(messageIDs, v.ID) && v.State == "dispatched" {
 				if failed {
-					v.State = "uncertain"
+					v.Settle("uncertain")
 				} else {
-					v.State = "delivered"
+					v.Settle("delivered")
 				}
 			}
 		}
@@ -988,10 +1037,10 @@ func (s *Store) EndMember(session, id string, notify bool) error {
 				WithdrawDecision(w, &w.Messages[i])
 			}
 			if w.Messages[i].Recipient == id && w.Messages[i].State == "dispatched" {
-				w.Messages[i].State = "uncertain"
+				w.Messages[i].Settle("uncertain")
 			}
 			if w.Messages[i].Recipient == id && w.Messages[i].State == "queued" {
-				w.Messages[i].State = "cancelled"
+				w.Messages[i].Settle("cancelled")
 			}
 		}
 		for i := range w.Assignments {

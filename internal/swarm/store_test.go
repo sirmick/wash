@@ -674,3 +674,71 @@ func TestAssignRetryMatchesTheBodyToo(t *testing.T) {
 		t.Fatal("a request_id reused with other instructions was taken as a retry")
 	}
 }
+
+// A checkpoint instruction leads the member's next turn as its one ask and
+// supersedes the sender's earlier queued instructions; the handover of an
+// assignment is not one of those. Dispatch and settlement are stamped, so
+// "in its queue" and "in its turn" are different answers (Redoubt, R12).
+func TestACheckpointLeadsSupersedesAndDeliveryIsStamped(t *testing.T) {
+	s, _ := fixture(t)
+	a, err := s.Assign("lead-session", "worker", "", "", "Build timers", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Send("lead-session", "worker", "instruction", "Also add tests.", "", a.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Send("lead-session", "worker", "instruction", "And docs.", "", a.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cp *Message
+	superseded := 0
+	if err := s.Mutate("lead-session", true, func(w *Workspace, lead *Member) error {
+		v, err := AddMessage(w, lead.ID, "worker", "instruction", "Checkpoint now.", "", "", "")
+		if err != nil {
+			return err
+		}
+		v.Priority = "checkpoint"
+		superseded = Supersede(w, lead.ID, "worker", v.ID)
+		cp = v
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if superseded != 2 {
+		t.Fatalf("superseded %d instructions, want the two plain ones", superseded)
+	}
+	w := s.View("lead-session")
+	for _, msg := range w.Messages {
+		switch msg.ID {
+		case first.ID, second.ID:
+			if msg.State != "superseded" || msg.Settled == 0 {
+				t.Fatalf("plain instruction after checkpoint: %+v", msg)
+			}
+		case cp.ID:
+			if msg.State != "queued" {
+				t.Fatalf("checkpoint itself: %+v", msg)
+			}
+		}
+	}
+	batch, err := s.Next("worker-session")
+	if err != nil || len(batch) != 1 || batch[0].ID != cp.ID || batch[0].Dispatched == 0 {
+		t.Fatalf("the checkpoint did not lead the turn alone: %+v %v", batch, err)
+	}
+	// The handover was not superseded; it is the ask of the turn after.
+	if err := s.TurnEnded("worker-session", []string{cp.ID}, false); err != nil {
+		t.Fatal(err)
+	}
+	w = s.View("lead-session")
+	for _, msg := range w.Messages {
+		if msg.ID == cp.ID && (msg.State != "delivered" || msg.Settled < msg.Dispatched) {
+			t.Fatalf("settlement not stamped: %+v", msg)
+		}
+	}
+	next, err := s.Next("worker-session")
+	if err != nil || len(next) != 1 || !next[0].Task {
+		t.Fatalf("the handover did not follow: %+v %v", next, err)
+	}
+}
