@@ -76,6 +76,33 @@ func reviewerEnforcement(provider string, info acp.Implementation) (level, note 
 	}
 }
 
+// modelAdvisory says when a model id is not in the list the provider's
+// adapter reported the last time it ran on this host, or "" when it is, or
+// when the host cannot know yet. The launch does not fail on it (the member
+// runs on the adapter's default, recorded in applied.notes); this is the
+// warning before that. A catalog written as "claude-opus-5-5" against a
+// list that only ever said "opus" failed every slot that resolved to it.
+func modelAdvisory(provider, model string) string {
+	if model == "" {
+		return ""
+	}
+	mem := loadAdapterMemory()[provider]
+	for _, c := range mem.Configs {
+		if c.Category != "model" || len(c.Values) == 0 {
+			continue
+		}
+		values := make([]string, 0, len(c.Values))
+		for _, v := range c.Values {
+			if v.Value == model {
+				return ""
+			}
+			values = append(values, v.Value)
+		}
+		return fmt.Sprintf("model %q is not in the list %s %s last reported on this host (%s); the member would run on the adapter's default, recorded in applied.notes", model, provider, mem.Version, strings.Join(values, ", "))
+	}
+	return ""
+}
+
 // launchAdvisories is what an orchestrator should know about a member's
 // advisory settings before it launches: which of them this provider, or the
 // adapter version this host last ran, will not enforce. Returned with the
@@ -97,6 +124,9 @@ func launchAdvisories(settings swarm.AgentProfile) []string {
 				out = append(out, fmt.Sprintf("capability \"reviewer\": %s (enforcement %q)", note, level))
 			}
 		}
+	}
+	if note := modelAdvisory(settings.Provider, settings.Model); note != "" {
+		out = append(out, note)
 	}
 	if settings.Subagents == "deny" && !slices.Contains(providerCapability["subagents"], settings.Provider) {
 		out = append(out, fmt.Sprintf(`subagents "deny" on %s: the adapter has no subagent control; the member is instructed not to spawn (enforced by %s only)`, settings.Provider, strings.Join(providerCapability["subagents"], ", ")))

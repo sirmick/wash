@@ -251,3 +251,17 @@ test('a stored default that can no longer start stays visible, disabled', () => 
   expect(opt.textContent).toContain('cannot start here');
   expect(sel.value).toBe('mine');
 });
+
+// A model the adapter did not list last time is a warning on the slot, not
+// a refusal: the launch runs on the adapter's default and says so. The
+// warning is what catches a typo before a workspace does.
+test('a slot model not in the adapter list is flagged, a listed one is not', () => {
+  const { getByTestId, queryByTestId } = mount([pro, mine]);
+  expect(getByTestId('ai-catalog-model-note-anthropic-pro-frontier').textContent).toContain('claude-fable-5-1[1m] is not in the list Claude Code last reported');
+  expect(queryByTestId('ai-catalog-model-note-anthropic-pro-coding')).toBeNull();
+  // An adapter that has not reported a list yet cannot flag anything.
+  expect(queryByTestId('ai-catalog-model-note-mine-frontier')).toBeNull();
+  // Typing a listed model clears the note.
+  fireEvent.input(getByTestId('ai-catalog-model-anthropic-pro-frontier'), { target: { value: 'haiku' } });
+  expect(queryByTestId('ai-catalog-model-note-anthropic-pro-frontier')).toBeNull();
+});

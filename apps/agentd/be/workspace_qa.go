@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/sirmick/wash/internal/swarm"
 )
@@ -35,8 +36,11 @@ func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 		return map[string]any{"threads": index}, nil
 	}
 	q := swarm.QA(w, a.Thread)
-	if q == nil || a.Node != "" && !swarm.Within(w, q.Node, a.Node) {
-		return nil, errors.New("unknown QA thread")
+	if q == nil {
+		return nil, swarm.UnknownThread(w, a.Thread)
+	}
+	if a.Node != "" && !swarm.Within(w, q.Node, a.Node) {
+		return nil, fmt.Errorf("thread %s is not on node %s", q.ID, a.Node)
 	}
 	thread := *q
 	if thread.Archived {

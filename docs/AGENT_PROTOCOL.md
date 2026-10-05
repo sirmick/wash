@@ -1230,6 +1230,7 @@ UsageRow is one row's counters.
 | `roles?` | `Record<string, string>` | Roles are instruction templates by member role, put before a new member's own instructions (workspace.toml [roles.<role>]). |
 | `context_warn?` | `number` | ContextWarn is the share of its context window at which a member's use is reported to the orchestrator, once; 0 is the default. |
 | `supervisor?` | `Supervisor` | Supervisor tunes the stall watchdog. |
+| `digest?` | `string` | Digest holds the orchestrator's routine mail (progress, notes, lifecycle) for this long, or until something that needs it arrives (a result, a question, an answer, an owner's decision), and delivers it in one turn. "" delivers as it comes. With twenty members every progress report was a turn of the owner's own session (Redoubt, R11). |
 | `nudged?` | `string[]` | Nudged are the lifecycle nudges already sent, so each goes once. |
 | `members` | `Member[] \| null` |  |
 | `assignments` | `Assignment[] \| null` |  |

@@ -568,6 +568,14 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 						}
 						msg.Thread = u.ID
 					}
+					// A direct copy of words already on their way on the
+					// same thread is the one already sent (see NotifyQA).
+					if msg.Thread != "" && msg.QA == nil {
+						if dup := swarm.PendingCopy(w, m.ID, target.ID, msg.Thread, msg.Body); dup != nil {
+							out = append(out, *dup)
+							return nil
+						}
+					}
 					v, err := swarm.AddMessage(w, m.ID, target.ID, msg.Type, msg.Body, msg.Reply, msg.Assignment, msg.Request)
 					if err != nil {
 						return err

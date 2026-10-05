@@ -732,7 +732,7 @@ func memberSettingsFor(w *swarm.Workspace, catalogs map[string]Catalog, bad map[
 
 // workspaceFileKeys are what a workspace file (workspace.toml) may set:
 // the same fields as workspace_configure, with name for workspace.name.
-var workspaceFileKeys = []string{"name", "max_active", "max_members", "catalog", "qa_dir", "plan_file", "legend", "context_warn", "supervisor", "roles", "members"}
+var workspaceFileKeys = []string{"name", "max_active", "max_members", "catalog", "qa_dir", "plan_file", "legend", "context_warn", "supervisor", "digest", "roles", "members"}
 
 // workspaceFromFile reads a workspace definition (TOML) and returns the
 // configuration it describes, with the call's own fields on top: a field in

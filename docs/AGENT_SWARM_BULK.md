@@ -120,6 +120,16 @@ now need two consecutive checks and say since when they held and when the member
 delivery settled; the lifecycle message says when it was observed. Mail from a member that
 has ended is labelled `(…, ended)` in the orchestrator's inbox.
 
+API 4.2 also: `digest` on the workspace (top level and in the workspace file; a duration from
+30s to 1h) holds the orchestrator's routine mail — `progress`, `note`, `lifecycle` — for one
+turn, or until a result, question, answer or owner decision carries it (R11). Words already on
+their way to a member from the same author on the same thread are not sent twice when a QA reply
+and a direct answer carry them both (R14). `workspace_get view=message id=…` reads one message
+(sender, recipient or orchestrator) or one QA event by id, and a `thread_id` that is really a
+message or event id is refused saying so (R15). A model id not in the list the provider's adapter
+last reported on this host is an advisory in the configure receipt and a note on the catalog
+slot in the launcher, not a failure.
+
 ## Fourteen tools
 
 | Tool | Responsibility |

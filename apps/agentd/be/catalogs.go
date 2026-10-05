@@ -238,6 +238,12 @@ func publishCatalogs(pol agentpolicy.Policy, keys map[string]string) []agentprot
 			if !sv.Available && v.Available {
 				v.Available, v.Note = false, sv.Note
 			}
+			// A model the adapter did not list last time is a warning on the
+			// slot, not an unavailable catalog: the launch runs on the
+			// adapter's default and says so.
+			if sv.Available && sv.Note == "" {
+				sv.Note = modelAdvisory(s.Provider, s.Model)
+			}
 			v.Slots = append(v.Slots, sv)
 		}
 		out = append(out, v)
