@@ -285,8 +285,8 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 	sid := h.sessionID
 	switch call.Name {
 	case "workspace_get":
-		if a.View != "" && a.View != "state" && a.View != "about" && a.View != "qa" && a.View != "team" {
-			return nil, errors.New("view must be state, about, qa or team")
+		if a.View != "" && a.View != "state" && a.View != "about" && a.View != "qa" && a.View != "team" && a.View != "message" {
+			return nil, errors.New("view must be state, about, qa, team or message")
 		}
 		if a.View == "about" {
 			var fields map[string]json.RawMessage
@@ -302,6 +302,9 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		}
 		if a.View == "qa" {
 			return qaView(w, a)
+		}
+		if a.View == "message" {
+			return messageView(w, workspaceMember(w, sid), a)
 		}
 		// Team is the default: it is what a member or orchestrator re-reads
 		// between turns, and full state (configuration, launch snapshots,
@@ -1569,6 +1572,41 @@ func teamView(w *swarm.Workspace) map[string]any {
 		header["catalog"] = w.Catalog
 	}
 	return map[string]any{"workspace": header, "pending_approvals": len(workspaceApprovals(w)), "members": members}
+}
+
+// messageView is one message by id, for its sender, its recipient or the
+// orchestrator: a reviewer's result quoted to a successor needed the whole
+// state history read to find it (Redoubt, R15). A QA event id is answered
+// with its thread and the event, so either kind of id a result cites is
+// readable directly.
+func messageView(w *swarm.Workspace, self *swarm.Member, a workspaceArgs) (any, error) {
+	if a.ID == "" || a.Thread != "" || a.Node != "" || a.IncludeMessages || a.After != "" || a.Limit != 0 {
+		return nil, errors.New("view=message takes id (a message or QA event id) and nothing else")
+	}
+	if self == nil {
+		return nil, errors.New("no workspace")
+	}
+	for _, msg := range w.Messages {
+		if msg.ID != a.ID {
+			continue
+		}
+		if self.ID != w.Lead && msg.Sender != self.ID && msg.Recipient != self.ID {
+			return nil, errors.New("that message is between other members")
+		}
+		out := map[string]any{"message": msg}
+		if msg.Thread != "" {
+			out["read_thread"] = map[string]string{"view": "qa", "thread_id": msg.Thread}
+		}
+		return out, nil
+	}
+	for _, q := range w.QA {
+		for _, e := range q.Events {
+			if e.ID == a.ID {
+				return map[string]any{"thread_id": q.ID, "event": e, "read_thread": map[string]string{"view": "qa", "thread_id": q.ID}}, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no message or QA event %q", a.ID)
 }
 
 // firstLine is s cut to its first line and at most n runes, marked when cut.

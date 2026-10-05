@@ -402,3 +402,39 @@ func TestCheckpointLeadsTheQueueAndSupersedes(t *testing.T) {
 		t.Fatalf("setup view mutated: %d", n)
 	}
 }
+
+// One message or QA event by id, for its parties and the orchestrator (R15).
+func TestMessageViewReadsOneMessageOrEvent(t *testing.T) {
+	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	w, _ := s.Setup("lead", "codex", t.TempDir(), "Team", "")
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "m", Key: "impl", Session: "m-session", Name: "Impl", State: "available", Lifetime: "resident"},
+			swarm.Member{ID: "o", Key: "other", Session: "o-session", Name: "Other", State: "available", Lifetime: "resident"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	call := func(session, raw string) (any, error) {
+		return ws.call(context.Background(), &hosted{sessionID: session}, workspacemcp.Call{Name: "workspace_get", Arguments: json.RawMessage(raw)})
+	}
+	sent, err := ws.call(context.Background(), &hosted{sessionID: "lead"}, workspacemcp.Call{Name: "message_send", Arguments: json.RawMessage(`{"recipient":"impl","type":"instruction","body":"Go."}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sent.(swarm.Message).ID
+	got, err := call("m-session", `{"view":"message","id":"`+id+`"}`)
+	if err != nil || got.(map[string]any)["message"].(swarm.Message).Body != "Go." {
+		t.Fatalf("recipient read: %v %v", got, err)
+	}
+	if _, err := call("o-session", `{"view":"message","id":"`+id+`"}`); err == nil || !strings.Contains(err.Error(), "between other members") {
+		t.Fatalf("a bystander read it: %v", err)
+	}
+	if _, err := call("lead", `{"view":"message","id":"nope"}`); err == nil || !strings.Contains(err.Error(), `no message or QA event "nope"`) {
+		t.Fatalf("unknown id: %v", err)
+	}
+	if _, err := call("lead", `{"view":"message"}`); err == nil {
+		t.Fatal("no id accepted")
+	}
+	_ = w
+}

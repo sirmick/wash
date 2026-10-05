@@ -150,7 +150,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 		}
 	} else {
 		if q == nil {
-			return nil, errors.New("unknown QA thread")
+			return nil, UnknownThread(w, u.ID)
 		}
 		if u.OnBehalfOf != "" {
 			return nil, errors.New("on_behalf_of is set when a thread opens")
@@ -250,7 +250,7 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 func LinkQA(w *Workspace, id string, msg *Message) error {
 	q := QA(w, id)
 	if q == nil {
-		return errors.New("unknown QA thread")
+		return UnknownThread(w, id)
 	}
 	if msg.Thread != "" && msg.Thread != id {
 		return errors.New("message belongs to a different QA thread")
@@ -316,6 +316,13 @@ func NotifyQA(w *Workspace, q *QAThread, author, body string, skip ...string) er
 			continue
 		}
 		told = append(told, m.ID)
+		// The same words already on their way to this member, from the
+		// same author on the same thread, are not sent twice: a ruling
+		// posted as a QA reply and then as a direct answer arrived as two
+		// turns (Redoubt, R14).
+		if PendingCopy(w, author, m.ID, q.ID, body) != nil {
+			continue
+		}
 		msg, err := AddMessage(w, author, m.ID, "answer", body, "", "", "")
 		if err != nil {
 			return err
@@ -323,6 +330,42 @@ func NotifyQA(w *Workspace, q *QAThread, author, body string, skip ...string) er
 		msg.Thread = q.ID
 	}
 	return nil
+}
+
+// PendingCopy is a message from from to to, on thread, with exactly body,
+// that has not been delivered yet — the duplicate a second send would make.
+func PendingCopy(w *Workspace, from, to, thread, body string) *Message {
+	for i := range w.Messages {
+		msg := &w.Messages[i]
+		if msg.Sender == from && msg.Recipient == to && msg.Thread == thread && msg.Body == body && (msg.State == "queued" || msg.State == "dispatched") {
+			return msg
+		}
+	}
+	return nil
+}
+
+// UnknownThread is the error for a thread id that names no thread, and says
+// what the id does name when Wash can tell: a message (and its thread, if it
+// is on one) or a QA event. A member that pasted a result's message id as a
+// thread_id got "unknown QA thread" and copied the findings by hand
+// (Redoubt, R15).
+func UnknownThread(w *Workspace, id string) error {
+	for _, msg := range w.Messages {
+		if msg.ID == id {
+			if msg.Thread != "" {
+				return fmt.Errorf("unknown QA thread %q: that is a message id; its thread is %s", id, msg.Thread)
+			}
+			return fmt.Errorf("unknown QA thread %q: that is a message id (%s from %s), on no thread; read it with workspace_get view=message", id, msg.Type, msg.Sender)
+		}
+	}
+	for _, q := range w.QA {
+		for _, e := range q.Events {
+			if e.ID == id {
+				return fmt.Errorf("unknown QA thread %q: that is a QA event on thread %s", id, q.ID)
+			}
+		}
+	}
+	return fmt.Errorf("unknown QA thread %q", id)
 }
 
 // QAMarkdown is the bounded QA view the window shows: every thread's header,

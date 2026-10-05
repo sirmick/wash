@@ -383,3 +383,48 @@ func TestThreadAnswersReachOnBehalfOfAndEveryoneWhoWrote(t *testing.T) {
 		t.Fatalf("thread file names no participant: %v\n%s", err, b.String())
 	}
 }
+
+// A ruling that already travels to a member on a thread is not sent again
+// by a second path (R14); and a thread id that is really a message or event
+// id is refused saying what it is (R15).
+func TestNotifyDedupesPendingCopiesAndUnknownThreadSaysWhatTheIDIs(t *testing.T) {
+	s, _ := planStore(t)
+	seed(t, s)
+	if err := s.Mutate("lead", true, func(w *Workspace, lead *Member) error {
+		if _, err := UpdateQA(w, lead, QAUpdate{ID: "Q1", Action: "open", Node: "A", Title: "Which?", Body: "A or B?", Assignee: "impl"}); err != nil {
+			return err
+		}
+		q := QA(w, "Q1")
+		// The assignee answers directly, then the same words fan out.
+		direct, err := AddMessage(w, "impl", lead.ID, "answer", "B.", "", "", "")
+		if err != nil {
+			return err
+		}
+		direct.Thread = "Q1"
+		if err := NotifyQA(w, q, "impl", "B."); err != nil {
+			return err
+		}
+		n := 0
+		for _, msg := range w.Messages {
+			if msg.Sender == "impl" && msg.Recipient == lead.ID && msg.Body == "B." {
+				n++
+			}
+		}
+		if n != 1 {
+			return fmt.Errorf("the lead got the same answer %d times", n)
+		}
+		err = UnknownThread(w, direct.ID)
+		if err == nil || !strings.Contains(err.Error(), "message id") || !strings.Contains(err.Error(), "its thread is Q1") {
+			return fmt.Errorf("message id as thread: %v", err)
+		}
+		if err := UnknownThread(w, q.Events[0].ID); err == nil || !strings.Contains(err.Error(), "QA event on thread Q1") {
+			return fmt.Errorf("event id as thread: %v", err)
+		}
+		if err := UnknownThread(w, "nope"); err == nil || err.Error() != `unknown QA thread "nope"` {
+			return fmt.Errorf("plain unknown: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

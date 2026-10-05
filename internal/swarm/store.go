@@ -238,6 +238,12 @@ type Workspace struct {
 	ContextWarn float64 `json:"context_warn,omitempty"`
 	// Supervisor tunes the stall watchdog.
 	Supervisor Supervisor `json:"supervisor,omitzero"`
+	// Digest holds the orchestrator's routine mail (progress, notes,
+	// lifecycle) for this long, or until something that needs it arrives
+	// (a result, a question, an answer, an owner's decision), and delivers
+	// it in one turn. "" delivers as it comes. With twenty members every
+	// progress report was a turn of the owner's own session (Redoubt, R11).
+	Digest string `json:"digest,omitempty"`
 	// Nudged are the lifecycle nudges already sent, so each goes once.
 	Nudged      []string     `json:"nudged,omitempty"`
 	Members     []Member     `json:"members"`
@@ -852,6 +858,26 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 		}
 		return rank(a) - rank(b)
 	})
+	// The orchestrator's routine mail waits for the digest interval, or for
+	// something that cannot wait to carry it. Results, questions, answers
+	// and owner decisions are never held; a checkpoint is never held.
+	if m.ID == w.Lead && w.Digest != "" && len(batch) > 0 {
+		if d, err := time.ParseDuration(w.Digest); err == nil && d > 0 {
+			routine := func(i int) bool {
+				t := w.Messages[i].Type
+				return t == "progress" || t == "note" || t == "lifecycle"
+			}
+			cutoff := time.Now().Add(-d).UnixMilli()
+			urgent, due := false, false
+			for _, i := range batch {
+				urgent = urgent || !routine(i)
+				due = due || w.Messages[i].Created <= cutoff
+			}
+			if !urgent && !due {
+				return nil, stale, setDone
+			}
+		}
+	}
 	// A note wakes nobody busy: it goes out with the next turn something
 	// else starts. It does wake a member idle in a plain wait (no waiting
 	// set): an orchestrator that kept to "do not poll" and waited for a

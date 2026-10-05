@@ -227,6 +227,9 @@ own 30% point will arrive from bookkeeping rather than decisions. Desired: a dig
 progress and lifecycle notes are batched or summarised, and only results, questions and owner
 decisions wake the orchestrator.
 
+Addressed in API 4.2: `digest` on the workspace (e.g. `"5m"`) holds progress, notes and
+lifecycle for one turn, or until a result, question, answer or owner decision carries them.
+
 ## What worked (keep)
 
 - The plan and QA files resumed intact on a new host from git alone (`workspace_configure
@@ -327,9 +330,10 @@ notifications for the same recipient, or expose their shared provenance. Digest 
 progress/confirmations without waking the owner's orchestrator for each one. Keep genuine
 questions, failures and results promptly visible.
 
-Partly addressed in API 4.2: mail from an ended member is labelled `(…, ended)` in the
-orchestrator's inbox. Open: a structured handoff-ready event, dedupe of thread/direct
-notifications, and the digest (R11).
+Addressed in API 4.2: mail from an ended member is labelled `(…, ended)` in the
+orchestrator's inbox; the same words from the same author on the same thread are not sent
+twice when a QA reply and a direct answer both carry them; routine mail digests (R11). Open:
+a structured handoff-ready event beyond the R03 lifecycle note.
 
 ## WASH-R15 — Message, QA event and thread identifiers need clearer affordances
 
@@ -395,7 +399,14 @@ commit. `subagents:"deny"` records `denied` or `instructed`. A model, effort or 
 the adapter does not offer runs on its default with `applied.notes` saying so. The 4.1 gate
 (`enforcement:"unverified"` as the way through) is replaced by `enforcement:"adapter"` as the
 one way to be refused. This closes R01's "no path forward" and the model-catalog failure mode
-above; the catalog-editor validation against the remembered adapter list remains a wish.
+above. The catalog-editor validation followed the same day: a slot model not in the list the
+adapter last reported is flagged in the Setup tab, noted on the slot in the launcher, and an
+advisory in the configure receipt.
+
+Addressed in API 4.2 (R15): `workspace_get view=message id=…` reads one message (sender,
+recipient or orchestrator) or one QA event; a `thread_id` that is really a message or event id
+is refused saying what it is and where its thread is; `decision_refs` are documented as free
+text. Open: typed references in result metadata.
 
 ## Model portability and reviewer setup (R01/R02 follow-up)
 

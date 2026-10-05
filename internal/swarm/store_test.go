@@ -742,3 +742,55 @@ func TestACheckpointLeadsSupersedesAndDeliveryIsStamped(t *testing.T) {
 		t.Fatalf("the handover did not follow: %+v %v", next, err)
 	}
 }
+
+// With a digest set, the orchestrator's routine mail waits for the interval
+// or for something that cannot wait; a result carries it at once (R11).
+func TestDigestHoldsRoutineMailUntilDueOrUrgent(t *testing.T) {
+	s, _ := fixture(t)
+	if _, err := s.Configure("lead-session", ConfigurePatch{Digest: str("5m")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Configure("lead-session", ConfigurePatch{Digest: str("5s")}); err == nil {
+		t.Fatal("a 5s digest accepted")
+	}
+	a, err := s.Assign("lead-session", "worker", "", "", "Build timers", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Mutate("worker-session", false, func(w *Workspace, m *Member) error {
+		_, err := AddMessage(w, "wash", w.Lead, "lifecycle", "Something routine.", "", "", "")
+		return err
+	}), error(nil); err != nil {
+		t.Fatal(err)
+	}
+	if batch, _ := s.Next("lead-session"); len(batch) != 0 {
+		t.Fatalf("routine mail delivered inside the digest interval: %+v", batch)
+	}
+	if err := s.Complete("worker-session", a.ID, "Done.", false); err != nil {
+		t.Fatal(err)
+	}
+	batch, _ := s.Next("lead-session")
+	types := []string{}
+	for _, msg := range batch {
+		types = append(types, msg.Type)
+	}
+	if len(batch) != 2 || !slices.Contains(types, "result") || !slices.Contains(types, "lifecycle") {
+		t.Fatalf("the result did not carry the held mail: %v", types)
+	}
+	// Past the interval, routine mail goes on its own.
+	if _, err := s.Configure("lead-session", ConfigurePatch{Digest: str("30s")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead-session", true, func(w *Workspace, _ *Member) error {
+		v, err := AddMessage(w, "wash", w.Lead, "lifecycle", "Old news.", "", "", "")
+		if err == nil {
+			v.Created -= 60_000
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if batch, _ := s.Next("lead-session"); len(batch) != 1 || batch[0].Body != "Old news." {
+		t.Fatalf("due routine mail held: %+v", batch)
+	}
+}

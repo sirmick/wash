@@ -26,7 +26,10 @@ type ConfigurePatch struct {
 	// Supervisor tunes the watchdog. It replaces the whole setting; {}
 	// restores the defaults.
 	Supervisor *Supervisor `json:"supervisor"`
-	Expected   *int64      `json:"expected_revision"`
+	// Digest is how long the orchestrator's routine mail (progress, notes,
+	// lifecycle) is held for one turn, e.g. "5m"; "" delivers as it comes.
+	Digest   *string `json:"digest"`
+	Expected *int64  `json:"expected_revision"`
 }
 
 // Supervisor tunes the watchdog that tells the orchestrator when work has
@@ -200,6 +203,15 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 				return err
 			}
 			w.Supervisor = *p.Supervisor
+		}
+		if p.Digest != nil {
+			if *p.Digest != "" {
+				d, err := time.ParseDuration(*p.Digest)
+				if err != nil || d < 30*time.Second || d > time.Hour {
+					return errors.New(`digest is a duration from 30s to 1h, e.g. "5m", or "" to deliver routine mail as it comes`)
+				}
+			}
+			w.Digest = *p.Digest
 		}
 		// The revision counts configuration changes only: bumped by every
 		// mutation, an expected_revision read moments earlier went stale

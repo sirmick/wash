@@ -68,3 +68,25 @@ func TestUnenforceableLaunchSettingsAreAdvisedNotRefused(t *testing.T) {
 		t.Fatal("strict reviewer refused before any session ran:", err)
 	}
 }
+
+// A model id the provider's adapter did not list last time is an advisory,
+// before the launch runs it on the adapter's default (the "opus-5-5" slots).
+func TestUnlistedModelIsAdvised(t *testing.T) {
+	adapterMemMu.Lock()
+	adapterMem = map[string]agentproto.AdapterOptions{"claude": {Adapter: "claude", Version: "0.85.1", Configs: []agentproto.Config{{ID: "model", Category: "model", Values: []agentproto.ConfigValue{{Value: "default"}, {Value: "opus"}, {Value: "sonnet"}}}}}}
+	adapterMemMu.Unlock()
+	t.Cleanup(resetAdapterMemoryForTest)
+	if note := modelAdvisory("claude", "opus"); note != "" {
+		t.Fatalf("listed model advised: %s", note)
+	}
+	note := modelAdvisory("claude", "claude-opus-5-5")
+	if !strings.Contains(note, `"claude-opus-5-5"`) || !strings.Contains(note, "0.85.1") || !strings.Contains(note, "opus, sonnet") {
+		t.Fatalf("unlisted model: %q", note)
+	}
+	if note := modelAdvisory("codex", "gpt-6-astra"); note != "" {
+		t.Fatalf("a provider that has not run advised: %s", note)
+	}
+	if got := launchAdvisories(swarm.AgentProfile{Provider: "claude", Model: "claude-opus-5-5"}); len(got) != 1 || !strings.Contains(got[0], "applied.notes") {
+		t.Fatalf("configure advisories: %v", got)
+	}
+}

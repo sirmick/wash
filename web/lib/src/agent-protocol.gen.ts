@@ -1607,6 +1607,14 @@ export interface Workspace {
   context_warn?: number;
   /** Supervisor tunes the stall watchdog. */
   supervisor?: Supervisor;
+  /**
+   * Digest holds the orchestrator's routine mail (progress, notes,
+   * lifecycle) for this long, or until something that needs it arrives
+   * (a result, a question, an answer, an owner's decision), and delivers
+   * it in one turn. "" delivers as it comes. With twenty members every
+   * progress report was a turn of the owner's own session (Redoubt, R11).
+   */
+  digest?: string;
   /** Nudged are the lifecycle nudges already sent, so each goes once. */
   nudged?: string[];
   members: Member[] | null;

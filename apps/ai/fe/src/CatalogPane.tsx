@@ -242,6 +242,15 @@ export const CatalogPane: Component<{
           style={{ font: tokens.type.monoMd, 'min-width': 0 }}
         />
         <datalist id={listID}><For each={models()}>{(m) => <option value={m.value}>{m.name}</option>}</For></datalist>
+        {/* A model the adapter did not list last time is not refused —
+            a launch runs on the adapter's default and says so — but it is
+            the one typo the Setup tab can catch before a workspace does:
+            "sonnect" sat in a slot for days (Redoubt). */}
+        <Show when={row.value.model && models().length > 0 && !models().some((m) => m.value === row.value.model)}>
+          <div data-testid={`ai-catalog-model-note-${row.catalogID}-${row.slot}`} style={{ 'grid-column': '2 / -1', font: tokens.type.textSm, color: tokens.fgWarning }}>
+            {row.value.model} is not in the list {adapterName(row.value.adapter)} last reported; a launch would run on its default model.
+          </div>
+        </Show>
         <Show
           when={efforts().length > 0}
           fallback={
