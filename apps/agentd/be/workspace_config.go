@@ -15,7 +15,17 @@ import (
 // choices when the model changes, so each is set only once the setting it
 // depends on is in place. Every step uses the full, authoritative option
 // list returned by ACP.
-func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.ConfigOption, set func(string, string) ([]acp.ConfigOption, error)) (map[string]string, error) {
+//
+// The settings are advisory. A value the adapter does not offer (a model id
+// not in its list, an effort level it has no setting for) is skipped and
+// returned as a note; the session runs on what the adapter has, and the
+// caller records the note on the member. Wash is agnostic to the provider,
+// so a catalog written against one adapter's list must not fail a launch on
+// another's — that cost the Redoubt Architect and every "opus-5-5" slot.
+// What still fails: a contradiction in the request (a semantic model and a
+// raw model config that disagree), and an adapter that errors on a value it
+// said it offers.
+func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.ConfigOption, set func(string, string) ([]acp.ConfigOption, error)) (effective map[string]string, notes []string, err error) {
 	pending := map[string]string{}
 	for id, value := range settings.Configs {
 		pending[id] = value
@@ -29,17 +39,23 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 		}
 		return nil
 	}
+	skip := func(id, value, why string) {
+		notes = append(notes, fmt.Sprintf("%s=%q not applied: %s", id, value, why))
+		delete(pending, id)
+	}
 	apply := func(id, value string) error {
 		option := find(id)
 		if option == nil {
-			return fmt.Errorf("unsupported adapter setting %q", id)
+			skip(id, value, "the adapter has no such setting")
+			return nil
 		}
 		if len(option.Options) > 0 && !slices.ContainsFunc(option.Options, func(v acp.ConfigOptionValue) bool { return v.Value == value }) {
 			values := make([]string, 0, len(option.Options))
 			for _, v := range option.Options {
 				values = append(values, v.Value)
 			}
-			return fmt.Errorf("unsupported value %q for %s; available values: %s", value, id, strings.Join(values, ", "))
+			skip(id, value, fmt.Sprintf("not offered by the adapter; it runs %q (available: %s)", option.CurrentValue, strings.Join(values, ", ")))
+			return nil
 		}
 		next, err := set(id, value)
 		if err != nil {
@@ -63,12 +79,16 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 		if len(ids) > 1 {
 			return "", fmt.Errorf("ambiguous %s options; use explicit configs instead", category)
 		}
-		return "", fmt.Errorf("adapter does not expose %s; inspect workspace_get config_options", category)
+		return "", nil
 	}
 	semantic := func(category, value string) error {
 		id, err := categoryID(category)
 		if err != nil {
 			return err
+		}
+		if id == "" {
+			notes = append(notes, fmt.Sprintf("%s=%q not applied: the adapter exposes no %s setting", category, value, category))
+			return nil
 		}
 		if raw, ok := pending[id]; ok && raw != value {
 			return fmt.Errorf("conflicting %s and configs[%q] values", category, id)
@@ -87,47 +107,50 @@ func configureWorkspaceSession(settings swarm.AgentProfile, options []acp.Config
 	for _, id := range ids {
 		if option := find(id); option != nil && option.Category == "mode" {
 			if err := apply(id, pending[id]); err != nil {
-				return nil, err
+				return nil, notes, err
 			}
 		}
 	}
 	if settings.Model != "" {
 		if err := semantic("model", settings.Model); err != nil {
-			return nil, err
+			return nil, notes, err
 		}
 	}
 	// A caller may use the raw model option instead of the semantic shortcut.
 	for _, id := range ids {
 		if option := find(id); option != nil && option.Category == "model" {
 			if err := apply(id, pending[id]); err != nil {
-				return nil, err
+				return nil, notes, err
 			}
 		}
 	}
 	if settings.Effort != "" {
 		if err := semantic("thought_level", settings.Effort); err != nil {
-			return nil, err
+			return nil, notes, err
 		}
 	}
 	for _, id := range ids {
 		if value, ok := pending[id]; ok {
 			if err := apply(id, value); err != nil {
-				return nil, err
+				return nil, notes, err
 			}
 		}
 	}
-	effective := map[string]string{}
+	effective = map[string]string{}
 	for _, option := range options {
 		effective[option.ID] = option.CurrentValue
 	}
-	// An adapter may reject/coerce a value without reporting an RPC error. Never
-	// start work under a silently substituted model or effort level.
+	// An adapter may coerce a value without reporting an RPC error. The
+	// session is not stopped for it — the adapter chose, as it does for a
+	// value it never offered — but the substitution is on the record, so
+	// "it ran on the wrong model" has a line to read.
 	for id, value := range requested {
 		if effective[id] != value {
-			return nil, fmt.Errorf("adapter did not retain %s=%q (reported %q)", id, value, effective[id])
+			notes = append(notes, fmt.Sprintf("%s=%q not kept by the adapter; it runs %q", id, value, effective[id]))
 		}
 	}
-	return effective, nil
+	slices.Sort(notes)
+	return effective, notes, nil
 }
 
 // restoreWorkspaceSession reapplies launch settings to a session that was
@@ -170,7 +193,8 @@ func restoreWorkspaceSession(settings swarm.AgentProfile, options []acp.ConfigOp
 			delete(settings.Configs, id)
 		}
 	}
+	_, notes, err := configureWorkspaceSession(settings, options, set)
+	skipped = append(skipped, notes...)
 	slices.Sort(skipped)
-	_, err = configureWorkspaceSession(settings, options, set)
 	return skipped, err
 }

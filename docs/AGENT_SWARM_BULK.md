@@ -1,6 +1,6 @@
 # Bulk workspace MCP contract
 
-Implemented API 4.1.0, 2026-10-01 (4.0.0 on 2026-09-26). This supersedes the incremental v1 catalog in
+Implemented API 4.2.0, 2026-10-04 (4.1.0 on 2026-10-01, 4.0.0 on 2026-09-26). This supersedes the incremental v1 catalog in
 [the original design](AGENT_SWARM.md). Discovery advertises fourteen tools.
 Removed operations and fields return errors; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
@@ -83,6 +83,29 @@ the project root (R08). The first message is size-checked with its handoff inclu
 (R09). `assignment_update` create with the same `request_id` and a different `body` is a
 conflict, not a retry. `caller.catalog` in `about` names the catalog this host serves the
 caller from, since a workspace file's model ids are catalog-specific.
+
+API 4.2 makes Wash agnostic to the AI provider: a member's launch settings are advisory,
+not mandated. `capability:"reviewer"` launches on every provider. Wash's own host guards
+apply everywhere (file writes and terminals refused through its ACP layer, edit/execute
+permissions denied, coordination tools scoped); the adapter's own tool allowlist is added
+where it has one (Claude Code, OpenCode). The launch records what held on the member as
+`applied.enforcement`: `adapter` (verified allowlist plus host guards), `unverified` (the
+allowlist on an adapter version Wash has not verified) or `host` (host guards only;
+read-only rests on instruction), and a `Reviewed-by` trailer carries `[enforcement <level>]`
+when less than `adapter`. `subagents:"deny"` likewise: removed where the adapter takes
+session metadata, otherwise the member is instructed, recorded as `applied.subagents`
+`denied` or `instructed`. A model id, effort or config value the adapter does not offer no
+longer fails the launch: the member runs on the adapter's default and `applied.notes` says
+what was not applied (and what the adapter substituted). The configure receipt, in preview
+too, carries `advisories` per member key — what this provider, or the adapter version this
+host last ran, will not enforce — so a review panel is told before it commits.
+`enforcement:"adapter"` on a reviewer is the one way to be refused instead: at configure
+and preview where this host has run the provider, else at launch. The 4.1 values
+`enforcement:"verified"|"unverified"` are gone; `view=about`
+`permissions.reviewer_capability_profiles` now reports per provider the enforcement a
+reviewer launched now would record, and `launch_setting_support` is informational.
+`member_control configure` on a live member is still exact: a value its adapter does not
+take is an error there, since it was asked for and nothing else.
 
 ## Fourteen tools
 

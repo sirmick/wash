@@ -521,7 +521,7 @@ func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error)
 		h.setMode(req.Mode)
 	}
 	options := h.configsSnapshot()
-	effective, err := configureWorkspaceSession(p, options, func(id, value string) ([]acp.ConfigOption, error) {
+	effective, notes, err := configureWorkspaceSession(p, options, func(id, value string) ([]acp.ConfigOption, error) {
 		res, e := h.client.SetConfigOption(ctx, h.sessionID, id, value)
 		if e == nil {
 			h.applyConfigs(res.ConfigOptions)
@@ -531,6 +531,12 @@ func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error)
 	if err != nil {
 		h.retire()
 		return nil, fmt.Errorf("%s: %w", p.Provider, err)
+	}
+	// A slot's model is advisory here too: a catalog written against one
+	// host's adapter list starts on another's default rather than not at
+	// all. The transcript's first line says so.
+	for _, note := range notes {
+		log.Printf("agentd: acp start key=%s catalog=%s: %s", h.key, req.Catalog, note)
 	}
 	// Then wash's auto-approval, which setYolo announces in the transcript
 	// like any later switch.

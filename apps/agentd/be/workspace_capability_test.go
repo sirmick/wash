@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sirmick/wash/internal/acp"
@@ -15,38 +16,51 @@ import (
 
 func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 	info := acp.Implementation{Name: "@agentclientprotocol/claude-agent-acp", Version: "0.81.1"}
-	meta, err := reviewerMetadata("claude", info, "")
-	if err != nil {
-		t.Fatal(err)
+	meta, level, err := reviewerMetadata("claude", info, "")
+	if err != nil || level != enforcementAdapter {
+		t.Fatal(level, err)
 	}
 	options := meta["claudeCode"].(map[string]any)["options"].(map[string]any)
 	if !reflect.DeepEqual(options["tools"], []string{"Read", "Glob", "Grep"}) || options["strictMcpConfig"] != true || options["allowDangerouslySkipPermissions"] != false {
 		t.Fatal(options)
 	}
 	info.Version = "0.81.2"
-	if _, err = reviewerMetadata("claude", info, ""); err != nil {
-		t.Fatal("re-verified adapter refused:", err)
+	if _, level, err = reviewerMetadata("claude", info, ""); err != nil || level != enforcementAdapter {
+		t.Fatal("re-verified adapter:", level, err)
 	}
-	// 0.79.0 was verified once and is no longer installed anywhere: dropped.
+	// An unverified version (0.79.0 was verified once and is no longer
+	// installed anywhere: dropped) gets the same allowlist, recorded as
+	// unverified; only a member that asked for enforcement "adapter" is
+	// refused.
 	for _, version := range []string{"", "0.64.2", "0.79.0", "0.80.0", "0.82.0"} {
 		info.Version = version
-		if _, err = reviewerMetadata("claude", info, ""); err == nil {
-			t.Fatal("unverified adapter accepted", version)
+		meta, level, err := reviewerMetadata("claude", info, "")
+		if err != nil || level != enforcementUnverified || meta == nil {
+			t.Fatal("unverified adapter:", version, level, meta, err)
+		}
+		if _, _, err := reviewerMetadata("claude", info, "adapter"); err == nil || !strings.Contains(err.Error(), `enforcement "adapter" cannot be met`) {
+			t.Fatal("strict reviewer launched unverified", version, err)
 		}
 	}
-	if _, err = startHostedCapability("codex", t.TempDir(), nil, sessionLaunch{capability: "reviewer", member: true}); err == nil {
-		t.Fatal("unsupported adapter launched")
+	// An adapter Wash has no allowlist for launches with host guards only.
+	codex := acp.Implementation{Name: "codex-acp", Version: "1.13.0"}
+	if meta, level, err := reviewerMetadata("codex", codex, ""); err != nil || meta != nil || level != enforcementHost {
+		t.Fatal("host-only reviewer:", meta, level, err)
+	}
+	if _, _, err := reviewerMetadata("codex", codex, "adapter"); err == nil {
+		t.Fatal("strict reviewer launched on codex")
 	}
 	// OpenCode's restriction is its launch configuration, not session
-	// metadata, and holds only for the version it was checked against.
+	// metadata, and is vouched for only at the version it was checked on.
 	oc := acp.Implementation{Name: "OpenCode", Version: "1.18.32"}
-	if meta, err := reviewerMetadata("opencode", oc, ""); err != nil || meta != nil {
-		t.Fatal("verified OpenCode:", meta, err)
+	if meta, level, err := reviewerMetadata("opencode", oc, ""); err != nil || meta != nil || level != enforcementAdapter {
+		t.Fatal("verified OpenCode:", meta, level, err)
 	}
-	for _, v := range []acp.Implementation{{Name: "OpenCode", Version: "1.19.0"}, {Name: "opencode-fork", Version: "1.18.32"}} {
-		if _, err := reviewerMetadata("opencode", v, ""); err == nil {
-			t.Fatal("unverified OpenCode accepted", v)
-		}
+	if _, level, err := reviewerMetadata("opencode", acp.Implementation{Name: "OpenCode", Version: "1.19.0"}, ""); err != nil || level != enforcementUnverified {
+		t.Fatal("newer OpenCode:", level, err)
+	}
+	if _, level, err := reviewerMetadata("opencode", acp.Implementation{Name: "opencode-fork", Version: "1.18.32"}, ""); err != nil || level != enforcementHost {
+		t.Fatal("foreign adapter on the opencode provider:", level, err)
 	}
 	s, _ := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
 	_, err = s.Setup("review-session", "claude", t.TempDir(), "Review", "")

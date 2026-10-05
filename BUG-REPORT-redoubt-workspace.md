@@ -368,6 +368,20 @@ Desired in Wash: validate slot models at save time and in preview against the re
 adapter list (warn, not refuse: the list is per-host); seed the CatalogPane model field from
 that list; have the launch error name the catalog and slot, not just "model".
 
+## Owner ruling (2026-10-04): provider-agnostic, advisory launch settings — API 4.2
+
+The owner's rule after reading the above: Wash must be agnostic to the AI provider, so
+`capability:"reviewer"` and a member's model string are advisory, not mandated. API 4.2
+implements it. A reviewer launches on every provider; Wash's host guards apply everywhere and
+the adapter's allowlist where it has one; the member's `applied.enforcement` records
+`adapter`, `unverified` or `host`, the `Reviewed-by` trailer carries the level when less than
+`adapter`, and the configure receipt's `advisories` (preview too) say what will not hold before
+commit. `subagents:"deny"` records `denied` or `instructed`. A model, effort or config value
+the adapter does not offer runs on its default with `applied.notes` saying so. The 4.1 gate
+(`enforcement:"unverified"` as the way through) is replaced by `enforcement:"adapter"` as the
+one way to be refused. This closes R01's "no path forward" and the model-catalog failure mode
+above; the catalog-editor validation against the remembered adapter list remains a wish.
+
 ## Model portability and reviewer setup (R01/R02 follow-up)
 
 The checked-in Wash catalog still maps `anthropic-budget.frontier` to `opus[1m]`, rejected

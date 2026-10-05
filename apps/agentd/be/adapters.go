@@ -294,11 +294,6 @@ func startHostedCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 // session/load.
 func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessionLaunch) (*hosted, error) {
 	capability := launch.capability
-	// Kept as defence in depth: configure rejects these before committing,
-	// but a resume reads launch settings stored before that check existed.
-	if err := unsupportedLaunchSetting(agentID, capability, launch.noSubagents, "; no session started"); err != nil {
-		return nil, err
-	}
 	a, ok := adapterByID(agentID)
 	if !ok {
 		return nil, fmt.Errorf("unknown agent %q", agentID)
@@ -448,15 +443,23 @@ func dialAdapterCapability(agentID, cwd string, svcConn *sdk.Conn, launch sessio
 	// is required, so it is only meaningful once a session call fails.
 	h.authMethods = res.AuthMethods
 	h.adapterInfo = res.AgentInfo
-	switch {
-	case capability != "":
-		h.sessionMeta, err = reviewerMetadata(agentID, res.AgentInfo, launch.enforcement)
-	case launch.noSubagents:
-		h.sessionMeta, err = noSubagentMetadata(res.AgentInfo)
+	// The member's advisory settings against what this adapter can do:
+	// applied where it can, recorded either way (Member.Applied). The one
+	// refusal left is a reviewer that asked for enforcement:"adapter".
+	if capability != "" {
+		h.sessionMeta, h.applied.Enforcement, err = reviewerMetadata(agentID, res.AgentInfo, launch.enforcement)
+		if err != nil {
+			h.stop()
+			return nil, err
+		}
 	}
-	if err != nil {
-		h.stop()
-		return nil, err
+	if launch.noSubagents {
+		// A reviewer's allowlist already removes Agent and Task.
+		meta, applied := noSubagentMetadata(res.AgentInfo)
+		if h.sessionMeta == nil {
+			h.sessionMeta = meta
+		}
+		h.applied.Subagents = applied
 	}
 	if res.AgentInfo.Name == claudeAdapter {
 		h.sessionMeta = claudeStateMeta(h.sessionMeta)

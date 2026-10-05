@@ -196,24 +196,19 @@ type controlError struct{ s string }
 func (e *controlError) Error() string { return e.s }
 
 // A member's subagents are background work outside its transcript and the
-// workspace's accounting. subagents "deny" removes the tool at launch, and
-// fails closed where wash cannot remove it.
+// workspace's accounting. subagents "deny" removes the tool at launch where
+// the adapter takes session metadata; elsewhere the member is instructed,
+// and the launch records which (the setting is advisory, not a refusal).
 func TestSubagentsDenyRemovesClaudesAgentTool(t *testing.T) {
-	meta, err := noSubagentMetadata(acp.Implementation{Name: "@agentclientprotocol/claude-agent-acp", Version: "0.81.1"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	meta, applied := noSubagentMetadata(acp.Implementation{Name: "@agentclientprotocol/claude-agent-acp", Version: "0.81.1"})
 	b, _ := json.Marshal(meta)
-	if !strings.Contains(string(b), `"disallowedTools":["Agent","Task"]`) {
-		t.Fatal(string(b))
+	if applied != "denied" || !strings.Contains(string(b), `"disallowedTools":["Agent","Task"]`) {
+		t.Fatal(applied, string(b))
 	}
-	if _, err = noSubagentMetadata(acp.Implementation{Name: "codex-acp", Version: "1.13.0"}); err == nil {
-		t.Fatal("an adapter wash cannot restrict was accepted")
+	if meta, applied = noSubagentMetadata(acp.Implementation{Name: "codex-acp", Version: "1.13.0"}); meta != nil || applied != "instructed" {
+		t.Fatal("an adapter wash cannot restrict:", meta, applied)
 	}
-	if _, err = startHostedCapability("codex", t.TempDir(), nil, sessionLaunch{member: true, noSubagents: true}); err == nil || !strings.Contains(err.Error(), "no session started") {
-		t.Fatal("codex launched with subagents deny", err)
-	}
-	if err = swarm.ValidateProfile(swarm.AgentProfile{Provider: "claude", Subagents: "sometimes"}); err == nil {
+	if err := swarm.ValidateProfile(swarm.AgentProfile{Provider: "claude", Subagents: "sometimes"}); err == nil {
 		t.Fatal("invalid subagents value accepted")
 	}
 	w := swarm.Workspace{Lead: "lead"}
