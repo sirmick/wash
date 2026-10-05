@@ -173,21 +173,25 @@ mode the Quickstart above starts.
 ### One machine serving the LAN (persistent single-user)
 
 For a box that should keep serving wash after you log out, without
-wash-login: `make install-host-scripts` symlinks three scripts from
-`scripts/host/` into `~/.local/bin`.
+wash-login or root beyond one line:
 
 ```bash
-make wash && make install-host-scripts
-wash-start      # router in a detached screen session, HTTPS + token on 0.0.0.0:10000
-wash-connect    # prints https://<this-host>:10000/?token=…  — paste it into any browser
-wash-update     # git pull --ff-only, pnpm install, make wash, wash-start
-wash-update --local   # the same without the pull: build and run what is checked out (local commits)
+sudo apt-get install -y git make && sudo loginctl enable-linger $USER      # once
+curl -fsSL https://raw.githubusercontent.com/sirmick/wash/main/scripts/host/wash-install | bash
+wash-connect     # https://<this-host>:10000/?token=…  — paste it into any browser
 ```
 
-The token lives in `~/.local/state/wash/router.token` and survives
-restarts, so existing browser cookies keep working; the log is beside
-it. `WASH_LISTEN`, `WASH_BRANCH`, `WASH_CONNECT_HOST` and
-`WASH_SCREEN_SESSION` override the defaults (see each script's header).
+`wash-install` clones into `~/wash`, puts go/node/pnpm under `~/.local`
+if they are missing, builds, links `wash-install` and `wash-connect` into
+`~/bin`, and runs `out/wash-router` as a `systemd --user` service
+(`journalctl --user -u wash -f` for logs). Re-running it is the update:
+`wash-install` (main), `wash-install v0.18.0`, `wash-install release`,
+`wash-install my-branch`, `wash-install origin/their-branch` — all built
+from source. A local branch ahead of origin builds your commits and says
+so. `--repo`, `--bindir` and `--listen` (or `WASH_REPO`, `WASH_BINDIR`,
+`WASH_LISTEN`) change the defaults; a later run remembers them from where
+it is linked and from the unit. The token lives in
+`~/.local/state/wash/router.token` and survives restarts.
 
 ### Multi-user (production)
 

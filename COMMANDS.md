@@ -92,9 +92,8 @@ wash-vm/run-qemu.sh             served by make qemu-run-vm (:13000)
 run.sh                          richer dev router launcher (--fm-seed / --tail / --listen)
 scripts/dev-restart.sh          kill+rebuild+restart the live router
 scripts/dev-kill.sh             kill every wash process
-scripts/host/wash-start         persistent router: screen session, HTTPS + token on :10000
-scripts/host/wash-connect       print that router's URL (with token) for another machine
-scripts/host/wash-update        pull, rebuild, wash-start; --local skips the pull   (make install-host-scripts symlinks all three)
+scripts/host/wash-install [REF] clone/toolchain/build REF, systemd --user unit on :10000; re-run = update  (make install-host-scripts symlinks both)
+scripts/host/wash-connect       print that router's URL (with token) for another machine, and what it serves
 scripts/fm-seed.sh  scripts/seed-bulk-fixture.sh
 ```
 
