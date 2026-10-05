@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
-# wash-connect — print the URL (with token) for the router wash-start is
-# running, for pasting into a browser on another machine. The host name is
-# this machine's reverse-DNS name on its primary interface, unless
-# WASH_CONNECT_HOST says otherwise.
+# wash-connect — print the URL, with token, of the router wash-install
+# runs, for pasting into a browser on another machine; and what it is
+# serving. The host name is this machine's reverse-DNS name on its primary
+# interface unless WASH_CONNECT_HOST says otherwise.
 #
 # Environment (all optional):
-#   WASH_CONNECT_HOST     hostname or IP to put in the URL (skips the DNS lookup)
-#   WASH_LISTEN           host:port wash-start serves on  (default 0.0.0.0:10000)
-#   WASH_SCREEN_SESSION   screen session name             (default wash)
-#   WASH_TOKEN_FILE       token file wash-start used      (default ~/.local/state/wash/router.token)
+#   WASH_CONNECT_HOST   hostname or IP for the URL (skips the DNS lookup)
+#   WASH_TOKEN_FILE     token file the router mints (default ~/.local/state/wash/router.token)
 
 set -euo pipefail
 
-session="${WASH_SCREEN_SESSION:-wash}"
-listen="${WASH_LISTEN:-0.0.0.0:10000}"
-token_file="${WASH_TOKEN_FILE:-$HOME/.local/state/wash/router.token}"
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+repo="$(cd "$here/../.." && pwd)"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/wash"
+unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/wash.service"
+token_file="${WASH_TOKEN_FILE:-$state_dir/router.token}"
 
-if ! screen -S "$session" -Q select . >/dev/null 2>&1; then
-  printf 'wash-connect: screen session %s is not running (wash-start)\n' "$session" >&2
+if ! systemctl --user is-active --quiet wash 2>/dev/null; then
+  printf 'wash-connect: wash.service is not running (wash-install starts it; journalctl --user -u wash -n 50 says why not)\n' >&2
   exit 1
 fi
+listen="$(grep -o -- '--listen [^ ]*' "$unit" 2>/dev/null | head -1 | cut -d' ' -f2 || true)"
+port="${listen##*:}"
+port="${port:-10000}"
 
 if [[ ! -r "$token_file" ]]; then
   printf 'wash-connect: token file is unavailable: %s\n' "$token_file" >&2
   exit 1
 fi
-
 token="$(tr -d '\r\n' < "$token_file")"
 if [[ -z "$token" ]]; then
   printf 'wash-connect: token file is empty: %s\n' "$token_file" >&2
@@ -41,15 +43,13 @@ else
       exit 1
     fi
   done
-
   route_line="$(ip -4 route get 1.1.1.1 2>/dev/null | head -1)"
   interface="$(awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}' <<<"$route_line")"
   primary_ip="$(awk '{for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}' <<<"$route_line")"
   if [[ -z "$interface" || -z "$primary_ip" ]]; then
-    printf 'wash-connect: could not determine the primary IPv4 interface and address\n' >&2
+    printf 'wash-connect: could not determine the primary IPv4 interface and address; set WASH_CONNECT_HOST\n' >&2
     exit 1
   fi
-
   dns_line="$(resolvectl dns "$interface" 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//')"
   read -r -a dns_servers <<<"$dns_line"
   host=""
@@ -59,10 +59,10 @@ else
   done
   host="${host%.}"
   if [[ -z "$host" ]]; then
-    printf 'wash-connect: no reverse-DNS record found for %s (%s); set WASH_CONNECT_HOST\n' \
-      "$primary_ip" "$interface" >&2
+    printf 'wash-connect: no reverse-DNS record found for %s (%s); set WASH_CONNECT_HOST\n' "$primary_ip" "$interface" >&2
     exit 1
   fi
 fi
-port="${listen##*:}"
+
 printf 'https://%s:%s/?token=%s\n' "$host" "$port" "$token"
+printf 'serving %s from %s\n' "$(git -C "$repo" describe --tags --always 2>/dev/null || echo '?')" "$repo" >&2

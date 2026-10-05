@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# wash-install — one command from a fresh Ubuntu login to a wash router
+# serving the LAN as this user, and the same command to change version.
+#
+#   sudo apt-get install -y git make && sudo loginctl enable-linger $USER     # once, the only root
+#   curl -fsSL https://raw.githubusercontent.com/sirmick/wash/main/scripts/host/wash-install | bash
+#   wash-connect
+#
+#   wash-install [REF] [--repo DIR] [--bindir DIR] [--listen HOST:PORT] [--no-start] [--dry-run]
+#
+# REF is anything git can check out, built from source; re-running is the
+# update. Default main.
+#   main (or any branch)   checked out and fast-forwarded to origin; if your local branch is
+#                          ahead, your commits are built and that is said
+#   origin/<branch>        exactly what origin has, detached
+#   v0.17.1                that tag;  release = the newest vX.Y.Z tag
+#
+# In order: clone if needed, install go/node/pnpm under ~/.local if missing
+# (scripts/install-local-toolchain.sh), check out REF, pnpm install, make
+# wash, symlink wash-install and wash-connect into --bindir, write a
+# systemd --user unit, restart it. Uncommitted edits are refused.
+#
+# Flags, environment, and what a later run remembers:
+#   --repo DIR          WASH_REPO      default ~/wash;    later: the checkout this command links into
+#   --bindir DIR        WASH_BINDIR    default ~/bin;     later: where this command's symlink lives
+#   --listen HOST:PORT  WASH_LISTEN    default 0.0.0.0:10000; later: the unit's ExecStart
+#   --no-start          build and install, leave the router as it is
+#   --dry-run           print what would run, change nothing
+# Flag > environment > remembered > default. State the router owns stays in
+# ~/.local/state/wash (token, log index, workspaces); the unit is wash.service.
+
+set -euo pipefail
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/wash"
+unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+unit="$unit_dir/wash.service"
+toolchain="${WASH_TOOLCHAIN_DIR:-$HOME/.local/wash-toolchain}"
+
+# ----- what a previous run left behind ------------------------------------------
+# Run from a checkout (directly or through its symlink), the checkout is the
+# repository and the symlink's directory is bindir. Run through curl | bash,
+# $0 is the shell and nothing is remembered.
+remembered_repo="" remembered_bindir="" remembered_listen=""
+if [[ -f "$0" ]]; then
+  here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+  if [[ -f "$here/../../Makefile" && -f "$here/wash-connect" ]]; then
+    remembered_repo="$(cd "$here/../.." && pwd)"
+  fi
+  if [[ -L "$0" ]]; then
+    remembered_bindir="$(cd "$(dirname "$0")" && pwd)"
+  fi
+fi
+if [[ -r "$unit" ]]; then
+  remembered_listen="$(grep -o -- '--listen [^ ]*' "$unit" | head -1 | cut -d' ' -f2 || true)"
+fi
+
+ref="" repo="${WASH_REPO:-}" bindir="${WASH_BINDIR:-}" listen="${WASH_LISTEN:-}"
+start=1 dry=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo)     repo="$2"; shift 2;;
+    --bindir)   bindir="$2"; shift 2;;
+    --listen)   listen="$2"; shift 2;;
+    --no-start) start=0; shift;;
+    --dry-run)  dry=1; shift;;
+    -h|--help)  sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'; exit 0;;
+    -*)         printf 'wash-install: unknown flag: %s (use --help)\n' "$1" >&2; exit 2;;
+    *)
+      if [[ -n "$ref" ]]; then printf 'wash-install: one REF (use --help)\n' >&2; exit 2; fi
+      ref="$1"; shift;;
+  esac
+done
+ref="${ref:-main}"
+repo="${repo:-${remembered_repo:-$HOME/wash}}"
+bindir="${bindir:-${remembered_bindir:-$HOME/bin}}"
+listen="${listen:-${remembered_listen:-0.0.0.0:10000}}"
+
+say() { printf '%s\n' "$*"; }
+run() { if [[ "$dry" == "1" ]]; then printf '  + %s\n' "$*"; else "$@"; fi; }
+
+# ----- what cannot be installed from here -----------------------------------------
+need_root=()
+command -v git  >/dev/null 2>&1 || need_root+=(git)
+command -v make >/dev/null 2>&1 || need_root+=(make)
+if [[ ${#need_root[@]} -gt 0 ]]; then
+  printf 'wash-install: %s missing. Once, as root:\n  sudo apt-get install -y %s && sudo loginctl enable-linger %s\n' \
+    "${need_root[*]}" "${need_root[*]}" "$USER" >&2
+  exit 1
+fi
+if [[ "$start" == "1" ]] && ! systemctl --user show-environment >/dev/null 2>&1; then
+  printf 'wash-install: systemd --user is not available in this session; use --no-start and run %s/out/wash-router yourself\n' "$repo" >&2
+  exit 1
+fi
+
+# ----- the checkout --------------------------------------------------------------------
+if [[ ! -d "$repo/.git" && ! -f "$repo/.git" ]]; then
+  say "Cloning wash into $repo"
+  run git clone -q https://github.com/sirmick/wash.git "$repo"
+fi
+
+# ----- the toolchain, under ~/.local -----------------------------------------------
+export PATH="$toolchain/go/bin:$HOME/go/bin:$toolchain/node/bin:$toolchain/npm-global/bin:$PATH"
+missing=()
+for c in go node pnpm; do command -v "$c" >/dev/null 2>&1 || missing+=("$c"); done
+if [[ ${#missing[@]} -gt 0 ]]; then
+  say "Installing ${missing[*]} under $toolchain (no root)"
+  run "$repo/scripts/install-local-toolchain.sh"
+  hash -r
+fi
+
+cd "$repo"
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  printf 'wash-install: uncommitted changes in %s; commit or stash them first\n' "$repo" >&2
+  exit 1
+fi
+
+# ----- REF ----------------------------------------------------------------------------------
+if ! run git fetch -q --tags --prune origin; then
+  say "note: could not reach origin; building from what is here"
+fi
+if [[ "$ref" == "release" ]]; then
+  ref="$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -1 || true)"
+  if [[ -z "$ref" ]]; then printf 'wash-install: no vX.Y.Z tag found\n' >&2; exit 1; fi
+  say "Newest release: $ref"
+fi
+if git show-ref --verify --quiet "refs/heads/$ref" || git show-ref --verify --quiet "refs/remotes/origin/$ref"; then
+  # A branch: yours if you have one, else origin's as a tracking branch.
+  run git checkout -q "$ref"
+  if upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+    if ! run git merge -q --ff-only "$upstream" 2>/dev/null; then
+      ahead="$(git rev-list --count "$upstream..HEAD")" behind="$(git rev-list --count "HEAD..$upstream")"
+      if [[ "$behind" == "0" ]]; then
+        say "Local $ref is $ahead commit(s) ahead of $upstream: building your commits"
+      else
+        say "Local $ref and $upstream have diverged ($ahead ahead, $behind behind): building yours; for origin's use 'wash-install $upstream'"
+      fi
+    fi
+  fi
+else
+  # A tag, origin/<branch>, or a commit.
+  run git checkout -q --detach "$ref"
+fi
+[[ "$dry" == "1" ]] || say "Building $(git describe --tags --always) — $(git log -1 --format='%s')"
+
+# ----- build ---------------------------------------------------------------------------------
+run pnpm install --frozen-lockfile
+run make wash
+
+# ----- the commands ------------------------------------------------------------------------
+run mkdir -p "$bindir"
+for s in wash-install wash-connect; do
+  run ln -sfn "$repo/scripts/host/$s" "$bindir/$s"
+done
+# The two this replaced, if an earlier install linked them here.
+for s in wash-start wash-update; do
+  if [[ -L "$bindir/$s" && "$(readlink -f "$bindir/$s" 2>/dev/null || true)" == "$repo/scripts/host/$s" ]]; then
+    run rm -f "$bindir/$s"
+  fi
+done
+case ":$PATH:" in
+  *":$bindir:"*) ;;
+  *) say "note: $bindir is on PATH from your next login (Ubuntu's ~/.profile adds it); until then: source ~/.profile";;
+esac
+
+# ----- the unit -------------------------------------------------------------------------------
+# A user service gets no login environment: PATH is written in, so the
+# agent adapters (npx) and anything the router runs can be found.
+unit_text="[Unit]
+Description=wash desktop router (serving as $USER)
+After=network-online.target
+
+[Service]
+ExecStart=$repo/out/wash-router --listen $listen --auth-token-file $state_dir/router.token
+WorkingDirectory=%h
+Environment=PATH=$PATH
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+"
+if [[ "$dry" == "1" ]]; then
+  say "  + write $unit (ExecStart: wash-router --listen $listen)"
+else
+  mkdir -p "$unit_dir" "$state_dir"
+  chmod 0700 "$state_dir"
+  printf '%s' "$unit_text" > "$unit"
+fi
+
+if [[ "$start" != "1" ]]; then
+  say "Built and installed; the router was not restarted (--no-start). When ready: systemctl --user restart wash"
+  exit 0
+fi
+run systemctl --user daemon-reload
+
+# ----- restart ----------------------------------------------------------------------------------
+# A restart ends every agent session and pauses every workspace; they resume
+# from .wash/ afterwards, but anything mid-turn is cut. Said, with time to stop it.
+active="$(python3 - "$state_dir/workspaces.json" <<'EOF' 2>/dev/null || true
+import json, sys
+try:
+    ws = json.load(open(sys.argv[1])).get("workspaces", [])
+except Exception:
+    sys.exit(0)
+print("\n".join(w.get("name", "?") for w in ws if w.get("state") == "active"))
+EOF
+)"
+if [[ -n "$active" && "$dry" != "1" ]]; then
+  say "Active workspaces will be interrupted (they resume after the restart):"
+  while IFS= read -r line; do say "  $line"; done <<<"$active"
+  say "Restarting in 5s — Ctrl-C keeps the current router."
+  sleep 5
+fi
+# The screen session an earlier wash-start left, if any: same port.
+if command -v screen >/dev/null 2>&1 && screen -S wash -Q select . >/dev/null 2>&1; then
+  say "Stopping the screen session the previous wash-start ran"
+  run screen -S wash -X quit
+fi
+run systemctl --user enable -q wash
+run systemctl --user restart wash
+if [[ "$dry" != "1" ]]; then
+  for _ in $(seq 1 50); do
+    systemctl --user is-active --quiet wash && break
+    sleep 0.1
+  done
+  if ! systemctl --user is-active --quiet wash; then
+    printf 'wash-install: wash.service did not stay up; see: journalctl --user -u wash -n 50\n' >&2
+    exit 1
+  fi
+fi
+# Survive logout: allowed without a password for the active desktop user;
+# over SSH polkit may refuse, in which case the sudo line says how.
+if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)" != "yes" ]]; then
+  if ! run loginctl enable-linger "$USER" 2>/dev/null; then
+    say "note: the router stops at logout until: sudo loginctl enable-linger $USER"
+  fi
+fi
+say "wash is running on $listen (logs: journalctl --user -u wash -f)"
+[[ "$dry" == "1" ]] || "$repo/scripts/host/wash-connect" || true

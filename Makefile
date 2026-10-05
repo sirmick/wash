@@ -1278,15 +1278,15 @@ push:
 	@echo "════ push: CI-equivalent gate passed ✓ — pushing ════"
 	git push $(ARGS)
 
-# Host scripts: run the built router as a persistent screen session with
-# HTTPS + token (wash-start), print its URL for another machine
-# (wash-connect), pull+rebuild+restart (wash-update). Symlinked, so a
-# `git pull` updates them in place. HOST_BINDIR=~/bin to put them elsewhere.
-HOST_BINDIR ?= $(HOME)/.local/bin
+# Host scripts: wash-install builds a REF and runs the router as a systemd
+# --user service with HTTPS + token (re-running is the update); wash-connect
+# prints its URL for another machine. Symlinked, so a `git pull` updates
+# them in place. HOST_BINDIR=~/.local/bin to put them elsewhere.
+HOST_BINDIR ?= $(HOME)/bin
 .PHONY: install-host-scripts
 install-host-scripts:
 	@mkdir -p $(HOST_BINDIR)
-	@for s in wash-start wash-connect wash-update; do \
+	@for s in wash-install wash-connect; do \
 	  ln -sfn $(abspath scripts/host/$$s) $(HOST_BINDIR)/$$s && echo "$(HOST_BINDIR)/$$s -> scripts/host/$$s"; \
 	done
 	@case ":$$PATH:" in *":$(HOST_BINDIR):"*) ;; *) echo "note: $(HOST_BINDIR) is not on PATH";; esac
