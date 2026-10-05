@@ -15,6 +15,11 @@ import (
 // setting one up.
 func (ws *workspaceService) about(h *hosted) workspacemcp.Discovery {
 	caller := map[string]any{"provider": h.agent, "session_id": h.sessionID, "role": "unattached"}
+	// Which catalog this host serves the caller from: a workspace file's
+	// model ids are catalog-specific, and the mismatch showed only at launch.
+	if h.catalog != "" {
+		caller["catalog"] = h.catalog
+	}
 	if w := ws.store.View(h.sessionID); w != nil {
 		caller["workspace_id"] = w.ID
 		for _, m := range w.Members {
@@ -68,11 +73,22 @@ func (ws *workspaceService) about(h *hosted) workspacemcp.Discovery {
 	permissions["host_policy_enabled"] = hostedPolicy().Enabled
 	permissions["approval_order"] = "host policy rules, then session auto-approval, then human approval (or cancellation if unavailable/disabled)"
 	permissions["filesystem_enforcement"] = "unknown: provider-specific; not verified by Wash workspace discovery"
-	permissions["reviewer_capability_profiles"] = map[string]any{"reviewer": map[string]any{"provider": "claude", "adapter": "@agentclientprotocol/claude-agent-acp", "verified_versions": reviewerVerifiedVersions, "tools": []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "enforcement": "provider tool allowlist plus host write/terminal denial; not an OS sandbox"}, "codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported", "opencode": map[string]any{"adapter": "OpenCode", "verified_versions": reviewerVerifiedOpenCode, "tools": []string{"read", "glob", "grep", "todowrite", "scoped Wash coordination"}, "enforcement": "write, edit, patch, bash, task, webfetch and skill tools removed and denied by launch configuration; not an OS sandbox"}}
+	// Per provider: the adapter and versions the profile is verified on,
+	// the version this host last ran, and so whether a reviewer launches
+	// here now. Read before staffing a review panel, not after it failed.
+	claude := reviewerHost("claude")
+	claude["provider"], claude["tools"], claude["enforcement"] = "claude", []string{"Read", "Glob", "Grep", "scoped Wash coordination"}, "provider tool allowlist plus host write/terminal denial; not an OS sandbox"
+	opencode := reviewerHost("opencode")
+	opencode["provider"], opencode["tools"], opencode["enforcement"] = "opencode", []string{"read", "glob", "grep", "todowrite", "scoped Wash coordination"}, "write, edit, patch, bash, task, webfetch and skill tools removed and denied by launch configuration; not an OS sandbox"
+	permissions["reviewer_capability_profiles"] = map[string]any{
+		"claude": claude, "opencode": opencode,
+		"codex": "unsupported: read-only mode uses a writable sandbox", "gemini": "unsupported",
+		"unverified": `a known adapter at a version not in verified_versions refuses capability:"reviewer" at configure (and preview); enforcement:"unverified" on the member launches the same tool allowlist anyway, recorded on the member and in its Reviewed-by trailer`,
+	}
 	permissions["launch_setting_support"] = map[string]any{
-		"reviewer":  providerCapability["reviewer"],
-		"subagents": providerCapability["subagents"],
-		"scope":     `which providers can enforce capability:"reviewer" and subagents:"deny"; configuring either on another provider is rejected before the member is committed`,
+		"reviewer":                     providerCapability["reviewer"],
+		"subagents":                    providerCapability["subagents"],
+		"scope":                        `which providers can enforce capability:"reviewer" and subagents:"deny"; configuring either on another provider is rejected before the member is committed`,
 		"instructing_a_member_instead": "a member told not to spawn agents is not the same as one that cannot: can_spawn:false removes its Wash spawning authority only",
 	}
 	permissions["approval_profiles"] = map[string]any{

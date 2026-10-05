@@ -35,6 +35,13 @@ type AgentProfile struct {
 	// member's work stays in its transcript and the workspace's accounting.
 	// "" and "allow" leave it available.
 	Subagents string `json:"subagents,omitempty"`
+	// Enforcement is how far capability:"reviewer" is vouched for.
+	// "verified" ("" too) launches only on an adapter version whose launch
+	// metadata Wash has checked; "unverified" launches the same tool
+	// allowlist on any version, and says so on the member and in every
+	// Reviewed-by trailer it earns. The owner's choice, recorded, rather
+	// than dropping the capability and the record with it.
+	Enforcement string `json:"enforcement,omitempty"`
 }
 
 type Usage struct {
@@ -49,6 +56,9 @@ type Member struct {
 	Role         string `json:"role,omitempty"`
 	Instructions string `json:"instructions,omitempty"`
 	InitialTask  string `json:"initial_task,omitempty"`
+	// InitialOverride is why the initial task starts before what its node
+	// needs is done; recorded on the node when the task is assigned.
+	InitialOverride string `json:"initial_override,omitempty"`
 	// Handoff is the handoff a member launched with handoff_from reads in
 	// its first message: what the member it replaces had done and knew.
 	Handoff string `json:"handoff,omitempty"`
@@ -479,16 +489,20 @@ func (s *Store) Assign(session, member, node, override, text, body, request stri
 		if target == nil || target.State == "ended" {
 			return errors.New("unknown member")
 		}
+		brief := text
+		if body != "" {
+			brief += "\n\n" + body
+		}
 		if request != "" {
 			for _, msg := range w.Messages {
 				if msg.Sender == m.ID && msg.RequestID == request {
 					for _, a := range w.Assignments {
-						if a.ID == msg.Assignment && a.Text == text && a.Member == target.ID {
+						if a.ID == msg.Assignment && a.Text == text && a.Member == target.ID && msg.Body == brief {
 							out = a
 							return nil
 						}
 					}
-					return errors.New("request_id conflict")
+					return errors.New("request_id reused with a different assignment")
 				}
 			}
 		}
@@ -497,10 +511,6 @@ func (s *Store) Assign(session, member, node, override, text, body, request stri
 			return err
 		}
 		out = *a
-		brief := text
-		if body != "" {
-			brief += "\n\n" + body
-		}
 		v, err := AddMessage(w, m.ID, target.ID, "instruction", brief, "", out.ID, request)
 		if err == nil {
 			v.Task = true
@@ -511,8 +521,17 @@ func (s *Store) Assign(session, member, node, override, text, body, request stri
 }
 
 // NewAssignment records an assignment for target on node (its own when
-// empty), starting work there: every assignment is on a plan node, and one
-// member holds one open assignment at a time.
+// empty), starting work there: every assignment is on a plan node, and a
+// member does one assignment at a time.
+//
+// A resident with one open may be given one more, queued: its instruction
+// is held until the open one resolves, then delivered as the member's next
+// turn. Without that, a member that reported a checkpoint as progress (not
+// a result) could not be given its next step except as an instruction off
+// the plan, and the orchestrator had to come back when the result landed
+// (Redoubt, WASH-R05). One queued at most: a third is a plan, not a queue.
+// An ephemeral member retires after its assignment, so nothing queues
+// behind it.
 func NewAssignment(w *Workspace, by, target *Member, node, override, text string) (*Assignment, error) {
 	if node == "" {
 		node = target.Node
@@ -520,16 +539,47 @@ func NewAssignment(w *Workspace, by, target *Member, node, override, text string
 	if node == "" {
 		return nil, fmt.Errorf("an assignment is on a plan node: give node (member %s is on none)", target.Name)
 	}
+	state := "assigned"
 	for _, a := range w.Assignments {
-		if a.Member == target.ID && a.Open() {
-			return nil, ErrActiveAssignment
+		if a.Member != target.ID || !a.Open() {
+			continue
 		}
+		if a.State == "queued" {
+			return nil, fmt.Errorf("%w, and %s queued behind it: send an instruction on the open one, or wait for a result", ErrActiveAssignment, a.ID)
+		}
+		if target.Lifetime == "ephemeral" {
+			return nil, fmt.Errorf("%w (%s), and an ephemeral member retires after it: send an instruction on it, or launch another member", ErrActiveAssignment, a.ID)
+		}
+		state = "queued"
 	}
 	if err := startWork(w, by, node, override); err != nil {
 		return nil, err
 	}
-	w.Assignments = append(w.Assignments, Assignment{ID: ID(), Assigner: by.ID, Member: target.ID, Node: node, Text: text, State: "assigned"})
+	w.Assignments = append(w.Assignments, Assignment{ID: ID(), Assigner: by.ID, Member: target.ID, Node: node, Text: text, State: state})
 	return &w.Assignments[len(w.Assignments)-1], nil
+}
+
+// queuedAssignment is whether id is an assignment still queued behind
+// another: its instruction waits with it.
+func queuedAssignment(w *Workspace, id string) bool {
+	for _, a := range w.Assignments {
+		if a.ID == id {
+			return a.State == "queued"
+		}
+	}
+	return false
+}
+
+// promoteQueued hands m the assignment queued behind the one that just
+// resolved: it becomes assigned, and the instruction held with it goes out
+// with m's next turn.
+func promoteQueued(w *Workspace, m *Member) {
+	for i := range w.Assignments {
+		if a := &w.Assignments[i]; a.Member == m.ID && a.State == "queued" {
+			a.State = "assigned"
+			return
+		}
+	}
 }
 func (s *Store) Complete(session, id, body string, failed bool) error {
 	return s.Mutate(session, false, func(w *Workspace, m *Member) error {
@@ -564,6 +614,7 @@ func (s *Store) Complete(session, id, body string, failed bool) error {
 			a.State = state
 			a.Result = body
 			settleWork(w, a.Node, failed)
+			promoteQueued(w, m)
 			PlanNudges(w)
 			recipient := a.Assigner
 			if assigner := GetMember(w, recipient); assigner == nil || assigner.State == "ended" {
@@ -696,6 +747,10 @@ func pickDelivery(w *Workspace, m *Member) (batch, stale []int, setDone bool) {
 					stale = append(stale, i)
 				}
 			}
+			continue
+		}
+		// A queued assignment's handover waits for the open one to resolve.
+		if msg.Task && queuedAssignment(w, msg.Assignment) {
 			continue
 		}
 		held := msg.Type == "result" && slices.Contains(m.WaitingOn, msg.Assignment) ||

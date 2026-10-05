@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,8 +31,11 @@ func decodeWorkspace(raw json.RawMessage, out any) error {
 
 type memberSpec struct {
 	Capability string `json:"capability,omitempty"`
-	Approval   string `json:"approval,omitempty"`
-	Name       string `json:"name"`
+	// Enforcement "unverified" launches a reviewer on an adapter version
+	// Wash has not verified, recorded as such.
+	Enforcement string `json:"enforcement,omitempty"`
+	Approval    string `json:"approval,omitempty"`
+	Name        string `json:"name"`
 	// Catalog names another catalog than the workspace's for this member;
 	// Model is a slot of that catalog (frontier, coding, small) or a model
 	// id its adapter offers. Empty is the catalog's default.
@@ -45,7 +49,11 @@ type memberSpec struct {
 	Instructions string            `json:"instructions"`
 	Lifetime     string            `json:"lifetime"`
 	Task         string            `json:"task,omitempty"`
-	CanSpawn     bool              `json:"can_spawn,omitempty"`
+	// Override is why the task starts before what its node needs is done:
+	// the same override assignment_update takes, recorded once on the node.
+	// Without it every launch on such a node was launch, wait, assign.
+	Override string `json:"override,omitempty"`
+	CanSpawn bool   `json:"can_spawn,omitempty"`
 	// Node is the plan node the member works on; none is the team.
 	Node string `json:"node,omitempty"`
 	Role string `json:"role,omitempty"`
@@ -211,9 +219,28 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	}
 	keys := make([]string, 0, len(p.Members))
 	handoffs := map[string]string{}
+	// The fields each member entry actually gave, so a correction to a
+	// launch that failed can be the changed fields alone.
+	given := map[string]map[string]json.RawMessage{}
+	_ = json.Unmarshal(fields["members"], &given)
 	for key, m := range p.Members {
 		if !swarm.ValidProfileName(key) || slices.Contains([]string{"conversation", "plan", "qa", swarm.OrchestratorKey}, key) || m == nil {
 			return nil, errors.New("invalid member key; use member_control to end members")
+		}
+		// A key whose launch failed takes a patch, as the receipt promises
+		// ("omitted fields stay"): one wrong model string cost three calls
+		// when the correction had to restate name and instructions too.
+		if w := ws.store.View(h.sessionID); w != nil {
+			if prior := swarm.GetMember(w, key); prior != nil && neverLaunched(prior) {
+				merged, err := redefinition(w, prior, given[key])
+				if err != nil {
+					return nil, fmt.Errorf("member %s: %w", key, err)
+				}
+				m, p.Members[key] = merged, merged
+				if merged.HandoffFrom == "" && merged.HandoffFile == "" && prior.Handoff != "" {
+					handoffs[key] = prior.Handoff
+				}
+			}
 		}
 		// Each check names the member and the field: a bare "invalid member
 		// definition" left the orchestrator diffing its call by eye.
@@ -228,9 +255,12 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			return nil, fmt.Errorf("member %s: an ephemeral member needs a task", key)
 		case len(m.Task) > 32768:
 			return nil, fmt.Errorf("member %s: task exceeds 32 KiB", key)
-		}
-		if len(memberBrief(swarm.Member{ID: swarm.ID(), Instructions: m.Instructions, InitialTask: m.Task}, swarm.ID())) > 32768 {
-			return nil, fmt.Errorf("member %s: instructions and task together exceed 32 KiB: a member receives them as one first message; put detail in a file it can read", key)
+		case m.Override != "" && m.Task == "":
+			return nil, fmt.Errorf("member %s: override goes with a task: it is why the task starts before the node's needs are done", key)
+		case len(m.Override) > 500:
+			return nil, fmt.Errorf("member %s: override reason is at most 500 bytes", key)
+		case m.Enforcement != "" && m.Capability != "reviewer":
+			return nil, fmt.Errorf(`member %s: enforcement goes with capability "reviewer"`, key)
 		}
 		if m.HandoffFrom != "" && m.HandoffFile != "" {
 			return nil, fmt.Errorf("member %s: handoff_from or handoff_file, not both", key)
@@ -254,6 +284,12 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				return nil, fmt.Errorf("member %s: no handoff from %s: %w", key, m.HandoffFrom, err)
 			}
 			handoffs[key] = string(b)
+		}
+		// The first message is instructions, guide, handoff and task as one;
+		// checked whole, since a handoff near its own limit on top of long
+		// instructions failed at launch, after the member was committed.
+		if len(memberBrief(swarm.Member{ID: swarm.ID(), Instructions: m.Instructions, InitialTask: m.Task, Handoff: handoffs[key], Cwd: m.Cwd}, root, swarm.ID())) > 32768 {
+			return nil, fmt.Errorf("member %s: instructions, handoff and task together exceed 32 KiB: a member receives them as one first message; put detail in a file it can read", key)
 		}
 		if m.Node != "" && !swarm.ValidProfileName(m.Node) {
 			return nil, fmt.Errorf("member %s: node must be a plan node id", key)
@@ -405,12 +441,12 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					if prior.State == "ended" {
 						return fmt.Errorf("member %s is ended; use a new key for replacement", key)
 					}
-					if prior.Name != spec.Name || spec.Catalog != "" && prior.Catalog != spec.Catalog || spec.Model != "" && prior.Model != spec.Model || prior.Cwd != spec.Cwd || prior.Instructions != swarm.WithRole(w, spec.Role, spec.Instructions) || prior.Lifetime != spec.Lifetime || prior.CanSpawn != spec.CanSpawn || prior.Node != spec.Node || prior.Role != spec.Role || prior.Handoff != handoffs[key] || prior.InitialTask != spec.Task {
+					if prior.Name != spec.Name || spec.Catalog != "" && prior.Catalog != spec.Catalog || spec.Model != "" && prior.Model != spec.Model || prior.Cwd != spec.Cwd || prior.Instructions != swarm.WithRole(w, spec.Role, spec.Instructions) || prior.Lifetime != spec.Lifetime || prior.CanSpawn != spec.CanSpawn || prior.Node != spec.Node || prior.Role != spec.Role || prior.Handoff != handoffs[key] || prior.InitialTask != spec.Task || prior.InitialOverride != spec.Override {
 						return fmt.Errorf("member %s already exists with different settings; end and replace explicitly", key)
 					}
 					// Catalog edits affect future launches; explicit launch overrides must still match.
 					old := prior.LaunchSettings
-					if spec.Capability != "" && old.Capability != spec.Capability || spec.Approval != "" && old.Approval != spec.Approval || spec.Provider != "" && old.Provider != spec.Provider || spec.Effort != "" && old.Effort != spec.Effort || spec.Subagents != "" && old.Subagents != spec.Subagents {
+					if spec.Capability != "" && old.Capability != spec.Capability || spec.Enforcement != "" && old.Enforcement != spec.Enforcement || spec.Approval != "" && old.Approval != spec.Approval || spec.Provider != "" && old.Provider != spec.Provider || spec.Effort != "" && old.Effort != spec.Effort || spec.Subagents != "" && old.Subagents != spec.Subagents {
 						return fmt.Errorf("member %s already exists with different launch settings; end and replace explicitly", key)
 					}
 					for id, val := range spec.Configs {
@@ -442,14 +478,14 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					if spec.Node == "" {
 						return fmt.Errorf("member %s: a task is an assignment on a plan node; give the member a node", key)
 					}
-					if unmet := swarm.Unmet(w, spec.Node); len(unmet) > 0 {
-						return fmt.Errorf("member %s: node %s needs %s first; launch it without a task and assign with override", key, spec.Node, strings.Join(unmet, ", "))
+					if unmet := swarm.Unmet(w, spec.Node); len(unmet) > 0 && strings.TrimSpace(spec.Override) == "" {
+						return fmt.Errorf("member %s: node %s needs %s first; start anyway with override:\"<reason>\" on the member (recorded once on the node), or launch it without a task", key, spec.Node, strings.Join(unmet, ", "))
 					}
 				}
 				if live >= w.MaxMembers {
 					return fmt.Errorf("member %s: workspace member limit (%d) reached", key, w.MaxMembers)
 				}
-				explicit := swarm.AgentProfile{Capability: spec.Capability, Approval: spec.Approval, Provider: spec.Provider, Effort: spec.Effort, Configs: spec.Configs, Subagents: spec.Subagents}
+				explicit := swarm.AgentProfile{Capability: spec.Capability, Enforcement: spec.Enforcement, Approval: spec.Approval, Provider: spec.Provider, Effort: spec.Effort, Configs: spec.Configs, Subagents: spec.Subagents}
 				catalog, settings, err := memberSettingsFor(w, catalogs, badCatalogs, spec.Catalog, spec.Model, explicit)
 				if err != nil {
 					return fmt.Errorf("member %s: %w", key, err)
@@ -473,7 +509,14 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if err := unsupportedLaunchSetting(settings.Provider, settings.Capability, settings.Subagents == "deny", ""); err != nil {
 					return fmt.Errorf("member %s: %w", key, err)
 				}
-				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: swarm.WithRole(w, spec.Role, spec.Instructions), InitialTask: spec.Task, Handoff: handoffs[key], Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Node: spec.Node, Role: spec.Role}
+				// And a reviewer on an adapter this host is known to run at
+				// an unverified version: the whole review panel of a project
+				// failed at launch, committed, with no way forward but
+				// dropping the capability.
+				if err := reviewerHostCheck(settings); err != nil {
+					return fmt.Errorf("member %s: %w", key, err)
+				}
+				member := swarm.Member{ID: swarm.ID(), Key: key, Name: spec.Name, Catalog: catalog, Model: spec.Model, Provider: settings.Provider, LaunchSettings: &settings, Cwd: spec.Cwd, Instructions: swarm.WithRole(w, spec.Role, spec.Instructions), InitialTask: spec.Task, InitialOverride: spec.Override, Handoff: handoffs[key], Lifetime: spec.Lifetime, State: "pending", Creator: creator.ID, CanSpawn: spec.CanSpawn, Node: spec.Node, Role: spec.Role}
 				if redefine != nil {
 					member.ID = redefine.ID
 					*redefine = member
@@ -609,6 +652,51 @@ func (ws *workspaceService) launchOutcome(ctx context.Context, h *hosted, worksp
 
 // neverLaunched is a member whose launch failed before it had a session.
 func neverLaunched(m *swarm.Member) bool { return m.State == "failed" && m.Session == "" }
+
+// redefinition is a never-launched member's committed definition with the
+// fields this call gave on top: what workspace_configure takes as a
+// correction. The definition is rebuilt from the member, so a model slot's
+// effort and configs read back as explicit; a correction that moves the
+// member to another slot restates them if they should follow.
+func redefinition(w *swarm.Workspace, prior *swarm.Member, given map[string]json.RawMessage) (*memberSpec, error) {
+	base := memberSpec{Name: prior.Name, Catalog: prior.Catalog, Model: prior.Model, Cwd: prior.Cwd, Instructions: ownInstructions(w, *prior), Lifetime: prior.Lifetime, Task: prior.InitialTask, Override: prior.InitialOverride, CanSpawn: prior.CanSpawn, Node: prior.Node, Role: prior.Role}
+	if ls := prior.LaunchSettings; ls != nil {
+		// Provider too: without it a member defined on another adapter than
+		// its catalog's fell back to the catalog's on a patch, silently —
+		// the redefine path skips the "different launch settings" guard.
+		base.Provider, base.Capability, base.Enforcement, base.Approval, base.Effort, base.Subagents = ls.Provider, ls.Capability, ls.Enforcement, ls.Approval, ls.Effort, ls.Subagents
+		base.Configs = maps.Clone(ls.Configs)
+	}
+	encoded, err := json.Marshal(base)
+	if err != nil {
+		return nil, err
+	}
+	merged := map[string]json.RawMessage{}
+	if err := json.Unmarshal(encoded, &merged); err != nil {
+		return nil, err
+	}
+	for field, value := range given {
+		merged[field] = value
+	}
+	encoded, err = json.Marshal(merged)
+	if err != nil {
+		return nil, err
+	}
+	var out memberSpec
+	if err := decodeWorkspace(encoded, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ownInstructions is a member's instructions without its role's template,
+// which configure puts back.
+func ownInstructions(w *swarm.Workspace, m swarm.Member) string {
+	if t := w.Roles[m.Role]; m.Role != "" && t != "" {
+		return strings.TrimPrefix(m.Instructions, t+"\n\n")
+	}
+	return m.Instructions
+}
 
 func knownProvider(provider string) error {
 	if _, ok := adapterByID(provider); !ok {

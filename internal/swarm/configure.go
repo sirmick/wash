@@ -101,6 +101,12 @@ func ValidateProfile(p AgentProfile) error {
 	if p.Capability == "reviewer" && p.Approval == "auto" {
 		return errors.New("reviewer capability cannot be auto-approved")
 	}
+	if p.Enforcement != "" && p.Capability != "reviewer" {
+		return errors.New(`enforcement goes with capability "reviewer"`)
+	}
+	if p.Enforcement != "" && p.Enforcement != "verified" && p.Enforcement != "unverified" {
+		return errors.New(`enforcement must be "verified" or "unverified"`)
+	}
 	if p.Capability == "reviewer" {
 		for id := range p.Configs {
 			if id == "mode" || id == "permission_mode" || id == "sandbox" {
@@ -231,6 +237,9 @@ func Overlay(base, explicit AgentProfile) (AgentProfile, error) {
 	}
 	if explicit.Subagents != "" {
 		result.Subagents = explicit.Subagents
+	}
+	if explicit.Enforcement != "" {
+		result.Enforcement = explicit.Enforcement
 	}
 	if result.Configs == nil {
 		result.Configs = map[string]string{}

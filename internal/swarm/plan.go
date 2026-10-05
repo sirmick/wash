@@ -68,9 +68,10 @@ func PlanNode(w *Workspace, id string) *Node {
 	return nil
 }
 
-// Open is whether an assignment is still to be done.
+// Open is whether an assignment is still to be done: queued behind another,
+// assigned, active, or blocked while its member waits.
 func (a Assignment) Open() bool {
-	return a.State == "assigned" || a.State == "active" || a.State == "blocked"
+	return a.State == "queued" || a.State == "assigned" || a.State == "active" || a.State == "blocked"
 }
 
 // OpenOn lists the open assignments on node id.
@@ -370,10 +371,15 @@ func startWork(w *Workspace, by *Member, node, override string) error {
 		if len(override) > 500 {
 			return errors.New("override reason is at most 500 bytes")
 		}
-		if len(n.Overrides) >= 32 {
-			return fmt.Errorf("node %s has 32 recorded overrides", node)
+		// One decision, recorded once: three implementers launched on the
+		// same reason showed as "3 override(s)" on the node.
+		record := fmt.Sprintf("%s: started by %s before %s: %s", time.Now().UTC().Format("2006-01-02"), by.Name, strings.Join(unmet, ", "), override)
+		if !slices.Contains(n.Overrides, record) {
+			if len(n.Overrides) >= 32 {
+				return fmt.Errorf("node %s has 32 recorded overrides", node)
+			}
+			n.Overrides = append(n.Overrides, record)
 		}
-		n.Overrides = append(n.Overrides, fmt.Sprintf("%s: started by %s before %s: %s", time.Now().UTC().Format("2006-01-02"), by.Name, strings.Join(unmet, ", "), override))
 	}
 	if n.State != "active" {
 		n.State = "active"
@@ -497,6 +503,12 @@ func Accept(w *Workspace, m *Member, id string, gates []Gate) (Accepted, error) 
 		line, _, _ := strings.Cut(strings.TrimSpace(a.Result), "\n")
 		if len(line) > 120 {
 			line = strings.ToValidUTF8(line[:120], "") + "…"
+		}
+		// A review that ran with its read-only allowlist unverified says so
+		// where the review is cited, so the merge record shows which
+		// verdicts rest on enforcement and which on the owner's say-so.
+		if r.LaunchSettings != nil && r.LaunchSettings.Capability == "reviewer" && r.LaunchSettings.Enforcement == "unverified" {
+			line += " [enforcement unverified]"
 		}
 		verdicts[r.ID] = r.Name + ": " + line
 	}

@@ -210,3 +210,52 @@ func TestReplacePlanRefusedWhileWorkIsOpen(t *testing.T) {
 		t.Fatalf("plan replaced under open work: %v", err)
 	}
 }
+
+// The same reason to start early is one override on the node, however many
+// members start on it; and a reviewer launched with its enforcement
+// unverified says so in the Reviewed-by trailer it earns.
+func TestOverridesRecordOnceAndUnverifiedReviewsSaySo(t *testing.T) {
+	s, _ := planStore(t)
+	seed(t, s)
+	if err := setPlan(s, "lead", map[string]*NodePatch{"M1": {State: str("done")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *Workspace, _ *Member) error {
+		GetMember(w, "red").LaunchSettings = &AgentProfile{Provider: "claude", Capability: "reviewer", Enforcement: "unverified"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range []string{"impl", "red"} {
+		if _, err := s.Assign("lead", member, "C", "the owner wants gamma drafted alongside", "Start gamma", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o := PlanNode(s.View("lead"), "C").Overrides; len(o) != 1 {
+		t.Fatalf("one decision, %d overrides: %v", len(o), o)
+	}
+	r, err := s.Assign("lead", "red", "A", "", "Review alpha", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The queued review runs after the override one; resolve that first.
+	for _, a := range s.View("lead").Assignments {
+		if a.Member == "red" && a.Node == "C" {
+			_ = s.Complete("red-s", a.ID, "Gamma looked at.", false)
+		}
+	}
+	if err := s.Complete("red-s", r.ID, "OK, no findings", false); err != nil {
+		t.Fatal(err)
+	}
+	var got Accepted
+	if err := s.Mutate("lead", false, func(w *Workspace, m *Member) error {
+		var err error
+		got, err = Accept(w, m, "A", nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Trailers, "Reviewed-by: Red team: OK, no findings [enforcement unverified]") {
+		t.Fatalf("trailers:\n%s", got.Trailers)
+	}
+}

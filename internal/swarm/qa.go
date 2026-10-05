@@ -29,6 +29,10 @@ type QAThread struct {
 	Revision     int64    `json:"revision"`
 	DecisionRefs []string `json:"decision_refs"`
 	Evidence     string   `json:"evidence,omitempty"`
+	// Participants are members the thread was opened on behalf of: an
+	// implementer whose question the orchestrator framed for the Architect
+	// hears the answer itself, as anyone who has written on the thread does.
+	Participants []string `json:"participants,omitempty"`
 	// Resumed marks a thread resolved in an earlier workspace and read
 	// back from its QA file: its evidence is about that workspace's code.
 	Resumed bool `json:"resumed,omitempty"`
@@ -48,6 +52,8 @@ type QAUpdate struct {
 	Expected     *int64   `json:"expected_revision,omitempty"`
 	DecisionRefs []string `json:"decision_refs,omitempty"`
 	Evidence     string   `json:"evidence,omitempty"`
+	// OnBehalfOf, on open, names the member whose question this is.
+	OnBehalfOf string `json:"on_behalf_of,omitempty"`
 }
 
 // nodeReviewer is a reviewer on the thread's node or a node it sits inside.
@@ -127,7 +133,17 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 		if assignee == nil || assignee.State == "ended" {
 			return nil, errors.New("QA requires an active assignee")
 		}
-		w.QA = append(w.QA, QAThread{ID: u.ID, Node: u.Node, Title: u.Title, Creator: m.ID, Assignee: assignee.ID, State: "open", DecisionRefs: u.DecisionRefs, Events: []QAEvent{}})
+		var participants []string
+		if u.OnBehalfOf != "" {
+			p := GetMember(w, u.OnBehalfOf)
+			if p == nil || p.State == "ended" {
+				return nil, fmt.Errorf("on_behalf_of %q is not an active member", u.OnBehalfOf)
+			}
+			if p.ID != m.ID && p.ID != assignee.ID {
+				participants = []string{p.ID}
+			}
+		}
+		w.QA = append(w.QA, QAThread{ID: u.ID, Node: u.Node, Title: u.Title, Creator: m.ID, Assignee: assignee.ID, State: "open", DecisionRefs: u.DecisionRefs, Participants: participants, Events: []QAEvent{}})
 		q = &w.QA[len(w.QA)-1]
 		if u.Blocking != nil {
 			q.Blocking = *u.Blocking
@@ -135,6 +151,9 @@ func UpdateQA(w *Workspace, m *Member, u QAUpdate) (*QAThread, error) {
 	} else {
 		if q == nil {
 			return nil, errors.New("unknown QA thread")
+		}
+		if u.OnBehalfOf != "" {
+			return nil, errors.New("on_behalf_of is set when a thread opens")
 		}
 		if u.Action != "reply" {
 			if u.Expected == nil || *u.Expected != q.Revision {
@@ -271,14 +290,27 @@ func WithdrawDecision(w *Workspace, msg *Message) {
 	}
 }
 
-// NotifyQA tells a thread's creator and assignee what author just added to
-// it, as an answer (which wakes an idle member). Whoever waits on a thread is
-// one of those two; a ruling that reached a blocked member only as a thread
-// event, or a copy that does not wake, left it asleep. skip names members
-// who already receive the text another way.
+// Audience is who hears what is added to a thread: its creator and assignee,
+// the members it was opened on behalf of, and everyone who has written on
+// it. Creator and assignee alone meant a question the orchestrator framed
+// for the Architect on an implementer's behalf was answered to the
+// orchestrator only, which relayed every ruling by hand (Redoubt, eight
+// times in a day).
+func Audience(q *QAThread) []string {
+	out := append([]string{q.Creator, q.Assignee}, q.Participants...)
+	for _, e := range q.Events {
+		out = append(out, e.Author)
+	}
+	return out
+}
+
+// NotifyQA tells a thread's audience what author just added to it, as an
+// answer (which wakes an idle member). A ruling that reached a blocked member
+// only as a thread event, or a copy that does not wake, left it asleep. skip
+// names members who already receive the text another way.
 func NotifyQA(w *Workspace, q *QAThread, author, body string, skip ...string) error {
 	told := append([]string{author, "human"}, skip...)
-	for _, id := range []string{q.Creator, q.Assignee} {
+	for _, id := range Audience(q) {
 		m := GetMember(w, id)
 		if m == nil || m.State == "ended" || slices.Contains(told, m.ID) {
 			continue
@@ -360,6 +392,13 @@ func WriteQAThread(out io.Writer, q QAThread, name func(string) string, bounded 
 	}
 	if q.Blocking {
 		b.WriteString("\n**Blocks work on its node.**\n")
+	}
+	if len(q.Participants) > 0 {
+		names := make([]string, len(q.Participants))
+		for i, id := range q.Participants {
+			names[i] = clean(name(id))
+		}
+		fmt.Fprintf(b, "\nOn behalf of: %s\n", strings.Join(names, ", "))
 	}
 	if len(q.DecisionRefs) > 0 {
 		fmt.Fprintf(b, "\nDecision references: %s\n", strings.Join(q.DecisionRefs, ", "))

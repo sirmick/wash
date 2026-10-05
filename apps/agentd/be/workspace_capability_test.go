@@ -15,7 +15,7 @@ import (
 
 func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 	info := acp.Implementation{Name: "@agentclientprotocol/claude-agent-acp", Version: "0.81.1"}
-	meta, err := reviewerMetadata("claude", info)
+	meta, err := reviewerMetadata("claude", info, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,13 +24,13 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 		t.Fatal(options)
 	}
 	info.Version = "0.81.2"
-	if _, err = reviewerMetadata("claude", info); err != nil {
+	if _, err = reviewerMetadata("claude", info, ""); err != nil {
 		t.Fatal("re-verified adapter refused:", err)
 	}
 	// 0.79.0 was verified once and is no longer installed anywhere: dropped.
 	for _, version := range []string{"", "0.64.2", "0.79.0", "0.80.0", "0.82.0"} {
 		info.Version = version
-		if _, err = reviewerMetadata("claude", info); err == nil {
+		if _, err = reviewerMetadata("claude", info, ""); err == nil {
 			t.Fatal("unverified adapter accepted", version)
 		}
 	}
@@ -40,11 +40,11 @@ func TestReviewerCapabilityAdapterContractAndResume(t *testing.T) {
 	// OpenCode's restriction is its launch configuration, not session
 	// metadata, and holds only for the version it was checked against.
 	oc := acp.Implementation{Name: "OpenCode", Version: "1.18.32"}
-	if meta, err := reviewerMetadata("opencode", oc); err != nil || meta != nil {
+	if meta, err := reviewerMetadata("opencode", oc, ""); err != nil || meta != nil {
 		t.Fatal("verified OpenCode:", meta, err)
 	}
 	for _, v := range []acp.Implementation{{Name: "OpenCode", Version: "1.19.0"}, {Name: "opencode-fork", Version: "1.18.32"}} {
-		if _, err := reviewerMetadata("opencode", v); err == nil {
+		if _, err := reviewerMetadata("opencode", v, ""); err == nil {
 			t.Fatal("unverified OpenCode accepted", v)
 		}
 	}

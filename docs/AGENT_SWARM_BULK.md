@@ -1,6 +1,6 @@
 # Bulk workspace MCP contract
 
-Implemented API 4.0.0, 2026-09-26. This supersedes the incremental v1 catalog in
+Implemented API 4.1.0, 2026-10-01 (4.0.0 on 2026-09-26). This supersedes the incremental v1 catalog in
 [the original design](AGENT_SWARM.md). Discovery advertises fourteen tools.
 Removed operations and fields return errors; there are no hidden aliases or
 compatibility handlers. Agent instructions and examples use the surface below. No live desktop upgrade is implied.
@@ -57,6 +57,33 @@ A slot is a model only: a reviewer that must not write says `capability:"reviewe
 `model`, and only Claude Code enforces that (about.permissions); elsewhere a reviewer is
 read-only by instruction. The per-workspace `profiles` map and `default_profile` are gone.
 
+API 4.1 is the first day's feedback from two live workspaces (NVL-AI on 0.16, Redoubt on
+0.17.1; the reports are in the repository root as `BUG-REPORT-*.md`), each item below a
+named finding there. A member definition takes `override:"<reason>"` beside its `task`, so a
+launch on a node whose needs are not done is one call; the same reason records once on the
+node however many members start on it (R06). A key whose launch failed takes the changed
+fields alone: its committed definition stays and the role template is not put on twice
+(R02). `capability:"reviewer"` is refused at configure and preview, before anything commits,
+when the adapter this host last ran (adapter memory) is at a version Wash has not verified;
+`view=about` `permissions.reviewer_capability_profiles.<provider>` says the installed version
+and whether a reviewer launches here; `enforcement:"unverified"` on the member launches the
+same tool allowlist on an unverified version, recorded on the member's launch settings and
+as `[enforcement unverified]` on its `Reviewed-by` trailer (R01). A resident with an
+assignment open takes one more, `queued`: its instruction is held until the open one
+resolves, then delivered as the member's next turn; a third is refused, and nothing queues
+behind an ephemeral member (R05). A thread opened with `on_behalf_of:"<member>"` answers to
+that member; answers and resolutions now reach the thread's creator, assignee, participants
+and everyone who has written on it (R04). `member_update {handoff}` by a member sends the
+orchestrator a lifecycle message naming the file, so a resident with nothing to complete is
+not forgotten (R03). The context warning repeats at each further tenth of the window, and
+`plan_get` shows each member's context share beside its activity (R10). `plan_get` detail
+lists threads as objects with their `revision`, which transitions need (R07). A member's
+first message says where it runs and that paths in messages are absolute or relative to
+the project root (R08). The first message is size-checked with its handoff included
+(R09). `assignment_update` create with the same `request_id` and a different `body` is a
+conflict, not a retry. `caller.catalog` in `about` names the catalog this host serves the
+caller from, since a workspace file's model ids are catalog-specific.
+
 ## Fourteen tools
 
 | Tool | Responsibility |
@@ -109,7 +136,7 @@ members merge by key, so a setup is one call and the definition is not transcrib
 template into every setup. An unknown key is an error naming it. A role's instructions
 are put before the instructions of every new member with that role. `context_warn`
 (default 0.6) is the share of its context window at which a member's use is reported to
-the orchestrator, once, with the handoff to make.
+the orchestrator, with the handoff to make, and again at each further tenth of the window.
 
 - Omitted fields stay. A member's `model` names a slot of the workspace catalog, or a
   model id that must come from provider choices. An adapter's own list (`anthropic`)
@@ -120,16 +147,18 @@ the orchestrator, once, with the handoff to make.
 - Members use stable keys; an existing matching definition is reused. Catalog edits
   affect future launches. Changed member definitions or ended keys require explicit
   end/replacement with a new key. No implicit restart or termination. The exception
-  is a member whose launch failed before it had a session: its key takes a corrected
-  definition in place (same member ID), and it holds no name.
+  is a member whose launch failed before it had a session: its key takes the changed
+  fields alone, over its committed definition (same member ID), and it holds no name.
 - `plan_file` is where Wash writes the plan (TOML) as it changes; set on a workspace with
   no plan, it resumes the plan the file holds. Wash never overwrites a file it did not
   write. `plan_file:null` stops writing. `legend` says what the orchestrator's emojis and
   states mean; `plan_get` returns it.
 - `expected_revision` guards workspace edits (0 may guard initial setup). A conflict
   requires fresh state and reconciliation. QA has separate per-thread revisions.
-- `preview:true` validates/stages without writing or launching. It does not prove
-  provider availability or adapter support; launch applies mode, then model, then effort
+- `preview:true` validates/stages without writing or launching. It refuses a launch
+  setting the provider cannot enforce, and a reviewer on an adapter version this host last
+  ran unverified (`enforcement:"unverified"` passes it, recorded); it does not prove
+  provider availability beyond that; launch applies mode, then model, then effort
   (Claude Code re-picks the model on a mode change and narrows effort by model).
   A preview returns only ids that already exist: a new workspace's id and new
   members' ids are empty, so address new members by key.
@@ -177,7 +206,8 @@ nodes that are `todo` with nothing open, and leave them `todo`.
 
 What Wash enforces: every assignment names a node (its member's by default); creating one
 on a node whose needs (its own and its ancestors') are not done is refused unless the call
-gives `override:"<reason>"`, recorded on the node with who and when; creating one makes the
+(or the member definition whose `task` it is) gives `override:"<reason>"`, recorded on the
+node with who and when, the same reason once; creating one makes the
 node `active`; the last result on it makes it `reported` (`failed` on failure); only the
 orchestrator sets `done`, and only with nothing open on the node; `workspace_end` needs
 `confirm:true` while nodes are active or reported.
@@ -192,8 +222,9 @@ Gates: go test ./... 0
 Reviewed-by: Red team: OK, no findings
 ```
 
-`Reviewed-by` is each reviewer's first result line on the node (or inside it). Wash never
-runs git.
+`Reviewed-by` is each reviewer's first result line on the node (or inside it), followed by
+`[enforcement unverified]` when the reviewer was launched with `enforcement:"unverified"`.
+Wash never runs git.
 
 Nudges reach the orchestrator once each: every node in a milestone is done; a done
 milestone's successor is still a sketch; a node is active with nobody on it (its member
@@ -202,8 +233,10 @@ result, as `nudges`; any other arrives as a lifecycle message. (Queued, a nudge 
 orchestrator's own call reached it only after the turn in which it had already moved on.)
 
 `plan_get` returns one line per node in tree order (`id · state · title · needs … · on:
-Member (activity)`), the legend and the revision; `node` or `detail:true` adds bodies,
-assignments and threads. The orchestrator answers status questions from it.
+Member (activity · context 45%)`), the legend and the revision; `node` or `detail:true` adds
+bodies, assignments and threads (`id`, `state`, `title`, `assignee`, `revision`; the node's
+own `revision` is in the node). The orchestrator answers status questions from it, and
+reads the revisions a `plan_set` edit or a QA transition needs there.
 
 ## Resident package workflow
 
@@ -216,9 +249,15 @@ or abandonment. Limits count idle residents; they do not consume model turns whi
 `assignment_update {updates, wait:{reason}}` creates assignments and sets the caller
 waiting on exactly those as one set, in the same call. On `create`, `text` is the one-line
 title the plan and the sidebar show and `body` the instructions to work from; the assignee
-receives both. On `complete`/`fail`, `body` is the result. `member_update {handoff}` writes the
-caller's handoff to `.wash/local/handoffs/<key>.md` (`.wash/local` keeps itself out of git);
-a member launched with `handoff_from:"<key>"` reads it in its first message. A hung member
+receives both. A member does one assignment at a time; a resident with one open takes one
+more, `queued`, whose instruction waits until the open one resolves and then goes out as the
+member's next turn (so a checkpoint reported as progress can be followed by the next step
+on the plan); a third is refused, and an ephemeral member takes none behind its own. On
+`complete`/`fail`, `body` is the result. `member_update {handoff}` writes the
+caller's handoff to `.wash/local/handoffs/<key>.md` (`.wash/local` keeps itself out of git)
+and sends the orchestrator a lifecycle message naming the file, so a resident with nothing
+to complete is not left idle unnoticed; a member launched with `handoff_from:"<key>"` reads
+it in its first message, which is size-checked with the handoff included. A hung member
 cannot write its own, so `handoff_file:"<path>"` launches from a file the orchestrator wrote
 instead (inside the project, at most 32 KiB; not with `handoff_from`). A member whose
 turn ends with its assignment active, no report and no waiting set is reminded once.
@@ -304,7 +343,7 @@ author and timestamp. QA updates through `member_update.qa_updates` support:
 
 | Action | Requirement |
 | --- | --- |
-| open | Unique id, node (a plan node), title, body, active assignee (message_send defaults recipient) |
+| open | Unique id, node (a plan node), title, body, active assignee (message_send defaults recipient); `on_behalf_of` names the member whose question it is |
 | reply | Body; append without revision guard |
 | assign | expected_revision, next assignee |
 | block | expected_revision; marks blocking |
@@ -321,9 +360,12 @@ A thread resumed from a QA directory is the new orchestrator's. A resolved one i
 `resumed` (its view says "Resolved in an earlier workspace"): its evidence is about the earlier
 code, so reopen any the current code may contradict.
 A reply or a resolution through `qa_updates`, and an `answer` sent on a thread, reach the
-thread's creator and assignee (other than the author and the message's recipient) as an
-`answer`, which wakes them: a member blocked on a thread wakes when it is answered, whoever
-the answer was addressed to. An `assign` sends the new assignee a question naming the thread.
+thread's audience (other than the author and the message's recipient) as an `answer`, which
+wakes them: a member blocked on a thread wakes when it is answered, whoever the answer was
+addressed to. The audience is the thread's creator and assignee, the member it was opened
+`on_behalf_of` (the usual case when the orchestrator frames an implementer's question for the
+Architect), and everyone who has written on it; the file's header names the participants.
+An `assign` sends the new assignee a question naming the thread.
 
 `decision_request {title?, questions:[{id?, question, header?, options?:[{label,
 description?}], multi?, recommended?}], thread_id?}` asks the owner up to ten questions;
@@ -368,10 +410,16 @@ example:
 {"members":{"K5-red":{"name":"K5 red","model":"coding","capability":"reviewer","lifetime":"resident","instructions":"…"}}}
 ```
 
-This currently requires verified `@agentclientprotocol/claude-agent-acp` 0.81.1 or 0.81.2;
-Codex, Gemini and unverified versions fail launch with an actionable error. Inspect
-about.permissions.reviewer_capability_profiles before choosing a provider. Codex's
-`read-only` adapter mode uses workspaceWrite and cannot satisfy this contract.
+This currently requires verified `@agentclientprotocol/claude-agent-acp` 0.81.1 or 0.81.2
+(`reviewerVerifiedVersions` in `apps/agentd/be/workspace_capability.go`, with the points
+checked in its comment). Codex and Gemini are refused at configure. An unverified version is
+refused at configure too, once this host has run the adapter and remembers its version;
+`enforcement:"unverified"` on the member launches the same allowlist anyway, recorded on the
+member and in its `Reviewed-by` trailer, so the merge record shows which reviews rest on
+enforcement and which on the owner's say-so. Inspect
+about.permissions.reviewer_capability_profiles (`installed_version`, `available`) before
+choosing a provider. Codex's `read-only` adapter mode uses workspaceWrite and cannot satisfy
+this contract.
 
 The Claude reviewer uses its provider tool allowlist (Read/Glob/Grep), disables ordinary
 settings/hooks and unrelated MCP servers, and refuses write/terminal callbacks in Wash.
