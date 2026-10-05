@@ -568,3 +568,94 @@ test('an embedded image opts out of the transcript column stretch', () => {
   expect(img!.style.maxWidth).toBe('100%');
   expect(img!.style.height).toBe('auto');
 });
+
+// ── Workspace lanes ─────────────────────────────────────────────────────
+// An orchestrator's transcript interleaves the owner's conversation with
+// inbox turns from members. The two were one undifferentiated column; the
+// owner's question was one line in forty and the reply looked like every
+// other paragraph of prose.
+
+const inbox = (seq: number, text: string): agentproto.Event => ({ seq, kind: 'collaboration', text, at_ms: 0 });
+const lanesFixture: agentproto.Event[] = [
+  { seq: 1, kind: 'user', text: 'should we drop the GATE1 requirement?', at_ms: 0 },
+  { seq: 2, kind: 'tool', title: 'Read', detail: 'plan.toml', status: 'completed', at_ms: 0 },
+  { seq: 3, kind: 'message', text: 'Yes — GATE1 is redundant.', at_ms: 0 },
+  inbox(4, 'Alice (m1) · progress\n\nran the tests'),
+  { seq: 5, kind: 'message', text: 'Noted, carrying on.', at_ms: 0 },
+  { seq: 6, kind: 'user', text: 'and the budget?', at_ms: 0 },
+];
+
+test('a plain session has one lane and no tab strip', () => {
+  const { queryByTestId } = render(() => <AgentSession events={() => lanesFixture.filter((e) => e.kind !== 'collaboration')} />);
+  expect(queryByTestId('agent-lanes')).toBeNull();
+  expect(queryByTestId('agent-owner-reply')).toBeNull();
+});
+
+test('the reply to an owner prompt carries the owner rule; prose about inbox mail does not', () => {
+  const { getAllByTestId } = render(() => <AgentSession events={() => lanesFixture} />);
+  expect(getAllByTestId('agent-owner-reply').map((r) => r.textContent)).toEqual(['Yes — GATE1 is redundant.']);
+});
+
+test('the Owner tab shows prompts and their replies only, and the composer stays', () => {
+  const { getByTestId, queryByTestId, queryAllByTestId, container } = render(() => <AgentSession events={() => lanesFixture} onSend={() => {}} />);
+  fireEvent.click(getByTestId('agent-lane-owner'));
+  expect(queryAllByTestId('agent-human-message')).toHaveLength(2);
+  expect(queryAllByTestId('agent-owner-reply')).toHaveLength(1);
+  expect(queryByTestId('agent-collaboration')).toBeNull();
+  expect(queryByTestId('agent-tool-row')).toBeNull();
+  expect(container.textContent).not.toContain('Noted, carrying on.');
+  expect(queryByTestId('agent-composer')).not.toBeNull();
+  // Back to Team: everything is there again.
+  fireEvent.click(getByTestId('agent-lane-team'));
+  expect(queryByTestId('agent-collaboration')).not.toBeNull();
+  expect(queryByTestId('agent-tool-row')).not.toBeNull();
+});
+
+test('the Owner badge counts prompts without a reply; the Team badge counts inbox turns since you looked', () => {
+  const [events, setEvents] = createSignal<agentproto.Event[]>(lanesFixture);
+  const { getByTestId, queryByTestId } = render(() => <AgentSession events={events} />);
+  // seq 6 has no reply yet.
+  expect(getByTestId('agent-lane-owner-badge').textContent).toBe('1');
+  // On the Team tab nothing is unseen.
+  expect(queryByTestId('agent-lane-team-badge')).toBeNull();
+  fireEvent.click(getByTestId('agent-lane-owner'));
+  setEvents([...lanesFixture, { seq: 7, kind: 'message', text: 'Under budget.', at_ms: 0 }, inbox(8, 'Bob (m2) · result\n\ndone')]);
+  expect(queryByTestId('agent-lane-owner-badge')).toBeNull();
+  expect(getByTestId('agent-lane-team-badge').textContent).toBe('1');
+  fireEvent.click(getByTestId('agent-lane-team'));
+  expect(queryByTestId('agent-lane-team-badge')).toBeNull();
+});
+
+test('inbox batches split per message; routine types collapse, results and questions stay open', () => {
+  const [events, setEvents] = createSignal<agentproto.Event[]>([
+    inbox(1, '3 messages\n\n#### Alice (m1) · progress\n\nran the tests\nall green\n\n#### Bob (m2) · result\n\n**frozen** report\n\n#### wash · lifecycle\n\nSupervisor: work has stalled.'),
+  ]);
+  const { getAllByTestId, getByTestId, container } = render(() => <AgentSession events={events} />);
+  const routine = getAllByTestId('agent-inbox-routine') as HTMLDetailsElement[];
+  expect(routine.map((d) => d.dataset.inboxType)).toEqual(['progress', 'lifecycle']);
+  expect(routine.every((d) => !d.open)).toBe(true);
+  // The excerpt is the first line only.
+  expect(routine[0].textContent).toContain('ran the tests');
+  expect(getByTestId('agent-inbox-message').dataset.inboxType).toBe('result');
+  expect(container.querySelector('strong')?.textContent).toBe('frozen');
+
+  // Opened, and still open after the event is replaced (a re-render).
+  routine[0].open = true;
+  fireEvent(routine[0], new Event('toggle'));
+  setEvents([inbox(1, '3 messages\n\n#### Alice (m1) · progress\n\nran the tests\nall green\n\n#### Bob (m2) · result\n\n**frozen** report\n\n#### wash · lifecycle\n\nSupervisor: still stalled.')]);
+  const again = getAllByTestId('agent-inbox-routine') as HTMLDetailsElement[];
+  expect(again[0].open).toBe(true);
+  expect(again[1].open).toBe(false);
+});
+
+test('a single inbox message keeps its label header and a human body stays literal', () => {
+  const events: agentproto.Event[] = [
+    inbox(1, 'Alice (m1) · question\n\nwhich **option**?'),
+    inbox(2, 'human · instruction\n\nuse **A**'),
+  ];
+  const { getAllByTestId, container } = render(() => <AgentSession events={() => events} />);
+  const rows = getAllByTestId('agent-inbox-message');
+  expect(rows[0].textContent).toContain('Alice (m1) · question');
+  expect(container.querySelector('strong')?.textContent).toBe('option');
+  expect(rows[1].textContent).toContain('use **A**');
+});

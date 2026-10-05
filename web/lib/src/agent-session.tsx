@@ -13,9 +13,10 @@
 
 import { QuestionPanel, type QuestionPanelProps } from './question-panel';
 import type * as agentproto from './agent-protocol.gen';
-import { For, Show, createEffect, createSignal, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
+import { Tab } from './tab';
 import { agentStateColor, agentStateLabel } from './agent-status';
 import { HighlightedCode, Markdown } from './markdown';
 import { PathLinksProvider, hitTitle, looksLikePath, pathResolver, useHits, usePathLinks } from './path-links';
@@ -474,30 +475,150 @@ export const DecisionRow: Component<{ e: agentproto.Event }> = (p) => {
   );
 };
 
-/** A workspace inbox message: "<sender> · <type>", a blank line, the body.
- *  A teammate's body is agent-authored Markdown, the same as the agent's own
- *  prose, and was showing its ** and lists raw. A human's stays literal, for
- *  the reason the user row gives: Markdown would eat what they meant to type.
- *  The origin line becomes a small header instead of the body's first line. */
-export const Collaboration: Component<{ text: string }> = (p) => {
-  const split = () => {
-    const i = p.text.indexOf('\n\n');
-    return i < 0 ? { origin: '', body: p.text } : { origin: p.text.slice(0, i), body: p.text.slice(i + 2) };
+/** One message of an inbox turn as the transcript shows it: its label
+ *  ("<sender> · <type>"), the type parsed off the label, and the body. */
+export interface InboxSection {
+  label: string;
+  type: string;
+  body: string;
+}
+
+/** Splits a collaboration event's text into its messages. agentd writes a
+ *  single message as "<label>\n\n<body>" and a batch as "N messages\n\n"
+ *  followed by one "#### <label>" heading per message (workspace.go
+ *  inboxDisplay); the heading is the only seam a batch has, so the split
+ *  keys on it. The type is whatever follows the label's last " · ". */
+export function inboxSections(text: string): { origin: string; sections: InboxSection[] } {
+  const i = text.indexOf('\n\n');
+  const origin = i < 0 ? '' : text.slice(0, i);
+  const body = i < 0 ? text : text.slice(i + 2);
+  const typeOf = (label: string) => {
+    const at = label.lastIndexOf(' · ');
+    return at < 0 ? '' : label.slice(at + 3).trim();
   };
-  const fromHuman = () => split().origin.startsWith('human ·');
+  if (/^\d+ messages$/.test(origin) && body.startsWith('#### ')) {
+    const sections: InboxSection[] = [];
+    for (const part of body.split(/^#### /m)) {
+      if (part === '') continue;
+      const nl = part.indexOf('\n');
+      const label = (nl < 0 ? part : part.slice(0, nl)).trim();
+      sections.push({ label, type: typeOf(label), body: (nl < 0 ? '' : part.slice(nl + 1)).trim() });
+    }
+    return { origin, sections };
+  }
+  return { origin, sections: [{ label: origin, type: typeOf(origin), body }] };
+}
+
+/** Message types that are bookkeeping — a checkpoint, a watchdog note, a
+ *  member's aside — and so collapse to their label until opened. Results,
+ *  questions and answers are the inbox's point; they stay open. */
+export const ROUTINE_INBOX_TYPES: ReadonlySet<string> = new Set(['progress', 'lifecycle', 'note', 'flash']);
+
+/** A workspace inbox turn, one block per message. A teammate's body is
+ *  agent-authored Markdown, the same as the agent's own prose, and was
+ *  showing its ** and lists raw. A human's stays literal, for the reason
+ *  the user row gives: Markdown would eat what they meant to type. Routine
+ *  types (ROUTINE_INBOX_TYPES) are closed by default with a one-line
+ *  excerpt; `open`/`onToggle` hold that state outside the row, as
+ *  thoughts do, because a re-rendered event would otherwise snap it shut. */
+export const Collaboration: Component<{
+  text: string;
+  open?: (key: string) => boolean;
+  onToggle?: (key: string, open: boolean) => void;
+}> = (p) => {
+  const parsed = createMemo(() => inboxSections(p.text));
+  const fromHuman = (s: InboxSection) => s.label.startsWith('human ·');
+  const prominent = (s: InboxSection) => s.type === 'question' || s.type === 'result' || s.type === 'answer' || s.type === 'decision_response';
+  const excerpt = (body: string) => {
+    const line = body.split('\n').find((l) => l.trim() !== '') ?? '';
+    return line.length > 120 ? line.slice(0, 117) + '…' : line;
+  };
+  const body = (s: InboxSection) => (
+    <Show when={!fromHuman(s)} fallback={<div style={{ 'white-space': 'pre-wrap' }}>{s.body}</div>}>
+      <Markdown text={s.body} />
+    </Show>
+  );
   return (
-    <div data-testid="agent-collaboration" style={{ 'white-space': 'normal' }}>
-      <Show when={split().origin}>
-        <div style={{ font: tokens.type.monoSm, color: tokens.fgMuted, 'margin-bottom': `${tokens.spaceXs}px` }}>
-          {split().origin}
-        </div>
+    <div data-testid="agent-collaboration" style={{ 'white-space': 'normal', display: 'flex', 'flex-direction': 'column', gap: `${tokens.spaceSm}px` }}>
+      <Show when={parsed().sections.length > 1}>
+        <div style={{ font: tokens.type.monoSm, color: tokens.fgDim }}>{parsed().origin}</div>
       </Show>
-      <Show when={!fromHuman()} fallback={<div style={{ 'white-space': 'pre-wrap' }}>{split().body}</div>}>
-        <Markdown text={split().body} />
-      </Show>
+      <For each={parsed().sections}>
+        {(s, i) => (
+          <Show
+            when={ROUTINE_INBOX_TYPES.has(s.type)}
+            fallback={
+              <div
+                data-testid="agent-inbox-message"
+                data-inbox-type={s.type}
+                style={prominent(s) ? { 'border-left': `2px solid ${tokens.accentTeal}`, 'padding-left': `${tokens.spaceMd}px` } : {}}
+              >
+                <Show when={s.label}>
+                  <div style={{ font: tokens.type.monoSm, color: prominent(s) ? tokens.fg : tokens.fgMuted, 'margin-bottom': `${tokens.spaceXs}px` }}>
+                    {s.label}
+                  </div>
+                </Show>
+                {body(s)}
+              </div>
+            }
+          >
+            <details
+              data-testid="agent-inbox-routine"
+              data-inbox-type={s.type}
+              open={p.open?.(String(i())) ?? false}
+              onToggle={(ev) => p.onToggle?.(String(i()), (ev.currentTarget as HTMLDetailsElement).open)}
+              style={{ color: tokens.fgMuted, font: tokens.type.textSm }}
+            >
+              <summary data-wash-hit style={{ cursor: 'pointer', 'user-select': 'none', display: 'flex', gap: `${tokens.spaceSm}px`, 'min-width': 0 }}>
+                <span style={{ font: tokens.type.monoSm, 'flex-shrink': 0 }}>{s.label}</span>
+                <span style={{ overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', color: tokens.fgDim }}>{excerpt(s.body)}</span>
+              </summary>
+              <div style={{ 'margin-top': `${tokens.spaceXs}px`, 'padding-left': `${tokens.spaceMd}px`, 'border-left': `2px solid ${tokens.borderMenu}`, color: tokens.fg }}>
+                {body(s)}
+              </div>
+            </details>
+          </Show>
+        )}
+      </For>
     </div>
   );
 };
+
+/** Whose turn each event belongs to: a `user` event opens the owner's turn,
+ *  a `collaboration` event (an inbox batch) the team's, and every event
+ *  after one belongs to it until the next opener. This is the whole basis
+ *  of the Owner lane — the transcript already keeps the two apart at the
+ *  turn boundary; it only ever merged them in the rendering. */
+export type TurnLane = 'owner' | 'team';
+export function laneOf(events: readonly agentproto.Event[]): Map<number, TurnLane> {
+  const lanes = new Map<number, TurnLane>();
+  let current: TurnLane = 'owner';
+  for (const e of events) {
+    if (e.kind === 'user') current = 'owner';
+    else if (e.kind === 'collaboration') current = 'team';
+    lanes.set(e.seq, current);
+  }
+  return lanes;
+}
+
+/** Owner prompts that have no reply yet: an owner turn with no `message`
+ *  event before the next turn opener. What the Owner tab's badge counts. */
+export function unansweredPrompts(events: readonly agentproto.Event[]): number {
+  let n = 0;
+  let open = false;
+  for (const e of events) {
+    if (e.kind === 'user') {
+      if (open) n++;
+      open = true;
+    } else if (e.kind === 'collaboration') {
+      if (open) n++;
+      open = false;
+    } else if (e.kind === 'message' && open) {
+      open = false;
+    }
+  }
+  return open ? n + 1 : n;
+}
 
 /** A pending question, rendered inline as a second view of agentd's queue. */
 const AskRow: Component<{
@@ -606,6 +727,55 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     else next.delete(seq);
     setOpenThoughts(next);
   };
+  // Routine inbox messages that have been opened, by "<seq>:<index>" — the
+  // same reasoning as openThoughts.
+  const [openInbox, setOpenInbox] = createSignal<ReadonlySet<string>>(new Set());
+  const setInboxOpen = (key: string, open: boolean) => {
+    if (openInbox().has(key) === open) return;
+    const next = new Set(openInbox());
+    if (open) next.add(key);
+    else next.delete(key);
+    setOpenInbox(next);
+  };
+
+  // The two lanes of a workspace orchestrator's transcript. The owner's
+  // questions and the orchestrator's answers to them were one line in
+  // forty among members' progress and the supervisor's notes; the Owner
+  // tab is that conversation alone. Tabs appear only once an inbox turn
+  // has arrived — a plain session has one lane and no strip. The composer
+  // sits below both: there is one session, and what you type goes to it
+  // whichever lane you are reading.
+  const lanes = createMemo(() => laneOf(props.events()));
+  const hasInbox = createMemo(() => props.events().some((e) => e.kind === 'collaboration'));
+  const [lane, setLane] = createSignal<TurnLane>('team');
+  // The newest inbox turn seen while on the Team tab; what has arrived
+  // since is the Team tab's badge while you read the Owner lane.
+  const [teamSeenSeq, setTeamSeenSeq] = createSignal(0);
+  const lastInboxSeq = createMemo(() => {
+    let last = 0;
+    for (const e of props.events()) if (e.kind === 'collaboration' && e.seq > last) last = e.seq;
+    return last;
+  });
+  createEffect(() => {
+    if (lane() === 'team') setTeamSeenSeq(lastInboxSeq());
+  });
+  const unseenTeam = createMemo(() => {
+    const since = teamSeenSeq();
+    let n = 0;
+    for (const e of props.events()) if (e.kind === 'collaboration' && e.seq > since) n++;
+    return n;
+  });
+  const unanswered = createMemo(() => unansweredPrompts(props.events()));
+  // What the Owner lane shows: what you typed, and the agent's prose and
+  // images in reply. Its tool calls and thinking stay on the Team tab,
+  // where the whole turn is.
+  const visible = (e: agentproto.Event) => {
+    if (lane() === 'team' || !hasInbox()) return true;
+    if (e.kind === 'user') return true;
+    return (e.kind === 'message' || e.kind === 'image') && lanes().get(e.seq) === 'owner';
+  };
+  const ownerReply = (e: agentproto.Event) => hasInbox() && e.kind === 'message' && lanes().get(e.seq) === 'owner';
+
   const [draft, setDraft] = createSignal('');
   let scroller: HTMLDivElement | undefined;
   let input: HTMLTextAreaElement | undefined;
@@ -895,6 +1065,42 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     >
       <Show when={props.header}>{props.header}</Show>
 
+      <Show when={hasInbox()}>
+        <div
+          role="tablist"
+          aria-label="Transcript lanes"
+          data-testid="agent-lanes"
+          style={{ display: 'flex', 'align-items': 'flex-end', 'flex-shrink': 0, background: tokens.bgMenu, 'border-bottom': `1px solid ${tokens.borderMenu}`, padding: `0 ${tokens.spaceMd}px` }}
+        >
+          <Tab
+            role="tab"
+            data-testid="agent-lane-owner"
+            active={lane() === 'owner'}
+            aria-selected={lane() === 'owner'}
+            onClick={() => setLane('owner')}
+            title="What you asked, and the orchestrator's replies to you"
+          >
+            Owner
+            <Show when={unanswered() > 0}>
+              <span data-testid="agent-lane-owner-badge" title={`${unanswered()} of your messages have no reply yet`} style={{ font: tokens.type.monoSm, color: tokens.accentAmber, 'margin-left': '6px' }}>{unanswered()}</span>
+            </Show>
+          </Tab>
+          <Tab
+            role="tab"
+            data-testid="agent-lane-team"
+            active={lane() === 'team'}
+            aria-selected={lane() === 'team'}
+            onClick={() => setLane('team')}
+            title="The whole transcript: members' messages, tool calls, and every turn"
+          >
+            Team
+            <Show when={lane() === 'owner' && unseenTeam() > 0}>
+              <span data-testid="agent-lane-team-badge" title={`${unseenTeam()} inbox turns since you last looked`} style={{ font: tokens.type.monoSm, color: tokens.accentBlue, 'margin-left': '6px' }}>{unseenTeam()}</span>
+            </Show>
+          </Tab>
+        </div>
+      </Show>
+
       <div
         ref={scroller}
         data-testid="agent-transcript"
@@ -916,7 +1122,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
       >
         <For each={props.events()}>
           {(e) => (
-            <>
+            <Show when={visible(e)}>
             <Show when={e.kind === 'image'}>
               {/* A data: URI, so the image never leaves the machine and
                   no request is made for it. Bounded by agentd before it
@@ -1021,7 +1227,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               }
             >
               <div
-                data-testid={e.kind === 'user' ? 'agent-human-message' : undefined}
+                data-testid={e.kind === 'user' ? 'agent-human-message' : ownerReply(e) ? 'agent-owner-reply' : undefined}
                 style={{
                   font: tokens.type.textMd,
                   color: tokens.fg,
@@ -1041,6 +1247,13 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                         'font-weight': 600,
                       }
                     : {}),
+                  // In a workspace, the orchestrator's reply TO YOU wears a
+                  // thinner version of your rule, so a question and its
+                  // answer read as a pair among the turns it spends on
+                  // members' mail. Its prose about that mail has no rule.
+                  ...(ownerReply(e)
+                    ? { 'border-left': `2px solid ${tokens.accentBlue}`, 'padding-left': `${tokens.spaceLg}px` }
+                    : {}),
                 }}
               >
                 {/* Agent-authored prose is Markdown; what you typed is literal.
@@ -1048,14 +1261,18 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                     asterisks and backticks you meant to send. */}
                 <Show when={e.kind === 'message'} fallback={
                   <Show when={e.kind === 'collaboration'} fallback={<>{e.text}</>}>
-                    <Collaboration text={e.text ?? ''} />
+                    <Collaboration
+                      text={e.text ?? ''}
+                      open={(key) => openInbox().has(`${e.seq}:${key}`)}
+                      onToggle={(key, open) => setInboxOpen(`${e.seq}:${key}`, open)}
+                    />
                   </Show>
                 }>
                   <Markdown text={e.text ?? ''} />
                 </Show>
               </div>
             </Show>
-            </>
+            </Show>
           )}
         </For>
 
