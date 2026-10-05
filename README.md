@@ -191,7 +191,7 @@ wash-connect     # https://<this-host>:10000/?token=…  — paste it into any b
 `wash-install` clones into `~/wash`, puts go/node/pnpm under `~/.local`
 if they are missing, builds, links `wash-install` and `wash-connect` into
 `~/bin`, and runs `out/wash-router` as a `systemd --user` service
-(`journalctl --user -u wash -f` for logs). Re-running it is the update:
+(log: `~/.local/state/wash/router.log`). Re-running it is the update:
 `wash-install` (main), `wash-install v0.18.0`, `wash-install release`,
 `wash-install my-branch`, `wash-install origin/their-branch` — all built
 from source. A local branch ahead of origin builds your commits and says

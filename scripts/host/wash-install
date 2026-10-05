@@ -164,7 +164,11 @@ esac
 
 # ----- the unit -------------------------------------------------------------------------------
 # A user service gets no login environment: PATH is written in, so the
-# agent adapters (npx) and anything the router runs can be found.
+# agent adapters (npx) and anything the router runs can be found. The log
+# goes to a file beside the token: on a stock Ubuntu this user cannot read
+# the journal (that takes the systemd-journal group), and a log you cannot
+# read is no log. Restart=always, not on-failure: the router that found its
+# port taken exited cleanly and stayed down.
 unit_text="[Unit]
 Description=wash desktop router (serving as $USER)
 After=network-online.target
@@ -173,7 +177,9 @@ After=network-online.target
 ExecStart=$repo/out/wash-router --listen $listen --auth-token-file $state_dir/router.token
 WorkingDirectory=%h
 Environment=PATH=$PATH
-Restart=on-failure
+StandardOutput=append:$state_dir/router.log
+StandardError=inherit
+Restart=always
 RestartSec=2
 
 [Install]
@@ -211,36 +217,69 @@ if [[ -n "$active" && "$dry" != "1" ]]; then
   say "Restarting in 5s — Ctrl-C keeps the current router."
   sleep 5
 fi
-# Whatever holds the port now that is not our unit has to go first, or the
-# unit binds, fails, and restarts every two seconds behind a router that
-# never stopped — which is what the first run did. The old wash-start's
-# screen session is the known case; it is found with `screen -ls`, which
-# unlike `screen -Q` works without a terminal (curl | bash has none).
+# Whatever serves the port now that is not our unit has to go first, or the
+# unit's router finds the port taken, exits, and the old one keeps serving —
+# which is what the first run did, invisibly: `is-active` was true for the
+# minutes the new router took to give up. The old wash-start's screen
+# session is the known case, and its socket can be gone while the router
+# lives on, so the router is found by its command line, not through screen.
 port="${listen##*:}"
-port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; }
+listener_inodes() { # inodes of LISTEN sockets on $port, from /proc (ss may be denied)
+  local hex; hex="$(printf '%04X' "$port")"
+  awk -v p=":$hex" 'NR>1 && index($2, p) == length($2) - length(p) + 1 && $4 == "0A" {print $10}' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+owns_port() { # <pid>: holds a listening socket on $port
+  local pid="$1" inode
+  for inode in $(listener_inodes); do
+    ls -l "/proc/$pid/fd" 2>/dev/null | grep -q "socket:\[$inode\]" && return 0
+  done
+  return 1
+}
+unit_pid() { systemctl --user show wash -p MainPID --value 2>/dev/null || echo 0; }
+stale=()
+while read -r pid cmd; do
+  [[ "$pid" == "$(unit_pid)" ]] && continue
+  stale+=("$pid")
+done < <(ps -eo pid=,args= | awk -v port=":$port" '$2 ~ /wash-router$/ && $0 ~ ("--listen [^ ]*" port "( |$)") {print $1, $2}')
 if command -v screen >/dev/null 2>&1 && screen -ls 2>/dev/null | grep -qE '[.]wash[[:space:]]'; then
   say "Stopping the screen session the previous wash-start ran"
   run screen -S wash -X quit
 fi
+if [[ ${#stale[@]} -gt 0 ]]; then
+  say "Stopping the router(s) already serving $listen outside wash.service: ${stale[*]}"
+  run kill "${stale[@]}"
+  if [[ "$dry" != "1" ]]; then
+    for _ in $(seq 1 50); do
+      kill -0 "${stale[@]}" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "${stale[@]}" 2>/dev/null && run kill -9 "${stale[@]}"
+  fi
+fi
 if [[ "$dry" != "1" ]]; then
   for _ in $(seq 1 50); do
-    port_busy || break
+    [[ -z "$(listener_inodes)" ]] && break
     sleep 0.1
   done
-  if port_busy && ! systemctl --user is-active --quiet wash; then
-    printf 'wash-install: port %s is in use by something that is not wash.service; stop it (ss -ltnp | grep :%s) or choose --listen\n' "$port" "$port" >&2
+  if [[ -n "$(listener_inodes)" ]] && ! owns_port "$(unit_pid)"; then
+    printf 'wash-install: port %s is still held by something that is not wash.service; stop it or choose --listen\n' "$port" >&2
     exit 1
   fi
 fi
 run systemctl --user enable -q wash
 run systemctl --user restart wash
 if [[ "$dry" != "1" ]]; then
-  # Up means: still active after a moment, never restarted, and answering
-  # on the port. `is-active` alone is true the instant a unit starts.
-  sleep 2
-  if ! systemctl --user is-active --quiet wash || [[ "$(systemctl --user show wash -p NRestarts --value)" != "0" ]] || ! port_busy; then
-    printf 'wash-install: wash.service did not stay up on %s. Its log:\n' "$listen" >&2
-    journalctl --user -u wash -n 15 --no-pager >&2 || true
+  # Up means: our router holds the listening socket. A unit is "active" the
+  # instant it starts, and a router that cannot bind takes minutes to say so.
+  ok=0
+  for _ in $(seq 1 100); do
+    pid="$(unit_pid)"
+    if [[ "$pid" != "0" ]] && owns_port "$pid"; then ok=1; break; fi
+    sleep 0.1
+  done
+  if [[ "$ok" != "1" ]]; then
+    printf 'wash-install: wash.service is not serving %s. The end of its log, %s/router.log:\n' "$listen" "$state_dir" >&2
+    tail -n 15 "$state_dir/router.log" >&2 2>/dev/null || true
     exit 1
   fi
 fi
@@ -251,5 +290,5 @@ if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)" != "
     say "note: the router stops at logout until: sudo loginctl enable-linger $USER"
   fi
 fi
-say "wash is running on $listen (logs: journalctl --user -u wash -f)"
+say "wash is running on $listen (log: $state_dir/router.log)"
 [[ "$dry" == "1" ]] || "$repo/scripts/host/wash-connect" || true
