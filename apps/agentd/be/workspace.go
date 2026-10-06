@@ -1167,6 +1167,46 @@ func (ws *workspaceService) loop() {
 		ws.contextNudges()
 		ws.supervise(time.Now())
 		ws.publish(false)
+		ws.archiveEnded()
+	}
+}
+
+// archiveEnded moves each ended workspace's record out of the live state
+// (swarm/archive.go), once its QA and plan files are saved: publish has
+// just written them, and a write still failing keeps its workspace, and so
+// its retry, until it succeeds.
+func (ws *workspaceService) archiveEnded() {
+	ids := ws.store.Unarchived()
+	if len(ids) == 0 {
+		return
+	}
+	ws.qaMu.Lock()
+	settled := func(id string) bool {
+		if st := ws.qaFiles[id]; st != nil && st.Status.State != "saved" {
+			return false
+		}
+		if st := ws.planFiles[id]; st != nil && st.Status.State != "saved" {
+			return false
+		}
+		return true
+	}
+	ready := []string{}
+	for _, id := range ids {
+		if settled(id) {
+			ready = append(ready, id)
+		}
+	}
+	ws.qaMu.Unlock()
+	for _, id := range ready {
+		if err := ws.store.Archive(id); err != nil {
+			log.Printf("agentd: workspace archive %s: %v", id, err)
+			continue
+		}
+		ws.qaMu.Lock()
+		delete(ws.qaFiles, id)
+		delete(ws.planFiles, id)
+		ws.qaMu.Unlock()
+		log.Printf("agentd: workspace %s ended; archived under %s", id, ws.store.ArchiveDir())
 	}
 }
 func (ws *workspaceService) dispatch() {
@@ -1394,6 +1434,15 @@ func (ws *workspaceService) restoreProvenance(session string, events []agentprot
 		}
 		if self == "" {
 			continue
+		}
+		// An ended workspace's messages are in its archive.
+		if w.Archive != "" {
+			full, err := swarm.LoadArchived(w.Archive)
+			if err != nil {
+				log.Printf("agentd: workspace %s archive unreadable for replay: %v", w.ID, err)
+				continue
+			}
+			w = *full
 		}
 		for _, msg := range w.Messages {
 			if msg.Recipient != self {

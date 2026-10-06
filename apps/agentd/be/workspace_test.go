@@ -274,6 +274,69 @@ func TestWorkspaceReplayPreservesVerifiedProvenance(t *testing.T) {
 	}
 }
 
+// A transcript reopened after its workspace ended and was archived still
+// shows its inbox turns as collaboration: the messages come from the archive.
+func TestReplayReadsAnArchivedWorkspace(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := s.Send("lead", w.Lead, "question", "Which clock?", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.State = "ended"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	ws.archiveEnded()
+	if a := s.Snapshot().Workspaces[0].Archive; a == "" {
+		t.Fatal("the loop did not archive an ended workspace")
+	}
+	real := inboxTurn([]swarm.Message{msg}, func(swarm.Message) string { return "Orchestrator · question" }).text
+	events := []agentproto.Event{{Kind: "user", Text: real}}
+	ws.restoreProvenance("lead", events)
+	if events[0].Kind != "collaboration" || !strings.Contains(events[0].Text, "Which clock?") {
+		t.Fatal(events[0])
+	}
+}
+
+// A workspace whose QA file write is still failing keeps its record (and
+// so the retry) until the write succeeds.
+func TestArchiveWaitsForAFailingQAWrite(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Setup("lead", "codex", t.TempDir(), "Team", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, _ *swarm.Member) error {
+		w.State = "ended"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s, qaFiles: map[string]*qaDirState{w.ID: {Status: agentproto.QADocumentStatus{State: "error"}}}}
+	ws.archiveEnded()
+	if s.Snapshot().Workspaces[0].Archive != "" {
+		t.Fatal("archived while its QA write was failing")
+	}
+	ws.qaFiles[w.ID].Status.State = "saved"
+	ws.archiveEnded()
+	if s.Snapshot().Workspaces[0].Archive == "" {
+		t.Fatal("not archived once saved")
+	}
+}
+
 func TestRemovedWorkspaceToolCannotBypassMCPBridge(t *testing.T) {
 	// A direct backend caller gets the same catalogue as the bridge.
 	ws := &workspaceService{}

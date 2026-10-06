@@ -244,6 +244,9 @@ type Workspace struct {
 	// it in one turn. "" delivers as it comes. With twenty members every
 	// progress report was a turn of the owner's own session (Redoubt, R11).
 	Digest string `json:"digest,omitempty"`
+	// Archive is the file an ended workspace's full record moved to; set,
+	// this entry is a stub (archive.go).
+	Archive string `json:"archive,omitempty"`
 	// Nudged are the lifecycle nudges already sent, so each goes once.
 	Nudged      []string     `json:"nudged,omitempty"`
 	Members     []Member     `json:"members"`
