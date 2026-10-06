@@ -163,17 +163,19 @@ test('MCP reads workspace JSON and launches members from a catalog with model-de
  expect(own.catalog).toBe('openai');
  expect(own.initial_configs).toEqual({ model: 'smart', reasoning_effort: 'high' });
  await tool('workspace_configure', {members:{unknown:{ name: 'Unknown', catalog: 'missing', instructions: 'Must not launch.', lifetime: 'resident' }}}, true);
- const failedLaunch = await tool('workspace_configure', {members:{invalid:{ name: 'Invalid effort', model: 'coding', effort: 'high', instructions: 'Must not run.', lifetime: 'resident' }}});
- expect(failedLaunch.launches.invalid.state).toBe('failed');
- expect(failedLaunch.launches.invalid.error).toBeTruthy();
+ // An effort the slot's model does not offer is advisory (API 4.2): the
+ // member launches on what the adapter has, and says what it did not take.
+ const unoffered = await tool('workspace_configure', {members:{invalid:{ name: 'Unoffered effort', model: 'coding', effort: 'high', instructions: 'Wait.', lifetime: 'resident' }}});
+ expect(unoffered.launches.invalid.state).toBe('available');
+ expect(unoffered.launches.invalid.applied.notes.join('\n')).toMatch(/high.*not applied/);
  const after = await tool('workspace_get', { view: 'state', include_messages: true });
  expect(after.workspace.catalog).toBe('fake');
  expect(after.workspace.members.find((m: any) => m.id === resident.id).launch_settings).toMatchObject({ model: 'smart', effort: 'high' });
  expect(after.sessions[resident.id].config_options.find((c: any) => c.id === 'model').currentValue).toBe('smart');
  expect(after.workspace.members.some((m: any) => m.name === 'Unknown')).toBe(false);
- const failed = after.workspace.members.find((m: any) => m.name === 'Invalid effort');
- expect(failed.state).toBe('failed');
- expect(after.workspace.messages.some((m: any) => m.recipient === failed.id)).toBe(false);
+ const advised = after.workspace.members.find((m: any) => m.name === 'Unoffered effort');
+ expect(advised.state).toBe('available');
+ expect(advised.applied.notes.length).toBeGreaterThan(0);
  await tool('workspace_configure', { expected_revision: before.workspace.revision, name: 'Stale edit' }, true);
  // Back to the adapter's own list: later launches only.
  await tool('workspace_configure', { catalog: 'openai' });
