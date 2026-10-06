@@ -97,7 +97,7 @@ func (ws *workspaceService) syncQADocuments() {
 		ws.qaFiles = map[string]*qaDirState{}
 	}
 	home, _ := os.UserHomeDir()
-	for _, w := range ws.store.Snapshot().Workspaces {
+	for _, w := range ws.store.Shared().Workspaces {
 		if w.QADir == "" {
 			delete(ws.qaFiles, w.ID)
 			continue

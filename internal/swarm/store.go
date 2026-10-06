@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirmick/wash/internal/agentpolicy"
@@ -259,9 +260,12 @@ type State struct {
 	Workspaces []Workspace `json:"workspaces"`
 }
 type Store struct {
-	mu    sync.Mutex
-	path  string
-	state State
+	mu   sync.Mutex
+	path string
+	// state is never changed in place: change() builds the next state on a
+	// copy and installs it whole. So the installed state can be read without
+	// a copy (Shared) and without the lock once its pointer is taken.
+	state *State
 	write func(string, []byte) error
 }
 
@@ -272,9 +276,22 @@ func ID() string {
 	}
 	return hex.EncodeToString(b)
 }
-func clone[T any](v T) T { b, _ := json.Marshal(v); var out T; _ = json.Unmarshal(b, &out); return out }
+
+// clones counts deep copies, so a test can hold a read path to none.
+var clones atomic.Int64
+
+// Clones is how many deep copies the store has made in this process.
+func Clones() int64 { return clones.Load() }
+
+func clone[T any](v T) T {
+	clones.Add(1)
+	b, _ := json.Marshal(v)
+	var out T
+	_ = json.Unmarshal(b, &out)
+	return out
+}
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, state: State{Version: 1}, write: atomicWrite}
+	s := &Store{path: path, state: &State{Version: 1}, write: atomicWrite}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -282,7 +299,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = json.Unmarshal(b, &s.state); err != nil {
+	if err = json.Unmarshal(b, s.state); err != nil {
 		return nil, err
 	}
 	if s.state.Version != 1 {
@@ -346,7 +363,7 @@ func atomicWrite(path string, b []byte) error {
 func (s *Store) change(fn func(*State) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next := clone(s.state)
+	next := clone(*s.state)
 	if err := fn(&next); err != nil {
 		return err
 	}
@@ -357,10 +374,21 @@ func (s *Store) change(fn func(*State) error) error {
 	if err = s.write(s.path, b); err != nil {
 		return err
 	}
-	s.state = next
+	s.state = &next
 	return nil
 }
-func (s *Store) Snapshot() State { s.mu.Lock(); defer s.mu.Unlock(); return clone(s.state) }
+
+// Snapshot is a private deep copy of the state, for a caller that may
+// change what it reads. It costs a JSON round trip of the whole state; a
+// reader that only reads takes Shared instead.
+func (s *Store) Snapshot() State { s.mu.Lock(); defer s.mu.Unlock(); return clone(*s.state) }
+
+// Shared is the current state, not copied. It must not be written to,
+// through any slice or map in it, and it does not change under the caller:
+// a later change installs a new state rather than editing this one. The
+// workspace loop reads the state several times a second; as copies, those
+// reads were a full core of agentd once the state grew (8.8 MB, 45 ms each).
+func (s *Store) Shared() *State { s.mu.Lock(); defer s.mu.Unlock(); return s.state }
 func find(st *State, session string) (*Workspace, *Member) {
 	for i := range st.Workspaces {
 		w := &st.Workspaces[i]
@@ -375,9 +403,22 @@ func find(st *State, session string) (*Workspace, *Member) {
 	}
 	return nil, nil
 }
+
+// View is a private copy of the caller's workspace, and only that one: a
+// copy of every workspace to return one cost the whole state's copy.
 func (s *Store) View(session string) *Workspace {
-	st := s.Snapshot()
-	w, _ := find(&st, session)
+	w, _ := find(s.Shared(), session)
+	if w == nil {
+		return nil
+	}
+	c := clone(*w)
+	return &c
+}
+
+// SharedView is the caller's workspace from Shared: not copied, not to be
+// written to.
+func (s *Store) SharedView(session string) *Workspace {
+	w, _ := find(s.Shared(), session)
 	return w
 }
 func (s *Store) Mutate(session string, lead bool, fn func(*Workspace, *Member) error) error {
@@ -706,8 +747,7 @@ func (s *Store) Complete(session, id, body string, failed bool) error {
 // delivers: everything queued that is not held for a waiting set. Caller must reserve the session's turn first. A
 // crash between those operations is deliberately an uncertain delivery.
 func (s *Store) Next(session string) ([]Message, error) {
-	st := s.Snapshot()
-	w, m := find(&st, session)
+	w, m := find(s.Shared(), session)
 	if w == nil || w.State != "active" || m.State != "available" || m.Retire {
 		return nil, nil
 	}
@@ -1015,7 +1055,7 @@ func idleNudge(w *Workspace, m *Member) {
 // orchestrator's when the creator is gone.
 func (s *Store) Parents() map[string]string {
 	out := map[string]string{}
-	for _, w := range s.Snapshot().Workspaces {
+	for _, w := range s.Shared().Workspaces {
 		lead := ""
 		if m := GetMember(&w, w.Lead); m != nil {
 			lead = m.Session

@@ -152,7 +152,7 @@ func rowWorkspaces() map[string]*agentproto.RowWorkspace {
 	if workspaces == nil {
 		return out
 	}
-	for _, w := range workspaces.store.Snapshot().Workspaces {
+	for _, w := range workspaces.store.Shared().Workspaces {
 		if w.State == "ended" {
 			continue
 		}

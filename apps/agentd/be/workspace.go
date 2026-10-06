@@ -39,6 +39,11 @@ type workspaceService struct {
 	views     map[string][]byte
 	sequences map[string]int64
 	previews  map[string]string
+	// unchanged is, per window, the shared workspace and the rest of the
+	// frame (everything but the workspace) its last frame was built from:
+	// with both the same, the frame is too, and building it — a copy and a
+	// marshal of the whole workspace, 22 ms at 965 messages — is skipped.
+	unchanged map[string]publishedFrom
 	sessions  map[string]string
 	// sup is the stall watchdog's state; only loop touches it.
 	sup *supervisor
@@ -69,7 +74,7 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 		os.RemoveAll(dir)
 		return err
 	}
-	ws := &workspaceService{store: store, conn: c, tokens: map[string]*hosted{}, socket: socket, kick: make(chan struct{}, 1), done: make(chan struct{}), views: map[string][]byte{}, sequences: map[string]int64{}, previews: map[string]string{}, sessions: map[string]string{}}
+	ws := &workspaceService{store: store, conn: c, tokens: map[string]*hosted{}, socket: socket, kick: make(chan struct{}, 1), done: make(chan struct{}), views: map[string][]byte{}, sequences: map[string]int64{}, previews: map[string]string{}, unchanged: map[string]publishedFrom{}, sessions: map[string]string{}}
 	workspaces = ws
 	server := &http.Server{Handler: http.HandlerFunc(ws.serve), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 	go func() {
@@ -1058,6 +1063,13 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (*agentproto
 	}
 	return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Questions: questionsFor("", m.ID), Note: "Archived conversation; reopen through Agent History to resume."}, nil
 }
+
+// publishedFrom is what a window's last frame was built from.
+type publishedFrom struct {
+	workspace *swarm.Workspace // shared, compared by identity
+	rest      []byte           // the frame without its workspace, marshaled
+}
+
 func (ws *workspaceService) publish(force bool) {
 	ws.syncQADocuments()
 	ws.syncPlanFiles()
@@ -1078,9 +1090,12 @@ func (ws *workspaceService) publish(force bool) {
 		if h != nil {
 			sessionID = h.sessionID
 		}
-		w := ws.store.View(sessionID)
-		frame := agentproto.WorkspaceState{Key: key, Workspace: w}
-		if w != nil {
+		// Everything but the workspace first, from the shared state: it is
+		// cheap, and with it and the workspace unchanged there is nothing to
+		// build or send.
+		shared := ws.store.SharedView(sessionID)
+		frame := agentproto.WorkspaceState{Key: key}
+		if shared != nil {
 			ws.mu.Lock()
 			selected := ws.previews[key]
 			ws.mu.Unlock()
@@ -1090,22 +1105,31 @@ func (ws *workspaceService) publish(force bool) {
 					frame.Preview = preview
 				}
 			}
-			frame.Activity, frame.ActivityDetail, frame.Usage = workspaceRuntime(w)
-			frame.Approvals = workspaceApprovals(w)
-			frame.Questions = workspaceQuestions(w)
-			frame.QAMarkdown = swarm.QAMarkdown(w)
-			status := ws.qaDocumentStatus(w)
+			frame.Activity, frame.ActivityDetail, frame.Usage = workspaceRuntime(shared)
+			frame.Approvals = workspaceApprovals(shared)
+			frame.Questions = workspaceQuestions(shared)
+			status := ws.qaDocumentStatus(shared)
 			frame.QADocumentStatus = &status
-			qaSummary(w)
-			if w.PlanFile != "" {
-				status := ws.planFileStatus(w)
+			if shared.PlanFile != "" {
+				status := ws.planFileStatus(shared)
 				frame.PlanFileStatus = &status
 			}
+		}
+		rest, _ := json.Marshal(frame)
+		if prior, ok := ws.unchanged[instance]; !force && ok && prior.workspace == shared && string(prior.rest) == string(rest) {
+			continue
+		}
+		from := publishedFrom{workspace: shared, rest: rest}
+		if w := ws.store.View(sessionID); w != nil {
+			frame.Workspace = w
+			frame.QAMarkdown = swarm.QAMarkdown(w)
+			qaSummary(w)
 		}
 		// Compared and diffed without a sequence: two frames that say the
 		// same thing are the same frame, whichever number each would carry.
 		b, _ := json.Marshal(frame)
 		if !force && string(ws.views[instance]) == string(b) {
+			ws.unchanged[instance] = from
 			continue
 		}
 		sequence := ws.sequences[instance] + 1
@@ -1119,6 +1143,9 @@ func (ws *workspaceService) publish(force bool) {
 		if err := agentproto.Send(ws.conn, wire.Recipient{InstanceID: instance}, outgoing); err == nil {
 			ws.views[instance] = b
 			ws.sequences[instance] = sequence
+			// Only a frame that went out counts as unchanged-from: one that
+			// failed to send is built and tried again next pass.
+			ws.unchanged[instance] = from
 		}
 	}
 	ws.mu.Lock()
@@ -1144,6 +1171,7 @@ func (ws *workspaceService) publish(force bool) {
 		if !found {
 			delete(ws.views, instance)
 			delete(ws.sequences, instance)
+			delete(ws.unchanged, instance)
 		}
 	}
 	// The Agents window nests members under their orchestrator, and a
@@ -1210,7 +1238,7 @@ func (ws *workspaceService) archiveEnded() {
 	}
 }
 func (ws *workspaceService) dispatch() {
-	for _, w := range ws.store.Snapshot().Workspaces {
+	for _, w := range ws.store.Shared().Workspaces {
 		if w.State != "active" {
 			continue
 		}

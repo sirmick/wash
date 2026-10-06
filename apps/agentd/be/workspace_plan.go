@@ -147,7 +147,7 @@ func (ws *workspaceService) syncPlanFiles() {
 	if ws.planFiles == nil {
 		ws.planFiles = map[string]*planFileState{}
 	}
-	for _, w := range ws.store.Snapshot().Workspaces {
+	for _, w := range ws.store.Shared().Workspaces {
 		if w.PlanFile == "" {
 			delete(ws.planFiles, w.ID)
 			continue
