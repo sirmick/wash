@@ -1615,6 +1615,11 @@ export interface Workspace {
    * progress report was a turn of the owner's own session (Redoubt, R11).
    */
   digest?: string;
+  /**
+   * Archive is the file an ended workspace's full record moved to; set,
+   * this entry is a stub (archive.go).
+   */
+  archive?: string;
   /** Nudged are the lifecycle nudges already sent, so each goes once. */
   nudged?: string[];
   members: Member[] | null;
