@@ -114,7 +114,7 @@ func (ws *workspaceService) captureUsage(h *hosted) {
 	}
 	// Ordinary sessions have no workspace to checkpoint.
 	found := false
-	for _, w := range ws.store.Snapshot().Workspaces {
+	for _, w := range ws.store.Shared().Workspaces {
 		if w.State == "ended" {
 			continue
 		}
@@ -168,7 +168,7 @@ const contextRewarn = 0.1
 // working to 45% was never heard of again, and the orchestrator's one chance
 // to time the handoff was wherever the first note had landed.
 func (ws *workspaceService) contextNudges() {
-	for _, w := range ws.store.Snapshot().Workspaces {
+	for _, w := range ws.store.Shared().Workspaces {
 		if w.State != "active" {
 			continue
 		}

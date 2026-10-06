@@ -38,7 +38,7 @@ func (s *Store) Transaction(session, operation, request string, raw []byte, prev
 	hash := sha256.Sum256(encoded)
 	digest := hex.EncodeToString(hash[:])
 	workspace := ""
-	if w, _ := find(&s.state, session); w != nil {
+	if w, _ := find(s.state, session); w != nil {
 		workspace = w.ID
 	}
 	if request != "" && !preview {
@@ -54,7 +54,7 @@ func (s *Store) Transaction(session, operation, request string, raw []byte, prev
 			return nil, errors.New("workspace request receipt limit reached")
 		}
 	}
-	staged := &Store{state: clone(s.state), write: func(string, []byte) error { return nil }}
+	staged := &Store{state: ptr(clone(*s.state)), write: func(string, []byte) error { return nil }}
 	result, err := fn(staged)
 	if err != nil {
 		return nil, err
@@ -67,7 +67,7 @@ func (s *Store) Transaction(session, operation, request string, raw []byte, prev
 		if err != nil {
 			return nil, err
 		}
-		if w, _ := find(&staged.state, session); w != nil {
+		if w, _ := find(staged.state, session); w != nil {
 			workspace = w.ID
 		}
 		staged.state.Receipts = append(staged.state.Receipts, Receipt{workspace, session, operation, request, digest, data})
@@ -85,3 +85,5 @@ func (s *Store) Transaction(session, operation, request string, raw []byte, prev
 	s.state = staged.state
 	return result, nil
 }
+
+func ptr[T any](v T) *T { return &v }

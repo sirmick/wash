@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentproto"
@@ -975,5 +976,44 @@ func TestContextUseIsReportedAtEachTenthAndShownOnThePlan(t *testing.T) {
 	}
 	if lines := got.(map[string]any)["nodes"].([]string); len(lines) != 1 || !strings.Contains(lines[0], "Impl (") || !strings.Contains(lines[0], "· context 73%)") {
 		t.Fatalf("plan lines: %q", lines)
+	}
+}
+
+// A pass of the workspace loop that finds nothing to do copies nothing.
+// Every read used to deep-copy the whole state as JSON — dispatch, each
+// member's Next, the nudges, the supervisor, the QA and plan file writers —
+// and at 8.8 MB that was a full core of agentd, forever.
+func TestAnIdleLoopPassCopiesNoState(t *testing.T) {
+	s, err := swarm.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Setup("lead", "codex", t.TempDir(), "Team", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mutate("lead", true, func(w *swarm.Workspace, m *swarm.Member) error {
+		w.Members = append(w.Members, swarm.Member{ID: "m", Key: "impl", Session: "m-session", Name: "Impl", State: "available", Lifetime: "resident", Creator: m.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ws := &workspaceService{store: s}
+	pass := func() {
+		ws.dispatch()
+		ws.contextNudges()
+		ws.sup = nil // supervise checks at most every 5s; a fresh one checks now
+		ws.supervise(time.Now())
+		ws.syncQADocuments()
+		ws.syncPlanFiles()
+		ws.archiveEnded()
+		_, _, _ = s.ApprovalsFor("m-session")
+		_ = s.Parents()
+		_, _ = s.Next("m-session")
+	}
+	pass() // the first pass may record what it finds
+	before := swarm.Clones()
+	pass()
+	if n := swarm.Clones() - before; n != 0 {
+		t.Fatalf("an idle loop pass made %d deep copies of the state", n)
 	}
 }

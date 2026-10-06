@@ -296,7 +296,7 @@ func coordinationPermission(tc acp.ToolCall) bool {
 // savedWorkspaceLaunch is what a reopened session was launched as.
 func savedWorkspaceLaunch(session string) sessionLaunch {
 	if workspaces != nil {
-		for _, w := range workspaces.store.Snapshot().Workspaces {
+		for _, w := range workspaces.store.Shared().Workspaces {
 			for _, m := range w.Members {
 				if m.Session == session {
 					return memberLaunch(w, m)

@@ -222,7 +222,7 @@ func registerQuestionHandlers(bus *sdk.Bus, c *sdk.Conn) {
 // placed on the asking member's session row.
 func (ws *workspaceService) decisionQuestions(now time.Time) []agentproto.PendingQuestion {
 	var out []agentproto.PendingQuestion
-	for _, w := range ws.store.Snapshot().Workspaces {
+	for _, w := range ws.store.Shared().Workspaces {
 		if w.State == "ended" {
 			continue
 		}

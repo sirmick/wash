@@ -183,7 +183,7 @@ func (ws *workspaceService) supervise(now time.Time) {
 	}
 	s.last = now
 	procs := readProcs()
-	for _, w := range ws.store.Snapshot().Workspaces {
+	for _, w := range ws.store.Shared().Workspaces {
 		if w.State != "active" || w.Supervisor.Off {
 			delete(s.sent, w.ID)
 			delete(s.stall, w.ID)

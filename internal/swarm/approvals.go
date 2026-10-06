@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/sirmick/wash/internal/agentpolicy"
 )
@@ -82,9 +83,13 @@ func (s *Store) AddApproval(workspaceID, match, decision string) error {
 // one). Returns "" when the session is not a workspace member, which is the
 // ordinary case for every agent conversation that never set one up.
 func (s *Store) ApprovalsFor(session string) (id, name string, policy agentpolicy.Policy) {
-	w := s.View(session)
+	// Asked on every permission decision: read shared, and hand back a
+	// copy of the rules alone rather than the whole workspace.
+	w := s.SharedView(session)
 	if w == nil {
 		return "", "", agentpolicy.Policy{}
 	}
-	return w.ID, w.Name, ApprovalPolicy(w)
+	policy = ApprovalPolicy(w)
+	policy.Rules = slices.Clone(policy.Rules)
+	return w.ID, w.Name, policy
 }
