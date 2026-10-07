@@ -441,3 +441,147 @@ versus `adapter_enforced` would make that intentional choice easier to audit acr
 
 No credentials or private source payloads are included. Message IDs refer to this workspace;
 briefs, logs and saved handoffs are under `/home/mcloonan/redoubt/.wash/local/`.
+
+---
+
+# Redoubt resume (2026-10-05 evening)
+
+Workspace `7a63bc6e1f6ea77266eccffc586b0825`, orchestrator `cab495a4d2c090f3d5882b1a537494b9`
+(the owner's Claude Code session, Fable 5.1); Wash 0.17.2 / workspace API 4.2.0; adapter
+`@agentclientprotocol/claude-agent-acp` 0.86.0; catalog `anthropic-pro`. Cold start from a
+clean checkout after the 2026-10-05 graceful stop: no workspace open, plan and 160+ QA threads
+resumed from `.wash/` alone. Evidence is tool responses in this session; no daemon trace read.
+
+## What worked (keep)
+
+- `workspace_configure {from, workspace:{name, project_root}}` with `preview:true` then for
+  real: one call restored plan rev 2 (89 nodes) and every thread, and launched the Architect
+  from `handoff_from:"architect-14"` with `subagents:"deny"` applied (`applied.subagents:
+  "denied"`), `auto_approve:true`. Two implementers launched the same way in one patch, each
+  with its worktree `cwd`, and the receipt showed the resolved model, launch settings and
+  `applied` for each. No failed launches, no round trips.
+- The API 4.2 answers to R07, R09, R12 and R15 held: `plan_get node detail` returned the node's
+  revision; the launch receipt carried the Architect's whole stored handoff; `about` documented
+  the mail watermarks and `priority:"checkpoint"`; `view=message` exists.
+- `member_update {waiting}` returned at once with the "finish your turn" instruction.
+
+## WASH-R17 — A QA thread file is 60% base64 checkpoint
+
+Status: open. Context cost, frequent.
+
+`.wash/qa/IPC3-wake-latency.md` is 195,102 bytes; its trailing
+`<!-- wash-qa-checkpoint-v2: … -->` blob is 115,876 of them (one line). Every thread file ends
+in one. The project rule is "read one thread, never the directory", and the natural read is
+`tail`: a member that tails the last three events gets the blob too, and one `tail -120` cost
+this orchestrator ~128 KB of tool output (persisted to a file by the harness, otherwise it would
+have been in context). The blob re-encodes the events already in the Markdown above it.
+
+Desired: keep the checkpoint out of the readable file (a sibling `.wash/qa/.state/<id>.json`, or
+the plan file's mechanism), or at least put it first so `tail` is safe; and give `workspace_get
+view=qa thread_id` a `last:N` (or negative `after`) so the newest events can be read without
+knowing an event id.
+
+## WASH-R18 — `workspace_get` with no workspace returns `null`
+
+Status: open. Minor.
+
+Before setup, `workspace_get {view:"team"}` returned `null` (no error, no hint). PROJECT.md's
+startup step 1 is "`about`, then `workspace_get({})`": the orchestrator has to infer "no
+workspace" from a bare null. Desired: `{workspace:null, hint:"no workspace; workspace_configure
+{from} creates one"}` or an error naming the next call.
+
+## WASH-R19 — `plan_get node=X` returns the whole plan as well
+
+Status: open. Context cost.
+
+`plan_get {node:"BEAM7", detail:true}` returned the node's detail *and* the full 89-line node
+list, identical to a bare `plan_get`. Three node reads in one turn cost three copies of the plan
+(~4 KB each). Desired: `node` returns that node (and its subtree) only; the full list on request.
+
+## Catalog follow-up: `coding` still resolves to a model this adapter rejects
+
+Status: open on this host (owner said "let's discuss" on 2026-10-04). The `anthropic-pro`
+`coding` slot still maps to `claude-opus-5-5`; the adapter's list has `opus` and `claude-opus-5`
+and not that id, so every implementer launch overrides `model:"opus"`, which puts a model id
+back into the orchestrator's hands — exactly what SWARM.md's slot rule is meant to avoid. API
+4.2 says an unoffered model "runs on the adapter's default, recorded in applied.notes"; the
+2026-10-04 handoff reports it was *rejected* at launch instead. Not reproduced today (I did not
+try the slot); worth one launch with `model:"coding"` to see which behaviour 0.17.2 has. Either
+way the fix is the catalog entry: `coding -> opus`.
+
+## Reviewer verification pin is at 0.81.x; installed is 0.86.0
+
+`reviewer_capability_profiles.claude.enforcement:"unverified"`, `installed_version:"0.86.0"`,
+`verified_versions:["0.81.1","0.81.2"]`. API 4.2 makes this advisory (reviewers launch, the
+trailer says `[enforcement unverified]`), which is the right behaviour — noting only that the
+pin has not moved in five adapter minors, so R01's "no release process" point stands.
+
+## Orchestration notes (ours, not Wash's)
+
+- Two members launched in one `workspace_configure`; the second (SCHED1) was told in its
+  instructions to run no cargo/QEMU until an explicit grant, because the first holds the machine
+  for a merge-gate whole bench. A workspace-level "machine token" (one holder, queue, release on
+  result) would replace that free-text rule; today it rests on instructions and on the
+  orchestrator remembering who holds it.
+- `workspace.toml`'s Architect entry carries a comment "add subagents=deny at launch when the
+  adapter supports it"; since `from` merges with call fields, the orchestrator re-sends the
+  whole member definition (name, instructions, lifetime are required) to add one field. A
+  `members.<key>` patch on top of `from` that needs only the changed field would make this a
+  one-liner.
+
+## WASH-R20 — Ephemeral members stay listed after their task completes, and count toward `max_members`
+
+Date: 2026-10-06. Status: open. Minor-medium (one failed panel launch, two extra round trips).
+
+Five ephemeral editors (`bench-rule-editor`, `-2`, `-3`, `-4`, `fpga-editor`), each launched
+with a `task` and each having completed its assignment with a result, still appeared in the
+member list and counted toward `max_members` (16). A `workspace_configure` launching three
+reviewers failed with "workspace member limit (16) reached"; I had to `member_control end` the
+five by hand and raise `max_members` to 20. The `about` text says an ephemeral member "retires
+after the turn" its task completes in; either it does not, or retirement does not free the slot.
+Desired: an ephemeral member whose task is complete is ended by Wash (and shown as ended), and
+the limit counts live members only.
+
+Also seen in the same call: the whole configure was refused for one member's `needs` error
+("node MEM2 needs MEM1 (active) first") after an earlier member in the same call had been
+accepted in a previous attempt; the refusal is correct, but it would help if `preview:true`
+reported the needs check too (it reports only the catalog and launch flags).
+
+## WASH-R21 — A multi-update `assignment_update` fails whole on one update's `needs` check, and the error names only that update
+
+Date: 2026-10-06. Status: open. Minor, frequent tonight.
+
+`assignment_update {updates:[a, b, c]}` where only `c` is on a node whose needs are not done
+is refused as a whole ("update 2: ... node SMP1 needs IPC3 (reported) ... start anyway with
+override"). Atomicity is fine; but the error does not say that `a` and `b` were NOT created,
+and the natural reading ("update 2 needs an override") invites re-sending only `c`. I re-sent
+all three each time after noticing, which is the safe move, but twice I had to re-check that
+`a` and `b` were really absent. Desired: the error states "no update applied" explicitly, or the
+call applies the updates that pass and reports the one that did not (with its index), since
+creates are independent. Related: the `needs` check fires on every create for an active node
+whose needs are unmet, even after the node already carries a recorded override from its launch;
+an override recorded on the node could cover its later assignments too.
+
+### WASH-R22 (2026-10-06 ~06:30): `capability: "reviewer"` members never run
+
+Five reviewers launched tonight with `capability: "reviewer"` (the launch refuses `approval: "auto"`
+with it: "reviewer capability cannot be auto-approved") received their instructions
+(`last_dispatched` updated) but then sat `idle` for 1-2 hours each with a few tens of thousands
+of tokens used and never sent a message; `pending_approvals` stayed 0 the whole time, so nothing
+surfaced for the orchestrator to approve either. The same members relaunched WITHOUT
+`capability` and WITH `approval: "auto"` (read-only enforced by their instructions) answered
+within minutes. Either the reviewer allowlist on claude-agent-acp 0.86.0 (the receipt says
+"not among the versions Wash verified it on") blocks their first tool call silently, or the
+approval prompt goes nowhere. Expected: a refused/blocked tool call should surface as a pending
+approval or an error the orchestrator can see, and `workspace_get team` should say the member is
+blocked, not `idle`.
+
+### WASH-R23 (2026-10-06 ~11:30): plan_accept's Reviewed-by trailers carry stale verdicts
+
+`plan_accept` builds `Reviewed-by:` trailers from reviewers' recorded assignment *results*, not
+from their latest verdicts. Reviewers here renew verdicts by message (answers), so the trailer for
+SCHED1 read `Red team: Merge verdict: BLOCK` (its round-4 result) when the red's final verdict was
+OK (round 6, by message), and MEM2/VOL1's said "OK with notes" when the renewals were OK. I edit
+the line to the true verdict before committing, which the instruction ("exactly as given")
+forbids. Expected: a way to record a renewed verdict on the node (a reviewer's `member_update`
+verdict field, or the trailer taking the newest verdict message on the node).
