@@ -143,7 +143,11 @@ fi
 [[ "$dry" == "1" ]] || say "Building $(git describe --tags --always) — $(git log -1 --format='%s')"
 
 # ----- build ---------------------------------------------------------------------------------
-run pnpm install --frozen-lockfile
+# CI=true: curl | bash has no terminal, and pnpm stops to ask before it
+# rebuilds a node_modules another pnpm version made (observed on a second
+# box: ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY). It also drops the
+# update banner from the log.
+run env CI=true pnpm install --frozen-lockfile
 run make wash
 
 # ----- the commands ------------------------------------------------------------------------
