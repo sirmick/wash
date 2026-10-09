@@ -585,3 +585,37 @@ OK (round 6, by message), and MEM2/VOL1's said "OK with notes" when the renewals
 the line to the true verdict before committing, which the instruction ("exactly as given")
 forbids. Expected: a way to record a renewed verdict on the node (a reviewer's `member_update`
 verdict field, or the trailer taking the newest verdict message on the node).
+
+## WASH-R24 (2026-10-08): wash-fswatch reads every new file's content, not only its name
+
+Measured on this host (ext4, relatime): a file written and given atime == mtime by utime has its
+atime bumped to now within 50 ms, 40 of 40 times, with no reader of mine; a future atime, which
+relatime never bumps, stays. The only watcher running is `wash-fswatch` (Wash's own, PID 95250,
+/home/mcloonan/wash/out/wash). So the watcher reads (not stats) each new file. Effect: the beamlet
+difftest's erlang/files2 test, which set atime == mtime and read it back, failed about 1 run in 3
+on both the BEAM oracle and beamlet (B28), and a polluted cached oracle result then failed every
+run. Expected: a watcher that needs only names and sizes should stat, not read; or read with
+O_NOATIME.
+
+## WASH-R25 (2026-10-08): a member launched with handoff_from sat idle for three hours with queued instructions
+
+beamlet-red-2 (e07c9d7d) was launched from beam4-red's handoff. I sent it four review instructions over about three hours, and each send returned `delivery: queued`. The team view showed it `idle`, with no `waiting` field and no turn running. `member_control interrupt` answered "no turn running". It never took a turn until I sent another instruction after the interrupt. Nothing in the team view flags a member whose queued instructions go undelivered while it is idle. I only noticed because reviews stalled. Expected: an idle member with queued instructions starts a turn. Failing that, the team view shows "queued N, oldest Ns" for an idle member, and the supervisor nudges it.
+
+## WASH-R26 (2026-10-08): handoff lifecycle messages repeat at every commit boundary, each saying "end it and launch its replacement"
+
+Members told to keep a running handoff (member_update handoff at each commit boundary) produce a lifecycle message every time. The userland implementer sent eight in one afternoon. Each reads "When its open work is reported, end it and launch its replacement", though the member is at 29-50% context and working. That's noise that hides the real ones. Expected: the lifecycle text depends on context use (only suggest replacement above context_warn), or a handoff update can be marked as routine.
+
+## WASH-R27 (2026-10-08): decision_request blocks the orchestrator, so owner questions wait for idle moments
+
+decision_request "blocks you: nothing else reaches you until then". With eight to ten members running, a blocking owner question would stall every review and merge until the owner answers. So I keep owner questions in a file (.wash/local/architect-questions.md) and raise them in prose, which the guide says not to do. Expected: a non-blocking decision_request whose answer arrives as a message, or a per-question timeout after which work resumes.
+
+## WASH-R28 (2026-10-08): ending a member leaves its open assignment open, and the node shows "active with nobody on it"
+
+When I end a member mid-package to relaunch from its handoff (SHELL3, SRV1, B37, BEAM17), its assignment stays open and the nudge says "Assign it again". The replacement gets a new assignment from its `task`, so the old one lingers. plan_accept refuses while any assignment is open on the node, so I have to watch for it. Expected: `handoff_from` transfers the predecessor's open assignment to the replacement, or `end` offers to close it as superseded.
+
+## WASH-R29 (2026-10-08): no way to see a reviewer's queue
+
+Four reviews were queued on one red. I could not see that in the team view (`undelivered` counts only) or tell which instruction it was working on. Rebalancing reviews across reds needed my own bookkeeping. Expected: per member, the list of queued instruction ids and their first lines.
+
+## WASH-R30 (2026-10-08): a capability:"reviewer" member with a launch task never completes it
+steward3-red was launched with capability "reviewer" (advisory: "allowlist applied on claude-agent-acp 0.88.0, not among verified versions") and a task. It ran a turn (25k tokens), read its handoff, then went idle with the assignment open and no waiting set, three times, including after a checkpoint-priority instruction naming the exact member_update call. The supervisor nagged every 5 minutes. Likely the adapter's reviewer allowlist on the unverified version drops the Wash MCP tools (member_update, message_send), so the member can read but cannot report. Reviewers launched without capability:"reviewer" (prompt-only restrictions) work. Expected: either the allowlist keeps the Wash tools, or the launch receipt says the member cannot report (refuse with enforcement "adapter", or an advisory that names the missing tools).
