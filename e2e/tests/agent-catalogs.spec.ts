@@ -151,7 +151,10 @@ test.describe('catalogs', () => {
     await expect(win.getByText(/KEYS<<openrouter=wxyz auth-token= opencode-config=true>>/)).toBeVisible({ timeout: 20_000 });
   });
 
-  test('a model the adapter does not offer fails the start and names the ones it does', async ({ page, router }) => {
+  // A slot's model is advisory (API 4.2): a catalog written against one
+  // host's adapter list starts on another's default rather than not at all,
+  // and agentd says what it did not apply.
+  test("a model the adapter does not offer starts on the adapter's default and says so", async ({ page, router }) => {
     writeKeys(router.xdgConfigHome, { openrouter: 'sk-or-e2e-0000-wxyz' });
     // A catalog pinning a model that is not on the adapter's list any more.
     const slot = (model: string) => ({ provider: 'opencode', connection: 'opencode@openrouter', model, effort: 'high' });
@@ -162,8 +165,24 @@ test.describe('catalogs', () => {
     const catalog = manager.locator('[data-testid="ai-catalog-select"]');
     await expect(catalog.locator('option[value="stale"]')).toHaveJSProperty('disabled', false, { timeout: 15_000 });
     await catalog.selectOption('stale');
+
+    const before = await page.locator('wash-app-ai').count();
+    const cursor = router.logCursor();
     await manager.locator('[data-testid="ai-start"]').click();
-    await expect(manager.locator('[data-testid="ai-start-error"]'))
-      .toContainText('available values: opencode/big-pickle, openrouter/', { timeout: 25_000 });
+
+    // The pinned model was skipped, naming what the adapter runs instead and
+    // what it does offer; the session then runs on that default.
+    await router.waitForLog(
+      /agentd: acp start key=\S+ catalog=stale: model="openrouter\/nobody\/imaginary-1" not applied: not offered by the adapter; it runs "opencode\/big-pickle" \(available: opencode\/big-pickle, openrouter\//,
+      25_000,
+      cursor,
+    );
+    await router.waitForLog(
+      /agentd: session settings key=\S+ catalog=stale model=\S* connection=opencode@openrouter adapter=opencode mode=\S* yolo=false effective=map\[.*model:opencode\/big-pickle/,
+      25_000,
+      cursor,
+    );
+    await expect(page.locator('wash-app-ai')).toHaveCount(before + 1, { timeout: 20_000 });
+    await expect(manager.locator('[data-testid="ai-start-error"]')).toHaveCount(0);
   });
 });

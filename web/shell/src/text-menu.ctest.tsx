@@ -56,10 +56,10 @@ test('leaves the terminal and the VM display alone', () => {
   }
 });
 
-// Shift+right-click is the browser's menu, everywhere: the capture-phase
-// hook stops the event before any wash handler — the shell's own, or an
-// app's on the element — can prevent the native menu. The spelling
-// suggestions live there, and a page cannot open that menu any other way.
+// Shift+right-click is the browser's menu: the capture-phase hook stops the
+// event before any wash handler — the shell's own, or an app's on the
+// element — can prevent the native menu. The spelling suggestions live
+// there, and a page cannot open that menu any other way.
 test('Shift+right-click reaches no wash handler, so the browser menu shows', () => {
   const host = mount('<input type="text">');
   const el = host.firstElementChild!;
@@ -82,6 +82,26 @@ test('Shift+right-click reaches no wash handler, so the browser menu shows', () 
   } finally {
     document.removeEventListener('contextmenu', yieldToBrowserMenu, true);
     document.removeEventListener('contextmenu', shellHandler);
+  }
+});
+
+// Except in the terminal (and the VM display): plain right-click is
+// copy/paste there, so Shift+right-click is the terminal's own menu, which
+// carries the split verbs. The hook stands aside and the terminal's handler
+// runs as before.
+test('Shift+right-click in the terminal still reaches the terminal', () => {
+  const host = mount('<div class="xterm"><textarea></textarea></div>');
+  const el = host.querySelector('textarea')!;
+  const termHandler = vi.fn((ev: Event) => ev.preventDefault());
+  el.addEventListener('contextmenu', termHandler);
+  document.addEventListener('contextmenu', yieldToBrowserMenu, true);
+  try {
+    const shifted = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true });
+    el.dispatchEvent(shifted);
+    expect(termHandler).toHaveBeenCalledTimes(1);
+    expect(shifted.defaultPrevented).toBe(true);
+  } finally {
+    document.removeEventListener('contextmenu', yieldToBrowserMenu, true);
   }
 });
 

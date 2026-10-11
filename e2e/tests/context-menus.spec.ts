@@ -58,8 +58,10 @@ test.describe('context menus', () => {
     const field = page.locator('wash-app-fm input:visible').first();
     await field.click();
     const prevented = page.evaluate(() => new Promise<boolean>((resolve) => {
-      // After every wash listener (bubble, on document) has had its turn.
-      window.addEventListener('contextmenu', (ev) => resolve(ev.defaultPrevented), { once: true });
+      // Seen first (window, capture: the shell's yield stops the event short
+      // of any later listener, this one included if it were on the bubble),
+      // read once dispatch is over, after every wash listener had its turn.
+      window.addEventListener('contextmenu', (ev) => setTimeout(() => resolve(ev.defaultPrevented), 0), { once: true, capture: true });
     }));
     await field.click({ button: 'right', modifiers: ['Shift'] });
     expect(await prevented).toBe(false);

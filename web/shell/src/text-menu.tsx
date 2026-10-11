@@ -181,9 +181,14 @@ export const TextFieldMenu: Component<{
 };
 
 /** The browser's own menu, on request: a Shift+right-click reaches no wash
- *  handler at all. Exported for the test; installed by TextMenuLayer. */
+ *  handler at all. The terminal and the VM display are left out: plain
+ *  right-click is copy/paste there, so Shift+right-click is the terminal's
+ *  own menu (the split verbs live on it), and neither has prose to spell.
+ *  Exported for the test; installed by TextMenuLayer. */
 export function yieldToBrowserMenu(ev: MouseEvent): void {
   if (!ev.shiftKey) return;
+  const t = ev.target as HTMLElement | null;
+  if (t?.closest?.('.xterm, wash-app-display')) return;
   ev.stopImmediatePropagation();
 }
 
