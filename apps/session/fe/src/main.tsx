@@ -34,6 +34,7 @@ import { AboutWidget, type AboutHostStats } from './sidebar/AboutWidget';
 import { NotifyWidget, type NotifyEntry } from './sidebar/NotifyWidget';
 import { TimelineWidget } from './sidebar/TimelineWidget';
 import { mergeNewestFirst, prependLive, type TimelineEntry } from './timeline';
+import { panToReveal } from './taskbar';
 
 import { NetWidget, type NetState, type NetIface } from './sidebar/NetWidget';
 import { RemoteWidget, type RemoteHost } from './sidebar/RemoteWidget';
@@ -1776,6 +1777,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               // a session this window is showing.
               <WindowPill
                 win={w}
+                viewport={vp()}
+                screen={screen()}
                 attention={w.attention || wantsAttention().has(w.instanceID)}
                 onVisit={() => clearAttention(w.instanceID)}
               />
@@ -2416,13 +2419,23 @@ const IconButton: Component<{
 
 const WindowPill: Component<{
   win: WindowInfo;
+  /** the camera's cell and the screen size, for deciding whether a visit
+   *  has to pan: a window in another cell can be focused with nothing
+   *  visible happening */
+  viewport: { vx: number; vy: number };
+  screen: { w: number; h: number };
   /** the window's app has an unread warn/error — wear the amber dot */
   attention?: boolean;
   /** called when the user visits the window, so the badge can clear */
   onVisit?: () => void;
 }> = (props) => {
   const minimized = () => props.win.state === 'minimized';
+  // Pan only when none of the window is in view (taskbar.ts): focusing a
+  // window one cell over otherwise "works" where nobody can see it. The
+  // shell pans only for its own clicks, and this is one of them.
   const visit = () => {
+    const to = panToReveal(props.win, props.viewport, props.screen);
+    if (to) window.wash.setViewport(to.vx, to.vy);
     if (props.win.state === 'minimized') window.wash.restoreWindow(props.win.windowID, props.win.origin);
     else window.wash.focusWindow(props.win.windowID, props.win.origin);
     props.onVisit?.();
@@ -2433,12 +2446,13 @@ const WindowPill: Component<{
       type="button"
       data-testid="taskbar-pill"
       data-attention={props.attention ? 'true' : undefined}
-      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to jump to its viewport, middle-click to close, right-click for the window menu`}
+      title={`${minimized() ? '[minimized] ' : ''}${props.win.title}${props.attention ? ' — wants your attention' : ''} — dblclick to centre its viewport, middle-click to close, right-click for the window menu`}
       onClick={visit}
       onDblClick={() => {
-        // Snap the camera to the cell holding this window, then focus
-        // (or restore-and-focus if minimized). Single-click already
-        // fires first and is idempotent with the dblclick action —
+        // Snap the camera to the cell holding this window even when part
+        // of it is already in view (a single click leaves the camera be
+        // then), then focus (or restore-and-focus if minimized).
+        // Single-click already fired first and is idempotent with this —
         // both end states converge on "focused & visible".
         const v = props.win.viewport;
         window.wash.setViewport(v.vx, v.vy);

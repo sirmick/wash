@@ -84,6 +84,25 @@ test.describe('viewport', () => {
     await expect(page.locator('[data-testid="pager-cell-0-0"]')).toHaveAttribute('data-active', 'true');
   });
 
+  test('taskbar pill click brings a window in another cell into view', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    // Spawn About in cell (0,0).
+    await page.locator('button[title="Apps"]').click();
+    await page.getByRole('button', { name: /About wash/ }).click();
+    await expect(page.locator('wash-app-about')).toBeVisible();
+
+    // Pan to (2,2); wait for the active cell to settle there.
+    await page.locator('[data-testid="pager-cell-2-2"]').click();
+    await expect(page.locator('[data-testid="pager-cell-2-2"]')).toHaveAttribute('data-active', 'true');
+
+    // A single click on About's pill. Focusing alone would raise it where
+    // nobody can see it; the pill has to pan too, since none of it is in view.
+    const pill = page.locator('[data-testid="taskbar-pill"]').filter({ hasText: 'About' }).first();
+    await pill.click();
+    await expect(page.locator('[data-testid="pager-cell-0-0"]')).toHaveAttribute('data-active', 'true');
+  });
+
   test('Ctrl+Alt+Right pans one viewport', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
