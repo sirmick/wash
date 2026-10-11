@@ -158,7 +158,7 @@ Everything is a `make` verb: `make wash` (multicall) / `make wash-standalone` to
 `make run` to launch the router, `make dev` for the Vite HMR loop,
 `make unit-test` / `make e2e-test` / `make all-test`, `make all-clean`, and
 `make <arch>-<platform>-<pkg>-package` for native packages. The full list is
-in [COMMANDS.md](COMMANDS.md).
+in [docs/COMMANDS.md](docs/COMMANDS.md).
 
 ---
 
@@ -519,7 +519,7 @@ between them is exact).
 
 ```bash
 make all-package                       # all rows → dist/packages/<row>/
-make amd64-ubuntu24-wash-package       # one row (the full leaf list is in COMMANDS.md)
+make amd64-ubuntu24-wash-package       # one row (the full leaf list is in docs/COMMANDS.md)
 WASH_PKG_VERSION=0.9.4 make all-package   # pin the version (default: root VERSION)
 ```
 

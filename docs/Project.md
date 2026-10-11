@@ -213,6 +213,5 @@ Recorded rather than silently tolerated; each has a Todo entry.
 - **Doc filenames are `UPPER_CASE.md`** (52 files), referenced from ~311
   files, many in Go and TS comments that would go stale silently. The
   rename wants its own change with a link check, not a drive-by.
-- **`COMMANDS.md` sits at the repo root**, outside `docs/`.
 - **`Sweeps.md` and `Review-findings.md` exist** but only the 2026-09-08
   apps sweep has been run under these rules.

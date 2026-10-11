@@ -29,7 +29,6 @@ bug list — all fully landed; see `git log` if you need their content.)
   forces a mass doc edit, or not at all. Four files already use normal case
   (`Project.md`, `Todo.md`, `Sweeps.md`, `Review-findings.md`), which is
   the drift the entry was originally about.
-- [ ] `COMMANDS.md:1` sits at the repo root; belongs in `docs/`.
 - [ ] The **docs** sweep has not run. The apps sweep did (2026-09-08), and
   `docs/Sweeps.md` + `docs/Review-findings.md` exist and record it — the
   old claim that neither file existed is gone. What is still outstanding is
@@ -211,8 +210,8 @@ bug list — all fully landed; see `git log` if you need their content.)
   connection banner's retry click, and A10's stale `env.publish` match launching
   terminals before `WASH_X_DISPLAY` existed. Neither was load, and C5's
   "compositor stalls under concurrency" premise was wrong. Issue **#7**
-  (display-input-smoke timing out on `wash-app-display`, which blocked #5) is
-  the same symptom from the same cause and should be closed with this.
+  (display-input-smoke timing out on `wash-app-display`, which blocked #5) was
+  the same symptom from the same cause; closed 2026-10-11.
 
 - [ ] **Execute the phased plan in docs/TEST_FLAKES.md** (~75 verified items,
   written for a smaller LLM): Phase A e2e harness/process lifecycle
@@ -225,7 +224,7 @@ bug list — all fully landed; see `git log` if you need their content.)
   Phase D FE unit; Phase E the **test event bus** (control-socket
   `wait_event` + FE settle hook + guest `WASH-EVENT` lines) so tests drive
   state machines instead of timing. Open flake trackers: **#8** (TestSpine).
-  (**#7**, display-input-smoke, was fixed 2026-08-06 — see above.)
+  (**#7**, display-input-smoke, was fixed 2026-08-06 and is closed.)
 - [ ] After phases B1–B3: trial dropping `-p 1` from the unit gate (it exists
   to dampen the loopback scheduling race).
 - [ ] After phase A6 (hardlink staging): measure control-socket RTTs and walk

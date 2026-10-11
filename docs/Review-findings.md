@@ -83,15 +83,62 @@ sidestep it either way.
 
 ## P2 — missing everyday workflows
 
-**fm**: keyboard row navigation (no Arrow/Home/End/PgUp/Space/type-ahead; `onKey` handles only F2/Del/Enter/Esc/Ctrl combos, `:2053-2140`); Enter on a file previews rather than opens; undo for move/rename/paste (trash itself is a won't-do, decided 2026-09-08); search/filter/recursive find; Open-with chooser and any handler for archives/audio/video/pdf (only edit and imageview register `Opens`); **Open terminal here**; Duplicate / "keep both" on conflict; archive create/extract (zip download drops symlinks and empty dirs, `download.go:218-250`); bookmarks/places/drives, breadcrumb, tabs/dual pane; cut items not dimmed; drag-out to OS; sort-by-type sorts `dir/file/symlink` not kind; tree unvirtualised (5k rows of DOM); Ctrl+A ignores the grid; no Ctrl+L/H/N.
+Re-verified 2026-10-11 against the tree, item by item; what had landed since
+2026-09-08 is deleted (most of the original list: fm keyboard navigation,
+filter and recursive search, open-with, open terminal here, duplicate, keep
+both, archives, Ctrl+A/L/H/N; edit Save All / Close All / Revert, tab cycling
+and reorder, recent files and quick-open, indentation detection and options,
+trim/final-newline, the status bar cells, font zoom, read-only awareness,
+send to agent, persisted wrap/language, scroll restore, the reload diff;
+term search, links and paths, cwd inheritance, unicode11, bells, desktop-wide
+prefs, zoom, rename, scrollback size, file drop, cursor style, COLORTERM,
+window title, restart; agent rename/delete/prune, copy block, Esc, Ctrl+Enter,
+prompt history, highlighting, attachments, diffs, adapter config, MCP
+servers, root override; `wash open`, `xdg-open`, reveal/terminal-here from
+edit, bell attention, start-menu pins and recents).
 
-**edit**: Save All / Close All / Revert; Ctrl+Tab cycling, tab drag-reorder, middle-click close; recent files / Ctrl+P quick-open; go-to-line only as CM's Ctrl+Alt+G; indentation fixed at 2 spaces (Tab in Go inserts spaces), no detect/width/tabs option, no trailing-whitespace/final-newline; status bar has no Ln/Col, language, indent or EOL; font zoom; split view; read-only awareness (mode bits never checked); rendered markdown preview (only WYSIWYG-or-source); drag-drop onto the editor body to open; "send selection to agent"; word-wrap and language override not persisted; tab switch loses scroll (`captureActiveState` records it, the active-tab effect never restores it, `:1109, 2308-2340`); reload prompt shows only a name, no diff, and Keep→Save is a one-click clobber of the external change (`:1743, 2848`); Ctrl+H unbound on source tabs (browser History); Ctrl+W fires while the FilePicker is focused (`:2174-2203`); WYSIWYG normalises the whole file on any edit and its dirty flag is a latch (`wysiwyg.ts:8-12, 339-345`).
+**fm**: undo for move/rename/paste (trash itself is a won't-do, decided
+2026-09-08); bookmarks/places/drives, breadcrumb, tabs/dual pane (the path
+field is still a plain input, `apps/fm/fe/src/main.tsx:455`); drag-out to the
+OS (`onDragStart` `:1630-1651` sets only wash MIME types and `text/plain`);
+the file tree is unvirtualised (`web/lib/src/file-tree.tsx:279` renders every
+row; only the grid is virtual); type-ahead opens the filter box rather than
+jumping to the row (`:2809-2814`); nothing registers `Opens` for audio, video
+or pdf (only edit and imageview do).
 
-**term**: find in scrollback (no search addon); clickable plain-text URLs and file paths (no web-links; OSC 8 http only); **cwd**: no OSC 7 or `/proc/<pid>/cwd`, new tab never inherits cwd, `execTabReq.Cwd` parsed and ignored (`app.go:289, 357`), no `--cwd`; unicode11 (emoji/CJK widths wrong under Claude Code/starship prompts); bell/activity indicators; preferences are per-window (font/size/theme/smart-paste in the instance blob, so every new window resets), no Ctrl+±/wheel zoom; manual tab rename; scrollback size / save-to-file; file drop from fm (fm sets newline-joined unquoted `text/plain`, term has no drop handler); sixel/kitty images; OSC 52; cursor style; `macOptionIsMeta`; **COLORTERM never set**; profiles/custom command; window title never reflects the active tab (`window.set_title` exists, unused); restart-hung-shell verb; DOM renderer only.
+**edit**: split view; rendered markdown preview (still WYSIWYG-or-source,
+Ctrl+Shift+P `:3252-3258`); an OS file dropped on the editor body only says
+"drag files from Files" (`onPaneDrop` `:2371-2387`); Keep→Save on the reload
+prompt still clobbers the external change (`dismissReload` `:2686-2703`
+adopts the disk version as the baseline and the save path checks no mtime or
+hash; Show diff is offered first); WYSIWYG normalises the whole file on any
+edit and its dirty flag is a latch (`wysiwyg.ts:8-11, 314, 357-362`).
 
-**agent**: rename a session; delete/prune history; copy a single code block; Esc-to-cancel, Ctrl+Enter, ↑ prompt history; syntax highlighting in fences, mermaid/LaTeX; attach files/images or paste an image; @-mention; **diffs the agent made are not viewable** (`ContentBlock` drops `diff`, tool rows are one-liners, and the Agent app passes no `onOpenTool` so rows are inert; only edit's agent tab opens the file — `internal/acp/types.go:244-250, 324-333`; `apps/ai/fe/src/main.tsx:921-930`); per-session cost; custom adapter command/args/env, MCP servers (always `[]`, `adapters.go:565`); fs/terminal confined to the session cwd with no override (monorepo sibling dirs unreadable, `acpfs.go:358`); fork; "open in terminal" / "send to agent" in either direction; desktop-operating intents (`docs/AGENT.md`, `CONTROL_BUS.md`) are design-only; no e2e for adapter crash/kill/auth failure.
+**term**: scrollback save-to-file; sixel/kitty images; OSC 52; no `--cwd`
+flag (`parseFlags` `apps/term/be/app.go:380-397` has only `--exec` and
+`--login`; the first tab takes `--open <dir>`); profiles/custom command
+beyond those two flags; DOM renderer only (no WebGL or canvas addon).
 
-**cross-app**: `wash open <path>`, `xdg-open`, `$EDITOR`, `$BROWSER` from a wash terminal (only `wash-edit --open <abs>` works, undocumented; URLs have no browser routing); "reveal in fm" / "terminal at file's dir" from edit; term → "open cwd in fm"; second fm double-click spawns a second edit window (edit is `InstancingMulti`; retargeting declared out of scope in IMAGES.md); `Instancing:single` via `EvtSpawnRequest` still duplicates (already in Todo); drag text out of term/edit into fm; terminal bell → attention (`EvtWindowAttention` used only by wash-ai); window state does not survive a router restart (persist is router-memory only, `app_session.go:540-543`); start menu has no recent files/pinned; no Alt+Tab; cross-host open-with/DnD/clipboard are documented non-goals.
+**agent**: mermaid/LaTeX; @-mention; per-session money cost (only the
+context counters `used`/`size`, `apps/ai/fe/src/usage-patch.ts`); fork,
+deliberately absent (`apps/ai/fe/src/HistoryPanel.tsx:15`, GH #21); term has
+no "send to agent" (edit has, and the places bar links the windows);
+desktop-operating intents are design-only (`docs/CONTROL_BUS.md`); no e2e for
+an adapter auth failure (crash and end are covered: `agent-adapter-exit`,
+`agent-end-session`).
+
+**cross-app**: `$EDITOR`/`$VISUAL` deliberately not set
+(`apps/term/be/shims.go:19-25`); `$BROWSER` is honoured by `wash open <url>`
+but never set, and only `xdg-open` is shimmed; a second fm double-click still
+spawns a second edit window (`internal/router/app_session.go:1203-1204`
+`spawnForOpen` always spawns; edit is `InstancingMulti`), and a spawn WITH an
+`open` path still starts a fresh instance even for a single-instance app
+(`:1163-1165`; a path-less spawn now raises); drag text out of term/edit into
+fm (fm's drop handler `apps/fm/fe/src/main.tsx:1717` takes only OS files and
+wash paths); window state does not survive a router restart (router memory
+only, `app_session.go:581-595`); the window switcher is on Ctrl+Alt+Tab, not
+Alt+Tab (`web/shell/src/switcher.ts:36-40`); cross-host open-with/DnD/
+clipboard are documented non-goals.
 
 ## Stale docs and backlog entries found on the way
 

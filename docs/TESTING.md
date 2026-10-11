@@ -65,7 +65,7 @@ Coverage (below) makes this concrete: app BEs read 0% at the unit layer but
 | `make all-test` | unit + e2e + standalone-smoke + net-test + disks-test |
 | `make test-all` | all-test + `all-package` (the whole pyramid) |
 | `make coverage` | instrumented build → merged go-unit + e2e report (§ Coverage) |
-| `make <arch>-<distro>-<pkg>-package` / `make all-package` / `make openwrt-smoke` | the Docker packaging matrix (leaf list in [COMMANDS.md](../COMMANDS.md)) |
+| `make <arch>-<distro>-<pkg>-package` / `make all-package` / `make openwrt-smoke` | the Docker packaging matrix (leaf list in [COMMANDS.md](COMMANDS.md)) |
 | `make push` | unit-test + test-race + e2e-test + the four amd64 wash packages + openwrt-smoke, then `git push` (`ARGS=` for push args) |
 
 Each verb exits non-zero on the first failing step. Pipe through `tee`, not
