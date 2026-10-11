@@ -42,7 +42,6 @@ import (
 	"github.com/sirmick/wash/internal/pty"
 	"github.com/sirmick/wash/pkg/apps/registry"
 	"github.com/sirmick/wash/pkg/sdk"
-	"github.com/sirmick/wash/pkg/wire"
 )
 
 // execArgv is the user-supplied --exec ARGS... When non-nil, openTab
@@ -439,7 +438,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	_ = os.Setenv("WASH_TERM_INSTANCE", instanceID)
 	bus := sdk.NewBus(c)
 	registerHandlers(bus)
-	go openTabExec(c, windowID, 80, 24, nil, "", openDir)
+	go openTab(c, windowID, 80, 24, "", openDir)
 	go pollTabStatus(c)
 	// Desktop-wide prefs: push what is on disk, then keep pushing when
 	// another terminal window changes it (apps/term/be/prefs.go).
@@ -523,15 +522,6 @@ type tabCwdReq struct {
 	Cwd       string `json:"cwd"`
 }
 
-// execTabReq is the resume path's tab request (§13). Exec is the argv to
-// run instead of the user's shell.
-type execTabReq struct {
-	Cols uint64   `json:"cols"`
-	Rows uint64   `json:"rows"`
-	Exec []string `json:"exec"`
-	Cwd  string   `json:"cwd,omitempty"`
-}
-
 // prefsSetReq is a partial preferences update from the FE.
 type prefsSetReq struct {
 	Prefs termPrefs `json:"prefs"`
@@ -603,9 +593,6 @@ func registerHandlers(b *sdk.Bus) {
 		return sess.Resize(uint16(req.Cols), uint16(req.Rows))
 	})
 	// new_tab is the FE's own verb: open a tab running the user's shell.
-	// (The privileged "open a tab running THIS command" verb is exec_tab
-	// below — a separate kind, because HandleFromVoid drops own-FE
-	// messages and because one caller deserves one door.)
 	sdk.HandleVoid(b, "new_tab", func(c *sdk.Conn, _ string, req newTabReq) error {
 		cols := req.Cols
 		rows := req.Rows
@@ -615,7 +602,7 @@ func registerHandlers(b *sdk.Bus) {
 		if rows == 0 {
 			rows = 24
 		}
-		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), nil, req.Req, cwdOf(uint32(req.From)))
+		go openTab(c, c.WindowID(), uint16(cols), uint16(rows), req.Req, cwdOf(uint32(req.From)))
 		return nil
 	})
 	// tab_cwd: the FE saw an OSC 7 (file://host/path) from this tab's
@@ -699,36 +686,6 @@ func registerHandlers(b *sdk.Bus) {
 		}
 		log.Printf("term: path_open file=%q -> open routing", abs)
 		return c.OpenPath(abs)
-	})
-	// exec_tab opens a tab running a specific command — the session-resume
-	// path (docs/AGENT_TERM.md §13). Honoured ONLY from com.wash.agentd,
-	// and only because a human clicked Resume in the sidebar. The sender is
-	// router-attested, so this is a real boundary rather than a convention.
-	//
-	// (agentd is not a privileged id: an app that could impersonate it is
-	// already a process on the user's box and could run the command
-	// itself. The check keeps the capability narrow, it does not contain an
-	// attacker who is already inside.)
-	sdk.HandleFromVoid(b, "exec_tab", func(c *sdk.Conn, _ string, req execTabReq, from wire.Sender) error {
-		// agentdAppID is declared beside the verb it guards now that the
-		// rest of the agent tier has gone (docs/AGENT_APP.md §10).
-		if from.AppID != agentdAppID {
-			log.Printf("term: exec_tab refused from=%s", from.AppID)
-			return nil
-		}
-		if len(req.Exec) == 0 {
-			return nil
-		}
-		cols, rows := req.Cols, req.Rows
-		if cols == 0 {
-			cols = 80
-		}
-		if rows == 0 {
-			rows = 24
-		}
-		log.Printf("term: exec_tab from=%s argv=%q cwd=%q", from.AppID, req.Exec, req.Cwd)
-		go openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), req.Exec, "", req.Cwd)
-		return nil
 	})
 	// list_sessions is the FE's mount-time reconcile: a `tab_closed`
 	// sent while no shell was attached is dropped by the router (only
@@ -847,7 +804,7 @@ func registerHandlers(b *sdk.Bus) {
 		// gone, so a restart that killed first would tear down the window
 		// it was restarting a tab in.
 		go func() {
-			openTabExec(c, c.WindowID(), uint16(cols), uint16(rows), nil, "", dir)
+			openTab(c, c.WindowID(), uint16(cols), uint16(rows), "", dir)
 			if sess != nil {
 				sess.CloseWithReason("restart requested")
 			} else {
@@ -858,19 +815,15 @@ func registerHandlers(b *sdk.Bus) {
 	})
 }
 
-// openTabExec forks a shell (or --exec argv), opens a raw channel, and
+// openTab forks a shell (or --exec argv), opens a raw channel, and
 // hands both to internal/pty.Open which wires them with io.Copy pairs.
-// Reports tab_opened / tab_closed app_msgs to the FE. override runs a
-// specific command instead of the user's shell — the resume path (§13);
-// such a tab autocloses when the command exits, matching --exec
-// semantics. req is the FE's request id, echoed on the reply (empty for
-// tabs nobody in the FE asked for, so a reconcile or an exec_tab can
-// never claim a split). dir is where the child starts; empty inherits.
-func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []string, req string, dir string) {
+// Reports tab_opened / tab_closed app_msgs to the FE. req is the FE's
+// request id, echoed on the reply (empty for tabs nobody in the FE asked
+// for, so a reconcile or a restart can never claim a split). dir is where
+// the child starts; empty inherits.
+func openTab(c *sdk.Conn, windowID uint32, cols, rows uint16, req string, dir string) {
 	var argv []string
 	switch {
-	case len(override) > 0:
-		argv = override
 	case len(execArgv) > 0:
 		// --exec mode: run the requested argv. argv[0] is resolved
 		// via $PATH (exec.Command does that). The tab autocloses on
@@ -889,10 +842,10 @@ func openTabExec(c *sdk.Conn, windowID uint32, cols, rows uint16, override []str
 	// and friends resolve without an absolute path, and the router's
 	// WASH_*-namespaced display hints mapped to the real DISPLAY /
 	// WAYLAND_DISPLAY a GUI client needs.
-	// execd: the tab runs a command rather than a shell (--exec, or an
-	// exec_tab override). Its fast clean exit is held for reading; a
-	// shell's is not. --login is still a shell.
-	execd := len(override) > 0 || len(execArgv) > 0
+	// execd: the tab runs a command rather than a shell (--exec). Its fast
+	// clean exit is held for reading; a shell's is not. --login is still a
+	// shell.
+	execd := len(execArgv) > 0
 	spawned := time.Now()
 	holdFn := func(s *pty.Session, reason string) bool { return holdOnExit(s, reason, execd, spawned) }
 	sess, err := pty.Open(context.Background(), c, windowID, cols, rows, argv, pty.WithWashEnv, func(s *pty.Session, reason string) {
@@ -1044,9 +997,3 @@ func killAllSessions() {
 // <svg><use href="/icons.svg#terminal"/></svg>; the sprite is built
 // from lucide-static at shell build time.
 const termIcon = "terminal"
-
-// agentdAppID is the roster service. The only thing wash-term still owes
-// it is the exec_tab verb behind a Resume click — the rest of the agent
-// tier (hooks, OSC, the decision socket) was retired when agentd started
-// hosting sessions itself (docs/AGENT_APP.md §10).
-const agentdAppID = "com.wash.agentd"

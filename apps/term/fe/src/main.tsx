@@ -456,8 +456,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // adoptOrphans places any inventoried channel the tree doesn't hold. It
   // covers two real cases: a restore where the saved tree and the saved tab
-  // list disagree, and a tab opened by another surface entirely (agentd's
-  // exec_tab, docs/AGENT_TERM.md §13).
+  // list disagree, and a tab the BE opened on its own (a restart_tab).
   const adoptOrphans = () => {
     let next = tree();
     let changed = false;
@@ -1230,7 +1229,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // ---- BE ----
 
   // reqOf is the request id a reply echoes, or undefined for a push the FE
-  // never asked for (an exec_tab from agentd carries none).
+  // never asked for (a restarted tab carries none).
   const reqOf = (m: BEMessage): string | undefined => (m.req ? String(m.req) : undefined);
 
   const handleBE = (m: BEMessage) => {

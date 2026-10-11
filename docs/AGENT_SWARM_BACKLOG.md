@@ -504,7 +504,5 @@ Found on the way:
 - **The Agent window's own messages** (restore, close, save transcript, the
   folder shortcuts) are typed on both sides but by hand (`WindowMessage` in
   main.tsx, the structs in app.go); they could join the generator.
-- **wash-term's `exec_tab`** is still honoured "only from agentd", but
-  agentd no longer sends it: dead since resume moved to Agent windows.
 - **The workspace MCP tools** answer with maps; that surface is its own
   (section 1).

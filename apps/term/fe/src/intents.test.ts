@@ -16,8 +16,8 @@ test('a tab_opened carrying the request id consumes exactly that intent', () => 
 });
 
 test('an arrival with no request id never takes a pending intent', () => {
-  // reconcile() after a reattach and agentd's exec_tab both add tabs the
-  // FE never asked for; neither may turn a pending split into theirs.
+  // reconcile() after a reattach and a restart_tab both add tabs the FE
+  // never asked for; neither may turn a pending split into theirs.
   const s = new SplitIntents();
   const req = s.mint();
   s.set(req, { path: '0', dir: 'col' });

@@ -39,7 +39,7 @@ More than it looks, and it is why this is a day rather than a rewrite.
 | Piece | Where | Fit |
 | --- | --- | --- |
 | `pty.Open` as a **library** | `internal/pty` | Any BE calls it — wash-edit does for its pane, wash-connect for ssh. Owning a pty is not a wash-term privilege. |
-| `exec_tab` | `apps/term/be/app.go:339` | agentd → wash-term, "open a tab running THIS argv", router-attested and guarded to agentd alone. `terminal/create` minus the handle. |
+| `exec_tab` | removed 2026-10-11 (nothing sent it once resume moved to Agent windows) | was agentd → wash-term, "open a tab running THIS argv", router-attested and guarded to agentd alone. `terminal/create` minus the handle; rebuild it from `openTab` if M4 is built. |
 | Per-channel ring buffer | `internal/router/ringbuf.go` | `Snapshot / Len / Truncated` — literally `TerminalOutputResponse`'s shape, built for scrollback replay. |
 | `openRawChannel(id, onBytes)` | `web/shell/src/main.tsx:1490` | **Keyed by channel id alone, not by instance.** Any FE can render any channel it is told about. |
 | A BE handing its channel to an FE | `apps/connect/fe/src/main.tsx:137` | "when the BE opens an ssh-copy-id pty it sends the raw channel id; we mount a Terminal on it". The pattern already ships. |

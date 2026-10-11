@@ -5,7 +5,7 @@
 // arrives. The first version kept those in a FIFO and let ANY arrival shift
 // it, which leaked: a `tab_error` never shifted, so the next plain New Tab
 // landed as a split; and arrivals nobody asked for here (a reconcile after
-// reattach, agentd's `exec_tab`) consumed whatever was queued.
+// reattach, a restarted tab) consumed whatever was queued.
 //
 // So an intent is keyed to the request that made it. Every `new_tab` carries
 // a request id, the BE echoes it on `tab_opened` / `tab_error`, and only the
@@ -35,8 +35,8 @@ export class SplitIntents {
   }
 
   // take consumes and returns the intent for `req`. An arrival without a
-  // request id — a reconcile, an exec_tab from another surface — never
-  // matches, so it can never steal a pending split.
+  // request id — a reconcile, a restarted tab — never matches, so it can
+  // never steal a pending split.
   take(req: string | undefined): SplitIntent | undefined {
     if (!req) return undefined;
     const intent = this.byReq.get(req);

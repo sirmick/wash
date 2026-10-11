@@ -178,7 +178,6 @@ fourteen tools: [AGENT_SWARM_BULK.md](AGENT_SWARM_BULK.md); design:
 - Workspace store (`workspaces.json`) is append-only, with no retention and
   no archive browser for ended workspaces (docs/Todo.md).
 - No agent frontend outside wash (VS Code, TUI) — AGENT_SWARM_BACKLOG §5.
-- wash-term still honours an `exec_tab` verb from agentd that nothing sends.
 - The desktop-*operating* AI ([AGENT.md](AGENT.md)) is unbuilt; the
   activity journal / commander is partly built ([COMMANDER.md](COMMANDER.md)).
 
