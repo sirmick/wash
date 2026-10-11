@@ -332,6 +332,10 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 			return nil, errors.New("maximum 100 QA updates")
 		}
 		handoff := ""
+		// How much of its context window the writer has used, for the
+		// lifecycle note below; -1 when unknown. Read here, outside the
+		// store's lock, since it looks at the live session.
+		handoffShare, handoffWarn := -1.0, defaultContextWarn
 		if p.Handoff != nil {
 			w := ws.store.View(h.sessionID)
 			self := workspaceMember(w, h.sessionID)
@@ -346,6 +350,14 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				return nil, fmt.Errorf("handoff not written: %w", err)
 			}
 			handoff = path
+			if w.ContextWarn > 0 {
+				handoffWarn = w.ContextWarn
+			}
+			if _, _, usage := workspaceRuntime(w); usage != nil {
+				if u, ok := usage[self.ID]; ok && u.Size > 0 {
+					handoffShare = float64(u.Used) / float64(u.Size)
+				}
+			}
 		}
 		// A reopen appends to the thread's history, so a thread read back
 		// as a header only gets its events from its file first.
@@ -388,9 +400,25 @@ func (ws *workspaceService) callOperation(ctx context.Context, h *hosted, c work
 				// relaunch with handoff_from). Written by a resident with no
 				// assignment, it completed nothing and so told nobody: an
 				// Architect sat idle two hours before the orchestrator asked.
+				// But a member keeping its handoff current at every commit
+				// boundary is routine, and eight "end it and launch its
+				// replacement" notes in an afternoon hid the real one
+				// (Redoubt, WASH-R26): the first write is announced, and a
+				// later one only when its context window is running low.
 				if handoff != "" && m.ID != w.Lead {
-					if _, err := swarm.AddMessage(w, m.ID, w.Lead, "lifecycle", m.Name+" ("+memberRef(*m)+") wrote its handoff: "+handoff+". When its open work is reported, end it and launch its replacement with handoff_from:\""+memberRef(*m)+"\".", "", "", ""); err != nil {
-						return err
+					first := m.HandoffPath == ""
+					m.HandoffPath = handoff
+					text := ""
+					switch {
+					case first:
+						text = m.Name + " (" + memberRef(*m) + ") wrote its handoff: " + handoff + ". It keeps that file current, so this is the only note until its context runs low. When its open work is reported, end it and launch its replacement with handoff_from:\"" + memberRef(*m) + "\"."
+					case handoffShare >= handoffWarn:
+						text = fmt.Sprintf("%s (%s) updated its handoff: %s, at %d%% of its context window. When its open work is reported, end it and launch its replacement with handoff_from:%q.", m.Name, memberRef(*m), handoff, int(100*handoffShare), memberRef(*m))
+					}
+					if text != "" {
+						if _, err := swarm.AddMessage(w, m.ID, w.Lead, "lifecycle", text, "", "", ""); err != nil {
+							return err
+						}
 					}
 				}
 				for _, u := range p.QA {

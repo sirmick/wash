@@ -120,6 +120,14 @@ func TestWorkIsOnTheNodeAndNeedsGateTheStart(t *testing.T) {
 	if o := PlanNode(s.View("lead"), "C").Overrides; len(o) != 1 || !strings.Contains(o[0], "fixture needs C early") || !strings.Contains(o[0], "Orchestrator") {
 		t.Fatalf("override not recorded: %v", o)
 	}
+	// The decision covers C's later assignments: the implementer behind the
+	// reviewer gives no second reason, and none is recorded (WASH-R21).
+	if _, err := s.Assign("lead", "impl", "C", "", "Fix gamma", "", ""); err != nil {
+		t.Fatalf("a second assignment on an overridden node: %v", err)
+	}
+	if o := PlanNode(s.View("lead"), "C").Overrides; len(o) != 1 {
+		t.Fatalf("the covered start recorded an override: %v", o)
+	}
 }
 
 func TestArchitectPlansOnlyWhatHasNotStarted(t *testing.T) {

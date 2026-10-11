@@ -89,7 +89,10 @@ type Member struct {
 	// Handoff is the handoff a member launched with handoff_from reads in
 	// its first message: what the member it replaces had done and knew.
 	Handoff string `json:"handoff,omitempty"`
-	Usage   *Usage `json:"usage,omitempty"`
+	// HandoffPath is where this member's own handoff is, once it has
+	// written one (member_update handoff); it keeps the same path current.
+	HandoffPath string `json:"handoff_path,omitempty"`
+	Usage       *Usage `json:"usage,omitempty"`
 	// Catalog and Model are what the member was asked to run on: the
 	// catalog (the workspace's unless the member named one) and the model
 	// as given, a slot name or an id. LaunchSettings is what that resolved

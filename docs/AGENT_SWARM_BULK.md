@@ -303,7 +303,9 @@ on the plan); a third is refused, and an ephemeral member takes none behind its 
 `complete`/`fail`, `body` is the result. `member_update {handoff}` writes the
 caller's handoff to `.wash/local/handoffs/<key>.md` (`.wash/local` keeps itself out of git)
 and sends the orchestrator a lifecycle message naming the file, so a resident with nothing
-to complete is not left idle unnoticed; a member launched with `handoff_from:"<key>"` reads
+to complete is not left idle unnoticed. Later writes keep the same file current and are
+silent unless the member's context window is past `context_warn`, so a handoff kept at every
+commit boundary is not a stream of "end it" notes; a member launched with `handoff_from:"<key>"` reads
 it in its first message, which is size-checked with the handoff included. A hung member
 cannot write its own, so `handoff_file:"<path>"` launches from a file the orchestrator wrote
 instead (inside the project, at most 32 KiB; not with `handoff_from`). A member whose

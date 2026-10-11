@@ -912,6 +912,20 @@ func TestAHandoffTellsTheOrchestrator(t *testing.T) {
 	if path == "" || len(told) != 1 || told[0].State != "queued" || !strings.Contains(told[0].Body, "Architect (architect) wrote its handoff: "+path) || !strings.Contains(told[0].Body, `handoff_from:"architect"`) {
 		t.Fatalf("handoff %q told %+v", path, told)
 	}
+	// Keeping the handoff current at the next commit boundary is routine:
+	// no second note while its context is not running low (WASH-R26).
+	if _, err := qaFileCall(t, ws, &hosted{sessionID: "arch-s"}, "member_update", map[string]any{"handoff": "Branch m1-arch at 9a1e; the migration is fixed."}); err != nil {
+		t.Fatal(err)
+	}
+	told = told[:0]
+	for _, msg := range s.View("lead").Messages {
+		if msg.Recipient == w.Lead && msg.Type == "lifecycle" {
+			told = append(told, msg)
+		}
+	}
+	if len(told) != 1 || swarm.GetMember(s.View("lead"), "arch").HandoffPath != path {
+		t.Fatalf("a routine handoff update told the orchestrator again: %+v", told)
+	}
 	// The orchestrator's own handoff is for its successor, not for itself.
 	if _, err := qaFileCall(t, ws, &hosted{sessionID: "lead"}, "member_update", map[string]any{"handoff": "Where I was."}); err != nil {
 		t.Fatal(err)

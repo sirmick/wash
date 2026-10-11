@@ -531,7 +531,7 @@ pin has not moved in five adapter minors, so R01's "no release process" point st
 
 ## WASH-R20 — Ephemeral members stay listed after their task completes, and count toward `max_members`
 
-Date: 2026-10-06. Status: open. Minor-medium (one failed panel launch, two extra round trips).
+Date: 2026-10-06. Status: addressed 2026-10-11: a retiring member whose session is gone is ended by the dispatch loop instead of staying listed. The `preview:true` needs-check half is still open.
 
 Five ephemeral editors (`bench-rule-editor`, `-2`, `-3`, `-4`, `fpga-editor`), each launched
 with a `task` and each having completed its assignment with a result, still appeared in the
@@ -549,7 +549,7 @@ reported the needs check too (it reports only the catalog and launch flags).
 
 ## WASH-R21 — A multi-update `assignment_update` fails whole on one update's `needs` check, and the error names only that update
 
-Date: 2026-10-06. Status: addressed 2026-10-11 (e7a30827): the error says no update in the call was applied and to resend all of them. The override-on-the-node half is still open.
+Date: 2026-10-06. Status: addressed 2026-10-11 (e7a30827): the error says no update in the call was applied and to resend all of them. An override recorded on an active node now covers its later assignments too.
 
 `assignment_update {updates:[a, b, c]}` where only `c` is on a node whose needs are not done
 is refused as a whole ("update 2: ... node SMP1 needs IPC3 (reported) ... start anyway with
@@ -604,6 +604,8 @@ beamlet-red-2 (e07c9d7d) was launched from beam4-red's handoff. I sent it four r
 ## WASH-R26 (2026-10-08): handoff lifecycle messages repeat at every commit boundary, each saying "end it and launch its replacement"
 
 Members told to keep a running handoff (member_update handoff at each commit boundary) produce a lifecycle message every time. The userland implementer sent eight in one afternoon. Each reads "When its open work is reported, end it and launch its replacement", though the member is at 29-50% context and working. That's noise that hides the real ones. Expected: the lifecycle text depends on context use (only suggest replacement above context_warn), or a handoff update can be marked as routine.
+
+Status: addressed 2026-10-11: the first handoff is announced; later writes are silent unless the member is past `context_warn`.
 
 ## WASH-R27 (2026-10-08): decision_request blocks the orchestrator, so owner questions wait for idle moments
 

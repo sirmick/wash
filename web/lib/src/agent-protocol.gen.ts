@@ -786,6 +786,11 @@ export interface Member {
    * its first message: what the member it replaces had done and knew.
    */
   handoff?: string;
+  /**
+   * HandoffPath is where this member's own handoff is, once it has
+   * written one (member_update handoff); it keeps the same path current.
+   */
+  handoff_path?: string;
   usage?: Usage;
   /**
    * Catalog and Model are what the member was asked to run on: the

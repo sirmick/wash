@@ -735,6 +735,7 @@ No fields.
 | `initial_task?` | `string` |  |
 | `initial_override?` | `string` | InitialOverride is why the initial task starts before what its node needs is done; recorded on the node when the task is assigned. |
 | `handoff?` | `string` | Handoff is the handoff a member launched with handoff_from reads in its first message: what the member it replaces had done and knew. |
+| `handoff_path?` | `string` | HandoffPath is where this member's own handoff is, once it has written one (member_update handoff); it keeps the same path current. |
 | `usage?` | `Usage` |  |
 | `catalog?` | `string` | Catalog and Model are what the member was asked to run on: the catalog (the workspace's unless the member named one) and the model as given, a slot name or an id. LaunchSettings is what that resolved to, with the member's own settings on top, fixed when its key was reserved: a later catalog change moves no running member. |
 | `model?` | `string` |  |

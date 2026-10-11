@@ -1264,6 +1264,15 @@ func (ws *workspaceService) dispatch() {
 		for _, m := range w.Members {
 			h := hostedBySession(m.Session)
 			if h == nil {
+				// A retiring member whose session is already gone (it
+				// exited, or was never reattached) has nothing left to
+				// finish: end it now, or it stays listed and holds a
+				// member slot (Redoubt, WASH-R20).
+				if m.Retire && m.State != "ended" {
+					if err := ws.store.EndMember(workspaceLeadSession(w), m.ID, false); err != nil {
+						log.Printf("agentd: retire %s: %v", m.ID, err)
+					}
+				}
 				continue
 			}
 			if h.closing.Load() || !h.sessionReady.Load() {

@@ -356,9 +356,19 @@ func ReplacePlan(w *Workspace, m *Member, nodes []Node) error {
 	return nil
 }
 
+// Overridden says whether work on node already started under a recorded
+// override: its needs were unmet, the orchestrator said why, and the node
+// is active on that decision. A later assignment on it needs no second
+// reason (Redoubt, WASH-R21): the needs check fired on every create, after
+// the node already carried the override from its launch.
+func Overridden(w *Workspace, node string) bool {
+	n := PlanNode(w, node)
+	return n != nil && n.State == "active" && len(n.Overrides) > 0
+}
+
 // startWork puts an assignment on its node: the node must exist, what it
-// needs must be done unless override says why not (recorded on the node),
-// and the node becomes active.
+// needs must be done unless override says why not (recorded on the node,
+// and covering the node's later assignments), and the node becomes active.
 func startWork(w *Workspace, by *Member, node, override string) error {
 	n := PlanNode(w, node)
 	if n == nil {
@@ -366,6 +376,11 @@ func startWork(w *Workspace, by *Member, node, override string) error {
 	}
 	if unmet := Unmet(w, node); len(unmet) > 0 {
 		if strings.TrimSpace(override) == "" {
+			if Overridden(w, node) {
+				// The reason is on the node already; the reviewer behind
+				// the implementer need not give it again.
+				return nil
+			}
 			return fmt.Errorf("node %s needs %s first; start anyway with override:\"<reason>\"", node, strings.Join(unmet, ", "))
 		}
 		if len(override) > 500 {

@@ -485,7 +485,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					if spec.Node == "" {
 						return fmt.Errorf("member %s: a task is an assignment on a plan node; give the member a node", key)
 					}
-					if unmet := swarm.Unmet(w, spec.Node); len(unmet) > 0 && strings.TrimSpace(spec.Override) == "" {
+					if unmet := swarm.Unmet(w, spec.Node); len(unmet) > 0 && strings.TrimSpace(spec.Override) == "" && !swarm.Overridden(w, spec.Node) {
 						return fmt.Errorf("member %s: node %s needs %s first; start anyway with override:\"<reason>\" on the member (recorded once on the node), or launch it without a task", key, spec.Node, strings.Join(unmet, ", "))
 					}
 				}
