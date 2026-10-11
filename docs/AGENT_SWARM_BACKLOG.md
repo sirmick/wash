@@ -127,6 +127,55 @@ found these.
   (AGENT_APP.md, "Turns the agent starts itself"); the adapter should still
   settle or refuse it.
 
+## Open field findings (reconciled 2026-10-11)
+
+What the two field reports at the repo root (`BUG-REPORT-redoubt-workspace.md`,
+`BUG-REPORT-nvl-ai-workspace.md`) still leave open, after their statuses were
+checked against the tree. Everything else in them is addressed and says so
+there; this list is the backlog, those files are the evidence.
+
+- **An idle member with queued instructions never takes a turn (M, high).**
+  Three sightings: NVL WASH-005, Redoubt WASH-R12 and WASH-R25 (a member
+  launched with `handoff_from`, four instructions over three hours, every
+  send `delivery: queued`, `interrupt` says "no turn running"). The
+  supervisor now reports `undelivered` after two checks; the cause is not
+  found. Start with a reproduction in `agent-workspace-plan.spec.ts` on the
+  fake adapter: a member whose turn ends, then an instruction.
+- **Assignment `body` not delivered, title only (S to diagnose).** NVL
+  WASH-004, one clear reproduction, cause unknown.
+- **`capability:"reviewer"` on an unverified adapter version blocks the Wash
+  tools silently (M).** Redoubt WASH-R22 and WASH-R30: the member reads but
+  cannot report, sits idle, and the launch receipt only says "not among the
+  versions Wash verified it on". Either verify the newer versions
+  (`reviewerVerifiedVersions`, `workspace_capability.go`) or have the receipt
+  say the member cannot report and refuse `capability` there.
+- **`plan_accept` trailers take recorded results, not renewed verdicts
+  (M, design).** Redoubt WASH-R23: a reviewer that renews its verdict by
+  message still appears with its round-4 BLOCK. A verdict field on
+  `member_update`, or the newest verdict message on the node.
+- **Ending a member leaves its assignment open (S–M).** Redoubt WASH-R28:
+  `handoff_from` should transfer the predecessor's open assignment, or `end`
+  should close it as superseded; until then `plan_accept` refuses the node.
+- **A reviewer's queue is invisible (S).** Redoubt WASH-R29: per member, the
+  queued instruction ids and first lines in the team view, not only the
+  `undelivered` count.
+- **A non-blocking `decision_request` (M, design).** Redoubt WASH-R27: with
+  ten members running, a blocking owner question stalls every review; the
+  orchestrator kept its questions in a file instead. A form whose answer
+  arrives as a message, or a per-question timeout. Blocking was a decision
+  (above, 2026-09-26), so this is a design change, not a bug.
+- **`preview:true` should run the needs check (S).** Redoubt WASH-R20, second
+  half: preview reports catalog and launch flags, not that a member's node
+  needs another first.
+- **Something reads every new file's content (verify first).** Redoubt
+  WASH-R24 blames wash-fswatch by PID, but the watcher packages open no
+  files and that PID is the multicall binary every app shares. Find the
+  reader (`strace -e openat` beside the writing test) before fixing.
+- **Subagent restriction fails on Codex launch (adapter).** NVL WASH-001:
+  `subagents:"deny"` is advisory on Codex; recorded, no path forward in Wash.
+- **The `coding` slot resolves to a model this adapter rejects.** Redoubt
+  catalog follow-up, "let's discuss" with the owner on 2026-10-04.
+
 # Earlier backlog, kept for reference
 
 The member-surface items (section 1) are to be reassessed once the plan and

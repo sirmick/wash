@@ -16,7 +16,7 @@ Adapter: `@agentclientprotocol/claude-agent-acp` `0.85.0`.
 ## WASH-R01 — `capability:"reviewer"` is pinned to two adapter versions, with no path forward
 
 Date: 2026-10-01
-Status: open; operational workaround applied (owner decision). No Wash code changed.
+Status: addressed: unverified enforcement is advisory and recorded on the Reviewed-by trailer (docs/AGENT_SWARM_BULK.md, R01); reconciled 2026-10-11. The reviewer allowlist on newer adapter versions is WASH-R22/R30.
 Category: capability enforcement / adapter version pinning / launch UX.
 Impact: medium-high; the whole review panel of the project's process (6 of 9 members) failed to
 launch on first attempt.
@@ -80,7 +80,7 @@ commits before a merge.
 ## WASH-R03 — A handoff written with `member_update {handoff}` reaches nobody
 
 Date: 2026-10-01
-Status: open. Minor-medium (cost: two hours of a resident Architect idle).
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 Wash's `context_warn` lifecycle note tells the orchestrator to have the member write a handoff,
 end it and relaunch with `handoff_from`. The Architect wrote its handoff at 08:31 (stored at
@@ -93,7 +93,7 @@ delivering a progress message to the orchestrator; and the stored path named in 
 ## WASH-R02 — Model slot `opus[1m]` is not in this host's catalog; the Architect failed silently in `from:` load
 
 Date: 2026-10-01
-Status: open; worked around. Minor.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 `workspace_configure {"from": ".wash/workspace.toml"}` committed the workspace, then the
 Architect (`model = "opus[1m]"`, the ID PROJECT.md prescribes) failed with
@@ -118,7 +118,7 @@ here are files `qa/<id>.md`; their event bodies quote the exact tool traffic.
 
 ## WASH-R04 — A thread's answer reaches its creator and assignee, not the member it is about
 
-Status: open. Cost: the orchestrator relayed every Architect ruling by hand, ~8 times in one day.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 `message_send` with `qa:{action:open}` makes the sender the creator and the recipient the
 assignee; "an answer on a thread also reaches its creator and assignee". When the orchestrator
@@ -140,7 +140,7 @@ member on the thread's node that has sent a message on it.
 
 ## WASH-R05 — One active assignment per member blocks "next step" and turns reports into dead ends
 
-Status: open.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 `assignment_update {create}` on a member with an active assignment is refused
 ("member already has an active assignment"), and a `progress` message does not close one. So when
@@ -159,7 +159,7 @@ a first-class, plan-visible step.
 
 ## WASH-R06 — Launching on an overridden node takes two calls and a round trip
 
-Status: open.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 `workspace_configure` with a `task` on a node whose needs are not done is refused:
 "launch it without a task and assign with override". The override is accepted on
@@ -177,7 +177,7 @@ Related: `max_members`/`max_active` are top-level `workspace_configure` paramete
 
 ## WASH-R07 — `expected_revision` is required but only discoverable by reading the file
 
-Status: open. Minor, frequent.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 Resolving a thread or editing a started node needs `expected_revision`, which no read tool
 returns: the orchestrator `grep`s `Revision:` in `qa/<id>.md`, and the first attempt still
@@ -187,7 +187,7 @@ orchestrator may resolve/edit without one (it already holds the authority).
 
 ## WASH-R08 — Paths in messages are not resolved against the project root
 
-Status: open. Minor.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 Members run in different `cwd`s (worktrees under `.worktrees/<pkg>`). A relative path in a message
 (`.wash/local/K14-progress.md`) resolves for the implementer in the project root and fails for
@@ -198,7 +198,7 @@ document "always absolute" in the role guide.
 
 ## WASH-R09 — The 2000-byte ceiling is right for threads and wrong for handoffs and briefs
 
-Status: open. Design.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 Members route around it correctly (detail in a file, pointer in the message), but a handoff that
 is mostly a pointer costs the successor a cold read of a long file, and the first thing a
@@ -209,7 +209,7 @@ successor needs (branch state, traps) is the part most likely truncated. See
 
 ## WASH-R10 — No context-usage visibility before the 30% note
 
-Status: open.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 The only signal is the `context_warn` lifecycle note. With it, handoffs landed wherever the member
 happened to be: `ipc2-implementer` mid-fix-round (`d1c080a0…`), `init1-implementer-2` mid-D3
@@ -219,7 +219,7 @@ keeps working to 45% is not re-warned.
 
 ## WASH-R11 — The orchestrator's own context is spent on routine events
 
-Status: open. Design.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 With ~20 members over ten hours, every `progress`, `lifecycle` and `note` event is a turn in the
 owner's own session (the orchestrator is that session). The work was fine, but the orchestrator's
@@ -256,7 +256,7 @@ No Wash code was changed for this report.
 
 ## WASH-R12 — Queued control messages lag behind the work they govern
 
-Status: observed operational problem; dispatch/adapter cause not established. High impact.
+Status: delivery made legible in API 4.2 (dispatched_at and watermarks, docs/AGENT_SWARM_BULK.md, R12); the idle-member-never-wakes cause itself is still open, with WASH-R25 and NVL WASH-005. Reconciled 2026-10-11.
 
 Members repeatedly reported waiting for permissions already sent, or continued older work
 after a context-checkpoint instruction was queued. Examples:
@@ -293,7 +293,7 @@ queued instructions); `member_control checkpoint` is interrupt plus that instruc
 
 ## WASH-R13 — Stall alerts can conflict with current member activity
 
-Status: observed contradictory snapshots; possible race/stale supervisor observation.
+Status: addressed with R12 in API 4.2 (docs/AGENT_SWARM_BULK.md); reconciled 2026-10-11.
 
 - Lifecycle `3a4eed855fbf0fa24680d0b1a1e2b783` said SCHED1 had three messages queued
   for 9m37s, was in no turn, and should be checked for relaunch. The subsequent team read
@@ -314,7 +314,7 @@ structured fields; and the possible `agentRunning`-stuck blind spot is unconfirm
 
 ## WASH-R14 — Late predecessor confirmations create avoidable orchestration turns
 
-Status: observed; relates to R03 and R11.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 After SCHED1 had been checkpointed and its successor launched, predecessor message
 `fa17c2e6418c533377288dc179b4523e` arrived confirming the same checkpoint and saying
@@ -337,7 +337,7 @@ a structured handoff-ready event beyond the R03 lifecycle note.
 
 ## WASH-R15 — Message, QA event and thread identifiers need clearer affordances
 
-Status: usability issue; one observed agent misuse, not evidence that lookup is broken.
+Status: addressed (recorded in docs/AGENT_SWARM_BULK.md, which cites this number); reconciled 2026-10-11.
 
 The human IPC decision had message ID `9e35cd7b11fd13a5f1e4c0d5db0d75b1` but QA event ID
 `9d1354d63f10b0774a745ede130f3de6`. We successfully reconciled both with a targeted QA read.
@@ -564,6 +564,8 @@ an override recorded on the node could cover its later assignments too.
 
 ### WASH-R22 (2026-10-06 ~06:30): `capability: "reviewer"` members never run
 
+Status: open (with WASH-R30). The launch records an advisory for an unverified adapter version; it does not yet say the member cannot report.
+
 Five reviewers launched tonight with `capability: "reviewer"` (the launch refuses `approval: "auto"`
 with it: "reviewer capability cannot be auto-approved") received their instructions
 (`last_dispatched` updated) but then sat `idle` for 1-2 hours each with a few tens of thousands
@@ -578,6 +580,8 @@ blocked, not `idle`.
 
 ### WASH-R23 (2026-10-06 ~11:30): plan_accept's Reviewed-by trailers carry stale verdicts
 
+Status: open. `plan_accept` still takes each reviewer's recorded result (internal/swarm/plan.go, verdicts).
+
 `plan_accept` builds `Reviewed-by:` trailers from reviewers' recorded assignment *results*, not
 from their latest verdicts. Reviewers here renew verdicts by message (answers), so the trailer for
 SCHED1 read `Red team: Merge verdict: BLOCK` (its round-4 result) when the red's final verdict was
@@ -587,6 +591,8 @@ forbids. Expected: a way to record a renewed verdict on the node (a reviewer's `
 verdict field, or the trailer taking the newest verdict message on the node).
 
 ## WASH-R24 (2026-10-08): wash-fswatch reads every new file's content, not only its name
+
+Status: open, attribution unproven (2026-10-11). `internal/fswatch` and `internal/remotewatch` open no files (inotify plus stat); the PID named is the multicall `out/wash`, which every Wash app shares, so the reader may be another app (a preview, a thumbnail, a file list). Reproduce with `fuser`/`strace -e openat` on the writing test before changing the watcher.
 
 Measured on this host (ext4, relatime): a file written and given atime == mtime by utime has its
 atime bumped to now within 50 ms, 40 of 40 times, with no reader of mine; a future atime, which
@@ -599,6 +605,8 @@ O_NOATIME.
 
 ## WASH-R25 (2026-10-08): a member launched with handoff_from sat idle for three hours with queued instructions
 
+Status: open; the supervisor now reports `undelivered` after two checks, the wake-up itself is unexplained (with WASH-R12 and NVL WASH-005).
+
 beamlet-red-2 (e07c9d7d) was launched from beam4-red's handoff. I sent it four review instructions over about three hours, and each send returned `delivery: queued`. The team view showed it `idle`, with no `waiting` field and no turn running. `member_control interrupt` answered "no turn running". It never took a turn until I sent another instruction after the interrupt. Nothing in the team view flags a member whose queued instructions go undelivered while it is idle. I only noticed because reviews stalled. Expected: an idle member with queued instructions starts a turn. Failing that, the team view shows "queued N, oldest Ns" for an idle member, and the supervisor nudges it.
 
 ## WASH-R26 (2026-10-08): handoff lifecycle messages repeat at every commit boundary, each saying "end it and launch its replacement"
@@ -609,13 +617,19 @@ Status: addressed 2026-10-11: the first handoff is announced; later writes are s
 
 ## WASH-R27 (2026-10-08): decision_request blocks the orchestrator, so owner questions wait for idle moments
 
+Status: open. Design: `decision_request` is blocking by decision (AGENT_SWARM_BACKLOG.md, 2026-09-26); a non-blocking form is unbuilt.
+
 decision_request "blocks you: nothing else reaches you until then". With eight to ten members running, a blocking owner question would stall every review and merge until the owner answers. So I keep owner questions in a file (.wash/local/architect-questions.md) and raise them in prose, which the guide says not to do. Expected: a non-blocking decision_request whose answer arrives as a message, or a per-question timeout after which work resumes.
 
 ## WASH-R28 (2026-10-08): ending a member leaves its open assignment open, and the node shows "active with nobody on it"
 
+Status: open.
+
 When I end a member mid-package to relaunch from its handoff (SHELL3, SRV1, B37, BEAM17), its assignment stays open and the nudge says "Assign it again". The replacement gets a new assignment from its `task`, so the old one lingers. plan_accept refuses while any assignment is open on the node, so I have to watch for it. Expected: `handoff_from` transfers the predecessor's open assignment to the replacement, or `end` offers to close it as superseded.
 
 ## WASH-R29 (2026-10-08): no way to see a reviewer's queue
+
+Status: open. The team view shows `undelivered` counts and the oldest age, not the queued instructions themselves.
 
 Four reviews were queued on one red. I could not see that in the team view (`undelivered` counts only) or tell which instruction it was working on. Rebalancing reviews across reds needed my own bookkeeping. Expected: per member, the list of queued instruction ids and their first lines.
 

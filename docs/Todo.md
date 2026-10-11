@@ -12,6 +12,13 @@ rename went 311 → 433 referrers and is now explicitly deferred). Anything
 stated here as a count or a line number was true on 2026-09-29; re-derive
 before relying on it.
 
+Partial pass 2026-10-11: the "genuinely small" tier was done (COMMANDS.md
+moved, bus.Emit annotations, SmallBtn folded, exec_tab removed, issue #7
+closed), the apps sweep's P2 list was re-verified item by item
+(docs/Review-findings.md), and the two field reports at the repo root were
+reconciled with the tree; what they still leave open is listed in
+docs/AGENT_SWARM_BACKLOG.md "Open field findings".
+
 Prior consolidation: 2026-07-03 — (that sweep deleted the 2026-07-01
 review docs + fix prompts, MAKE-PLAN, PACKS-PROMPT, NEXT, and the sftp-mount
 bug list — all fully landed; see `git log` if you need their content.)
@@ -259,8 +266,13 @@ bug list — all fully landed; see `git log` if you need their content.)
 ## Apps / UX
 
 - [ ] **Apps sweep follow-ups (docs/Review-findings.md, 2026-09-08).** P0 and
-  P1 shipped in 0.14.4; the P2 "missing everyday workflows" lists are the
-  open backlog for fm, edit, term, agent and the cross-app seams. The
+  P1 shipped in 0.14.4. The P2 "missing everyday workflows" list was
+  re-verified 2026-10-11 and most of it had landed; what remains is listed
+  there with evidence. The bigger leftovers: fm undo, bookmarks, tabs and an
+  unvirtualised tree; edit split view, markdown preview and the Keep→Save
+  clobber of an external change; term images and OSC 52; agent @-mention
+  and money cost; a second edit window on a second fm double-click, and
+  window state that does not survive a router restart. The
   terminal-intercept tier was deleted (docs/AGENT_APP.md §10), so `claude`
   in a wash terminal is an ordinary command; agent features go through the
   Agent app over ACP.
@@ -275,7 +287,8 @@ bug list — all fully landed; see `git log` if you need their content.)
   singleton Agents manager (`com.wash.agents`) and one hidden `com.wash.ai`
   controller per session. M5 (one status vocabulary) shipped 2026-08-24.
   Open agent-app gaps are listed in docs/AGENT_APP.md §0 "Known gaps";
-  workspace items in docs/AGENT_SWARM_BACKLOG.md.
+  workspace items, and the open field findings from the Redoubt and NVL
+  runs, in docs/AGENT_SWARM_BACKLOG.md.
 - [ ] **fm/edit: surface access-denied + "relaunch as root"** — **issue #6**
   (full implementation prompt is a comment there). Part A is now mostly
   done and the old description was stale: edit HAS a status-bar error
