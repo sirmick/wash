@@ -1,3 +1,52 @@
+wash (0.18.0-1) unstable; urgency=low
+
+  * Host install: wash-install replaces wash-start and wash-update. One
+    command (curl | bash) takes a fresh Ubuntu login to a router serving
+    the LAN as this user, under systemd --user instead of screen, and the
+    same command changes version (a branch, a tag, or "release" for the
+    newest vX.Y.Z). The root footprint is one printed line. It stops an
+    old screen router by PID, proves the unit's MainPID owns the port,
+    and logs to ~/.local/state/wash/router.log. wash-connect reads the
+    unit and says what the checkout is serving.
+  * Workspace API 4.2: launch settings are advisory and Wash is agnostic
+    to the provider. A reviewer launches on every provider; what held is
+    recorded as applied.enforcement and on the Reviewed-by trailer. A
+    model, effort or config value the adapter does not offer is skipped
+    and noted, not refused; an unlisted model id is an advisory in the
+    receipt, the launcher and the Setup tab.
+  * Workspace API 4.1, the first day's feedback from two live workspaces:
+    adapter-version gate for reviewers, patches to a failed launch, a
+    handoff lifecycle message, on_behalf_of threads, one queued
+    assignment per resident, override on a gated node, thread revisions
+    in plan_get, an absolute-paths note in the first message.
+  * Workspace delivery: messages carry dispatched_at and settled_at, team
+    view shows each member's mail watermarks, priority:"checkpoint" leads
+    the next turn and supersedes earlier queued instructions,
+    member_control checkpoint is the safe stop, stall alerts fire only on
+    two consecutive checks.
+  * Workspace digest holds routine mail for one turn; no double rulings;
+    workspace_get view=message reads one message or QA event; view=qa
+    last:N; the QA checkpoint sits second in the thread file as one line
+    of JSON (v3; v2 still reads). plan_get with a node returns its
+    subtree; a failed assignment_update batch says nothing was applied;
+    a retire ends a member without a session; routine handoffs are quiet;
+    an override covers the node's later assignments.
+  * agentd: ended workspaces archive to workspaces-archive/<id>.json and
+    the live state keeps a stub; the workspace loop reads the store
+    without copying it. agentd no longer sits at one full core.
+  * Agents: an Owner | Team lane strip for a workspace orchestrator's
+    transcript, inbox batches rendered one block per message. Show
+    thinking is a catalog and slot setting the Session menu can switch.
+    A question for a tool Wash cannot name shows the adapter's words.
+  * Shell: a taskbar pill click pans to a window the camera cannot see;
+    prose fields turn spellcheck on and Shift+right-click reaches the
+    browser menu; the places bar is one segmented pill.
+  * sdk: a failed push logs instead of vanishing. term: the unused
+    exec_tab verb is gone. Docs: COMMANDS.md moved into docs/, backlog
+    and field reports reconciled.
+
+ -- Michael <sirmick@gmail.com>  Sun, 11 Oct 2026 11:00:00 -0700
+
 wash (0.17.2-1) unstable; urgency=low
 
   * Host scripts for one machine serving the LAN, from a checkout:

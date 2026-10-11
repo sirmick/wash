@@ -20,7 +20,7 @@ windows, a workspace pager, a system sidebar — where the window
 manager runs *in the browser* and each application is an independent,
 one-file program that a transport-only **router** supervises.
 
-License: **AGPL-3.0**. Current version: **0.17.2**.
+License: **AGPL-3.0**. Current version: **0.18.0**.
 
 ---
 
@@ -494,7 +494,7 @@ sudo apk add --allow-untrusted ./wash-alpine-3.21-amd64.apk
 These are **stable filenames** (no version) that always resolve to the
 newest release — the page at
 <https://github.com/sirmick/wash/releases/latest> has the same files (plus
-the native versioned names, e.g. `wash_0.17.2-1_amd64.deb`) if you'd rather
+the native versioned names, e.g. `wash_0.18.0-1_amd64.deb`) if you'd rather
 click. CI builds **amd64** for all four, plus **Debian 13 arm64**
 (`wash-debian-13-arm64.deb`); other arm64/riscv64 rows and OpenWRT build
 from source (below). Once installed, start a single-user session with

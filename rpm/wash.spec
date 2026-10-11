@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.17.2
+Version:        0.18.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,16 @@ fi
 exit 0
 
 %changelog
+* Sun Oct 11 2026 sirmick <sirmick@gmail.com> - 0.18.0-1
+- wash-install replaces wash-start/wash-update (systemd --user, one
+  command from a fresh login, "release" picks the newest tag); workspace
+  API 4.2 (advisory launch settings, provider-agnostic, enforcement
+  recorded) on top of 4.1's live-workspace feedback; delivery watermarks,
+  checkpoint priority, digest, message by id, QA checkpoint as JSON;
+  ended workspaces archived and the loop reads the store uncopied;
+  Owner | Team lanes, show-thinking setting; taskbar pan, spellcheck,
+  segmented places bar.
+
 * Fri Oct 02 2026 sirmick <sirmick@gmail.com> - 0.17.2-1
 - Host scripts (wash-start, wash-connect, wash-update) with make
   install-host-scripts; agent question answers survive session updates;
