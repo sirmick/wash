@@ -8,7 +8,7 @@
 
 import { test, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent } from '@solidjs/testing-library';
-import { fieldFromEvent, TextFieldMenu } from './text-menu.tsx';
+import { fieldFromEvent, TextFieldMenu, yieldToBrowserMenu } from './text-menu.tsx';
 
 // Menu portals into document.body, so items are never inside the render
 // container — query the document, and read `disabled` off the attribute
@@ -53,6 +53,35 @@ test('leaves the terminal and the VM display alone', () => {
     const ev = ctx();
     el.dispatchEvent(ev);
     expect(fieldFromEvent(ev)).toBeNull();
+  }
+});
+
+// Shift+right-click is the browser's menu, everywhere: the capture-phase
+// hook stops the event before any wash handler — the shell's own, or an
+// app's on the element — can prevent the native menu. The spelling
+// suggestions live there, and a page cannot open that menu any other way.
+test('Shift+right-click reaches no wash handler, so the browser menu shows', () => {
+  const host = mount('<input type="text">');
+  const el = host.firstElementChild!;
+  const appHandler = vi.fn((ev: Event) => ev.preventDefault());
+  el.addEventListener('contextmenu', appHandler);
+  const shellHandler = vi.fn();
+  document.addEventListener('contextmenu', yieldToBrowserMenu, true);
+  document.addEventListener('contextmenu', shellHandler);
+  try {
+    const shifted = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true });
+    el.dispatchEvent(shifted);
+    expect(appHandler).not.toHaveBeenCalled();
+    expect(shellHandler).not.toHaveBeenCalled();
+    expect(shifted.defaultPrevented).toBe(false);
+
+    const plain = ctx();
+    el.dispatchEvent(plain);
+    expect(appHandler).toHaveBeenCalledTimes(1);
+    expect(plain.defaultPrevented).toBe(true);
+  } finally {
+    document.removeEventListener('contextmenu', yieldToBrowserMenu, true);
+    document.removeEventListener('contextmenu', shellHandler);
   }
 });
 

@@ -99,7 +99,7 @@ const QuestionSetCard: Component<{ q: agentproto.PendingQuestion; onAnswer?: Que
             </div>
           </Show>
           <Show when={!q.no_text}>
-            <textarea data-testid={`question-text-${q.id}`} aria-label={`Your answer: ${q.question}`} rows={1}
+            <textarea data-testid={`question-text-${q.id}`} aria-label={`Your answer: ${q.question}`} rows={1} spellcheck={true}
               placeholder={(q.options ?? []).length ? 'Your own answer, or a note (optional)' : 'Your answer'}
               value={get(q.id).text ?? ''} onInput={(e) => setText(q.id, e.currentTarget.value)}
               style={{ width: '100%', 'box-sizing': 'border-box', 'margin-top': `${tokens.spaceXs}px`, font: tokens.type.textSm, background: tokens.bgWindow, color: tokens.fg, border: `1px solid ${tokens.borderMenu}`, 'border-radius': tokens.radiusSm, resize: 'vertical' }} />

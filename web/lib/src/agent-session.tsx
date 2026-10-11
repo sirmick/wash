@@ -1449,6 +1449,9 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           ref={input}
           data-testid="agent-composer"
           rows={2}
+          // Prose: the browser's spellcheck, said explicitly rather than
+          // left to its default (Shift+right-click reaches the suggestions).
+          spellcheck={true}
           value={draft()}
           disabled={!props.onSend}
           placeholder={

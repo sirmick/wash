@@ -870,7 +870,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           value={promptDraft()}
           onInput={(e) => setPromptDraft(e.currentTarget.value)}
           rows={10}
-          spellcheck={false}
+          // Prose for the agent, in a monospace box: spellchecked like the
+          // composer. (Was off, with no reason recorded.)
+          spellcheck={true}
           style={{
             width: '58ch',
             'max-width': '80vw',
@@ -915,6 +917,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         </div>
         <Input
           data-testid="ai-rename-input"
+          spellcheck={true}
           value={renameDraft()}
           ref={(el: HTMLInputElement) => queueMicrotask(() => { el.focus(); el.select(); })}
           onInput={(e: InputEvent) => setRenameDraft((e.currentTarget as HTMLInputElement).value)}

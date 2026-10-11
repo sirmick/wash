@@ -45,6 +45,33 @@ test.describe('context menus', () => {
     await expect.poll(() => page.evaluate(() => window.wash.clipboardGetText())).toBe(value);
   });
 
+  // Shift+right-click is the browser's menu: wash's does not open, and the
+  // event reaches the browser unprevented. (Playwright cannot see the native
+  // menu itself; that it was not prevented is what decides whether it shows.)
+  test('Shift+right-click on a text field leaves the browser menu alone', async ({ page, router }) => {
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await page.locator('button[title="Apps"]').click();
+    await page.getByRole('button', { name: /^Files/ }).click();
+    await expect(page.locator('wash-app-fm')).toBeVisible();
+
+    const field = page.locator('wash-app-fm input:visible').first();
+    await field.click();
+    const prevented = page.evaluate(() => new Promise<boolean>((resolve) => {
+      // After every wash listener (bubble, on document) has had its turn.
+      window.addEventListener('contextmenu', (ev) => resolve(ev.defaultPrevented), { once: true });
+    }));
+    await field.click({ button: 'right', modifiers: ['Shift'] });
+    expect(await prevented).toBe(false);
+    await expect(page.getByTestId('text-context-menu')).toHaveCount(0);
+
+    // Without the modifier the same field gets wash's menu, which says
+    // where the browser's is.
+    await field.click({ button: 'right' });
+    await expect(page.getByTestId('text-context-menu')).toBeVisible();
+    await expect(page.getByTestId('text-ctx-browser-hint')).toHaveText(/Shift\+right-click/);
+  });
+
   test('the titlebar menu sends a window to another viewport', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();

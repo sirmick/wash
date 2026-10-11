@@ -2035,6 +2035,12 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
 };
 
 void conn.ready();
+// The page's language is the person's, not "en" for everyone: Firefox picks
+// the spellcheck dictionary for a field from the document language when it
+// has that dictionary, so the hard-coded value in index.html (kept as the
+// fallback) gave a French speaker English squiggles. Chrome uses its own
+// language settings and ignores this either way.
+if (navigator.language) document.documentElement.lang = navigator.language;
 // The interaction layer for the shell's OWN chrome (titlebars, resize
 // handles, crash-card controls). Apps get it via defineWashApp; the
 // shell never goes through that path, so it injects here.

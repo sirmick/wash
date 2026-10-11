@@ -3039,6 +3039,11 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const langExtensions = () => {
     const ext: any[] = [langForKey(currentLang())];
     if (wordWrap()) ext.push(EditorView.lineWrapping);
+    // CodeMirror turns the browser's spellcheck off on its content, which is
+    // right for code and wrong for prose: plain text, and markdown read in
+    // source mode, get it back (the WYSIWYG layer has it on already).
+    // Suggestions are a Shift+right-click away, as everywhere in wash.
+    if (currentLang() === 'plain' || currentLang() === 'markdown') ext.push(EditorView.contentAttributes.of({ spellcheck: 'true' }));
     return ext;
   };
 
@@ -4288,6 +4293,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             onClick={() => { setTextCtxMenu(null); sendToAgent(); }}
             data-testid="edit-text-ctx-send-agent"
           />
+          <MenuSeparator />
+          {/* Where the spelling suggestions are: the shell lets a
+              Shift+right-click through to the browser everywhere, and a
+              page cannot open that menu itself. A line to read, not an
+              action. */}
+          <MenuItem label="Shift+right-click for the browser menu" disabled onClick={() => {}} data-testid="edit-text-ctx-browser-hint" />
         </Menu>
       </Show>
 

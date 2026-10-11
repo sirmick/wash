@@ -1588,6 +1588,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <Input
               ref={(el) => { renameInputEl = el; }}
               data-testid={`term-tab-rename-${channelID}`}
+              spellcheck={true}
               value={renameDraft()}
               onInput={(ev) => setRenameDraft((ev.currentTarget as HTMLInputElement).value)}
               onKeyDown={(ev) => {

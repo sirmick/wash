@@ -24,6 +24,15 @@
 // Content inside an <iframe> (the ingress frames) never reaches us at all:
 // its contextmenu does not cross the boundary, so the embedded app keeps its
 // own menu without any check here.
+//
+// Shift+right-click is the browser's, everywhere. Wash's menus have no
+// spelling suggestions (browsers give a page no way to read them), and a
+// misspelled word underlined in a textarea with no way to reach its
+// corrections is a trap; the native menu also has Inspect and the rest. A
+// capture-phase listener on document sees the event before any wash
+// handler — the shell's, an app's, Solid's delegated ones — and stops it
+// there, so nothing below gets to preventDefault. Firefox already treats
+// Shift+right-click this way on its own; this makes every browser agree.
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
@@ -163,9 +172,23 @@ export const TextFieldMenu: Component<{
           el.select();
         })}
       />
+      <MenuSeparator />
+      {/* Where the spelling suggestions are. Disabled: a line to read, not
+          an action — the browser's menu cannot be opened from a page. */}
+      <MenuItem label={BROWSER_MENU_HINT} disabled data-testid="text-ctx-browser-hint" onClick={() => {}} />
     </Menu>
   );
 };
+
+/** The browser's own menu, on request: a Shift+right-click reaches no wash
+ *  handler at all. Exported for the test; installed by TextMenuLayer. */
+export function yieldToBrowserMenu(ev: MouseEvent): void {
+  if (!ev.shiftKey) return;
+  ev.stopImmediatePropagation();
+}
+
+/** What the menus say so the modifier can be found. */
+export const BROWSER_MENU_HINT = 'Shift+right-click for the browser menu';
 
 // TextMenuLayer is the shell-side host: one listener, one menu at a time.
 export const TextMenuLayer: Component = () => {
@@ -177,8 +200,12 @@ export const TextMenuLayer: Component = () => {
       ev.preventDefault();
       setOpen({ x: ev.clientX, y: ev.clientY, el });
     };
+    document.addEventListener('contextmenu', yieldToBrowserMenu, true);
     document.addEventListener('contextmenu', onCtx);
-    onCleanup(() => document.removeEventListener('contextmenu', onCtx));
+    onCleanup(() => {
+      document.removeEventListener('contextmenu', yieldToBrowserMenu, true);
+      document.removeEventListener('contextmenu', onCtx);
+    });
   });
   return (
     <Show when={open()}>
