@@ -3471,7 +3471,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onOpen={(target) => send({ kind: 'places_click', target, cwd: root() })}
           disabled={root() ? undefined : 'Open a folder first'}
           describe={(t) => (t === PLACES_AGENT ? defaultCatalog()?.label ?? root() : root())}
-          style={{ 'margin-left': 'auto', 'margin-right': '4px' }}
+          style={{ 'margin-left': 'auto' }}
         />
         <Show when={openMenu() === 'file'}>
           <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-file">

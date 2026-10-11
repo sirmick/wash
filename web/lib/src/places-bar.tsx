@@ -47,6 +47,9 @@ const APPS: PlaceApp[] = [
   { id: PLACES_TERMINAL, name: 'Terminal', icon: Terminal },
 ];
 
+// Fully round ends whatever the height — the bar is a pill, not a card.
+const PILL = '999px';
+
 // The group palette. Deliberately NOT the four apps' own accents (Files blue,
 // Terminal green, Editor amber, Agent violet) or anything that reads as one
 // of them — a tint the colour of an app would look like a statement about
@@ -133,6 +136,20 @@ export const PlacesBar: Component<{
     return extra ? `Open ${a.name} here · ${extra}` : `Open ${a.name} here`;
   };
 
+  // One segmented pill, not three buttons: the wrapper draws the single
+  // border and the pill ends, the buttons sit flush with hairline dividers
+  // between them. Each button's radius follows its position so the hover
+  // tint (border-radius: inherit in hit.ts) hugs the pill's ends and no
+  // overflow clipping is needed — clipping would eat the focus ring.
+  const n = () => others().length;
+  const segmentRadius = (i: number): string => {
+    const r = PILL;
+    if (n() === 1) return r;
+    if (i === 0) return `${r} 0 0 ${r}`;
+    if (i === n() - 1) return `0 ${r} ${r} 0`;
+    return '0';
+  };
+
   return (
     <div
       data-testid="places-bar"
@@ -141,16 +158,17 @@ export const PlacesBar: Component<{
       aria-label="Related windows"
       style={{
         display: 'inline-flex',
-        'align-items': 'center',
-        gap: '1px',
-        padding: '1px 3px',
-        'border-radius': tokens.radiusSm,
+        'align-items': 'stretch',
+        height: '22px',
+        border: `1px solid ${tokens.borderMenu}`,
+        'border-radius': PILL,
         background: groupTint(props.view.group),
+        'margin-right': '4px',
         ...props.style,
       }}
     >
       <For each={others()}>
-        {(a) => {
+        {(a, i) => {
           const Icon = a.icon;
           return (
             <Button
@@ -163,8 +181,13 @@ export const PlacesBar: Component<{
               disabled={!!props.disabled}
               onClick={() => props.onOpen(a.id)}
               style={{
-                padding: '3px 6px',
-                'min-width': '26px',
+                display: 'inline-flex',
+                'align-items': 'center',
+                'justify-content': 'center',
+                padding: '0 8px',
+                border: 'none',
+                'border-left': i() === 0 ? 'none' : `1px solid ${tokens.borderMenu}`,
+                'border-radius': segmentRadius(i()),
                 color: bound(a.id) ? groupInk(props.view.group) : tokens.fgMuted,
               }}
             >
