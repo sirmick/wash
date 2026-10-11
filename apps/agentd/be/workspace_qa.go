@@ -16,7 +16,7 @@ func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 		return nil, errors.New("QA view does not accept include_messages")
 	}
 	if a.Thread == "" {
-		if a.After != "" || a.Limit != 0 {
+		if a.After != "" || a.Limit != 0 || a.Last != 0 {
 			return nil, errors.New("QA pagination requires thread_id")
 		}
 		index := []map[string]any{}
@@ -56,6 +56,32 @@ func qaView(w *swarm.Workspace, a workspaceArgs) (any, error) {
 	}
 	if limit < 1 || limit > 100 {
 		return nil, errors.New("limit must be 1–100")
+	}
+	// last: the newest N events without knowing an event id — what a
+	// member wants when it is caught up and asks what happened since
+	// (Redoubt, WASH-R17). Not with after: that is the other direction.
+	if a.Last != 0 {
+		if a.After != "" || a.Limit != 0 {
+			return nil, errors.New("last takes no after or limit")
+		}
+		if a.Last < 1 || a.Last > 100 {
+			return nil, errors.New("last must be 1–100")
+		}
+		all := thread.Events
+		events := all
+		if events == nil {
+			events = []swarm.QAEvent{}
+		}
+		if len(events) > a.Last {
+			events = events[len(events)-a.Last:]
+		}
+		thread.Events = events
+		cursor := ""
+		if len(events) > 0 {
+			cursor = events[len(events)-1].ID
+		}
+		// has_more here means older events exist before these.
+		return map[string]any{"thread": thread, "cursor": cursor, "has_more": len(events) < len(all)}, nil
 	}
 	events := []swarm.QAEvent{}
 	after := a.After == ""

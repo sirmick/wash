@@ -268,6 +268,7 @@ type workspaceArgs struct {
 	After           string `json:"after"`
 	IncludeMessages bool   `json:"include_messages"`
 	Limit           int    `json:"limit"`
+	Last            int    `json:"last"`
 	Workspace       string `json:"workspace_id"`
 	Confirm         bool   `json:"confirm"`
 }
@@ -318,7 +319,7 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		// between turns, and full state (configuration, launch snapshots,
 		// every live session's adapter options) is several times its size.
 		if a.View == "" || a.View == "team" {
-			if a.Thread != "" || a.Node != "" || a.IncludeMessages || a.After != "" || a.Limit != 0 {
+			if a.Thread != "" || a.Node != "" || a.IncludeMessages || a.After != "" || a.Limit != 0 || a.Last != 0 {
 				return nil, errors.New("view=team (the default) takes no other options; message history needs view=state, threads view=qa")
 			}
 			return teamView(w), nil

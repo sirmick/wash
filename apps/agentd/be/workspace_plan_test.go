@@ -359,3 +359,34 @@ func TestPlanGetNodeIsTheSubtreeOnly(t *testing.T) {
 		t.Fatalf("threads on no node: %v", loose)
 	}
 }
+
+// view=qa thread_id with last:N answers the newest N events without an
+// event id to page from: a member catching up on its thread used to need
+// the whole thread, or an id it did not have (Redoubt, WASH-R17).
+func TestQAViewLastReadsTheNewestEvents(t *testing.T) {
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	w, _ := s.Setup("lead", "codex", root, "Team", root)
+	seedPlan(t, s, "lead", "K5")
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex"}
+	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": w.Lead, "type": "question", "body": "First?", "qa": map[string]any{"id": "K5-q", "action": "open", "node": "K5", "title": "Q"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{"Second.", "Third."} {
+		if _, err := qaFileCall(t, ws, h, "member_update", map[string]any{"qa_updates": []map[string]any{{"id": "K5-q", "action": "reply", "body": body}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := qaFileCall(t, ws, h, "workspace_get", map[string]any{"view": "qa", "thread_id": "K5-q", "last": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := got.(map[string]any)["thread"].(swarm.QAThread).Events
+	if len(events) != 2 || events[0].Body != "Second." || events[1].Body != "Third." || got.(map[string]any)["has_more"] != true || got.(map[string]any)["cursor"] != events[1].ID {
+		t.Fatalf("last 2: %+v", got)
+	}
+	if _, err := qaFileCall(t, ws, h, "workspace_get", map[string]any{"view": "qa", "thread_id": "K5-q", "last": 2, "after": events[0].ID}); err == nil {
+		t.Fatal("last with after")
+	}
+}

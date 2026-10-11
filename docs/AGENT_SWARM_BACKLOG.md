@@ -113,12 +113,13 @@ found these.
 
 - **The QA checkpoint is two thirds of every thread file (M, med).** After
   `tools/qa-split` and one resume, `.wash/qa/` was 95 files and 2.7 MB, more
-  than the 2.1 MB single file it replaced; 1.8 MB of it is the
-  `wash-qa-checkpoint-v2` comment (`internal/swarm/qafile.go`): the whole
-  thread again as base64 JSON, rewritten whole on any change, opaque in
-  diffs. Keep in it only what the Markdown cannot carry losslessly (author
-  IDs, message IDs, flags), or make the Markdown the parsed form; if it
-  stays, plain JSON in a fenced block, not base64.
+  than the 2.1 MB single file it replaced; most of it is the checkpoint
+  comment (`internal/swarm/qafile.go`): the whole thread again as JSON,
+  rewritten whole on any change. Since 2026-10-11 it is plain JSON on the
+  second line (a quarter smaller, and `tail` no longer reads it). What
+  remains: keep in it only what the Markdown cannot carry losslessly (author
+  IDs, message IDs, flags), or make the Markdown the parsed form, or move it
+  to a sibling `.state/<id>.json` the stage list names too.
 - **Report the swallowed prompt upstream (S, low).** claude-agent-acp 0.81.2
   loses a `session/prompt` sent while Claude Code runs a turn of its own
   (reproduction: a background `sleep`, then a prompt during the woken

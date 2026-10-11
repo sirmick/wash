@@ -333,8 +333,28 @@ func TestQAFileRoundTripsWithShortenedPaths(t *testing.T) {
 	if f.Thread.ID != "Q2" || f.Thread.Events[0].Body != "See ./a.go and ~/notes" || f.Authors["writer"] == "" {
 		t.Fatalf("%+v", f)
 	}
-	if _, err := DecodeQAFile(append([]byte(nil), b[:len(b)-10]...)); err == nil {
+	// The checkpoint is the second line, so `tail` never sees it, and it is
+	// plain JSON (WASH-R17); a damaged one is an error, not an empty thread.
+	lines := strings.SplitN(string(b), "\n", 3)
+	if !strings.HasPrefix(lines[1], "<!-- wash-qa-checkpoint-v3: {") || !strings.Contains(lines[1], `"id":"Q2"`) {
+		t.Fatalf("checkpoint line: %q", lines[1])
+	}
+	if _, err := DecodeQAFile([]byte(strings.Replace(string(b), " -->\n", "\n", 1))); err == nil {
 		t.Fatal("a truncated checkpoint decoded")
+	}
+	// A body holding "--" cannot close the comment, and reads back as written.
+	if err := qaChange(s, "writer-session", QAUpdate{ID: "Q2", Action: "reply", Body: "flags: --force --> yes"}); err != nil {
+		t.Fatal(err)
+	}
+	b, err = EncodeQAFile(QAFileFor(s.View("lead"), "Q2"), "/home/u/proj", "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line := strings.SplitN(string(b), "\n", 3)[1]; strings.Count(line, "-->") != 1 || !strings.HasSuffix(line, " -->") {
+		t.Fatalf("the checkpoint line closes itself early: %q", line)
+	}
+	if f, err := DecodeQAFile(b); err != nil || f.Thread.Events[len(f.Thread.Events)-1].Body != "flags: --force --> yes" {
+		t.Fatalf("%+v %v", f, err)
 	}
 	if _, err := DecodeQAFile([]byte("# notes\n")); err == nil || IsQAFile([]byte("# notes\n")) {
 		t.Fatal("someone's Markdown read as a thread")

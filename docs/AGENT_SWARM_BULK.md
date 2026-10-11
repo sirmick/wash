@@ -352,8 +352,10 @@ Wash owns durable QA threads and writes each to its own Markdown file. The sideb
 shows open threads, blocking state and next responder; selecting one opens the main-panel
 Questions tab at its heading. Configure `qa_dir` at setup (`".wash/qa"`, relative to the
 project root; created if missing). Each thread is `<qa_dir>/<thread>.md`: a marker line
-naming the thread, the thread as Markdown (every event with its ID and time), and a
-checkpoint (the thread as JSON). A file is written only when its thread changes, so a
+naming the thread, a checkpoint (the thread as one line of JSON, second in the file so
+`tail` reads only events), and the thread as Markdown (every event with its ID and time).
+`view=qa thread_id` takes `last:N` for the newest events without knowing an event id.
+A file is written only when its thread changes, so a
 resolved thread stops changing and a commit's diff shows only the threads it touched.
 Paths under the home directory and the project root are written as `~` and `.`. No agent
 edits those files or commits per reply.

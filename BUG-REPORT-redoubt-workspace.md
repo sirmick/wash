@@ -467,7 +467,7 @@ resumed from `.wash/` alone. Evidence is tool responses in this session; no daem
 
 ## WASH-R17 — A QA thread file is 60% base64 checkpoint
 
-Status: open. Context cost, frequent.
+Status: addressed 2026-10-11: the checkpoint is plain JSON on the file's second line, so `tail` reads only events; `view=qa thread_id` takes `last:N`. Keeping the checkpoint out of the readable file altogether is still open (AGENT_SWARM_BACKLOG.md).
 
 `.wash/qa/IPC3-wake-latency.md` is 195,102 bytes; its trailing
 `<!-- wash-qa-checkpoint-v2: … -->` blob is 115,876 of them (one line). Every thread file ends

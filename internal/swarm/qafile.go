@@ -11,16 +11,28 @@ import (
 )
 
 // A QA thread's file, <thread>.md in the workspace's QA directory: a marker
-// line naming the thread, the thread as Markdown for people and diffs, and a
-// checkpoint (the thread as JSON) from which a later workspace resumes it
-// without the store that wrote it. One file per thread, so a resolved thread
-// stops changing and a commit's diff shows only the threads it touched.
+// line naming the thread, a checkpoint (the thread as JSON) from which a
+// later workspace resumes it without the store that wrote it, and the
+// thread as Markdown for people and diffs. One file per thread, so a
+// resolved thread stops changing and a commit's diff shows only the threads
+// it touched.
+//
+// The checkpoint comes second, not last: the natural read of a thread is
+// its newest events, `tail`, and with the checkpoint at the end one
+// `tail -120` cost an orchestrator 128 KB of blob (Redoubt, WASH-R17). It is
+// plain JSON rather than base64, a quarter smaller and greppable, with `--`
+// written as `--` so no string can close the comment early.
 
 // QAFileMarker is a thread file's first line. A file without it is never
 // overwritten: it is someone's document, not Wash's.
 func QAFileMarker(id string) string { return "<!-- wash-qa-thread: " + id + " -->" }
 
-const qaFileCheckpoint = "<!-- wash-qa-checkpoint-v2: "
+const (
+	qaFileCheckpoint = "<!-- wash-qa-checkpoint-v3: "
+	// qaFileCheckpointV2 is the base64 checkpoint older files end with;
+	// still read, never written.
+	qaFileCheckpointV2 = "<!-- wash-qa-checkpoint-v2: "
+)
 
 // QAFile is what a thread file holds: the thread, the names of its authors,
 // and owner decisions still pending on it, which a resumed workspace asks
@@ -93,6 +105,11 @@ func EncodeQAFile(f QAFile, root, home string) ([]byte, error) {
 	}
 	var b bytes.Buffer
 	fmt.Fprintln(&b, QAFileMarker(q.ID))
+	payload, err := json.Marshal(f)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(&b, "%s%s -->\n", qaFileCheckpoint, strings.ReplaceAll(string(payload), "--", `--`))
 	name := func(id string) string {
 		if id == "human" {
 			return "Owner"
@@ -105,11 +122,6 @@ func EncodeQAFile(f QAFile, root, home string) ([]byte, error) {
 	if err := WriteQAThread(&b, q, name, false); err != nil {
 		return nil, err
 	}
-	payload, err := json.Marshal(f)
-	if err != nil {
-		return nil, err
-	}
-	fmt.Fprintf(&b, "\n%s%s -->\n", qaFileCheckpoint, base64.StdEncoding.EncodeToString(payload))
 	return b.Bytes(), nil
 }
 
@@ -122,17 +134,31 @@ func DecodeQAFile(b []byte) (*QAFile, error) {
 	if !IsQAFile(b) {
 		return nil, errors.New("not a Wash QA thread file")
 	}
-	i := bytes.LastIndex(b, []byte("\n"+qaFileCheckpoint))
-	if i < 0 {
+	var raw []byte
+	if i := bytes.Index(b, []byte("\n"+qaFileCheckpoint)); i >= 0 {
+		// v3: one line of JSON, right after the marker.
+		rest := b[i+1+len(qaFileCheckpoint):]
+		end := bytes.IndexByte(rest, '\n')
+		if end < 0 {
+			end = len(rest)
+		}
+		line := strings.TrimSpace(string(rest[:end]))
+		if !strings.HasSuffix(line, " -->") {
+			return nil, errors.New("incomplete QA checkpoint")
+		}
+		raw = []byte(strings.TrimSuffix(line, " -->"))
+	} else if i := bytes.LastIndex(b, []byte("\n"+qaFileCheckpointV2)); i >= 0 {
+		// v2: base64, the last thing in the file.
+		payload := strings.TrimSpace(string(b[i+1+len(qaFileCheckpointV2):]))
+		if !strings.HasSuffix(payload, " -->") {
+			return nil, errors.New("incomplete QA checkpoint")
+		}
+		var err error
+		if raw, err = base64.StdEncoding.DecodeString(strings.TrimSuffix(payload, " -->")); err != nil {
+			return nil, fmt.Errorf("invalid QA checkpoint: %w", err)
+		}
+	} else {
 		return nil, errors.New("QA thread file has no checkpoint")
-	}
-	payload := strings.TrimSpace(string(b[i+1+len(qaFileCheckpoint):]))
-	if !strings.HasSuffix(payload, " -->") {
-		return nil, errors.New("incomplete QA checkpoint")
-	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(payload, " -->"))
-	if err != nil {
-		return nil, fmt.Errorf("invalid QA checkpoint: %w", err)
 	}
 	var f QAFile
 	if err := json.Unmarshal(raw, &f); err != nil {
