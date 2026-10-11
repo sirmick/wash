@@ -337,9 +337,6 @@ bug list — all fully landed; see `git log` if you need their content.)
 - [ ] **`pkg/sdk/bus.go` struct→`map[string]any`→struct round-trip.**
   Collapse the BE↔FE decode path to a typed one. Architectural — touches
   every app's message decode.
-- [ ] **2.4 `bus.Emit` swallow annotations.** 16 bare `_ = bus.Emit(...)`
-  sites; either an `EmitLogged` helper or per-site "safe to drop" comments.
-  Low value, annotation-only.
 - [ ] **Workspace store retention (`internal/swarm/store.go`).** `State.Workspaces`
   and `State.Receipts` are append-only: an ended workspace keeps its whole
   message log (up to 10k × 32 KiB) forever, and `Store.change` clones,

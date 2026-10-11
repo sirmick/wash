@@ -163,7 +163,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 			// Match the item path format scanImages emits so the FE selects it.
 			payload["open"] = filepath.Join(abs, filepath.Base(open))
 		}
-		_ = bus.Emit("scan_ok", payload)
+		bus.EmitOrLog("scan_ok", payload)
 		return nil
 	})
 }

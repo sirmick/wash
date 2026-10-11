@@ -107,7 +107,7 @@ func registerFindHandlers(b *sdk.Bus) {
 				out["id"] = id
 			}
 			log.Printf("wash-edit: find root=%q files=%d truncated=%v cancelled=%v", abs, len(files), truncated, cancelled)
-			_ = bus.Emit("find_ok", out)
+			bus.EmitOrLog("find_ok", out)
 		}()
 		return nil
 	})

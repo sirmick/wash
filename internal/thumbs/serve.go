@@ -75,7 +75,7 @@ func serveFile(c *sdk.Conn, b *sdk.Bus, req getFileReq, abs string, fi os.FileIn
 		return
 	}
 	defer ch.Close()
-	_ = b.Emit("file_channel", map[string]any{
+	b.EmitOrLog("file_channel", map[string]any{
 		"req_id":     req.ReqID,
 		"channel_id": uint64(ch.ID()),
 		"mime":       contentType,
@@ -100,7 +100,7 @@ func emitDone(b *sdk.Bus, reqID, errMsg string) {
 	if errMsg != "" {
 		status = "failed"
 	}
-	_ = b.Emit("file_done", map[string]any{"req_id": reqID, "status": status, "error": errMsg})
+	b.EmitOrLog("file_done", map[string]any{"req_id": reqID, "status": status, "error": errMsg})
 }
 
 func streamPath(w io.Writer, abs string) error {

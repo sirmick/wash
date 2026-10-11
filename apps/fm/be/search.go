@@ -139,7 +139,7 @@ func runSearch(id, dir, query string, run *searchRun) {
 		if len(batch) == 0 {
 			return
 		}
-		_ = bus.Emit("search_batch", map[string]any{"search_id": id, "hits": batch})
+		bus.EmitOrLog("search_batch", map[string]any{"search_id": id, "hits": batch})
 		batch = make([]searchHit, 0, searchBatch)
 	}
 	stats := searchWalk(fmFS, dir, query, searchOpts{
@@ -153,7 +153,7 @@ func runSearch(id, dir, query string, run *searchRun) {
 	flush()
 	log.Printf("fm: search dir=%q q=%q hits=%d visited=%d skipped=%d truncated=%v cancelled=%v",
 		dir, query, stats.Hits, stats.Visited, stats.Skipped, stats.Truncated, stats.Cancelled)
-	_ = bus.Emit("search_done", map[string]any{
+	bus.EmitOrLog("search_done", map[string]any{
 		"search_id": id, "hits": stats.Hits, "visited": stats.Visited,
 		"skipped": stats.Skipped, "truncated": stats.Truncated, "cancelled": stats.Cancelled,
 	})

@@ -150,7 +150,7 @@ func runDownloadWriter(c *sdk.Conn, s *downloadSession) {
 		return
 	}
 	defer ch.Close()
-	_ = bus.Emit("download_channel", map[string]any{"download_id": s.id, "channel_id": uint64(ch.ID())})
+	bus.EmitOrLog("download_channel", map[string]any{"download_id": s.id, "channel_id": uint64(ch.ID())})
 
 	bw := bufio.NewWriterSize(ch, 64*1024)
 	var werr error
@@ -184,7 +184,7 @@ func finishDownload(c *sdk.Conn, s *downloadSession) {
 	// Bulk lane and the FE saves an empty/truncated blob (a real e2e flake:
 	// fm-download "exact bytes" returned ""). Sent at Bulk it rides the same
 	// FIFO lane behind the bytes, so ordering holds.
-	_ = bus.EmitBulk("download_done", map[string]any{"download_id": s.id, "status": status, "error": s.failedMsg()})
+	bus.EmitBulkOrLog("download_done", map[string]any{"download_id": s.id, "status": status, "error": s.failedMsg()})
 	switch status {
 	case "done":
 		c.Info("Download ready", s.filename)

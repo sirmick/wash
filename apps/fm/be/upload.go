@@ -263,7 +263,7 @@ func runUploadReader(c *sdk.Conn, s *uploadSession) {
 		return
 	}
 	defer ch.Close()
-	_ = bus.Emit("upload_channel", map[string]any{"upload_id": s.id, "channel_id": uint64(ch.ID())})
+	bus.EmitOrLog("upload_channel", map[string]any{"upload_id": s.id, "channel_id": uint64(ch.ID())})
 
 	br := bufio.NewReaderSize(ch, 64*1024)
 	var lastReported int64
@@ -374,7 +374,7 @@ func finishUpload(c *sdk.Conn, s *uploadSession) {
 	case "failed":
 		c.Fail("Upload failed", errors.New(s.failedMsg()))
 	}
-	_ = bus.Emit("upload_done", map[string]any{"upload_id": s.id, "status": status})
+	bus.EmitOrLog("upload_done", map[string]any{"upload_id": s.id, "status": status})
 }
 
 // abortUpload marks a session cancelled and closes its channel so the
@@ -390,7 +390,7 @@ func abortUpload(id string) {
 	if ch := s.cancel(); ch != nil {
 		_ = ch.Close()
 	}
-	_ = bus.Emit("upload_cancelled", map[string]any{"upload_id": id})
+	bus.EmitOrLog("upload_cancelled", map[string]any{"upload_id": id})
 }
 
 // reportJob upserts the session's state into wash-bulk as an external

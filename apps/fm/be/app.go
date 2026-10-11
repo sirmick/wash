@@ -140,7 +140,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// Use the bus.Emit path with the same shape the list handler produces;
 	// the FE treats unsolicited list_ok the same as a response.
 	if reply, err := listReplyFor("", initialPath()); err == nil {
-		_ = bus.Emit("list_ok", reply)
+		bus.EmitOrLog("list_ok", reply)
 	}
 
 	// Seed the FE's file-clipboard view from whatever's already on
@@ -664,7 +664,7 @@ func doClipboardFilesSet(c *sdk.Conn, id, op string, paths []string) (clipboardF
 	}
 	// Echo state to THIS fm's FE immediately — the setter doesn't
 	// receive its own OnClipboardChanged (router suppresses).
-	_ = bus.Emit("clipboard_files_state", map[string]any{"op": op, "paths": paths})
+	bus.EmitOrLog("clipboard_files_state", map[string]any{"op": op, "paths": paths})
 	return clipboardFilesSetResp{Op: op, Paths: paths}, nil
 }
 
@@ -676,7 +676,7 @@ func onClipboardChanged(c *sdk.Conn, mime string) {
 	}
 	// A non-files clipboard set means our previous cut/copy is no
 	// longer the active clipboard content. Tell the FE.
-	_ = bus.Emit("clipboard_files_state", map[string]any{"op": "", "paths": []string{}})
+	bus.EmitOrLog("clipboard_files_state", map[string]any{"op": "", "paths": []string{}})
 }
 
 // pushFilesClipboardToFE fetches the current router clipboard and,
@@ -695,7 +695,7 @@ func pushFilesClipboardToFE(c *sdk.Conn) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return
 	}
-	_ = bus.Emit("clipboard_files_state", map[string]any{"op": p.Op, "paths": p.Paths})
+	bus.EmitOrLog("clipboard_files_state", map[string]any{"op": p.Op, "paths": p.Paths})
 }
 
 // ----- helpers -----

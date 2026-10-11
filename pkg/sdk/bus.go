@@ -696,3 +696,21 @@ func mintReqID() (string, error) {
 	}
 	return "c-" + hex.EncodeToString(b[:]), nil
 }
+
+// EmitOrLog is Emit for a push with nobody to hand the error to — a
+// progress event from a goroutine, a state echo after a verb has already
+// replied. The only failures are a payload that will not encode and a
+// connection that is going away, and both are worth a line in the log
+// rather than a silent `_ =`.
+func (b *Bus) EmitOrLog(kind string, payload any) {
+	if err := b.Emit(kind, payload); err != nil {
+		log.Printf("bus: %s emit %s: %v", b.appID(), kind, err)
+	}
+}
+
+// EmitBulkOrLog is EmitOrLog with the Bulk class bit set unconditionally.
+func (b *Bus) EmitBulkOrLog(kind string, payload any) {
+	if err := b.EmitBulk(kind, payload); err != nil {
+		log.Printf("bus: %s emit %s: %v", b.appID(), kind, err)
+	}
+}

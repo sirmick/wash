@@ -195,7 +195,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		if info, err := os.Stat(abs); err == nil && info.IsDir() {
 			kind = "cmd.set_root"
 		}
-		_ = bus.Emit(kind, map[string]any{"path": abs})
+		bus.EmitOrLog(kind, map[string]any{"path": abs})
 	}
 }
 
@@ -298,7 +298,7 @@ func registerHandlers(b *sdk.Bus) {
 			log.Printf("edit: places show path=%q: %v", req.Path, err)
 			return
 		}
-		_ = bus.Emit("cmd.open_file", editorShowReq{Path: abs, Line: req.Line, Col: req.Col})
+		bus.EmitOrLog("cmd.open_file", editorShowReq{Path: abs, Line: req.Line, Col: req.Col})
 	})
 	// cmd.* — FE-owned passthrough. The bus pattern routes any kind
 	// starting with "cmd." into this single handler, which echoes the
@@ -464,11 +464,11 @@ func openTerm(c *sdk.Conn, replyID string, cols, rows uint16) {
 		if !found {
 			return
 		}
-		_ = bus.Emit("term.closed", termClosedEvent{ChannelID: uint64(s.ID()), Reason: reason})
+		bus.EmitOrLog("term.closed", termClosedEvent{ChannelID: uint64(s.ID()), Reason: reason})
 	})
 	if err != nil {
 		log.Printf("wash-edit term open: %v", err)
-		_ = bus.Emit("term.open_err", map[string]any{"id": replyID, "msg": err.Error()})
+		bus.EmitOrLog("term.open_err", map[string]any{"id": replyID, "msg": err.Error()})
 		return
 	}
 	termMu.Lock()
@@ -486,7 +486,7 @@ func openTerm(c *sdk.Conn, replyID string, cols, rows uint16) {
 	if replyID != "" {
 		out["id"] = replyID
 	}
-	_ = bus.Emit("term.opened", out)
+	bus.EmitOrLog("term.opened", out)
 }
 
 // doRead loads up to maxReadBytes of path. Returns sdk.Err with the

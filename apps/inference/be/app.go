@@ -201,6 +201,10 @@ func (s *server) emit(from wire.Sender, kind, id string, payload map[string]any,
 		s.emitFn(from, kind, id, payload, bulk)
 		return
 	}
+	// Best effort by design: the asker is another app's instance that may
+	// have closed mid-stream, and a push to a gone recipient has nobody
+	// left to tell. Not logged, because every stream ends this way for a
+	// window closed early.
 	if bulk {
 		_ = s.bus.EmitToBulk(recipient(from), kind, payload)
 	} else {
