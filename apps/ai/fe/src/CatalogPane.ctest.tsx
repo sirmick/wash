@@ -166,7 +166,8 @@ test('a new catalog needs an id, a name and an adapter per slot, or an adapter a
       small: { adapter: 'opencode', connection: 'opencode@openrouter', model: 'openrouter/small' },
     },
   }]]);
-  // An adapter's own list: no slots at all.
+  // An adapter's own list: no slots at all. Pointing it at Claude ticks
+  // "show thinking", as the built-in Anthropic catalog has it.
   fireEvent.click(getByTestId('ai-catalog-add'));
   fireEvent.input(getByTestId('ai-catalog-new-id'), { target: { value: 'work' } });
   fireEvent.input(getByTestId('ai-catalog-new-kind'), { target: { value: 'auto' } });
@@ -174,7 +175,7 @@ test('a new catalog needs an id, a name and an adapter per slot, or an adapter a
   fireEvent.input(getByTestId('ai-catalog-adapter-work'), { target: { value: 'claude' } });
   fireEvent.input(getByTestId('ai-catalog-connection-work'), { target: { value: 'claude@openrouter' } });
   fireEvent.click(getByTestId('ai-catalog-new-save'));
-  expect(saved[1]).toEqual(['work', { name: 'Work', adapter: 'claude', connection: 'claude@openrouter' }]);
+  expect(saved[1]).toEqual(['work', { name: 'Work', adapter: 'claude', connection: 'claude@openrouter', show_thinking: true }]);
 });
 
 test('a save outcome is shown on its card, an error as one; an invalid catalog still lists its slots', () => {
@@ -183,6 +184,28 @@ test('a save outcome is shown on its card, an error as one; an invalid catalog s
   expect(getByTestId('ai-catalog-result-anthropic-pro').textContent).toBe('slot small: unknown adapter');
   expect(getByTestId('ai-catalog-note-half').textContent).toContain('has no coding slot');
   expect((getByTestId('ai-catalog-adapter-half-coding') as HTMLSelectElement).value).toBe('');
+});
+
+// Whether a model's thinking opens by default is a box per slot (and one on
+// an auto catalog). It is saved only when on, and pointing a slot at Claude
+// ticks it, as the built-in Anthropic catalogs have it.
+test('show thinking is a box per slot, saved when on, ticked for Claude', () => {
+  const thinking: agentproto.CatalogView = { ...pro, slots: [slot('frontier', 'claude', 'opus', { show_thinking: true }), slot('coding', 'claude', 'sonnet'), slot('small', 'claude', 'haiku')] };
+  expect(specOf(draftOf(thinking)).slots?.frontier).toEqual({ adapter: 'claude', model: 'opus', show_thinking: true });
+  expect(specOf(draftOf(thinking)).slots?.coding).toEqual({ adapter: 'claude', model: 'sonnet' });
+  expect(specOf(draftOf({ ...auto, show_thinking: true }))).toEqual({ name: 'OpenRouter', adapter: 'opencode', connection: 'opencode@openrouter', show_thinking: true });
+
+  const { getByTestId, saved } = mount([thinking, mine]);
+  expect((getByTestId('ai-catalog-thinking-anthropic-pro-frontier') as HTMLInputElement).checked).toBe(true);
+  expect((getByTestId('ai-catalog-thinking-anthropic-pro-coding') as HTMLInputElement).checked).toBe(false);
+  fireEvent.click(getByTestId('ai-catalog-thinking-anthropic-pro-coding'));
+  fireEvent.click(getByTestId('ai-catalog-save-anthropic-pro'));
+  expect(saved[0][1].slots?.coding).toEqual({ adapter: 'claude', model: 'sonnet', show_thinking: true });
+
+  fireEvent.input(getByTestId('ai-catalog-adapter-mine-frontier'), { target: { value: 'claude' } });
+  expect((getByTestId('ai-catalog-thinking-mine-frontier') as HTMLInputElement).checked).toBe(true);
+  fireEvent.input(getByTestId('ai-catalog-adapter-mine-frontier'), { target: { value: 'opencode' } });
+  expect((getByTestId('ai-catalog-thinking-mine-frontier') as HTMLInputElement).checked).toBe(false);
 });
 
 test('draftOf and specOf round-trip a catalog, leaving empty fields out', () => {

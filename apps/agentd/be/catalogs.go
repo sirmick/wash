@@ -49,9 +49,12 @@ const defaultSlot = "frontier"
 type Catalog struct {
 	Name string `json:"name"`
 	// Adapter and Connection make an auto catalog; Slots a curated one.
-	Adapter    string                        `json:"adapter,omitempty"`
-	Connection string                        `json:"connection,omitempty"`
-	Slots      map[string]swarm.AgentProfile `json:"slots,omitempty"`
+	Adapter    string `json:"adapter,omitempty"`
+	Connection string `json:"connection,omitempty"`
+	// ShowThinking is an auto catalog's (its models all open their
+	// thinking by default); a curated catalog's slots say it each.
+	ShowThinking bool                          `json:"show_thinking,omitempty"`
+	Slots        map[string]swarm.AgentProfile `json:"slots,omitempty"`
 }
 
 func (c Catalog) auto() bool { return len(c.Slots) == 0 }
@@ -64,7 +67,7 @@ func (c Catalog) auto() bool { return len(c.Slots) == 0 }
 func loadCatalogs(pol agentpolicy.Policy) (map[string]Catalog, map[string]error) {
 	catalogs := map[string]Catalog{}
 	for id, c := range builtinLaunch.Catalogs {
-		catalogs[id] = Catalog{Name: c.Name, Adapter: c.Adapter, Connection: c.Connection, Slots: maps.Clone(c.Slots)}
+		catalogs[id] = Catalog{Name: c.Name, Adapter: c.Adapter, Connection: c.Connection, ShowThinking: c.ShowThinking, Slots: maps.Clone(c.Slots)}
 	}
 	bad := map[string]error{}
 	for id, raw := range pol.Catalogs {
@@ -150,7 +153,7 @@ func resolveCatalog(catalogs map[string]Catalog, bad map[string]error, id, model
 		if slices.Contains(slotNames, model) {
 			return swarm.AgentProfile{}, fmt.Errorf("catalog %q is %s's own model list and has no slots; name a model id it offers (view=state config_options), or a catalog with slots%s", id, c.Adapter, curatedFor(catalogs, bad, c.Adapter))
 		}
-		return swarm.AgentProfile{Provider: c.Adapter, Connection: c.Connection, Model: model}, nil
+		return swarm.AgentProfile{Provider: c.Adapter, Connection: c.Connection, Model: model, ShowThinking: c.ShowThinking}, nil
 	}
 	if model == "" {
 		model = defaultSlot
@@ -160,7 +163,7 @@ func resolveCatalog(catalogs map[string]Catalog, bad map[string]error, id, model
 		return s, nil
 	}
 	base := c.Slots[defaultSlot]
-	return swarm.AgentProfile{Provider: base.Provider, Connection: base.Connection, Model: model}, nil
+	return swarm.AgentProfile{Provider: base.Provider, Connection: base.Connection, Model: model, ShowThinking: base.ShowThinking}, nil
 }
 
 // curatedFor lists the valid catalogs with slots whose frontier slot runs
@@ -213,7 +216,7 @@ func publishCatalogs(pol agentpolicy.Policy, keys map[string]string) []agentprot
 		c := catalogs[id]
 		_, builtin := builtinLaunch.Catalogs[id]
 		_, inPolicy := pol.Catalogs[id]
-		v := agentproto.CatalogView{ID: id, Name: c.Name, Adapter: c.Adapter, Connection: c.Connection, Available: true, Builtin: builtin, Overridden: builtin && inPolicy}
+		v := agentproto.CatalogView{ID: id, Name: c.Name, Adapter: c.Adapter, Connection: c.Connection, ShowThinking: c.ShowThinking, Available: true, Builtin: builtin, Overridden: builtin && inPolicy}
 		if v.Name == "" {
 			v.Name = id
 		}
@@ -228,7 +231,7 @@ func publishCatalogs(pol agentpolicy.Policy, keys map[string]string) []agentprot
 			if !ok {
 				continue
 			}
-			sv := agentproto.SlotView{Slot: name, Adapter: s.Provider, Connection: s.Connection, Model: s.Model, Effort: s.Effort}
+			sv := agentproto.SlotView{Slot: name, Adapter: s.Provider, Connection: s.Connection, Model: s.Model, Effort: s.Effort, ShowThinking: s.ShowThinking}
 			if invalid {
 				sv.Note = v.Note
 				v.Slots = append(v.Slots, sv)
@@ -301,11 +304,11 @@ func startProfile(pol agentpolicy.Policy, req agentproto.AgentStart) (swarm.Agen
 // catalogFromSpec is a catalog as the Setup tab writes it, in the shape
 // catalogs.json and agents.json hold.
 func catalogFromSpec(spec agentproto.CatalogSpec) Catalog {
-	c := Catalog{Name: spec.Name, Adapter: spec.Adapter, Connection: spec.Connection}
+	c := Catalog{Name: spec.Name, Adapter: spec.Adapter, Connection: spec.Connection, ShowThinking: spec.ShowThinking}
 	if len(spec.Slots) > 0 {
 		c.Slots = map[string]swarm.AgentProfile{}
 		for id, s := range spec.Slots {
-			c.Slots[id] = swarm.AgentProfile{Provider: s.Adapter, Connection: s.Connection, Model: s.Model, Effort: s.Effort}
+			c.Slots[id] = swarm.AgentProfile{Provider: s.Adapter, Connection: s.Connection, Model: s.Model, Effort: s.Effort, ShowThinking: s.ShowThinking}
 		}
 	}
 	return c
@@ -549,6 +552,10 @@ func startSession(req agentproto.AgentStart, svcConn *sdk.Conn) (*hosted, error)
 	if req.Yolo {
 		h.setYolo(true, "launched with auto-approve on")
 	}
+	// How the transcript shows this model's thinking is the catalog's call
+	// until the Session menu says otherwise. Quiet: a display default is
+	// not a transcript event.
+	h.setShowThinking(p.ShowThinking)
 	// What the adapter reports now, not what was asked: the two are checked
 	// equal above, and this is the line to read when a session "ran on the
 	// wrong model".

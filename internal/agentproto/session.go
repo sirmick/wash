@@ -112,6 +112,13 @@ type AgentSetYolo struct {
 	On  bool   `json:"on"`
 }
 
+// AgentSetThinking opens or collapses the agent's thinking in the
+// transcript by default, for one session (Row.ShowThinking).
+type AgentSetThinking struct {
+	Key string `json:"key"`
+	On  bool   `json:"on"`
+}
+
 // AgentSetMode switches the agent's approval preset (Row.Modes).
 type AgentSetMode struct {
 	Key  string `json:"key"`
@@ -193,6 +200,8 @@ func init() {
 		Doc: "End a session and its adapter."})
 	register(Spec{Kind: "agent_set_yolo", Dir: Request, Payload: AgentSetYolo{}, From: "a frontend showing the session",
 		Doc: "Turn host-side auto-approval on or off for the session."})
+	register(Spec{Kind: "agent_set_thinking", Dir: Request, Payload: AgentSetThinking{}, From: "a frontend showing the session",
+		Doc: "Open or collapse the agent's thinking in the transcript by default, for this session."})
 	register(Spec{Kind: "agent_set_mode", Dir: Request, Payload: AgentSetMode{}, From: "a frontend showing the session",
 		Doc: "Switch the agent's approval preset. Refused for a reviewer."})
 	register(Spec{Kind: "agent_set_config", Dir: Request, Payload: AgentSetConfig{}, From: "a frontend showing the session",

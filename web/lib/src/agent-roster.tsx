@@ -299,8 +299,10 @@ const AskRow: Component<{
   ask: agentproto.Ask;
   onAnswer: (decision: 'allow' | 'deny', remember: boolean, scope?: 'workspace') => void;
 }> = (props) => {
+  // The subject, or when wash has none for this tool the agent's own words
+  // for the call; a bare tool name only when the adapter sent nothing.
   const what = () => {
-    const s = props.ask.subject ?? '';
+    const s = props.ask.subject || props.ask.detail || '';
     return s ? `${props.ask.tool}: ${s}` : props.ask.tool;
   };
   return (

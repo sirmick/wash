@@ -147,7 +147,7 @@ func workspaceApprovals(w *swarm.Workspace) []agentproto.WorkspaceApproval {
 	}
 	for _, ask := range svc.Snapshot().Asks {
 		if id := byKey[ask.RowKey]; id != "" {
-			out = append(out, agentproto.WorkspaceApproval{ID: ask.ID, MemberID: id, Tool: ask.Tool, Subject: ask.Subject})
+			out = append(out, agentproto.WorkspaceApproval{ID: ask.ID, MemberID: id, Tool: ask.Tool, Subject: ask.Subject, Detail: ask.Detail})
 		}
 	}
 	return out

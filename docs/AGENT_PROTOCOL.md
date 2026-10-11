@@ -119,6 +119,7 @@ edit by hand.
 | `agent_reattach` | [`AgentReattach`](#agentreattach) | any frontend |  | Open a window onto a running session. |
 | `agent_stop` | [`AgentStop`](#agentstop) | any frontend |  | End a session and its adapter. |
 | `agent_set_yolo` | [`AgentSetYolo`](#agentsetyolo) | a frontend showing the session |  | Turn host-side auto-approval on or off for the session. |
+| `agent_set_thinking` | [`AgentSetThinking`](#agentsetthinking) | a frontend showing the session |  | Open or collapse the agent's thinking in the transcript by default, for this session. |
 | `agent_set_mode` | [`AgentSetMode`](#agentsetmode) | a frontend showing the session |  | Switch the agent's approval preset. Refused for a reviewer. |
 | `agent_set_config` | [`AgentSetConfig`](#agentsetconfig) | a frontend showing the session |  | Change an agent setting (model, effort, …). A reviewer's mode cannot change. |
 | `agent_add_root` | [`AgentAddRoot`](#agentaddroot) | any frontend |  | Let the session reach another folder. |
@@ -274,6 +275,7 @@ AgentProfile describes launch settings and an optional enforced capability profi
 | `connection?` | `string` | Connection names how the provider is reached ("opencode@openrouter"); empty is the provider direct. agentd owns the list and checks it. |
 | `model?` | `string` |  |
 | `effort?` | `string` |  |
+| `show_thinking?` | `boolean` | ShowThinking opens the model's thinking in the transcript by default. A property of the model, like Effort: some adapters stream a short summary worth reading as it goes, others a raw stream that buries the reply. Display only; the session can be switched either way later. |
 | `configs?` | `Record<string, string>` |  |
 | `subagents?` | `string` | Subagents "deny" removes the provider's own subagent tool, so the member's work stays in its transcript and the workspace's accounting. "" and "allow" leave it available. |
 | `enforcement?` | `string` | Enforcement is what capability:"reviewer" requires of the adapter. "" ("advisory" too) launches on any provider and records in Member.Applied how far the read-only restriction actually held; "adapter" refuses to launch unless the adapter enforces it at a version Wash has verified. Wash is agnostic to the provider, so the advisory default is the rule and the strict value the exception. |
@@ -394,6 +396,15 @@ AgentSetMode switches the agent's approval preset (Row.Modes).
 | `key` | `string` |  |
 | `mode` | `string` |  |
 
+#### AgentSetThinking
+
+AgentSetThinking opens or collapses the agent's thinking in the transcript by default, for one session (Row.ShowThinking).
+
+| Field | Type | |
+|---|---|---|
+| `key` | `string` |  |
+| `on` | `boolean` |  |
+
 #### AgentSetYolo
 
 AgentSetYolo turns host-side auto-approval on or off for one session.
@@ -469,6 +480,7 @@ Ask is one question waiting for a human.
 | `agent` | `string` | Agent / Tool / Subject are what the human reads: "claude wants to run `git push origin main`". |
 | `tool` | `string` |  |
 | `subject?` | `string` |  |
+| `detail?` | `string` | Detail is the agent's own words for the call — its title, or its raw input — for when Subject is empty because wash does not know the tool (an ACP kind it cannot map, an MCP tool). It is shown, never matched: no rule is written from it. |
 | `cwd?` | `string` |  |
 | `dir?` | `string` |  |
 | `suggested_rule?` | `string` | SuggestedRule is what "Always allow" would write. Shown ON the button — what you clicked is what gets saved. |
@@ -515,6 +527,7 @@ CatalogSpec is a catalog as written: a name and either an adapter (an auto catal
 | `name` | `string` |  |
 | `adapter?` | `string` |  |
 | `connection?` | `string` |  |
+| `show_thinking?` | `boolean` | ShowThinking is an auto catalog's: open the model's thinking by default. A curated catalog says it per slot. |
 | `slots?` | `Record<string, SlotSpec>` | Slots is keyed by slot name (frontier, coding, small); all three are required for a curated catalog, and none is given for an auto one. |
 
 #### CatalogView
@@ -527,6 +540,7 @@ CatalogView is a catalog as the launcher and the Setup tab show it.
 | `name` | `string` |  |
 | `adapter?` | `string` | Adapter and Connection are an auto catalog's: the adapter whose models it lists, reached direct or through the connection. |
 | `connection?` | `string` |  |
+| `show_thinking?` | `boolean` | ShowThinking is an auto catalog's: sessions of it open the model's thinking by default. A curated catalog's slots each carry their own. |
 | `available` | `boolean` | Available is every slot (or the adapter) startable here; Note says why not. |
 | `note?` | `string` |  |
 | `slots?` | `SlotView[]` |  |
@@ -981,6 +995,7 @@ Row is one hosted agent session.
 | `mode?` | `string` | Mode is the agent's active approval preset and Modes what it offers (docs/AGENT_APP.md §9). Empty for an agent with no such notion. |
 | `modes?` | `Mode[]` |  |
 | `yolo?` | `boolean` | Yolo is wash answering this session's permission questions with "allow" instead of asking. Host-side and per-session; it is on the row so every surface that shows the session can SAY so — an auto-approving agent that looks like any other is the failure mode this flag exists to prevent. |
+| `show_thinking?` | `boolean` | ShowThinking is whether the transcript opens the agent's thinking by default. Set at launch from the catalog (a property of the model), switched per session from the Session menu (agent_set_thinking). On the row so every window showing the session agrees. |
 | `configs?` | `Config[]` | Configs is the agent's generic settings block (model, reasoning effort, plan mode…). Commands are its own slash commands. |
 | `commands?` | `Command[]` |  |
 | `detached?` | `boolean` | Detached marks a session still running with no window pointing at it — the sidebar offers Reattach rather than focus. |
@@ -1097,10 +1112,11 @@ SlotSpec is one slot as written: a model on an adapter.
 | `connection?` | `string` |  |
 | `model?` | `string` |  |
 | `effort?` | `string` |  |
+| `show_thinking?` | `boolean` |  |
 
 #### SlotView
 
-SlotView is one slot of a curated catalog: a model on an adapter, with its effort.
+SlotView is one slot of a curated catalog: a model on an adapter, with its effort and whether its thinking is shown.
 
 | Field | Type | |
 |---|---|---|
@@ -1109,6 +1125,7 @@ SlotView is one slot of a curated catalog: a model on an adapter, with its effor
 | `connection?` | `string` |  |
 | `model?` | `string` |  |
 | `effort?` | `string` |  |
+| `show_thinking?` | `boolean` |  |
 | `available` | `boolean` |  |
 | `note?` | `string` |  |
 
@@ -1267,6 +1284,7 @@ WorkspaceApproval is a member's question waiting for the human.
 | `member_id` | `string` |  |
 | `tool` | `string` |  |
 | `subject` | `string` |  |
+| `detail?` | `string` | Detail stands in for Subject when it is empty (Ask.Detail). |
 
 #### WorkspacePatch
 
@@ -1340,5 +1358,6 @@ WorkspaceTranscript is a member's recent transcript: the selected member's previ
 | `asks?` | `Ask[]` | Asks are the member's questions waiting for the human, when it runs. |
 | `questions?` | `PendingQuestion[]` | Questions are the member's question sets waiting for the human. |
 | `note?` | `string` | Note says what the transcript is when it is not live: an ended member's archive. |
+| `show_thinking?` | `boolean` | ShowThinking is the member session's Row.ShowThinking, so the member pane opens its thinking the way the Agent window would. |
 
 <!-- END GENERATED -->

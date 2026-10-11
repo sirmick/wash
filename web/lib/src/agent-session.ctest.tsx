@@ -43,6 +43,30 @@ test('thoughts collapse, count their characters, and stay open as they stream', 
   expect(getByTestId('agent-thought-chars').textContent).toBe('· 6 chars');
 });
 
+// The session says whether thinking opens by default (the catalog's choice
+// for the model, or the Session menu's). A panel closed by hand stays
+// closed while the default holds; switching the default resets every panel
+// to it, since the switch is a statement about the whole transcript.
+test('thoughts open by default when the session says so, and follow a switch', () => {
+  const [status, setStatus] = createSignal<{ showThinking?: boolean }>({ showThinking: true });
+  const events: agentproto.Event[] = [
+    { seq: 1, kind: 'thought', text: 'one', at_ms: 0 },
+    { seq: 2, kind: 'thought', text: 'two', at_ms: 0 },
+  ];
+  const { getAllByTestId } = render(() => <AgentSession events={() => events} status={status} />);
+  const panels = () => getAllByTestId('agent-thought') as HTMLDetailsElement[];
+  expect(panels().map((p) => p.open)).toEqual([true, true]);
+
+  panels()[0].open = false;
+  fireEvent(panels()[0], new Event('toggle'));
+  expect(panels().map((p) => p.open)).toEqual([false, true]);
+
+  setStatus({ showThinking: false });
+  expect(panels().map((p) => p.open)).toEqual([false, false]);
+  setStatus({ showThinking: true });
+  expect(panels().map((p) => p.open)).toEqual([true, true]);
+});
+
 // Older transcripts hold a per-call yolo approval row; it is not shown.
 test('routine yolo approvals are hidden, other verdicts shown', () => {
   const events: agentproto.Event[] = [

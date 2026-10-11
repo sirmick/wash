@@ -13,7 +13,7 @@
 
 import { QuestionPanel, type QuestionPanelProps } from './question-panel';
 import type * as agentproto from './agent-protocol.gen';
-import { For, Show, createEffect, createMemo, createSignal, onMount } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, on, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { Tab } from './tab';
@@ -94,6 +94,10 @@ export interface AgentStatus {
    *  yolo). Rendered as a standing badge, never as a quiet flag: an agent
    *  nobody is vetting must not look like one that is being watched. */
   yolo?: boolean;
+  /** the transcript opens the agent's thinking by default (Row.ShowThinking):
+   *  the catalog's choice for the model, or the Session menu's. A panel the
+   *  person has opened or closed by hand keeps its own state. */
+  showThinking?: boolean;
   /** work the session left running in the background (a Bash run in the
    *  background): while it runs the session is waiting on it, not done. */
   background?: string;
@@ -639,8 +643,15 @@ const AskRow: Component<{
       padding: `${tokens.spaceMd}px`,
     }}
   >
+    {/* The subject is what a rule matches, and is empty for a tool wash does
+        not know (Acp:other, an MCP tool). Then the agent's own words for the
+        call stand in, with the tool name beside them so the "always" button
+        below still reads as the rule it writes. */}
     <div style={{ flex: '1 1 100%', font: tokens.type.monoMd, color: tokens.fg, 'word-break': 'break-all' }}>
-      {p.ask.subject || p.ask.tool}
+      {p.ask.subject || p.ask.detail || p.ask.tool}
+      <Show when={!p.ask.subject && p.ask.detail}>
+        <span style={{ font: tokens.type.monoSm, opacity: 0.6 }}> · {p.ask.tool}</span>
+      </Show>
     </div>
     <button
       data-wash-hit
@@ -716,19 +727,25 @@ function askBtn(bg: string, fg: string): JSX.CSSProperties {
 }
 
 export const AgentSession: Component<AgentSessionProps> = (props) => {
-  // Which thinking panels are open, by event seq. Held here, not in the
-  // row: every streamed chunk replaces the event object and so remounts
-  // its row, which would snap an opened panel shut on the next chunk.
-  const [openThoughts, setOpenThoughts] = createSignal<ReadonlySet<number>>(new Set());
+  // Which thinking panels the person has opened or closed by hand, by event
+  // seq; every other panel follows the session's default (status
+  // showThinking). Held here, not in the row: every streamed chunk replaces
+  // the event object and so remounts its row, which would snap an opened
+  // panel shut on the next chunk.
+  const thoughtsDefault = () => !!props.status?.().showThinking;
+  const [thoughtOverrides, setThoughtOverrides] = createSignal<ReadonlyMap<number, boolean>>(new Map());
+  const thoughtOpen = (seq: number) => thoughtOverrides().get(seq) ?? thoughtsDefault();
   const setThoughtOpen = (seq: number, open: boolean) => {
-    if (openThoughts().has(seq) === open) return;
-    const next = new Set(openThoughts());
-    if (open) next.add(seq);
-    else next.delete(seq);
-    setOpenThoughts(next);
+    if (thoughtOpen(seq) === open) return;
+    const next = new Map(thoughtOverrides());
+    next.set(seq, open);
+    setThoughtOverrides(next);
   };
+  // Switching the default (the Session menu) is a statement about the whole
+  // transcript: the panels opened or closed by hand follow it too.
+  createEffect(on(thoughtsDefault, () => setThoughtOverrides(new Map()), { defer: true }));
   // Routine inbox messages that have been opened, by "<seq>:<index>" — the
-  // same reasoning as openThoughts.
+  // same reasoning as thoughtOverrides.
   const [openInbox, setOpenInbox] = createSignal<ReadonlySet<string>>(new Set());
   const setInboxOpen = (key: string, open: boolean) => {
     if (openInbox().has(key) === open) return;
@@ -1216,7 +1233,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             </Show>
 
             <Show when={e.kind === 'thought'}>
-              <ThoughtRow e={e} open={openThoughts().has(e.seq)} onToggle={(open) => setThoughtOpen(e.seq, open)} />
+              <ThoughtRow e={e} open={thoughtOpen(e.seq)} onToggle={(open) => setThoughtOpen(e.seq, open)} />
             </Show>
             <Show
               when={e.kind !== 'tool' && e.kind !== 'image' && e.kind !== 'terminal' && e.kind !== 'decision' && e.kind !== 'thought'}

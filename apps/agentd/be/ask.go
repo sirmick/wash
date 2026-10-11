@@ -125,11 +125,23 @@ type pending struct {
 // it an id.
 type askSpec struct {
 	Agent, Tool, Subject, Cwd string
-	RowKey                    string
+	// Detail is what the person reads when Subject is empty (askDetail).
+	Detail string
+	RowKey string
 	// Workspace is resolved when the question is ASKED, not when it is
 	// answered: the member that asked may have been ended or replaced by
 	// then, and the answer must still land on the right table.
 	WorkspaceID, WorkspaceName string
+}
+
+// askWhat is the one line that says what a question is about: the subject a
+// rule would match, or failing that the adapter's own description. Every
+// place that writes the question for a person (journal, toast) reads this.
+func askWhat(subject, detail string) string {
+	if subject != "" {
+		return subject
+	}
+	return detail
 }
 
 // askScopeWorkspace is the answer's name for "remember this for every member
@@ -311,6 +323,7 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 				Agent:         spec.Agent,
 				Tool:          spec.Tool,
 				Subject:       spec.Subject,
+				Detail:        spec.Detail,
 				Cwd:           spec.Cwd,
 				Dir:           dirLabel(spec.Cwd),
 				SuggestedRule: agentpolicy.SuggestRule(spec.Tool, spec.Subject, spec.Cwd),
@@ -337,7 +350,7 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 		_ = reply(DecisionDefer, ReasonTooMany)
 		return false
 	}
-	log.Printf("agentd: ask row=%s agent=%s tool=%s subject=%q ttl=%s", spec.RowKey, spec.Agent, spec.Tool, spec.Subject, soft)
+	log.Printf("agentd: ask row=%s agent=%s tool=%s subject=%q detail=%q ttl=%s", spec.RowKey, spec.Agent, spec.Tool, spec.Subject, spec.Detail, soft)
 	// Toast AFTER the state push, and only here: this is the one path
 	// where a question actually reaches a human, so it is the one place a
 	// toast is honest. The deferred paths above answered without ever
@@ -349,7 +362,7 @@ func enqueueAsk(spec askSpec, reply replyFn) bool {
 	// extension would be a machine nagging about its own patience.
 	notifyAsk(queued)
 	if h := lookupHosted(spec.RowKey); h != nil {
-		h.journal("agent.ask", spec.Tool+": "+spec.Subject)
+		h.journal("agent.ask", spec.Tool+": "+askWhat(spec.Subject, spec.Detail))
 	}
 	return true
 }

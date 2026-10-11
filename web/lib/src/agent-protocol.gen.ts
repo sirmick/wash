@@ -138,6 +138,13 @@ export interface AgentProfile {
   connection?: string;
   model?: string;
   effort?: string;
+  /**
+   * ShowThinking opens the model's thinking in the transcript by default.
+   * A property of the model, like Effort: some adapters stream a short
+   * summary worth reading as it goes, others a raw stream that buries the
+   * reply. Display only; the session can be switched either way later.
+   */
+  show_thinking?: boolean;
   configs?: Record<string, string>;
   /**
    * Subagents "deny" removes the provider's own subagent tool, so the
@@ -289,6 +296,16 @@ export interface AgentSetMode {
   mode: string;
 }
 
+/**
+ * AgentSetThinking opens or collapses the agent's thinking in the
+ * transcript by default, for one session (Row.ShowThinking).
+ */
+export interface AgentSetThinking {
+  kind: 'agent_set_thinking';
+  key: string;
+  on: boolean;
+}
+
 /** AgentSetYolo turns host-side auto-approval on or off for one session. */
 export interface AgentSetYolo {
   kind: 'agent_set_yolo';
@@ -415,6 +432,13 @@ export interface Ask {
   agent: string;
   tool: string;
   subject?: string;
+  /**
+   * Detail is the agent's own words for the call — its title, or its raw
+   * input — for when Subject is empty because wash does not know the tool
+   * (an ACP kind it cannot map, an MCP tool). It is shown, never matched:
+   * no rule is written from it.
+   */
+  detail?: string;
   cwd?: string;
   dir?: string;
   /**
@@ -481,6 +505,11 @@ export interface CatalogSpec {
   adapter?: string;
   connection?: string;
   /**
+   * ShowThinking is an auto catalog's: open the model's thinking by
+   * default. A curated catalog says it per slot.
+   */
+  show_thinking?: boolean;
+  /**
    * Slots is keyed by slot name (frontier, coding, small); all three are
    * required for a curated catalog, and none is given for an auto one.
    */
@@ -503,6 +532,11 @@ export interface CatalogView {
    */
   adapter?: string;
   connection?: string;
+  /**
+   * ShowThinking is an auto catalog's: sessions of it open the model's
+   * thinking by default. A curated catalog's slots each carry their own.
+   */
+  show_thinking?: boolean;
   /**
    * Available is every slot (or the adapter) startable here; Note says
    * why not.
@@ -1149,6 +1183,13 @@ export interface Row {
    */
   yolo?: boolean;
   /**
+   * ShowThinking is whether the transcript opens the agent's thinking by
+   * default. Set at launch from the catalog (a property of the model),
+   * switched per session from the Session menu (agent_set_thinking). On
+   * the row so every window showing the session agrees.
+   */
+  show_thinking?: boolean;
+  /**
    * Configs is the agent's generic settings block (model, reasoning
    * effort, plan mode…). Commands are its own slash commands.
    */
@@ -1367,18 +1408,20 @@ export interface SessionState {
 /**
  * SlotSpec is one slot as written: a model on an adapter. Effort and
  * Connection may be empty (the adapter's default effort; the adapter
- * direct).
+ * direct). ShowThinking opens the model's thinking in the transcript.
  */
 export interface SlotSpec {
   adapter: string;
   connection?: string;
   model?: string;
   effort?: string;
+  show_thinking?: boolean;
 }
 
 /**
  * SlotView is one slot of a curated catalog: a model on an adapter, with
- * its effort. Nothing about permissions (see catalogs.go).
+ * its effort and whether its thinking is shown. Nothing about permissions
+ * (see catalogs.go).
  */
 export interface SlotView {
   slot: string;
@@ -1386,6 +1429,7 @@ export interface SlotView {
   connection?: string;
   model?: string;
   effort?: string;
+  show_thinking?: boolean;
   available: boolean;
   note?: string;
 }
@@ -1661,6 +1705,8 @@ export interface WorkspaceApproval {
   member_id: string;
   tool: string;
   subject: string;
+  /** Detail stands in for Subject when it is empty (Ask.Detail). */
+  detail?: string;
 }
 
 /**
@@ -1759,6 +1805,11 @@ export interface WorkspaceTranscript {
    * member's archive.
    */
   note?: string;
+  /**
+   * ShowThinking is the member session's Row.ShowThinking, so the member
+   * pane opens its thinking the way the Agent window would.
+   */
+  show_thinking?: boolean;
 }
 
 /** Every request, discriminated by kind. */
@@ -1785,6 +1836,7 @@ export type AgentdRequest =
   | AgentReattach
   | AgentStop
   | AgentSetYolo
+  | AgentSetThinking
   | AgentSetMode
   | AgentSetConfig
   | AgentAddRoot

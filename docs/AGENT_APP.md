@@ -93,7 +93,10 @@ One tab for the machine's agent configuration
 - Composer: slash commands, Attach… (sent as `resource_link`), pasted
   images, drafts sent from other apps (`agent_draft`; wash-edit's "send
   selection to agent").
-- Status bar: mode, usage, background tasks. Session menu: yolo, rename,
+- Status bar: mode, usage, background tasks. Session menu: yolo, Show /
+  Hide thinking (whether the transcript opens the agent's thinking by
+  default; the catalog chooses per model, `show_thinking`, on for the
+  built-in Anthropic catalogs), rename,
   Show terminal / file manager / editor (this window's bound ones,
   [PLACES.md](PLACES.md)), and every setting the adapter exposes (model,
   effort, …) as a pop-out picker.

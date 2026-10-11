@@ -44,8 +44,9 @@ arrived. A member launched without a task is told to wait for its assignment.
 
 API 3.3 adds catalogs (renamed from stacks and tiers on 2026-09-25). A catalog
 (apps/agentd/be/catalogs.go) is a named, global source of models: an adapter's own list, or
-three slots, `frontier`, `coding` and `small`, each an adapter, connection, model and effort,
-and nothing else; the launcher starts sessions from them. A workspace takes its `catalog` from
+three slots, `frontier`, `coding` and `small`, each an adapter, connection, model, effort and
+whether the model's thinking is shown open in the transcript (`show_thinking`), and nothing
+else; the launcher starts sessions from them. A workspace takes its `catalog` from
 the orchestrator's own session (the catalog it was started from, or its adapter's own list),
 and `workspace_configure.catalog` changes it for later launches. A member definition gives
 `"model":"coding"` (a slot) or a model id, never a marketing name: the slot is resolved into the

@@ -247,6 +247,11 @@ func Overlay(base, explicit AgentProfile) (AgentProfile, error) {
 	if explicit.Effort != "" {
 		result.Effort = explicit.Effort
 	}
+	// A bool cannot say "unset", so an explicit profile can only switch
+	// thinking ON over the catalog's choice; off is the catalog's.
+	if explicit.ShowThinking {
+		result.ShowThinking = true
+	}
 	if explicit.Subagents != "" {
 		result.Subagents = explicit.Subagents
 	}

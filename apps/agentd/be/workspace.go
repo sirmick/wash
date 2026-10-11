@@ -558,6 +558,8 @@ func (ws *workspaceService) spawn(ctx context.Context, parent *hosted, id string
 		}
 		child.setYolo(true, why)
 	}
+	// The slot's choice for how the member pane shows this model's thinking.
+	child.setShowThinking(settings.ShowThinking)
 	var initialAssignment *swarm.Assignment
 	err = ws.store.Mutate(parent.sessionID, false, func(w *swarm.Workspace, _ *swarm.Member) error {
 		if w.State != "active" || w.ID != workspaceID {
@@ -1049,7 +1051,7 @@ func (ws *workspaceService) inspect(h *hosted, raw json.RawMessage) (*agentproto
 				}
 			}
 		}
-		return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Asks: pending, Questions: questionsFor(target.key, m.ID)}, nil
+		return &agentproto.WorkspaceTranscript{MemberID: m.ID, Events: events, Asks: pending, Questions: questionsFor(target.key, m.ID), ShowThinking: target.snapshot().showThinking}, nil
 	}
 	events, err := loadTranscript(m.Session)
 	if err != nil {

@@ -20,6 +20,7 @@
 package agentd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
@@ -28,6 +29,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sirmick/wash/internal/acp"
 	"github.com/sirmick/wash/internal/agentpolicy"
@@ -124,6 +126,11 @@ type hosted struct {
 	// A standing "never let anything run rm -rf" is a decision the user
 	// already made, and a convenience toggle must not quietly reverse it.
 	yolo bool
+	// showThinking is whether the transcript opens this session's thinking
+	// by default: the catalog's choice for the model at launch, switched
+	// from the Session menu after. Display only, held here rather than in
+	// a window so every window showing the session agrees.
+	showThinking bool
 	// configs is the agent's generic settings block — model, reasoning
 	// effort, plan mode, and whatever an adapter adds. One shape, so one
 	// control renders all of them.
@@ -677,6 +684,7 @@ func (h *hosted) setState(state, reason string) {
 type rowSnapshot struct {
 	state, reason     string
 	detached, yolo    bool
+	showThinking      bool
 	queued            int
 	used, size        int64
 	title, agentTitle string
@@ -694,8 +702,9 @@ func (h *hosted) snapshot() rowSnapshot {
 	return rowSnapshot{
 		state: h.rowState, reason: h.rowReason,
 		detached: h.detached, yolo: h.yolo,
-		queued: len(h.pending),
-		used:   h.used, size: h.size,
+		showThinking: h.showThinking,
+		queued:       len(h.pending),
+		used:         h.used, size: h.size,
 		title: h.shownTitleLocked(), agentTitle: h.title,
 		mode:       h.mode,
 		modes:      append([]acp.SessionMode(nil), h.modes...),
@@ -746,6 +755,7 @@ func (h *hosted) publishRow() {
 		r.Title = snap.title
 		r.Mode, r.Modes = snap.mode, publicModes(snap.modes)
 		r.Yolo = snap.yolo
+		r.ShowThinking = snap.showThinking
 		r.Configs = publicConfigs(snap.configs)
 		r.Commands = publicCommands(snap.commands)
 		r.Background = snap.background
@@ -1097,7 +1107,7 @@ func (h *hosted) RequestPermission(ctx context.Context, req acp.RequestPermissio
 	}
 
 	subject := agentpolicy.ToolSubject(preq.ToolName, preq.ToolInput)
-	v := h.askHuman(ctx, preq.ToolName, subject)
+	v := h.askHuman(ctx, preq.ToolName, subject, askDetail(preq.ToolName, req.ToolCall))
 	switch v.decision {
 	case DecisionAllow:
 		return pick(req.Options, acp.OptionAllowOnce, acp.OptionAllowAlways), nil
@@ -1135,7 +1145,10 @@ func (h *hosted) awaitingHuman(reason string) (done func()) {
 // approval above, and "this path is outside every folder you gave me"
 // (roots.go). Returns the verdict rather than an ACP response, because
 // the two callers answer their agents in different protocols.
-func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
+//
+// subject is what a rule matches and is empty for a tool wash does not know;
+// detail is what the person reads when it is (askDetail), and may be "".
+func (h *hosted) askHuman(ctx context.Context, tool, subject, detail string) verdict {
 	defer h.awaitingHuman("permission")()
 
 	answer := make(chan verdict, 1)
@@ -1144,6 +1157,7 @@ func (h *hosted) askHuman(ctx context.Context, tool, subject string) verdict {
 		Agent:         h.agent,
 		Tool:          tool,
 		Subject:       subject,
+		Detail:        detail,
 		Cwd:           h.cwd,
 		RowKey:        h.key,
 		WorkspaceID:   workspaceID,
@@ -1201,7 +1215,7 @@ func (h *hosted) askOutside(ctx context.Context, tool, path string) bool {
 		h.decision(DecisionAllow, "yolo, outside this session's folders", tool, path)
 		return true
 	}
-	v := h.askHuman(ctx, tool, path+" (outside this session's folders)")
+	v := h.askHuman(ctx, tool, path+" (outside this session's folders)", "")
 	if v.decision == DecisionAllow {
 		h.decision(DecisionAllow, "allowed once, outside this session's folders", tool, path)
 		return true
@@ -1361,6 +1375,43 @@ func subjectKeyFor(tool string) string {
 	return "command"
 }
 
+// askDetail is what the prompt shows when the subject is empty: the
+// adapter's own words for the call. ToolSubject is deliberately blank for a
+// tool wash does not know (so no pattern rule can match it), but a person
+// still has to know what they are approving. Observed: every prompt from an
+// adapter that sends kind "other" read as a bare "Acp:other".
+//
+// The title ("Run git push", an MCP tool's description) when the adapter
+// sends one that says more than the tool's name; otherwise the raw input,
+// compacted and cut, which is the real thing. Display only — never matched.
+func askDetail(tool string, tc acp.ToolCall) string {
+	const maxDetail = 240
+	if t := strings.TrimSpace(tc.Title); t != "" && t != tool {
+		return cutRunes(t, maxDetail)
+	}
+	if len(tc.RawInput) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, tc.RawInput); err != nil {
+		return ""
+	}
+	in := buf.String()
+	if in == "{}" || in == "null" || in == `""` {
+		return ""
+	}
+	return cutRunes(in, maxDetail)
+}
+
+// cutRunes ends s at n runes with an ellipsis, on a rune boundary.
+func cutRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n-1]) + "…"
+}
+
 // hostedPolicy reads the rule file fresh. One stat per permission request
 // is not a cost worth a stale answer — this is the moment a user is
 // watching for a rule to take effect (AGENT_TERM §9.6).
@@ -1501,6 +1552,16 @@ func registerACPHandlers(bus *sdk.Bus, svcConn *sdk.Conn) {
 	sdk.HandleFromVoid(bus, "agent_set_yolo", func(_ *sdk.Conn, _ string, req agentproto.AgentSetYolo, _ wire.Sender) error {
 		if h := lookupHosted(req.Key); h != nil {
 			h.toggleYolo(req.On)
+		}
+		return nil
+	})
+
+	// agent_set_thinking: open or collapse this session's thinking in the
+	// transcript by default. Per session and in memory, like yolo; the
+	// catalog's choice is what a fresh launch gets.
+	sdk.HandleFromVoid(bus, "agent_set_thinking", func(_ *sdk.Conn, _ string, req agentproto.AgentSetThinking, _ wire.Sender) error {
+		if h := lookupHosted(req.Key); h != nil {
+			h.setShowThinking(req.On)
 		}
 		return nil
 	})
@@ -1774,6 +1835,19 @@ func (h *hosted) setYolo(on bool, why string) bool {
 	h.note(msg)
 	h.publishRow()
 	return true
+}
+
+// setShowThinking sets whether the transcript opens this session's thinking
+// by default, and tells every window showing it. Nothing in the transcript:
+// unlike yolo it changes what is seen, not what runs.
+func (h *hosted) setShowThinking(on bool) {
+	h.mu.Lock()
+	changed := h.showThinking != on
+	h.showThinking = on
+	h.mu.Unlock()
+	if changed {
+		h.publishRow()
+	}
 }
 
 // toggleYolo is the human's switch. A workspace member's answer is also

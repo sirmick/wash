@@ -5,21 +5,21 @@
     "claude@openrouter": {"adapter": "claude", "env": {"ANTHROPIC_BASE_URL": "https://openrouter.ai/api", "ANTHROPIC_API_KEY": ""}, "key": "openrouter", "key_env": ["ANTHROPIC_AUTH_TOKEN"]}
   },
   "catalogs": {
-    "anthropic": {"name": "Anthropic", "adapter": "claude"},
+    "anthropic": {"name": "Anthropic", "adapter": "claude", "show_thinking": true},
     "anthropic-pro": {
       "name": "Anthropic pro",
       "slots": {
-        "frontier": {"provider": "claude", "model": "claude-fable-5-1[1m]"},
-        "coding": {"provider": "claude", "model": "opus[1m]"},
-        "small": {"provider": "claude", "model": "sonnet"}
+        "frontier": {"provider": "claude", "model": "claude-fable-5-1[1m]", "show_thinking": true},
+        "coding": {"provider": "claude", "model": "opus[1m]", "show_thinking": true},
+        "small": {"provider": "claude", "model": "sonnet", "show_thinking": true}
       }
     },
     "anthropic-budget": {
       "name": "Anthropic budget",
       "slots": {
-        "frontier": {"provider": "claude", "model": "opus[1m]"},
-        "coding": {"provider": "claude", "model": "sonnet"},
-        "small": {"provider": "claude", "model": "sonnet"}
+        "frontier": {"provider": "claude", "model": "opus[1m]", "show_thinking": true},
+        "coding": {"provider": "claude", "model": "sonnet", "show_thinking": true},
+        "small": {"provider": "claude", "model": "sonnet", "show_thinking": true}
       }
     },
     "openai": {"name": "OpenAI", "adapter": "codex"},

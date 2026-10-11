@@ -109,6 +109,11 @@ type Row struct {
 	// auto-approving agent that looks like any other is the failure mode
 	// this flag exists to prevent.
 	Yolo bool `json:"yolo,omitempty"`
+	// ShowThinking is whether the transcript opens the agent's thinking by
+	// default. Set at launch from the catalog (a property of the model),
+	// switched per session from the Session menu (agent_set_thinking). On
+	// the row so every window showing the session agrees.
+	ShowThinking bool `json:"show_thinking,omitempty"`
 	// Configs is the agent's generic settings block (model, reasoning
 	// effort, plan mode…). Commands are its own slash commands.
 	Configs  []Config  `json:"configs,omitempty"`
@@ -191,8 +196,13 @@ type Ask struct {
 	Agent   string `json:"agent"`
 	Tool    string `json:"tool"`
 	Subject string `json:"subject,omitempty"`
-	Cwd     string `json:"cwd,omitempty"`
-	Dir     string `json:"dir,omitempty"`
+	// Detail is the agent's own words for the call — its title, or its raw
+	// input — for when Subject is empty because wash does not know the tool
+	// (an ACP kind it cannot map, an MCP tool). It is shown, never matched:
+	// no rule is written from it.
+	Detail string `json:"detail,omitempty"`
+	Cwd    string `json:"cwd,omitempty"`
+	Dir    string `json:"dir,omitempty"`
 	// SuggestedRule is what "Always allow" would write. Shown ON the
 	// button — what you clicked is what gets saved.
 	SuggestedRule string `json:"suggested_rule,omitempty"`
@@ -290,6 +300,9 @@ type CatalogView struct {
 	// models it lists, reached direct or through the connection.
 	Adapter    string `json:"adapter,omitempty"`
 	Connection string `json:"connection,omitempty"`
+	// ShowThinking is an auto catalog's: sessions of it open the model's
+	// thinking by default. A curated catalog's slots each carry their own.
+	ShowThinking bool `json:"show_thinking,omitempty"`
 	// Available is every slot (or the adapter) startable here; Note says
 	// why not.
 	Available bool       `json:"available"`
@@ -304,15 +317,17 @@ type CatalogView struct {
 }
 
 // SlotView is one slot of a curated catalog: a model on an adapter, with
-// its effort. Nothing about permissions (see catalogs.go).
+// its effort and whether its thinking is shown. Nothing about permissions
+// (see catalogs.go).
 type SlotView struct {
-	Slot       string `json:"slot"`
-	Adapter    string `json:"adapter"`
-	Connection string `json:"connection,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Effort     string `json:"effort,omitempty"`
-	Available  bool   `json:"available"`
-	Note       string `json:"note,omitempty"`
+	Slot         string `json:"slot"`
+	Adapter      string `json:"adapter"`
+	Connection   string `json:"connection,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Effort       string `json:"effort,omitempty"`
+	ShowThinking bool   `json:"show_thinking,omitempty"`
+	Available    bool   `json:"available"`
+	Note         string `json:"note,omitempty"`
 }
 
 // AdapterOptions is what one adapter offered the last time a session of it

@@ -48,10 +48,11 @@ func askKey(a agentproto.Ask) string {
 // askToastBody is what the toast says under the title. The question
 // itself, in the same words the roster row uses.
 func askToastBody(a agentproto.Ask) string {
-	if a.Subject == "" {
+	what := askWhat(a.Subject, a.Detail)
+	if what == "" {
 		return a.Tool
 	}
-	return a.Tool + " " + a.Subject
+	return a.Tool + " " + what
 }
 
 // installAskToasts wires the ask queue's notify seam to this connection.

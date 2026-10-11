@@ -33,8 +33,11 @@ export const WorkspaceMemberPanel: Component<{
   const member = () => (w().members ?? []).find((m) => m.id === props.memberID);
   const draft = () => props.draft;
   const setDraft = (text: string) => props.onDraft(text);
-  const events = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.events ?? []
-    : props.result?.operation === 'member_inspect' && props.result.transcript?.member_id === props.memberID ? props.result.transcript.events ?? [] : [];
+  // The member's transcript: the live preview when it is this member's,
+  // else an inspect result for it.
+  const transcript = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview
+    : props.result?.operation === 'member_inspect' && props.result.transcript?.member_id === props.memberID ? props.result.transcript : undefined;
+  const events = () => transcript()?.events ?? [];
   const asks = () => props.frame.preview?.member_id === props.memberID ? props.frame.preview.asks ?? [] : props.result?.operation === 'member_inspect' && props.result.transcript?.member_id === props.memberID ? props.result.transcript.asks ?? [] : [];
   // The member's questions for the human, live from the frame: answered here,
   // in its tab, like its permission asks.
@@ -101,9 +104,9 @@ export const WorkspaceMemberPanel: Component<{
             }}>
             <Splitter container={panes} orientation="horizontal" thickness={5} min={MEMBER_MIN} max={MEMBER_MAX} onChange={setSplit} onCommit={persistSplit} />
           </div>
-          <div style={{ 'min-height': 0, 'min-width': 0 }}><AgentSession events={events} asks={asks} onAnswer={props.onAnswer} questions={questions} onQuestionAnswer={props.onQuestionAnswer} hideComposer /></div>
+          <div style={{ 'min-height': 0, 'min-width': 0 }}><AgentSession events={events} asks={asks} onAnswer={props.onAnswer} questions={questions} onQuestionAnswer={props.onQuestionAnswer} status={() => ({ showThinking: transcript()?.show_thinking })} hideComposer /></div>
           </div>
-          <textarea aria-label={`Message ${m().name}`} value={draft()} onInput={(e) => setDraft(e.currentTarget.value)} style={{ width: '100%', 'box-sizing': 'border-box' }} />
+          <textarea aria-label={`Message ${m().name}`} spellcheck={true} value={draft()} onInput={(e) => setDraft(e.currentTarget.value)} style={{ width: '100%', 'box-sizing': 'border-box' }} />
           <Button disabled={!draft().trim() || m().state === 'ended'} onClick={() => { props.onAction('member_message', { recipient: m().id, body: draft() }); setDraft(''); }}>Send message</Button>
         </section>
       )}</Show>

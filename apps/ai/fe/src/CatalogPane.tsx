@@ -18,7 +18,7 @@
 // on a model nobody chose.
 
 import { For, Show, createMemo, createSignal, type Component, type JSX } from 'solid-js';
-import { Button, Input, Select, tokens, type agentproto } from '@wash/ui';
+import { Button, Checkbox, Input, Select, tokens, type agentproto } from '@wash/ui';
 import { SLOTS, fieldStyle, labelStyle, optionValues, slotLabel } from './Launcher.tsx';
 
 /** DefaultRow is what "start an agent" means when nobody says otherwise:
@@ -106,10 +106,17 @@ export interface CatalogResult {
   detail?: string;
 }
 
-type SlotDraft = { adapter: string; connection: string; model: string; effort: string };
-type CatalogDraft = { name: string; adapter: string; connection: string; slots: Record<string, SlotDraft> };
+/** thinking: open the model's thinking in the transcript by default. */
+type SlotDraft = { adapter: string; connection: string; model: string; effort: string; thinking: boolean };
+type CatalogDraft = { name: string; adapter: string; connection: string; thinking: boolean; slots: Record<string, SlotDraft> };
 
-const emptySlot = (): SlotDraft => ({ adapter: '', connection: '', model: '', effort: '' });
+const emptySlot = (): SlotDraft => ({ adapter: '', connection: '', model: '', effort: '', thinking: false });
+
+/** Whether a slot or auto catalog that has just been pointed at an adapter
+ *  shows thinking: on for Claude, whose thinking is a short summary worth
+ *  reading as it goes, as the built-in Anthropic catalogs have it. What is
+ *  saved is always the box as it stands; this only sets the box. */
+export const thinkingDefaultFor = (adapter: string) => adapter === 'claude';
 
 /** A catalog as agentd publishes it, as an editable draft. A missing slot
  *  (an invalid catalog from agents.json) starts empty rather than absent. */
@@ -118,10 +125,10 @@ export function draftOf(c: agentproto.CatalogView): CatalogDraft {
   if (c.slots?.length) {
     for (const t of SLOTS) {
       const v = c.slots.find((x) => x.slot === t);
-      slots[t] = { adapter: v?.adapter ?? '', connection: v?.connection ?? '', model: v?.model ?? '', effort: v?.effort ?? '' };
+      slots[t] = { adapter: v?.adapter ?? '', connection: v?.connection ?? '', model: v?.model ?? '', effort: v?.effort ?? '', thinking: !!v?.show_thinking };
     }
   }
-  return { name: c.name, adapter: c.adapter ?? '', connection: c.connection ?? '', slots };
+  return { name: c.name, adapter: c.adapter ?? '', connection: c.connection ?? '', thinking: !!c.show_thinking, slots };
 }
 
 export const isAuto = (d: CatalogDraft) => Object.keys(d.slots).length === 0;
@@ -132,6 +139,7 @@ export function specOf(d: CatalogDraft): agentproto.CatalogSpec {
   if (isAuto(d)) {
     spec.adapter = d.adapter;
     if (d.connection) spec.connection = d.connection;
+    if (d.thinking) spec.show_thinking = true;
     return spec;
   }
   spec.slots = {};
@@ -141,6 +149,7 @@ export function specOf(d: CatalogDraft): agentproto.CatalogSpec {
     if (v.connection) s.connection = v.connection;
     if (v.model) s.model = v.model;
     if (v.effort) s.effort = v.effort;
+    if (v.thinking) s.show_thinking = true;
     spec.slots[t] = s;
   }
   return spec;
@@ -188,7 +197,7 @@ export const CatalogPane: Component<{
   // A new catalog, before it exists anywhere but here.
   const [adding, setAdding] = createSignal(false);
   const [newID, setNewID] = createSignal('');
-  const curatedDraft = (): CatalogDraft => ({ name: '', adapter: '', connection: '', slots: Object.fromEntries(SLOTS.map((t) => [t, emptySlot()])) });
+  const curatedDraft = (): CatalogDraft => ({ name: '', adapter: '', connection: '', thinking: false, slots: Object.fromEntries(SLOTS.map((t) => [t, emptySlot()])) });
   const [newDraft, setNewDraft] = createSignal<CatalogDraft>(curatedDraft());
   const newIDBlocker = () => {
     const id = newID().trim();
@@ -214,14 +223,14 @@ export const CatalogPane: Component<{
     const listID = `ai-catalog-models-${row.catalogID}-${row.slot}`;
     const set = (p: Partial<SlotDraft>) => row.onChange({ ...row.value, ...p });
     return (
-      <div data-testid={`ai-catalog-slot-${row.catalogID}-${row.slot}`} style={{ display: 'grid', 'grid-template-columns': '8ch minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)', gap: `${tokens.spaceSm}px`, 'align-items': 'center' }}>
+      <div data-testid={`ai-catalog-slot-${row.catalogID}-${row.slot}`} style={{ display: 'grid', 'grid-template-columns': '8ch minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr) auto', gap: `${tokens.spaceSm}px`, 'align-items': 'center' }}>
         <span style={{ font: tokens.type.textMd, color: tokens.fgMuted, 'white-space': 'nowrap' }}>{slotLabel(row.slot)}</span>
         <Select
           value={row.value.adapter}
           data-testid={`ai-catalog-adapter-${row.catalogID}-${row.slot}`}
           // Another adapter's connection, model and effort mean nothing to
           // this one: the slot starts over on its defaults.
-          onChange={(v) => row.onChange({ adapter: v, connection: '', model: '', effort: '' })}
+          onChange={(v) => row.onChange({ adapter: v, connection: '', model: '', effort: '', thinking: thinkingDefaultFor(v) })}
           options={adapterOptionsList()}
         />
         <Select
@@ -272,6 +281,17 @@ export const CatalogPane: Component<{
             options={[['', 'default effort'], ...efforts().map((v) => [v.value, v.name] as [string, string])]}
           />
         </Show>
+        {/* How the transcript shows this model's thinking: open as it
+            streams, or folded to a line. A property of the model like
+            effort — a short summary reads well open, a raw stream buries
+            the reply — and a session can still be switched from its menu. */}
+        <Checkbox
+          checked={row.value.thinking}
+          disabled={!row.value.adapter}
+          onChange={(v) => set({ thinking: v })}
+          data-testid={`ai-catalog-thinking-${row.catalogID}-${row.slot}`}
+          label="show thinking"
+        />
       </div>
     );
   };
@@ -305,7 +325,7 @@ export const CatalogPane: Component<{
             <Select
               value={card.draft.adapter}
               data-testid={`ai-catalog-adapter-${card.id}`}
-              onChange={(v) => card.onDraft({ ...card.draft, adapter: v, connection: '' })}
+              onChange={(v) => card.onDraft({ ...card.draft, adapter: v, connection: '', thinking: thinkingDefaultFor(v) })}
               options={adapterOptionsList()}
             />
             <Select
@@ -316,9 +336,18 @@ export const CatalogPane: Component<{
               options={connectionOptions(card.draft.adapter)}
             />
             <span />
-            <span style={{ font: tokens.type.textSm, color: tokens.fgDim, 'grid-column': 'span 2' }}>
+            <span style={{ font: tokens.type.textSm, color: tokens.fgDim }}>
               Its models are whatever {card.draft.adapter ? adapterName(card.draft.adapter) : 'the adapter'} reports.
             </span>
+            {/* One box for every model of the adapter; a curated catalog
+                has one per slot. */}
+            <Checkbox
+              checked={card.draft.thinking}
+              disabled={!card.draft.adapter}
+              onChange={(v) => card.onDraft({ ...card.draft, thinking: v })}
+              data-testid={`ai-catalog-thinking-${card.id}`}
+              label="show thinking"
+            />
           </div>
         }
       >
@@ -398,7 +427,7 @@ export const CatalogPane: Component<{
               <Select
                 value={isAuto(newDraft()) ? 'auto' : 'slots'}
                 data-testid="ai-catalog-new-kind"
-                onChange={(v) => setNewDraft((d) => v === 'auto' ? { ...d, slots: {} } : { ...d, adapter: '', connection: '', slots: Object.fromEntries(SLOTS.map((t) => [t, emptySlot()])) })}
+                onChange={(v) => setNewDraft((d) => v === 'auto' ? { ...d, slots: {} } : { ...d, adapter: '', connection: '', thinking: false, slots: Object.fromEntries(SLOTS.map((t) => [t, emptySlot()])) })}
                 options={[['slots', 'Three slots'], ['auto', "An adapter's own list"]]}
               />
               <Button

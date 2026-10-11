@@ -70,7 +70,7 @@ export const WorkspaceSidebar: Component<{
           </Show>
           <For each={props.frame.approvals ?? []}>{ask => (
             <Button data-testid={`workspace-approval-${ask.id}`} onClick={() => props.onSelect(ask.member_id)}>
-              {label(ask.member_id)} · Approval needed: {ask.tool} {ask.subject}
+              {label(ask.member_id)} · Approval needed: {ask.tool} {ask.subject || ask.detail}
             </Button>
           )}</For>
           <For each={ownerThreads()}>{q => (

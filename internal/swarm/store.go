@@ -28,10 +28,15 @@ type AgentProfile struct {
 	Provider string `json:"provider"`
 	// Connection names how the provider is reached ("opencode@openrouter");
 	// empty is the provider direct. agentd owns the list and checks it.
-	Connection string            `json:"connection,omitempty"`
-	Model      string            `json:"model,omitempty"`
-	Effort     string            `json:"effort,omitempty"`
-	Configs    map[string]string `json:"configs,omitempty"`
+	Connection string `json:"connection,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Effort     string `json:"effort,omitempty"`
+	// ShowThinking opens the model's thinking in the transcript by default.
+	// A property of the model, like Effort: some adapters stream a short
+	// summary worth reading as it goes, others a raw stream that buries the
+	// reply. Display only; the session can be switched either way later.
+	ShowThinking bool              `json:"show_thinking,omitempty"`
+	Configs      map[string]string `json:"configs,omitempty"`
 	// Subagents "deny" removes the provider's own subagent tool, so the
 	// member's work stays in its transcript and the workspace's accounting.
 	// "" and "allow" leave it available.

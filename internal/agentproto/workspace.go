@@ -77,6 +77,9 @@ type WorkspaceTranscript struct {
 	// Note says what the transcript is when it is not live: an ended
 	// member's archive.
 	Note string `json:"note,omitempty"`
+	// ShowThinking is the member session's Row.ShowThinking, so the member
+	// pane opens its thinking the way the Agent window would.
+	ShowThinking bool `json:"show_thinking,omitempty"`
 }
 
 // WorkspaceApproval is a member's question waiting for the human.
@@ -85,6 +88,8 @@ type WorkspaceApproval struct {
 	MemberID string `json:"member_id"`
 	Tool     string `json:"tool"`
 	Subject  string `json:"subject"`
+	// Detail stands in for Subject when it is empty (Ask.Detail).
+	Detail string `json:"detail,omitempty"`
 }
 
 // QADocumentStatus is where a file (or directory) Wash writes for the

@@ -2082,7 +2082,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     return {
       agent: r?.agent, dir: r?.dir, state: r?.state, used: r?.used, size: r?.size,
       title: r?.title, mode: r?.mode, modes: r?.modes, configs: r?.configs,
-      commands: r?.commands, yolo: r?.yolo,
+      commands: r?.commands, yolo: r?.yolo, showThinking: r?.show_thinking,
     };
   };
   const agentAsksFor = (key: string): agentproto.Ask[] =>

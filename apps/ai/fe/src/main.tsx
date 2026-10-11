@@ -527,6 +527,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       configs: r?.configs,
       commands: r?.commands,
       yolo: r?.yolo,
+      showThinking: r?.show_thinking,
       queued: r?.queued,
       roots: r?.roots,
       background: r?.background,
@@ -709,6 +710,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                 disabled={!sessionKey()}
                 onClick={() => { close(); sendAgentd({ kind: 'agent_set_yolo', key: sessionKey(), on: !status().yolo }); }}
                 data-testid="ai-menu-yolo"
+              />
+              {/* Whether the transcript opens the agent's thinking as it
+                  streams. The catalog chose for this model at launch; this
+                  is the session's own switch, and every window showing the
+                  session follows it. */}
+              <MenuItem
+                label={status().showThinking ? 'Hide thinking' : 'Show thinking'}
+                disabled={!sessionKey()}
+                onClick={() => { close(); sendAgentd({ kind: 'agent_set_thinking', key: sessionKey(), on: !status().showThinking }); }}
+                data-testid="ai-menu-thinking"
               />
               <MenuItem
                 label="Rename session…"

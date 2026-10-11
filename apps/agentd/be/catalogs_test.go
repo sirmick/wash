@@ -285,6 +285,63 @@ func TestSlotIsAnAgentProfile(t *testing.T) {
 	}
 }
 
+// Whether a model's thinking opens by default is the catalog's call: on for
+// the Anthropic catalogs wash ships (an auto one and curated ones), carried
+// from an auto catalog onto every model of it and from a slot onto a model
+// that falls back to its adapter, and off where nothing says otherwise.
+func TestCatalogSaysWhetherThinkingShows(t *testing.T) {
+	catalogs, bad := loadCatalogs(agentpolicy.Policy{})
+	cases := []struct {
+		catalog, model string
+		want           bool
+	}{
+		{"anthropic", "", true},
+		{"anthropic", "haiku", true},
+		{"anthropic-pro", "coding", true},
+		{"anthropic-pro", "some-new-model", true},
+		{"anthropic-budget", "", true},
+		{"openai", "", false},
+		{"openai-pro", "frontier", false},
+	}
+	for _, c := range cases {
+		p, err := resolveCatalog(catalogs, bad, c.catalog, c.model)
+		if err != nil {
+			t.Fatalf("%s/%s: %v", c.catalog, c.model, err)
+		}
+		if p.ShowThinking != c.want {
+			t.Errorf("%s/%s: ShowThinking = %v, want %v", c.catalog, c.model, p.ShowThinking, c.want)
+		}
+	}
+	// What the Setup tab writes comes back the same way, on both shapes.
+	spec := agentproto.CatalogSpec{Name: "Mine", Slots: map[string]agentproto.SlotSpec{
+		"frontier": {Adapter: "claude", Model: "opus", ShowThinking: true},
+		"coding":   {Adapter: "claude", Model: "sonnet"},
+		"small":    {Adapter: "claude", Model: "haiku"},
+	}}
+	c := catalogFromSpec(spec)
+	if !c.Slots["frontier"].ShowThinking || c.Slots["coding"].ShowThinking {
+		t.Errorf("slots = %+v, want frontier on and coding off", c.Slots)
+	}
+	if !catalogFromSpec(agentproto.CatalogSpec{Name: "Auto", Adapter: "claude", ShowThinking: true}).ShowThinking {
+		t.Error("an auto catalog's show_thinking was dropped")
+	}
+	views := publishCatalogs(agentpolicy.Policy{}, nil)
+	for _, v := range views {
+		switch v.ID {
+		case "anthropic":
+			if !v.ShowThinking {
+				t.Error("anthropic view does not show thinking")
+			}
+		case "anthropic-pro":
+			for _, s := range v.Slots {
+				if !s.ShowThinking {
+					t.Errorf("anthropic-pro %s slot does not show thinking", s.Slot)
+				}
+			}
+		}
+	}
+}
+
 // The Setup tab writes a catalog whole into agents.json; the launcher sees
 // it on the next read. A built-in's override is removed by delete, and an
 // invalid catalog is refused rather than saved greyed.

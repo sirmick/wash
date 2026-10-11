@@ -20,6 +20,9 @@ type CatalogSpec struct {
 	Name       string `json:"name"`
 	Adapter    string `json:"adapter,omitempty"`
 	Connection string `json:"connection,omitempty"`
+	// ShowThinking is an auto catalog's: open the model's thinking by
+	// default. A curated catalog says it per slot.
+	ShowThinking bool `json:"show_thinking,omitempty"`
 	// Slots is keyed by slot name (frontier, coding, small); all three are
 	// required for a curated catalog, and none is given for an auto one.
 	Slots map[string]SlotSpec `json:"slots,omitempty"`
@@ -27,12 +30,13 @@ type CatalogSpec struct {
 
 // SlotSpec is one slot as written: a model on an adapter. Effort and
 // Connection may be empty (the adapter's default effort; the adapter
-// direct).
+// direct). ShowThinking opens the model's thinking in the transcript.
 type SlotSpec struct {
-	Adapter    string `json:"adapter"`
-	Connection string `json:"connection,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Effort     string `json:"effort,omitempty"`
+	Adapter      string `json:"adapter"`
+	Connection   string `json:"connection,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Effort       string `json:"effort,omitempty"`
+	ShowThinking bool   `json:"show_thinking,omitempty"`
 }
 
 // AgentDeleteCatalog removes a catalog from agents.json: a built-in goes

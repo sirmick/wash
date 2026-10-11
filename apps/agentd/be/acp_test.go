@@ -124,6 +124,52 @@ func TestToolRequestSpeaksTheRuleLanguage(t *testing.T) {
 	}
 }
 
+// The prompt for a tool wash cannot name must still say what it is about.
+// Observed: an adapter sending kind "other" for everything put a bare
+// "Acp:other" on screen for every call, with the title it had sent thrown
+// away because ToolSubject (rightly) has nothing to match it against.
+func TestAskDetailSpeaksForUnknownTools(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	cases := []struct {
+		name string
+		tool string
+		tc   acp.ToolCall
+		want string
+	}{
+		{
+			name: "the title is the adapter's own words",
+			tool: "Acp:other",
+			tc:   acp.ToolCall{Kind: "other", Title: "Run git push", RawInput: json.RawMessage(`{"command":"git push"}`)},
+			want: "Run git push",
+		},
+		{
+			name: "a title that only repeats the tool name says nothing; the input does",
+			tool: "mcp__github__create_issue",
+			tc:   acp.ToolCall{Kind: "other", Title: "mcp__github__create_issue", RawInput: json.RawMessage("{\n  \"title\": \"bug\"\n}")},
+			want: `{"title":"bug"}`,
+		},
+		{
+			name: "no title and an empty input is nothing, not braces",
+			tool: "Acp:other",
+			tc:   acp.ToolCall{Kind: "other", RawInput: json.RawMessage(`{}`)},
+			want: "",
+		},
+		{
+			name: "a long title is cut, not dropped",
+			tool: "Acp:other",
+			tc:   acp.ToolCall{Kind: "other", Title: long},
+			want: strings.Repeat("x", 239) + "…",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := askDetail(c.tool, c.tc); got != c.want {
+				t.Errorf("askDetail = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // A kind wash has never heard of must fall through to asking. If it landed
 // on a tool name an allow rule matched, a new ACP kind would silently
 // widen the user's policy.
