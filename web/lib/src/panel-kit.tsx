@@ -9,6 +9,7 @@
 import { For, createEffect, splitProps } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
+import { Button } from './button';
 
 const sectionTitleStyle: JSX.CSSProperties = {
   font: tokens.type.titleSm,
@@ -34,28 +35,23 @@ export const Row: Component<{ label: string; children: JSX.Element }> = (props) 
   </div>
 );
 
-const smallBtnStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  gap: '5px',
-  background: tokens.bgMenu,
-  color: tokens.fg,
-  border: `1px solid ${tokens.borderMenu}`,
-  'border-radius': `${tokens.radiusMd}`,
-  padding: '4px 10px',
-  font: tokens.type.textMd,
-  cursor: 'pointer',
-};
-
-/** SmallBtn is the compact action button used across panes. */
+/** SmallBtn is the compact action button used across panes: `<Button
+ *  size="sm">` under the name the settings panels have always used, so
+ *  there is one small-button style, not two. The inline-flex + gap is for
+ *  an icon beside its label. */
 export const SmallBtn: Component<{
   onClick: () => void;
   'data-testid'?: string;
   children: JSX.Element;
 }> = (props) => (
-  <button type="button" data-wash-hit data-testid={props['data-testid']} onClick={props.onClick} style={smallBtnStyle}>
+  <Button
+    size="sm"
+    data-testid={props['data-testid']}
+    onClick={props.onClick}
+    style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px' }}
+  >
     {props.children}
-  </button>
+  </Button>
 );
 
 const selectStyle: JSX.CSSProperties = {
