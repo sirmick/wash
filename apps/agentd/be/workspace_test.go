@@ -700,6 +700,11 @@ func TestAssignmentBatchNamesTheFailingUpdate(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `update 1: member "K5-red": member already has an active assignment`) || strings.Contains(err.Error(), "of this batch") {
 		t.Fatalf("conflict with an existing assignment = %v", err)
 	}
+	// The error says the batch was dropped whole, so the fix is not to
+	// resend only the update it names (Redoubt, WASH-R21).
+	if !strings.Contains(err.Error(), "no update in this call was applied; fix it and resend all 2") {
+		t.Fatalf("the batch outcome is unsaid: %v", err)
+	}
 	if err = assign(create("K5-implementer", "Build"), map[string]any{"action": "complete", "id": "nope", "body": "x"}); err == nil || !strings.HasPrefix(err.Error(), "update 1: ") {
 		t.Fatalf("complete failure unnamed: %v", err)
 	}

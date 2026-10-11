@@ -367,7 +367,10 @@ store: open threads come back whole and are assigned to the new orchestrator, wh
 the current team; resolved threads come back as headers only (title, state, decision
 references, evidence), marked `resumed` because their evidence is about the earlier code,
 and their events stay in their files until `view=qa thread_id` reads them or a reopen loads
-them. Pending owner decisions are asked again. Other Markdown in the directory is ignored and
+them. Pending owner decisions are asked again. The receipt's `qa_resumed: {open: [ids],
+resolved: n}` says which threads came back open, so stale ones get triaged rather than
+carried forward; `plan_get` lists open threads on no node of the current plan as
+`threads_on_no_node`. Other Markdown in the directory is ignored and
 never overwritten; a damaged Wash file stops the configuration, naming the file, and nothing
 changes. Symlinks are not written through. Another active workspace's directory is refused,
 naming it; an ended workspace's directory is taken over. `tools/qa-split` converts an API 3

@@ -76,11 +76,30 @@ func run(in, out, root string) error {
 		if _, err := os.Lstat(path); err == nil {
 			return fmt.Errorf("%s exists; convert into an empty directory", path)
 		}
-		f := swarm.QAFile{Thread: q, Authors: a.Authors}
+		f := swarm.QAFile{Thread: q, Authors: map[string]string{}}
 		for _, d := range a.Decisions {
 			if d.Thread == q.ID {
 				f.Decisions = append(f.Decisions, d)
 			}
+		}
+		// Only the thread's own authors, as Wash's own writes carry (the
+		// same set swarm.QAFileFor collects): the whole document's map was
+		// 126 names, about 5 KB, in every one of Redoubt's 95 files.
+		add := func(id string) {
+			if id != "" && id != "human" {
+				f.Authors[id] = a.Authors[id]
+			}
+		}
+		add(q.Creator)
+		add(q.Assignee)
+		for _, id := range q.Participants {
+			add(id)
+		}
+		for _, e := range q.Events {
+			add(e.Author)
+		}
+		for _, d := range f.Decisions {
+			add(d.Sender)
 		}
 		content, err := swarm.EncodeQAFile(f, root, home)
 		if err != nil {

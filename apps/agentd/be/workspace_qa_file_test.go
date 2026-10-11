@@ -226,8 +226,14 @@ func TestQADirResumesWithoutStoreAndRetainsDecisions(t *testing.T) {
 	s2, _ := swarm.Open(filepath.Join(dir, "second.json"))
 	ws2 := &workspaceService{store: s2}
 	h2 := &hosted{sessionID: "second", agent: "codex", cwd: dir}
-	if _, err = qaFileCall(t, ws2, h2, "workspace_configure", setup); err != nil {
+	resumed, err := qaFileCall(t, ws2, h2, "workspace_configure", setup)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The result says what came back open (and so is the orchestrator's to
+	// triage) and how many resolved threads are headers now.
+	if got := resumed.(map[string]any)["receipt"].(map[string]any)["qa_resumed"].(qaResumed); len(got.Open) != 1 || got.Open[0] != "q" || got.Resolved != 0 {
+		t.Fatalf("qa_resumed = %+v", got)
 	}
 	w := s2.View(h2.sessionID)
 	if len(w.QA) != 1 || w.QA[0].State != "awaiting-owner" || w.QA[0].Assignee != w.Lead || w.QA[0].Events[0].Author != old.Lead || w.QAAuthors[old.Lead] == "" {

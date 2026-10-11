@@ -270,7 +270,8 @@ initial settings are deliberately retained as history. Paused/unloaded/ended
 sessions can have no live entry. State and live provider options are separate
 snapshots; the workspace revision only guards durable workspace mutations.
 
-`workspace_get` returns `null` before setup and never activates the sidebar.
+`workspace_get` before setup returns `{workspace: null, hint}` naming
+`workspace_configure`, and never activates the sidebar.
 By default `workspace.messages` contains pending decisions;
 `delivery_counts` summarizes all retained mail. `include_messages: true` returns
 a history page in `workspace.messages`, with `message_page.cursor` and

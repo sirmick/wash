@@ -119,17 +119,6 @@ found these.
   diffs. Keep in it only what the Markdown cannot carry losslessly (author
   IDs, message IDs, flags), or make the Markdown the parsed form; if it
   stays, plain JSON in a fenced block, not base64.
-- **`qa-split` writes every author into every file (S, low).** Each split
-  thread carries the whole old document's `authors` map (126 members, about
-  5 KB a file); Wash's own writes carry only the thread's. Keep only the
-  thread's authors, and re-split or rewrite Redoubt's files.
-- **Resume reassigns open threads silently (S, low).** 32 of Redoubt's 95
-  threads were open (most answered long ago); resume gave each to the
-  orchestrator with "Resumed from the QA directory"
-  (`workspace_qa_resume.go`), and nothing in the setup result said so.
-  Return `qa_resumed: {open: [ids], resolved: n}` from `workspace_configure`,
-  and have `plan_get` list open threads on no node, so stale ones get
-  triaged rather than carried forward.
 - **Report the swallowed prompt upstream (S, low).** claude-agent-acp 0.81.2
   loses a `session/prompt` sent while Claude Code runs a turn of its own
   (reproduction: a background `sleep`, then a prompt during the woken

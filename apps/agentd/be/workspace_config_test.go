@@ -131,7 +131,9 @@ func TestWorkspaceGetAndConfigure(t *testing.T) {
 	call := func(name, raw string) (any, error) {
 		return ws.call(context.Background(), h, workspacemcp.Call{Name: name, Arguments: json.RawMessage(raw)})
 	}
-	if got, err := call("workspace_get", `{}`); err != nil || got != nil {
+	// Before setup the answer says there is no workspace and what makes one
+	// (WASH-R18), rather than a bare null.
+	if got, err := call("workspace_get", `{}`); err != nil || got.(map[string]any)["workspace"] != nil || !strings.Contains(got.(map[string]any)["hint"].(string), "workspace_configure") {
 		t.Fatal(got, err)
 	}
 	w, err := s.Setup(h.sessionID, h.agent, t.TempDir(), "Team", "")
@@ -246,8 +248,12 @@ func TestWorkspaceAboutBeforeSetupAndWithoutMutation(t *testing.T) {
 			t.Fatal("about mutated workspace")
 		}
 		state, err := call(`{"view":"state"}`)
-		if err != nil || (state != nil) != attached {
+		if err != nil {
 			t.Fatal(state, err)
+		}
+		// Unattached: the answer says there is no workspace (WASH-R18).
+		if attached != (state.(map[string]any)["workspace"] != nil) {
+			t.Fatal(state, attached)
 		}
 	}
 }

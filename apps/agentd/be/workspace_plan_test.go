@@ -308,3 +308,54 @@ func TestPlanDetailCarriesThreadRevisions(t *testing.T) {
 		t.Fatalf("threads on the plan: %v", threads)
 	}
 }
+
+// plan_get with a node answers with that node's subtree only, not the whole
+// plan again: three node reads in one turn cost three copies of an 89-line
+// plan (Redoubt, WASH-R19). Open threads on no node ride with the full plan
+// so a resume's stale questions get triaged (Redoubt on API 4).
+func TestPlanGetNodeIsTheSubtreeOnly(t *testing.T) {
+	root := t.TempDir()
+	s, _ := swarm.Open(filepath.Join(root, "state.json"))
+	w, _ := s.Setup("lead", "codex", root, "Team", root)
+	ws := &workspaceService{store: s}
+	h := &hosted{sessionID: "lead", agent: "codex"}
+	if _, err := qaFileCall(t, ws, h, "plan_set", map[string]any{"nodes": map[string]any{
+		"M1": map[string]any{"title": "Plan", "template": "milestone", "state": "active"},
+		"M2": map[string]any{"title": "Build", "template": "milestone"},
+		"A":  map[string]any{"title": "a", "parent": "M2"},
+		"A1": map[string]any{"title": "a1", "parent": "A"},
+		"B":  map[string]any{"title": "b", "parent": "M2"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// A thread on B, then B deleted: the thread is on no node of the plan,
+	// as a resumed thread whose node this plan lacks would be.
+	if _, err := qaFileCall(t, ws, h, "message_send", map[string]any{"recipient": w.Lead, "type": "question", "body": "Where?", "qa": map[string]any{"id": "loose", "action": "open", "node": "B", "title": "Loose"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qaFileCall(t, ws, h, "plan_set", map[string]any{"nodes": map[string]any{"B": nil}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := qaFileCall(t, ws, h, "plan_get", map[string]any{"node": "A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := got.(map[string]any)["nodes"].([]string)
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "A ·") || !strings.HasPrefix(lines[1], "  A1 ·") {
+		t.Fatalf("node A's lines: %q", lines)
+	}
+	if _, ok := got.(map[string]any)["threads_on_no_node"]; ok {
+		t.Fatal("a node read carries the unplaced threads")
+	}
+	got, err = qaFileCall(t, ws, h, "plan_get", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := got.(map[string]any)["nodes"].([]string); len(lines) != 4 {
+		t.Fatalf("the whole plan: %q", lines)
+	}
+	loose := got.(map[string]any)["threads_on_no_node"].([]map[string]any)
+	if len(loose) != 1 || loose[0]["id"] != "loose" {
+		t.Fatalf("threads on no node: %v", loose)
+	}
+}

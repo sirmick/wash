@@ -63,7 +63,11 @@ func applyAssignments(s *swarm.Store, h *hosted, updates []assignmentChange) ([]
 	// error left the caller guessing which update failed, and three creates
 	// for one member read as a conflict with some assignment it could not see.
 	created := map[string]int{}
-	fail := func(i int, err error) ([]any, error) { return nil, fmt.Errorf("update %d: %w", i, err) }
+	// The index alone invited resending only that update (Redoubt, WASH-R21):
+	// say that the whole batch was dropped.
+	fail := func(i int, err error) ([]any, error) {
+		return nil, fmt.Errorf("update %d: %w (no update in this call was applied; fix it and resend all %d)", i, err, len(updates))
+	}
 	for i, u := range updates {
 		switch u.Action {
 		case "create":

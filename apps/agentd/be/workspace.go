@@ -303,7 +303,10 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		}
 		w := ws.store.View(sid)
 		if w == nil {
-			return nil, nil
+			// Not a bare null: PROJECT.md's first step is this call, and an
+			// orchestrator had to infer "no workspace" from nothing (Redoubt,
+			// WASH-R18). Say so, and name the call that makes one.
+			return map[string]any{"workspace": nil, "hint": "no workspace; workspace_configure {workspace:{name}} or {from} creates one"}, nil
 		}
 		if a.View == "qa" {
 			return qaView(w, a)

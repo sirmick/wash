@@ -197,13 +197,25 @@ func (ws *workspaceService) planFileStatus(w *swarm.Workspace) agentproto.QADocu
 // it with what they are doing and how much context they have used (so a
 // handoff can be timed at a commit boundary rather than wherever the
 // warning lands).
-func planLines(w *swarm.Workspace) []string {
+func planLines(w *swarm.Workspace) []string { return planLinesUnder(w, "") }
+
+// planLinesUnder is planLines for the subtree at root (the node and its
+// descendants, indented from the node); the whole plan when root is empty.
+// Three node reads in one turn used to cost three copies of the plan
+// (Redoubt, WASH-R19).
+func planLinesUnder(w *swarm.Workspace, root string) []string {
 	activity, _, usage := workspaceRuntime(w)
 	var out []string
 	var walk func(parent string, depth int)
 	walk = func(parent string, depth int) {
 		for _, n := range w.Plan {
 			if n.Parent != parent {
+				continue
+			}
+			if root != "" && !swarm.Within(w, n.ID, root) {
+				// An ancestor or a cousin of root: not shown, but walked
+				// through, since root is somewhere below it.
+				walk(n.ID, depth)
 				continue
 			}
 			line := strings.Repeat("  ", depth)
@@ -251,7 +263,7 @@ func (ws *workspaceService) planGet(w *swarm.Workspace, raw json.RawMessage) (an
 	if err := decodeWorkspace(raw, &p); err != nil {
 		return nil, err
 	}
-	out := map[string]any{"revision": w.PlanRevision, "nodes": planLines(w)}
+	out := map[string]any{"revision": w.PlanRevision, "nodes": planLinesUnder(w, p.Node)}
 	if w.Legend != "" {
 		out["legend"] = w.Legend
 	}
@@ -260,6 +272,24 @@ func (ws *workspaceService) planGet(w *swarm.Workspace, raw json.RawMessage) (an
 	}
 	if len(w.Plan) == 0 {
 		out["hint"] = "The plan is empty. Add nodes with plan_set; every assignment is on a node."
+	}
+	// Open threads on no node of this plan (a resumed thread's node may not
+	// exist here) ride with the full plan, so a resume's stale questions get
+	// triaged rather than carried forward unseen (Redoubt on API 4).
+	if p.Node == "" {
+		onPlan := map[string]bool{}
+		for _, n := range w.Plan {
+			onPlan[n.ID] = true
+		}
+		unplaced := []map[string]any{}
+		for _, q := range w.QA {
+			if !onPlan[q.Node] && q.State != "resolved" {
+				unplaced = append(unplaced, map[string]any{"id": q.ID, "state": q.State, "title": firstLine(q.Title, 120), "assignee": q.Assignee})
+			}
+		}
+		if len(unplaced) > 0 {
+			out["threads_on_no_node"] = unplaced
+		}
 	}
 	if p.Node == "" && !p.Detail {
 		return out, nil

@@ -57,10 +57,19 @@ func readQADir(dir string) ([]swarm.QAFile, error) {
 // whole and return to the new orchestrator until it assigns its team.
 // Resolved threads come back as headers only (their files keep the events)
 // and are marked resumed, since their evidence is about the code as it was.
-// Pending owner decisions are asked again.
-func restoreQA(w *swarm.Workspace, files []swarm.QAFile) error {
+// Pending owner decisions are asked again. The summary says which threads
+// came back open (and so went to the orchestrator) and how many resolved:
+// Redoubt resumed 32 open threads, most answered long ago, and nothing in
+// the setup result said so.
+type qaResumed struct {
+	Open     []string `json:"open"`
+	Resolved int      `json:"resolved"`
+}
+
+func restoreQA(w *swarm.Workspace, files []swarm.QAFile) (qaResumed, error) {
+	summary := qaResumed{Open: []string{}}
 	if len(w.QA) > 0 {
-		return errors.New("workspace already has QA threads; resume the directory in a new workspace")
+		return summary, errors.New("workspace already has QA threads; resume the directory in a new workspace")
 	}
 	if w.QAAuthors == nil {
 		w.QAAuthors = map[string]string{}
@@ -76,15 +85,17 @@ func restoreQA(w *swarm.Workspace, files []swarm.QAFile) error {
 		if q.State == "resolved" {
 			q.Assignee, q.Resumed, q.Archived, q.Events = w.Lead, true, true, nil
 			w.QA = append(w.QA, q)
+			summary.Resolved++
 			continue
 		}
 		if q.Events == nil {
 			q.Events = []swarm.QAEvent{}
 		}
 		w.QA = append(w.QA, q)
+		summary.Open = append(summary.Open, q.ID)
 		rev, prior := q.Revision, q.State
 		if _, err := swarm.UpdateQA(w, lead, swarm.QAUpdate{ID: q.ID, Action: "assign", Expected: &rev, Assignee: w.Lead, Body: "Resumed from the QA directory; the orchestrator assigns the current team."}); err != nil {
-			return err
+			return summary, err
 		}
 		if prior == "blocked" {
 			swarm.QA(w, q.ID).State = "blocked"
@@ -97,7 +108,7 @@ func restoreQA(w *swarm.Workspace, files []swarm.QAFile) error {
 			swarm.QA(w, msg.Thread).State = "awaiting-owner"
 		}
 	}
-	return nil
+	return summary, nil
 }
 
 // loadQAEvents reads a header-only thread's events back from its file.

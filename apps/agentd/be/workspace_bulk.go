@@ -184,6 +184,8 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	// created when the configuration commits.
 	qaDir, qaDetach := "", false
 	var qaRestore []swarm.QAFile
+	// What restoreQA brought back, for the result; nil when nothing resumed.
+	var resumed *qaResumed
 	qaLocked := false
 	defer func() {
 		if qaLocked {
@@ -402,9 +404,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 					}
 				}
 				if len(qaRestore) > 0 {
-					if err := restoreQA(w, qaRestore); err != nil {
+					summary, err := restoreQA(w, qaRestore)
+					if err != nil {
 						return err
 					}
+					resumed = &summary
 				}
 				w.QADir = qaDir
 			}
@@ -556,6 +560,9 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		out := map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "qa_dir": w.QADir, "plan_file": w.PlanFile, "legend": w.Legend, "max_active": w.MaxActive, "max_members": w.MaxMembers}}
 		if len(advisories) > 0 {
 			out["advisories"] = advisories
+		}
+		if resumed != nil {
+			out["qa_resumed"] = *resumed
 		}
 		return out, nil
 	})

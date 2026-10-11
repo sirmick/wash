@@ -137,7 +137,10 @@ test('MCP reads workspace JSON and launches members from a catalog with model-de
  expect(about.guide.join(' ')).toContain('end your turn');
  expect(about.reference.workspace_file).toContain('.wash/workspace.toml');
  expect(about.permissions.filesystem_enforcement).toMatch(/^unknown:/);
- expect(await tool('workspace_get')).toBeNull();
+ // No workspace yet: said in words, with the call that makes one (WASH-R18).
+ const none = await tool('workspace_get');
+ expect(none.workspace).toBeNull();
+ expect(none.hint).toContain('workspace_configure');
  await expect(app.locator('[data-testid="workspace-sidebar"]')).toHaveCount(0);
  await tool('workspace_configure', { workspace:{name: 'Catalog'} });
  expect((await tool('workspace_get', {view:'about'})).caller.role).toBe('orchestrator');
