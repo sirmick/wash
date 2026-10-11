@@ -308,6 +308,13 @@ go_build = $(GO_ENV) go build $(GOFLAGS) -o $(1) ./$(2) && chmod 0755 $(1)
 
 PNPM    := pnpm
 
+# JOBS: the parallelism of the full builds. The per-app FE bundles and Go
+# binaries are independent make targets, so `all` and the multicall verbs
+# fan them out across the cores (27 bundles from clean: 59 s at -j1, 15 s at
+# -j12 on 24 cores; past ~12 vite's own threads contend). Not a global
+# MAKEFLAGS: the packaging rows and VM images run their own tools.
+JOBS    ?= $(shell nproc 2>/dev/null || echo 4)
+
 # Shared shell-runtime embed stamp. wash-router and wash-login embed the
 # SAME bundle from one package (internal/shellassets), so the web stage
 # stages web/shell/dist there ONCE and both binaries' go builds depend on
@@ -322,8 +329,19 @@ SHELL_STAMP  := $(SHELL_ASSETS)/.stamp
 # *_STAMP variables are needed. (SHELL_STAMP above is the
 # exception: it embeds the shell runtime, not an app FE bundle.)
 
+# all builds in two phases. wash-router and wash-login — the shared /vendor
+# carriers — come first, serially: every app binary's vendor-sync guard
+# (below) rebuilds those two through a recursive make when web/lib is newer
+# than the router, and under -j that recursive build would race the top
+# level's own build of the same targets. With the carriers already fresh,
+# phase two's guards are no-ops, and everything else fans out in parallel.
+# The carriers are filtered out of phase two: web-shell is .PHONY, so
+# listing them again would relink them beside the guards' checks.
+VENDOR_CARRIERS := $(SC)/wash-router $(OUT)/wash-login
 .PHONY: all
-all: $(TARGETS)
+all:
+	$(MAKE) --no-print-directory $(VENDOR_CARRIERS)
+	$(MAKE) --no-print-directory -j$(JOBS) $(filter-out $(VENDOR_CARRIERS),$(TARGETS))
 
 # ----- build verbs -----
 # `make wash` builds the MULTICALL layout — the busybox `wash` dispatcher plus
@@ -338,7 +356,7 @@ all: $(TARGETS)
 # `run.sh --standalone` use it).
 .PHONY: wash
 wash: $(OUT)/wash-sudo $(WASH_DISPLAY_TARGET)
-	$(MAKE) multicall
+	$(MAKE) -j$(JOBS) multicall
 	@echo "wash: built the multicall layout (busybox wash + wash-* symlinks + wash-sudo$(if $(WASH_DISPLAY_TARGET), + wash-display) — the shipped layout)"
 	@echo "  → $(abspath $(OUT))/   (run: make run)"
 
@@ -1144,7 +1162,7 @@ e2e-test: test-app
 	# building bare out/wash leaves a stale layout and the fixture fails with
 	# "missing binary: out/wash-<app>". Then run the argv[0]-dispatch unit tests
 	# and Playwright with WASH_E2E_MULTICALL=1.
-	$(MAKE) TEST_APP=1 multicall
+	$(MAKE) -j$(JOBS) TEST_APP=1 multicall
 	go test -count=1 -tags=multicall ./cmd/wash/...
 	cd e2e && $(PNPM) install --ignore-workspace --silent
 	# Typecheck BEFORE spending three minutes running the suite. The e2e
