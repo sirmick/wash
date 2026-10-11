@@ -483,7 +483,7 @@ knowing an event id.
 
 ## WASH-R18 — `workspace_get` with no workspace returns `null`
 
-Status: open. Minor.
+Status: addressed 2026-10-11 (e7a30827): the answer is `{workspace: null, hint}` naming `workspace_configure`.
 
 Before setup, `workspace_get {view:"team"}` returned `null` (no error, no hint). PROJECT.md's
 startup step 1 is "`about`, then `workspace_get({})`": the orchestrator has to infer "no
@@ -492,7 +492,7 @@ workspace" from a bare null. Desired: `{workspace:null, hint:"no workspace; work
 
 ## WASH-R19 — `plan_get node=X` returns the whole plan as well
 
-Status: open. Context cost.
+Status: addressed 2026-10-11 (e7a30827): `node` returns that node's subtree only.
 
 `plan_get {node:"BEAM7", detail:true}` returned the node's detail *and* the full 89-line node
 list, identical to a bare `plan_get`. Three node reads in one turn cost three copies of the plan
@@ -549,7 +549,7 @@ reported the needs check too (it reports only the catalog and launch flags).
 
 ## WASH-R21 — A multi-update `assignment_update` fails whole on one update's `needs` check, and the error names only that update
 
-Date: 2026-10-06. Status: open. Minor, frequent tonight.
+Date: 2026-10-06. Status: addressed 2026-10-11 (e7a30827): the error says no update in the call was applied and to resend all of them. The override-on-the-node half is still open.
 
 `assignment_update {updates:[a, b, c]}` where only `c` is on a node whose needs are not done
 is refused as a whole ("update 2: ... node SMP1 needs IPC3 (reported) ... start anyway with
