@@ -2367,6 +2367,10 @@ window.wash = {
   onScreenSize: (cb) => screenSub.on(cb),
   linkStats: () => linkHealth(),
   onLinkStats: (cb) => onLinkHealth(cb),
+  // The local shell link's lifecycle state. Ingress consumers watch it to
+  // re-check their /app/<token>/ after a drop (@wash/ui ingress-heal).
+  connState: () => connState(),
+  onConnState: (cb) => conn.onState(cb),
   activityQuery: (origin, q) => {
     const c = clientForOrigin(origin ?? ACTIVITY_LOCAL) ?? local;
     return activityQueryOn((m) => c.conn.sendCtrl(m), c.origin, q ?? {});

@@ -123,5 +123,7 @@ export type { FileClient, FileClientOptions, FileUrlOptions } from './file-clien
 export { washAssetUrl } from './assets';
 export { IngressFrame } from './ingress-frame';
 export type { IngressFrameProps } from './ingress-frame';
+export { createIngressHeal, ingressBase } from './ingress-heal';
+export type { IngressHeal, IngressHealOptions } from './ingress-heal';
 export { installIngressClipboardBridge } from './ingress-clipboard';
 export { installIngressFocusBridge } from './ingress-focus';

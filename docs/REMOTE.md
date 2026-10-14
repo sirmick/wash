@@ -734,5 +734,10 @@ the existing peer channel (splice invariant above), so it would have needed
 a second dialed connection regardless — at which point plain HTTP on a
 dedicated forwarded socket is the same topology with none of the framing.
 
-Not folded in (separate TODO item): the single-host stale-token self-heal
-after a wash-login restart — re-`ensure` on 401/410 in the workbench FE.
+Not folded in (shipped separately): the stale-token self-heal. A token can
+die under a mounted FE (a wash-login restart → 401, a replaced publisher →
+410); `web/lib/src/ingress-heal.ts` HEAD-probes the base on shell reconnect
+and on consumer cues (iframe load, media error) and, on 401/410, re-runs the
+app's own ensure/list request for a fresh path — capped, backed off, and
+never while the shell link is down. Used by IngressFrame (vscode workbench)
+and by music, radio and washamp.

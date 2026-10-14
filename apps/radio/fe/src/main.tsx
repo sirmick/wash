@@ -6,6 +6,12 @@
 // <audio> and registers with com.wash.audio. Same kit as the Music app;
 // the "list" is stations and the SeekBar runs in non-seekable LIVE mode.
 // Favorites + pasted stations + last-tuned persist via app_state.
+//
+// The stream URL hangs off the BE's /app/<token>/ ingress base. If that
+// token dies under a mounted window (wash-login restart → 401, router
+// forgot it → 410) createIngressHeal notices — on shell reconnect or an
+// <audio> error — and re-requests the list, whose stations_ok carries a
+// live base; the tuned station is then re-tuned on it.
 
 import {
   Button,
@@ -16,6 +22,7 @@ import {
   VolumeSlider,
   createAppBus,
   createAudioSource,
+  createIngressHeal,
   defineWashApp,
   tokens,
   type AudioSource,
@@ -494,8 +501,12 @@ function RadioApp(props: WashAppProps) {
       if (m.station == null || m.station === index()) setStreamInfo(m.info ?? {});
     } else if (m?.kind === 'stations_ok') {
       const s = m as StationsOk;
+      const rebased = !!base() && base() !== s.base;
       setStations(s.stations);
       setBase(s.base);
+      // A fresh base (the heal re-ensure answered): confirm it now rather
+      // than on the backoff timer; recovery re-tunes (onRecovered below).
+      if (rebased) heal.check();
       const rows = stationRows();
       const pendingRow = pendingRevealName ? rows.find((r) => r.name === pendingRevealName) : undefined;
       const lastRow = lastName ? rows.find((r) => r.name === lastName) : undefined;
@@ -596,9 +607,21 @@ function RadioApp(props: WashAppProps) {
     });
   });
 
+  // Ingress self-heal. Re-ensure = the idempotent list request, which also
+  // returns the current base. On recovery the dead stream is re-tuned —
+  // only if it was playing or had failed, so a paused station stays paused.
+  const heal = createIngressHeal({
+    base,
+    reensure: sendCustom,
+    onRecovered: () => {
+      if (index() >= 0 && (offline() || status() === 'playing')) tune(index());
+    },
+  });
+
   onCleanup(() => {
     if (persistTimer) clearTimeout(persistTimer);
     audio?.dispose();
+    heal.dispose();
   });
 
   return (
@@ -850,6 +873,8 @@ function RadioApp(props: WashAppProps) {
         }}
         onError={() => {
           if (index() >= 0) setOffline(true);
+          // Offline upstream, or our own token died? The probe tells.
+          heal.check();
         }}
       />
     </div>

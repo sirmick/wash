@@ -64,15 +64,6 @@ bug list — all fully landed; see `git log` if you need their content.)
   peers and reverse-proxies (`internal/router/ingress_remote.go`). Covered
   by unit tests + `e2e/tests/remote-ingress.spec.ts` (two local routers via
   the `--peer-ingress` seam).
-- [ ] **Single-host ingress self-heal after a wash-login restart** (separate
-  from #15). A restart tears down sessions + per-launch ingress tokens; the
-  shell's `/ws` reconnects fine but the vscode-workbench iframe keeps
-  pointing at the dead `/app/<token>/` → 401 (login: `identityFromRequest`
-  fail) or 410 (router stale-token) until re-open. Fix: the workbench
-  (`apps/vscode-workbench/fe/src/main.tsx`) treats 401/410 from its iframe
-  as "ingress died" → auto re-`ensure` (re-mint token / relaunch). Affected:
-  vscode/workbench, music, radio, washamp. Diagnosed live on carrier-dev
-  2026-06-24.
 - [ ] **R3 — stream fm downloads to disk, not a Blob.** The relay is
   creditless, so the FE's writable sink is the last place backpressure can
   live; today fm concatenates chunks into RAM. File System Access API

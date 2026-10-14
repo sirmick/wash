@@ -8,6 +8,11 @@
 // It remembers its folder across server restarts: an upgrade restarts
 // code-server and the service broadcasts a fresh ready{path}; the window
 // re-applies its stored folder so it reloads the same workspace.
+//
+// It also heals a token that died under it (a wash-login restart → 401, a
+// replaced wash-vscode service → 410): IngressFrame probes the path on
+// load and on shell reconnect and calls onDead, which re-sends `ensure`;
+// the service answers ready{path} with a live path and the frame follows.
 
 import { Match, Switch, createMemo, createSignal } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
@@ -105,7 +110,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   return (
     <Switch>
       <Match when={phase() === 'ready'}>
-        <IngressFrame path={src()} host={props.host} title="VS Code" />
+        <IngressFrame path={src()} host={props.host} title="VS Code" onDead={() => send({ kind: 'ensure' })} />
       </Match>
       <Match when={phase() === 'choosing'}>
         <FilePicker

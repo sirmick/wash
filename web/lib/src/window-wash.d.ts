@@ -156,6 +156,9 @@ interface WashObservation {
 
 type WashLogLevel = 'error' | 'warn' | 'info' | 'debug';
 
+// Mirrors web/shell/src/ws.ts ConnState.
+type WashConnState = 'connecting' | 'open' | 'reconnecting' | 'closed' | 'unauthenticated';
+
 // Link-health telemetry (docs/QOS.md). The router pushes per-class
 // throughput + the session running totals ~1/s; the shell folds in
 // FE-derived rates, the WS send-buffer backlog, and reconnect count.
@@ -300,6 +303,13 @@ interface WashGlobals {
   // About screen render it. null until the first link.stats arrives.
   linkStats(): WashLinkHealth | null;
   onLinkStats(cb: (h: WashLinkHealth) => void): () => void;
+  // Lifecycle state of the LOCAL shell link (web/shell ws.ts ConnState).
+  // onConnState fires with the current state immediately, then on every
+  // transition. Ingress consumers (ingress-heal.ts) use a down → 'open'
+  // transition as the cue to re-check their /app/<token>/ path, and never
+  // ask their BE for a fresh token while it is not 'open'.
+  connState(): WashConnState;
+  onConnState(cb: (s: WashConnState) => void): () => void;
   /** Activity journal (docs/COMMANDER.md §3). Every host journals itself;
    *  entries carry the origin they came from as `host`. */
   activityQuery(origin: string | undefined, q?: WashActivityQuery): Promise<WashActivityPage>;

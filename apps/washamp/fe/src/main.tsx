@@ -4,8 +4,22 @@
 // com.wash.audio control plane (§3): it reports now-playing/status/
 // position up to the service (→ sidebar) and obeys transport/volume
 // commands coming back down.
+//
+// Local tracks and skins hang off the BE's /app/<token>/ ingress base. If
+// that token dies under a mounted window (wash-login restart → 401, router
+// forgot it → 410) createIngressHeal notices on shell reconnect and
+// re-requests the track list; rebase() swaps the playlist onto the fresh
+// URLs, keeping the current track and whether it was playing.
 
-import { createAppBus, createAudioSource, defineWashApp, type AudioSource, type WashAppProps } from '@wash/ui';
+import {
+  createAppBus,
+  createAudioSource,
+  createIngressHeal,
+  defineWashApp,
+  ingressBase,
+  type AudioSource,
+  type WashAppProps,
+} from '@wash/ui';
 import { onCleanup, onMount } from 'solid-js';
 import Webamp from 'webamp';
 
@@ -62,6 +76,9 @@ function WashampApp(props: WashAppProps) {
   // tracks) apart from a service-driven one (handleCmd set it → don't bounce
   // it back). -1 until the first sync.
   let lastVolume = -1;
+  // The ingress base the playlist was built on ('' until tracks_ok, or
+  // when every track is an absolute stream URL). Skins live under it too.
+  let base = '';
 
   // readPersistable pulls the current playback blob out of Webamp.
   // Guarded like snapshot(): the store shape is not a stable contract.
@@ -417,9 +434,62 @@ function WashampApp(props: WashAppProps) {
     scheduleReport();
   }
 
+  // rebase swaps a live player's playlist onto a fresh ingress base (the
+  // heal re-ensure answered). Tracks are matched across bases by their
+  // path under the base, so the current track survives the token change;
+  // Webamp's public API has no "replace without playing", so the playlist
+  // is cleared through its store and re-appended.
+  function rebase(wa: Webamp, m: TracksOk, next: string) {
+    const old = base;
+    base = next;
+    let playing = false;
+    try {
+      playing = String(wa.getMediaStatus()).toUpperCase() === 'PLAYING';
+    } catch {
+      /* treat as stopped */
+    }
+    const rel = (u: string, b: string) => (b && u.includes(b) ? u.slice(u.indexOf(b) + b.length) : u);
+    const curRel = rel(cur.url, old);
+    trackMeta.clear();
+    for (const t of m.tracks) trackMeta.set(t.url, { title: t.title, artist: t.artist ?? '' });
+    try {
+      wa.stop();
+      wa.store.dispatch({ type: 'REMOVE_ALL_TRACKS' });
+      wa.appendTracks(m.tracks.map((t) => ({ url: t.url, metaData: { title: t.title, artist: t.artist ?? '' } })));
+      const idx = m.tracks.findIndex((t) => rel(t.url, next) === curRel);
+      if (idx >= 0) {
+        wa.setCurrentTrack(idx);
+        const t = m.tracks[idx];
+        cur = { url: t.url, title: t.title, artist: t.artist ?? '' };
+      }
+      if (playing) wa.play();
+    } catch {
+      /* best-effort: a stale playlist is what we had anyway */
+    }
+    scheduleReport();
+  }
+
   const handleBE = (m: { kind?: string }) => {
-    if (m?.kind === 'tracks_ok') void initWebamp(m as TracksOk);
+    if (m?.kind !== 'tracks_ok') return;
+    const t = m as TracksOk;
+    const next = ingressBase(t.tracks.find((x) => ingressBase(x.url))?.url ?? t.skins?.[0]?.url);
+    if (!webamp) {
+      base = next;
+      void initWebamp(t);
+    } else if (next && next !== base) {
+      rebase(webamp, t, next);
+      heal.check();
+    }
   };
+
+  // Ingress self-heal. Re-ensure = the track-list request, answered with
+  // URLs under a live base (handleBE → rebase). No media-error cue here:
+  // Webamp owns its <audio> and doesn't surface errors, so the shell
+  // reconnect is the trigger.
+  const heal = createIngressHeal({
+    base: () => base,
+    reensure: () => send({ kind: 'tracks', id: 'm-tracks' }),
+  });
   // wash:state always fires before any queued wash:msg (api.ts
   // delivery order), so `saved` is populated before tracks_ok
   // triggers initWebamp's restore.
@@ -458,6 +528,7 @@ function WashampApp(props: WashAppProps) {
   });
 
   onCleanup(() => {
+    heal.dispose();
     audio?.dispose();
     webamp?.dispose();
   });

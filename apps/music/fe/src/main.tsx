@@ -4,6 +4,12 @@
 // UI built from the @wash/ui media kit + FilePicker; an <audio> element
 // does playback (Case-1 fe-decoded over the BE's ingress), and the player
 // registers with com.wash.audio (sidebar now-playing + transport).
+//
+// Track URLs live under the BE's /app/<token>/ ingress base. If that token
+// dies under a mounted window (wash-login restart → 401, router forgot it
+// → 410) createIngressHeal notices — on shell reconnect or an <audio>
+// error — and rescans, which hands back URLs under a live base; the
+// rescan re-selects the same track at the same position.
 
 import {
   Button,
@@ -15,6 +21,7 @@ import {
   VolumeSlider,
   createAppBus,
   createAudioSource,
+  createIngressHeal,
   defineWashApp,
   tokens,
   type AudioSource,
@@ -70,6 +77,9 @@ function MusicApp(props: WashAppProps) {
   let pendingSeek = -1;
   let lastPersistedPos = 0;
   let persistTimer: ReturnType<typeof setTimeout> | undefined;
+  // Set by a heal-driven rescan: resume playback once the track is
+  // re-pointed at its fresh URL (it was playing when the token died).
+  let resumeAfterRescan = false;
 
   const current = () => tracks()[index()];
   const persist = () => {
@@ -182,12 +192,14 @@ function MusicApp(props: WashAppProps) {
         applyVolume();
         setStatus('paused');
         audio?.register({ title: t.title });
+        if (resumeAfterRescan) void audioEl.play().catch(() => {});
       } else {
         setIndex(-1);
         setSelected(s.tracks.length ? 0 : -1);
         audio?.register({ title: s.tracks[0]?.title ?? '' });
       }
       restore = null;
+      resumeAfterRescan = false;
     }
   };
   // wash:state drives the first scan: restore the saved folder, else
@@ -204,6 +216,21 @@ function MusicApp(props: WashAppProps) {
     onState: (s) => handleState(s as PersistedState | null),
   });
 
+  // Ingress self-heal: watch the base the track URLs live under. A rescan
+  // is the re-ensure — scan_ok re-selects the current track (by URL, else
+  // title; the URL changes with the token) and seeks back to where it was.
+  const heal = createIngressHeal({
+    base: () => current()?.url ?? tracks()[0]?.url ?? '',
+    reensure: () => {
+      const t = current();
+      if (t) {
+        restore = { track_url: t.url, track_title: t.title, pos: pos() };
+        resumeAfterRescan = status() === 'playing';
+      }
+      scan(pickedPath || undefined);
+    },
+  });
+
   onMount(() => {
     audio = createAudioSource({
       instance: props.instance,
@@ -216,6 +243,7 @@ function MusicApp(props: WashAppProps) {
   onCleanup(() => {
     if (persistTimer) clearTimeout(persistTimer);
     audio?.dispose();
+    heal.dispose();
   });
 
   return (
@@ -339,6 +367,9 @@ function MusicApp(props: WashAppProps) {
           }
         }}
         onEnded={next}
+        // A stale token surfaces only as an opaque media error; let the
+        // heal probe tell it apart from a bad file.
+        onError={() => heal.check()}
       />
     </div>
   );

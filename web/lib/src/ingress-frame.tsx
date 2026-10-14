@@ -3,6 +3,7 @@ import type { Component, JSX } from 'solid-js';
 import { washAssetUrl } from './assets';
 import { installIngressClipboardBridge } from './ingress-clipboard';
 import { installIngressFocusBridge } from './ingress-focus';
+import { createIngressHeal, type IngressHeal } from './ingress-heal';
 
 // IngressFrame embeds a web app published through the router's
 // generic ingress (/app/<token>/*) in a full-bleed iframe. It is the
@@ -21,6 +22,12 @@ import { installIngressFocusBridge } from './ingress-focus';
 // `wash:ingress` CustomEvent, so an app shell can react (title sync,
 // theme, focus) without IngressFrame knowing app specifics. Apps that
 // don't post anything (plain code-server) simply get the iframe.
+//
+// Self-heal: with onDead set, the frame probes its ingress base on every
+// load and whenever the shell link comes back (ingress-heal.ts). A dead
+// token (401/410) calls onDead so the app re-ensures and hands back a
+// fresh path; if the same path instead recovers in place, the frame
+// reloads itself off the error page.
 
 export interface IngressFrameProps {
   /** Ingress base path from PublishIngress, e.g. "/app/<token>/". */
@@ -34,6 +41,12 @@ export interface IngressFrameProps {
   host?: HTMLElement;
   /** Fires when the iframe finishes loading the embedded app. */
   onLoad?: () => void;
+  /**
+   * The ingress token behind `path` died (401/410). The app should ask
+   * its BE for a fresh path (its ensure/launch message) and pass it back
+   * in as `path`. Omit to opt out of self-heal.
+   */
+  onDead?: () => void;
   /** Extra styles merged onto the iframe (last). */
   style?: JSX.CSSProperties;
 }
@@ -62,8 +75,22 @@ export const IngressFrame: Component<IngressFrameProps> = (props) => {
     frame?.dispatchEvent(new Event('pointerdown', { bubbles: true, composed: true }));
   };
 
+  let heal: IngressHeal | undefined;
+
   onMount(() => {
     onCleanup(() => detachFocus?.());
+    if (props.onDead) {
+      heal = createIngressHeal({
+        base: () => props.path,
+        reensure: () => props.onDead?.(),
+        onRecovered: (sameBase) => {
+          // A fresh base already re-navigated the frame via src; the same
+          // base means the frame may still be showing the failure page.
+          if (sameBase && frame) frame.src = src();
+        },
+      });
+      onCleanup(() => heal?.dispose());
+    }
     if (!props.host) return;
     const onMessage = (ev: MessageEvent) => {
       // Only relay messages from our own iframe, and only those that
@@ -96,6 +123,9 @@ export const IngressFrame: Component<IngressFrameProps> = (props) => {
         // load: each navigation is a new document.
         detachFocus?.();
         detachFocus = installIngressFocusBridge(frame?.contentWindow, raiseWindow);
+        // The load event fires for an error page too — the iframe can't
+        // see its status, so ask the route directly.
+        heal?.check();
         props.onLoad?.();
       }}
       style={{
