@@ -270,3 +270,54 @@ describe('wm pending geometry commit (window.move tok)', () => {
     expect(b).not.toBe(a);
   });
 });
+
+// GH #22: windows came back from a browser reconnect without titlebar icons.
+// The titlebar renders from Win.icon alone, so the store must carry the
+// snapshot's icon/accent through every path a reconnect takes: a window that
+// was already on screen (merged in place), one whose bundle was still in
+// flight (re-scheduled under the new epoch), and one the router brought up
+// again under a new instance (first sight).
+describe('wm reconnect keeps manifest icons (GH #22)', () => {
+  beforeEach(async () => {
+    applySessionSnapshot('local', [], immediate);
+    applySessionSnapshot('hostB', [], immediate);
+    await flush();
+  });
+
+  const iconOf = (id: number) => {
+    const w = windows.find((x) => x.origin === 'local' && x.windowID === id);
+    return w ? [w.icon, w.accent] : undefined;
+  };
+
+  it('a reconnect snapshot keeps icon and accent on windows already shown', async () => {
+    const term = (o: Partial<SessionWindow> = {}) => sw(1, 'term', { icon: 'terminal', accent: '#0af', ...o });
+    applySessionSnapshot('local', [term(), sw(2, 'fm', { icon: 'folder' })], immediate);
+    await flush();
+    // A retitle in between, then the reconnect.
+    applySessionPatch('local', [{ op: 'window.upsert', window: term({ title: 'renamed' }) }], immediate);
+    applySessionSnapshot('local', [term({ title: 'renamed' }), sw(2, 'fm', { icon: 'folder' })], immediate);
+    await flush();
+    expect(iconOf(1)).toEqual(['terminal', '#0af']);
+    expect(iconOf(2)).toEqual(['folder', undefined]);
+  });
+
+  it('a window still waiting on its bundle mounts with its icon after a reconnect', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    applySessionSnapshot('local', [sw(3, 'ai', { icon: 'bot' })], (id) => (id === 'ai' ? gate : Promise.resolve()));
+    await flush();
+    applySessionSnapshot('local', [sw(3, 'ai', { icon: 'bot' })], immediate);
+    release();
+    await flush();
+    expect(iconOf(3)).toEqual(['bot', undefined]);
+  });
+
+  it('a window brought up again under a new instance carries its icon', async () => {
+    applySessionSnapshot('local', [sw(4, 'i-8', { icon: 'layout-dashboard' })], immediate);
+    await flush();
+    applySessionSnapshot('local', [sw(9, 'i-16', { icon: 'layout-dashboard' })], immediate);
+    await flush();
+    expect(iconOf(4)).toBeUndefined();
+    expect(iconOf(9)).toEqual(['layout-dashboard', undefined]);
+  });
+});
