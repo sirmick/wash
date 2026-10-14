@@ -26,6 +26,7 @@ import type { Component, JSX } from 'solid-js';
 import { washAssetUrl } from './assets';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { washCopyText, washPasteText } from './clipboard';
+import { parseOsc52 } from './term-osc52';
 import { washAppearance, onAppearanceChange } from './packs';
 
 // Terminal palettes by pack appearance. The component uses these when no
@@ -1074,6 +1075,19 @@ export const Terminal: Component<TerminalProps> = (props) => {
         return false;
       });
     }
+    // OSC 52 — a TUI that owns the mouse copies its own selection this way
+    // (see term-osc52.ts). Arrives outside any user gesture, so the system
+    // clipboard write may be refused (Firefox); the wash clipboard always
+    // takes it.
+    term.parser.registerOscHandler(52, (data) => {
+      try {
+        const text = parseOsc52(data);
+        if (text) washCopyText(text);
+      } catch (e) {
+        window.wash.log('error', 'terminal', `OSC 52 threw: ${e}`, (e as Error)?.stack);
+      }
+      return true;
+    });
 
     // PuTTY-style select = copy: xterm keeps its own selection model
     // (not a DOM selection), so on selection-end we push the selected
