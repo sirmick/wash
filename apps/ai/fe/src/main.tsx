@@ -14,6 +14,7 @@ import { Connections, type KeyResult } from './Connections.tsx';
 import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
 import { isManagerElement } from './role.ts';
+import { reconnectRequests } from './reconnect.ts';
 import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuPicker, MenuSeparator,
@@ -401,6 +402,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // for an authoritative transcript snapshot.
       setSessionKey(key);
       sendLocal({ kind: 'restore', key });
+    },
+    // The mount-time asks again, after a connection blip that remounted
+    // nothing (reconnect.ts). History's answer can be lost the same way.
+    onReconnect: () => {
+      for (const msg of reconnectRequests(role(), sessionKey())) {
+        if (msg.kind === 'transcript_subscribe') resyncPending = true;
+        sendAgentd(msg);
+      }
+      if (role() === 'manager') askHistory(historyQuery());
     },
   });
 

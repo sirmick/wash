@@ -32,6 +32,13 @@ export interface AppBusOptions<M extends AppBusMsgBound = AppBusMessage> {
   /** Invoked for every wash:state CustomEvent (persisted FE-state restore). */
   onState?: (state: unknown) => void;
   /**
+   * Invoked for every wash:reconnected CustomEvent: the shell's connection
+   * dropped and came back while this element stayed mounted. A WS blip
+   * remounts nothing, so whatever this FE pulls on mount it must pull
+   * again here — the router dropped every BE push sent while it was away.
+   */
+  onReconnect?: () => void;
+  /**
    * Debounce window (ms) for saveState() coalescing. Bursts of view-state
    * changes (typing in a filter, dragging a splitter) collapse to one
    * router round-trip. Default 200. Set 0 to send on the next tick with
@@ -76,6 +83,12 @@ export function createAppBus<M extends AppBusMsgBound = AppBusMessage>(
     const handler = (ev: Event) => onState((ev as CustomEvent).detail);
     props.host.addEventListener('wash:state', handler);
     onCleanup(() => props.host.removeEventListener('wash:state', handler));
+  }
+  if (opts.onReconnect) {
+    const onReconnect = opts.onReconnect;
+    const handler = () => onReconnect();
+    props.host.addEventListener('wash:reconnected', handler);
+    onCleanup(() => props.host.removeEventListener('wash:reconnected', handler));
   }
 
   // Debounced view-state persistence. We hold the latest blob (a sentinel

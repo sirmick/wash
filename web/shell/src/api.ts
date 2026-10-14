@@ -218,6 +218,24 @@ export function replaceSavedStates(origin: Origin, states: Record<string, unknow
   }
 }
 
+// announceReconnect tells every element of origin that is STILL mounted
+// that its connection came back: a `wash:reconnected` CustomEvent. (Not
+// the raw-channel resync below — that is one channel's bytes falling
+// behind; this is the whole connection having been away.)
+//
+// A WS blip does not remount anything — the snapshot that follows it
+// upserts the windows that survived in place — so "pull on mount"
+// (ARCHITECTURE.md, Reconnect & durability) never runs for them, and any
+// BE push the router dropped while no shell was attached stays lost. An
+// app whose view is fed by pushes re-asks on this the way it asks on
+// mount. Elements that mount after this call get wash:state instead.
+export function announceReconnect(origin: Origin): void {
+  for (const [id, el] of mountedElements) {
+    if (parseInstanceId(id).origin !== origin) continue;
+    el.dispatchEvent(new CustomEvent('wash:reconnected', { bubbles: false }));
+  }
+}
+
 export function unregisterMountedElement(instanceID: string): void {
   mountedElements.delete(instanceID);
   pendingMessages.delete(instanceID);

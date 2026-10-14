@@ -124,8 +124,8 @@ program plus an embedded frontend (FE) web-component bundle.
 
 ## Reconnect & durability
 
-App BE processes survive browser disconnects; the shell FE remounts
-everything from the router's snapshot on (re)connect. The contract has
+App BE processes survive browser disconnects; the shell FE rebuilds
+from the router's snapshot on (re)connect. The contract has
 three load-bearing rules:
 
 - **FE must pull on mount.** BE→FE `app_msg` sent while no shell is
@@ -133,9 +133,13 @@ three load-bearing rules:
   (256KB) for replay. Any FE that depends on BE pushes must re-request
   its snapshot on mount (fm's `request_initial`, term's
   `list_sessions`, priv's `hello`, the sidebar's per-service
-  resubscribe). State that must survive a reload goes through the save
-  path: FE → `save_state` app_msg → BE `SaveState` → router
-  `app_state` blob → `wash:state` on remount.
+  resubscribe). A WS blip remounts nothing — surviving windows are
+  upserted in place — so the shell also fires `wash:reconnected` on
+  each still-mounted element (createAppBus `onReconnect`), and an FE
+  fed by pushes re-asks there too (the Agent windows do, GH #21).
+  State that must survive a reload goes through the save path: FE →
+  `save_state` app_msg → BE `SaveState` → router `app_state` blob →
+  `wash:state` on remount.
 - **Durability tiers.** Router-held state (`app_state`, window
   geometry, channel ring buffers) survives shell reconnects but NOT a
   router restart — it is router-process memory by design. Disk-backed

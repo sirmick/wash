@@ -79,6 +79,7 @@ import {
   WindowInfo,
   bindVideoChannel,
   bindPopupChannel,
+  announceReconnect,
   closeRawSubscriber,
   deliverRaw,
   deliverResync,
@@ -1396,6 +1397,11 @@ function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot, isLocal
   // router's echo arrived.
   const rescued = rescueOrphans(msg.windows);
   applySessionSnapshot(client.origin, msg.windows, (id) => client.waitForBundle(id));
+  // Windows that survived the reconnect were upserted in place, not
+  // remounted, so they never pull what the router dropped while this
+  // connection was away. Tell them. (On a first connect nothing of this
+  // origin is mounted yet, so this reaches no one.)
+  announceReconnect(client.origin);
   // After applying: the snapshot clears pending geometry for this origin,
   // so a token marked before it would be wiped.
   for (const m of rescued) {
