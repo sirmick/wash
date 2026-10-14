@@ -709,9 +709,23 @@ func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) 
 		}
 	}
 	send := wire.NewShellAppMsgDeliver(inst.InstanceID, json.RawMessage(m.Data))
+	// One shell failing must not starve the others. After a reconnect the
+	// dead connection lingers in shellList beside its replacement until
+	// its teardown completes, and map order is random — so returning on
+	// the first error meant that, about half the time, the browser the
+	// user just reconnected missed the app's message because a zombie
+	// happened to be visited first (GH #23: the session app's pushes are
+	// exactly these). Deliver to every shell, then report the first
+	// failure; dispatch turns a departed shell's ErrSchedulerClosed into
+	// a dropped frame rather than a dead app. relayNotify below already
+	// fans out this way.
+	var firstErr error
 	for _, s := range inst.router.shellList() {
 		if err := s.WriteCtrlClass(send, class); err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		// Attribute the envelope to the app that sent it. Counted here
 		// rather than in the drain loop because a control-channel frame
@@ -721,7 +735,7 @@ func (inst *AppInstance) relayAppMsgToShell(m wire.EvtAppMsg, class wire.Class) 
 		// keeps the number one an app author can reason about.
 		s.statsLink().recordAppTx(inst.AppID, class, len(m.Data))
 	}
-	return nil
+	return firstErr
 }
 
 // relayNotify routes an EvtNotify based on the sender:

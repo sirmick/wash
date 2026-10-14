@@ -357,3 +357,61 @@ func TestQueueSaturationLogIsThrottled(t *testing.T) {
 		t.Errorf("logged saturation %d times for 50 stalled submits, want 1", n)
 	}
 }
+
+// The control fan-out has the same duty toward the OTHER shells. After a
+// reconnect the dead connection can still sit in shellList beside its
+// replacement, and the old relayAppMsgToShell returned on the first
+// failed write — so whenever map order visited the zombie first, the
+// live browser never got the app's message. Surviving the dead shell is
+// not enough; the app's state pushes (com.wash.session's are app_msgs)
+// have to reach the one the user is looking at.
+//
+// Repeated sends make the random map order irrelevant: with a dead shell
+// visited first about half the time, twenty sends all arriving is the
+// fan-out continuing, not luck.
+func TestAppMsgReachesLiveShellPastADeadOne(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), nil)
+
+	dead := stalledShell(t)
+	dead.scheduler.Close()
+	r.registerShell(dead)
+
+	// A live shell needs no drainer here: its queue has room, so Submit
+	// takes the fast path and the frames wait to be counted below.
+	live := &ShellSession{scheduler: NewScheduler(), drainerDone: make(chan struct{})}
+	r.registerShell(live)
+
+	inst, _ := appWithBoundChannel(t, r, dead, wire.ClassInteractive)
+
+	const sends = 20
+	if sends >= ClassQueueSize[wire.ClassInteractive] {
+		t.Fatalf("live queue (%d) too small for %d sends", ClassQueueSize[wire.ClassInteractive], sends)
+	}
+	for i := 0; i < sends; i++ {
+		data := []byte(fmt.Sprintf(`{"seq":%d}`, i))
+		payload, err := wire.EncodeCtrl(wire.EvtAppMsg{T: wire.TEvtAppMsg, Data: data})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := wire.Frame{Flags: wire.FlagEnd, Channel: ChannelEvent, Payload: payload}.WithClass(wire.ClassInteractive)
+		if err := inst.dispatch(f); err != nil {
+			t.Fatalf("dispatch %d: %v — a dead shell in the fan-out ended the app's loop", i, err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	got := 0
+	for {
+		f, err := live.scheduler.Next(ctx)
+		if err != nil {
+			break
+		}
+		if strings.Contains(string(f.Payload), wire.TShellAppMsgDeliver) {
+			got++
+		}
+	}
+	if got != sends {
+		t.Fatalf("live shell received %d of %d app messages — the fan-out stopped at the dead shell", got, sends)
+	}
+}
