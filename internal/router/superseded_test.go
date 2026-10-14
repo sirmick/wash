@@ -100,3 +100,75 @@ func TestSupersededNotSentToSelf(t *testing.T) {
 		// no superseded frame — correct
 	}
 }
+
+// TestClaimHeadTakesHeadBack: a superseded shell's "Use here"
+// (shell.claim_head on its still-open connection) makes it the head again —
+// its terminal channel migrates back and the shell that held the head is
+// told it was superseded in turn. It used to re-dial, which is a no-op on
+// an open socket, so the button did nothing.
+func TestClaimHeadTakesHeadBack(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+
+	s1, _, c1 := newTestShellSession(t)
+	s1.router = r
+	defer c1()
+	s2, fe2, c2 := newTestShellSession(t)
+	s2.router = r
+	defer c2()
+
+	r.registerShell(s1)
+	r.reattachChannelsToShell(s1)
+	term := &channelBinding{
+		channelID: 42,
+		kind:      wire.ChannelKindGeneric,
+		shell:     s1,
+		buf:       newRingBuffer(ChannelScrollbackBytes),
+	}
+	r.registerChannel(term)
+
+	r.registerShell(s2)
+	r.reattachChannelsToShell(s2) // s2 steals the head
+
+	superseded := make(chan struct{}, 1)
+	go func() {
+		for {
+			f, err := fe2.ReadFrame()
+			if err != nil {
+				return
+			}
+			if f.Channel != ChannelControl {
+				continue
+			}
+			var p struct {
+				T string `json:"t"`
+			}
+			if json.Unmarshal(f.Payload, &p) == nil && p.T == wire.TShellSuperseded {
+				superseded <- struct{}{}
+				return
+			}
+		}
+	}()
+
+	payload, err := json.Marshal(wire.NewShellClaimHead())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.dispatch(wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: payload}); err != nil {
+		t.Fatalf("dispatch claim_head: %v", err)
+	}
+
+	if got := r.headShellOrAny(); got != s1 {
+		t.Fatalf("after claim, head = %p, want s1 %p", got, s1)
+	}
+	term.shellMu.Lock()
+	owner := term.shell
+	term.shellMu.Unlock()
+	if owner != s1 {
+		t.Errorf("terminal channel owner = %p, want migrated back to s1 %p", owner, s1)
+	}
+	select {
+	case <-superseded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the shell that lost the head never received shell.superseded")
+	}
+}

@@ -369,6 +369,9 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellPong:
 		var m ShellPong
 		return m, json.Unmarshal(data, &m)
+	case TShellClaimHead:
+		var m ShellClaimHead
+		return m, json.Unmarshal(data, &m)
 	case TShellReload:
 		var m ShellReload
 		return m, json.Unmarshal(data, &m)

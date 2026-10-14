@@ -506,6 +506,12 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return nil
 	case wire.ShellPing:
 		return s.handlePing(m)
+	case wire.ShellClaimHead:
+		// "Use here": the same takeover a fresh attach does, on this open
+		// connection — no re-dial, so nothing races a reconnect.
+		s.router.log("shell: claim head conn=%d", s.connID)
+		s.router.reattachChannelsToShell(s)
+		return nil
 	case wire.ShellLog:
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:

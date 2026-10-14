@@ -1563,6 +1563,19 @@ conn.onEvent((e) => {
 // keeping the session in the other window is an answer too.
 const [superseded, setSuperseded] = createSignal<string | null>(null);
 
+// claimHead is the banner's "Use here": the router migrates the terminal and
+// display channels back to this connection (and tells the tab that had them).
+// The compositor's one output was last sized by the other tab, so re-send
+// this tab's metrics and layout too.
+function claimHead(): void {
+  local.conn.sendCtrl({ t: 'shell.claim_head' });
+  setSuperseded(null);
+  sentDisplayMetrics.delete(local.origin);
+  publishDisplayMetrics(local);
+  layoutSentTo.delete(local.origin);
+  publishKeymap(local);
+}
+
 // connTick drives the banner's live "no contact for Ns / next retry" readout
 // while the link is down. Only ticks when not open, so a healthy desktop
 // pays nothing.
@@ -1983,16 +1996,16 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
             Reconnect now
           </button>
         </Show>
-        {/* Reclaiming the head is a re-dial, the same one "Reconnect now"
-            does, so the two never both show. It used to reload the page —
-            throwing the whole desktop away to re-attach a socket — and it
-            was hidden unless the link was open, which is when it was least
-            needed. */}
+        {/* Reclaiming the head is a shell.claim_head on the open socket.
+            It used to be conn.reconnectNow(), which is a no-op while the
+            socket is open — the only time this button shows — so "Use
+            here" did nothing. While the link is down "Reconnect now"
+            stands in: the fresh attach takes the head anyway. */}
         <Show when={superseded() && !canRetry()}>
           <button
             data-wash-hit
             data-testid="wash-connection-use-here"
-            onClick={() => conn.reconnectNow()}
+            onClick={claimHead}
             style={{
               font: tokens.type.textSm,
               color: tokens.fg,

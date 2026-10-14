@@ -139,6 +139,10 @@ const (
 	// this shell's terminals go quiet; the FE raises an "opened elsewhere"
 	// banner instead of leaving the tab silently dark (REVIEW-RECONNECT L2).
 	TShellSuperseded = "shell.superseded"
+	// Shell → router, the banner's "Use here": take the head back on this
+	// still-open connection — channels migrate here and the shell that
+	// holds the head now is sent shell.superseded in turn.
+	TShellClaimHead = "shell.claim_head"
 
 	// Shell → router, settings-panel bundle pull. Read the cached
 	// panel.js bytes (Entry.PanelBundle) for an app that declared a
@@ -535,6 +539,16 @@ type ShellSuperseded struct {
 
 func NewShellSuperseded(msg string) ShellSuperseded {
 	return ShellSuperseded{T: TShellSuperseded, Msg: msg}
+}
+
+// ShellClaimHead asks the router to make this shell the foreground head
+// again without re-dialing.
+type ShellClaimHead struct {
+	T string `json:"t"`
+}
+
+func NewShellClaimHead() ShellClaimHead {
+	return ShellClaimHead{T: TShellClaimHead}
 }
 
 // ShellPing (shell → router) and ShellPong (router → shell) are the
