@@ -551,6 +551,14 @@ type bellReq struct {
 	ChannelID uint64 `json:"channel_id"`
 }
 
+// notifyReq is a desktop notification a program in a tab raised (OSC 9 /
+// 777 / 99). The FE has already parsed, clamped and titled it.
+type notifyReq struct {
+	ChannelID uint64 `json:"channel_id"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+}
+
 // pathProbeReq asks which of Paths exist, resolved against the tab's cwd.
 // The FE sends the tokens exactly as they appear in the output; Ok comes
 // back holding the same strings, so the FE can key its cache on them.
@@ -648,6 +656,14 @@ func registerHandlers(b *sdk.Bus) {
 	sdk.HandleVoid(b, "bell", func(c *sdk.Conn, _ string, req bellReq) error {
 		log.Printf("wash-term bell ch=%d", req.ChannelID)
 		return c.Attention(true)
+	})
+	// notify: a program in this tab raised a desktop notification. The FE
+	// only sends it when the tab is not in front of the user; it becomes an
+	// ordinary toast, whose click focuses this window.
+	sdk.HandleVoid(b, "notify", func(c *sdk.Conn, _ string, req notifyReq) error {
+		log.Printf("wash-term notify ch=%d", req.ChannelID)
+		c.Info(req.Title, req.Body)
+		return nil
 	})
 	// path_probe / path_open: the FE's link provider found path-shaped
 	// tokens on a line and wants to know which are real (only real ones

@@ -53,6 +53,7 @@ export {
   TERM_SCROLLBACK_LINES,
 } from './terminal';
 export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme, TermSearchOptions, TermCursorStyle, TermLinks } from './terminal';
+export type { TermNotification } from './term-notify';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';

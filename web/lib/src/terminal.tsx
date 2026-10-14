@@ -27,6 +27,7 @@ import { washAssetUrl } from './assets';
 import { Menu, MenuItem, MenuSeparator } from './menu';
 import { washCopyText, washPasteText } from './clipboard';
 import { parseOsc52 } from './term-osc52';
+import { Osc99, parseOsc777, parseOsc9, type TermNotification } from './term-notify';
 import { washAppearance, onAppearanceChange } from './packs';
 
 // Terminal palettes by pack appearance. The component uses these when no
@@ -546,6 +547,10 @@ export interface TerminalProps {
   // nothing itself — what a bell should LOOK like is the consumer's
   // (a pane flash, a tab badge, a window attention flag).
   onBell?: () => void;
+  // onNotify fires when the program raises a desktop notification (OSC 9,
+  // 777 or 99 — see term-notify.ts). Like onBell, showing it is the
+  // consumer's; omit and the sequences are swallowed.
+  onNotify?: (n: TermNotification) => void;
   // onActivity fires when output arrives, coalesced to at most one call
   // per ACTIVITY_MS. A per-byte callback would be a signal write per
   // frame during a build.
@@ -911,6 +916,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
       scrollback: props.scrollback ?? TERM_SCROLLBACK_LINES,
       allowProposedApi: true,
       wordSeparator: TERM_WORD_SEPARATORS,
+      // OSC 8 hyperlinks (ls --hyperlink, gcc, delta, rg, systemd) open the
+      // way detected links do. Without a handler xterm falls back to a
+      // confirm() popup and a bare window.open. file:// links go to
+      // openPath as an absolute path; other schemes are not opened.
+      linkHandler: {
+        allowNonHttpProtocols: true,
+        activate: (ev, uri) => {
+          ev.preventDefault();
+          if (/^https?:/i.test(uri)) {
+            props.links?.openUrl?.(uri);
+            return;
+          }
+          const path = /^file:/i.test(uri) ? parseOsc7(uri) : null;
+          if (path) props.links?.openPath?.(path);
+        },
+      },
     });
     // Theme resolution, in priority order: an explicit `theme` prop (a
     // pinned named palette from the menubar's Theme menu) wins; else an
@@ -1088,6 +1109,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
       }
       return true;
     });
+    // Notifications. Registered regardless of onNotify so the sequences
+    // never fall through to xterm (which would ignore them anyway).
+    const osc99 = new Osc99();
+    const notifyVia = (id: number, parse: (data: string) => TermNotification | null) =>
+      term!.parser.registerOscHandler(id, (data) => {
+        try {
+          const n = parse(data);
+          if (n) props.onNotify?.(n);
+        } catch (e) {
+          window.wash.log('error', 'terminal', `OSC ${id} threw: ${e}`, (e as Error)?.stack);
+        }
+        return true;
+      });
+    notifyVia(9, parseOsc9);
+    notifyVia(777, parseOsc777);
+    notifyVia(99, (data) => osc99.feed(data));
 
     // PuTTY-style select = copy: xterm keeps its own selection model
     // (not a DOM selection), so on selection-end we push the selected

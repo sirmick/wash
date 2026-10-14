@@ -270,7 +270,7 @@ bug list — all fully landed; see `git log` if you need their content.)
   re-verified 2026-10-11 and most of it had landed; what remains is listed
   there with evidence. The bigger leftovers: fm undo, bookmarks, tabs and an
   unvirtualised tree; edit split view, markdown preview and the Keep→Save
-  clobber of an external change; term images and OSC 52; agent @-mention
+  clobber of an external change; term images; agent @-mention
   and money cost; a second edit window on a second fm double-click, and
   window state that does not survive a router restart. The
   terminal-intercept tier was deleted (docs/AGENT_APP.md §10), so `claude`
@@ -302,6 +302,28 @@ bug list — all fully landed; see `git log` if you need their content.)
   `FSRoot` — decide whether confined deployments need an unconfined-root
   option before building). Invariant: fm/edit never declare
   `CapPrepareSpawn`.
+- [ ] **Terminal escape sequences, the rest.** Handled today: OSC 0/1/2
+  title, 7 cwd, 8 hyperlinks (`linkHandler` in `web/lib/src/terminal.tsx`),
+  9/777/99 notifications (`term-notify.ts`), 52 clipboard writes
+  (`term-osc52.ts`); xterm answers the 4/10/11/12 colour queries itself.
+  Still to do, most valuable first:
+  - **OSC 133 shell integration** (FinalTerm marks: prompt / command /
+    output / `D;<exit>`; VS Code's OSC 633 is a superset). Unlocks
+    jump-to-prompt, select-a-command's-output, failed-command marks and a
+    "long command finished" toast for background tabs. Bash/zsh need an rc
+    snippet (ship one; fish and recent Starship/Oh My Posh emit it).
+  - **OSC 9;4 progress** (`9;4;<state>;<pct>` — ConEmu, Windows Terminal,
+    Ghostty). Parse two numbers, show a bar on the tab/window. Currently
+    dropped by `parseOsc9` on purpose.
+  - **Images**: `@xterm/addon-image` (sixel + iTerm2 OSC 1337 File=);
+    heavier, and the router's scrollback ring would need to survive them.
+  - **OSC 1337** other verbs (`SetUserVar`, `CurrentDir`) — overlap with
+    OSC 7; only if a tool we care about needs them.
+  - **OSC 22** pointer shape — rare.
+  - **Mouse-mode gaps** found with OSC 52: no `macOptionClickForcesSelection`
+    (Mac users can't force a selection under mouse tracking), no
+    `onBinary` subscription (DEFAULT-encoded mouse reports are dropped),
+    and no e2e that turns mouse tracking (`?1000h`/`?1006h`) on.
 - [ ] **fm expand-folder scroll anchoring** — WebKit/Safari only (no native
   `overflow-anchor`; Chromium/Firefox already pin). A JS polyfill fought
   Solid's async `<For>` timing and was backed out (2026-06-23). Revisit via

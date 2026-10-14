@@ -27,7 +27,7 @@ import {
   TERM_MIN_FONT_SIZE, TERM_MAX_FONT_SIZE, TERM_SCROLLBACK_LINES, TERM_THEMES, themeById,
   defineWashApp, tokens, WASH_SCROLL_HIDDEN_CLASS,
 } from '@wash/ui';
-import type { PasteAnalysis, TermCursorStyle, TermModes, TermSearchOptions, TerminalAPI } from '@wash/ui';
+import type { PasteAnalysis, TermCursorStyle, TermModes, TermNotification, TermSearchOptions, TerminalAPI } from '@wash/ui';
 import { analyzePaste } from '@wash/ui';
 import { PLACES_TERMINAL, PlacesBar } from '@wash/ui';
 import type { PlacesView } from '@wash/ui';
@@ -543,6 +543,17 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     if (flashTimer) clearTimeout(flashTimer);
     flashTimer = setTimeout(() => setFlash(null), 180);
     send({ kind: 'bell', channel_id: channelID });
+  };
+
+  // onNotify: the program raised a desktop notification (Claude Code when
+  // it is done or wants input, a build script). It rings like a bell — the
+  // marks and the window's attention flag — and becomes a wash toast unless
+  // you are already looking at that tab. A body-only notification (OSC 9)
+  // is titled with the tab, so you know which one is asking.
+  const onNotify = (channelID: number, n: TermNotification) => {
+    onBell(channelID);
+    if (visibleTab(channelID) && document.hasFocus()) return;
+    send({ kind: 'notify', channel_id: channelID, title: n.title || labelOfChannel(channelID), body: n.body });
   };
 
   const onActivity = (channelID: number) => {
@@ -2230,6 +2241,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
                   cursorBlink={cursorBlink()}
                   scrollback={scrollback()}
                   onBell={() => onBell(tab.channelID)}
+                  onNotify={(n) => onNotify(tab.channelID, n)}
                   onActivity={() => onActivity(tab.channelID)}
                   links={{
                     openUrl: (uri) => window.open(uri, '_blank', 'noopener,noreferrer'),
