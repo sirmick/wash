@@ -16,7 +16,7 @@ func indexOf(ss []string, want string) int {
 }
 
 func TestBuildSSHArgs(t *testing.T) {
-	args := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/wash-relay-deadbeef.sock", "/tmp/a/A.i.sock", "/tmp/wash-relay-deadbeef.sock.i", 0)
+	args := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/wash-relay-deadbeef.sock", "/tmp/a/A.i.sock", "/tmp/wash-relay-deadbeef.sock.i", 0, false)
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
@@ -55,7 +55,7 @@ func TestBuildSSHArgs(t *testing.T) {
 	if i := indexOf(args, "-p"); i >= 0 {
 		t.Errorf("default port must not emit -p: %v", args)
 	}
-	p := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/b.sock", "/tmp/a/A.i.sock", "/tmp/b.sock.i", 2222)
+	p := buildSSHArgs("user@host", "/tmp/a/A.sock", "/tmp/b.sock", "/tmp/a/A.i.sock", "/tmp/b.sock.i", 2222, false)
 	if i := indexOf(p, "-p"); i < 0 || i+1 >= len(p) || p[i+1] != "2222" {
 		t.Errorf("non-default port must emit -p 2222: %v", p)
 	}

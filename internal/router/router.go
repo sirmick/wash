@@ -197,6 +197,11 @@ type Router struct {
 	// decremented on disconnect — "has anyone ever been here" is a
 	// different question from "is anyone here now".
 	shellsSeen atomic.Uint64
+	// keepers counts relay keepers holding this router open (HoldOpen):
+	// the ssh-side foreground process of a detached --listen-raw router
+	// (docs/REMOTE.md §9). The reaper treats one like an attached shell,
+	// so the linger only starts once the ssh session is gone.
+	keepers atomic.Int32
 	// nextObserveReq mints observe.request ids (observe.go).
 	nextObserveReq atomic.Uint64
 

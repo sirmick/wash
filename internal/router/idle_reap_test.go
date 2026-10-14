@@ -111,3 +111,28 @@ func TestReapDisabledBlocksUntilCancel(t *testing.T) {
 		t.Error("did not return after cancel")
 	}
 }
+
+// A relay keeper (docs/REMOTE.md §9, M2e) counts as someone being here:
+// a detached B-side router whose ssh session is up must not be reaped just
+// because no browser is looking. Release is idempotent so a keeper
+// connection's teardown paths can't double-drop the hold.
+func TestHoldOpenCountsAsAttached(t *testing.T) {
+	r := &Router{shells: map[*ShellSession]struct{}{}}
+	if n := r.attachedCount(); n != 0 {
+		t.Fatalf("fresh router attached = %d, want 0", n)
+	}
+	release := r.HoldOpen()
+	other := r.HoldOpen()
+	if n := r.attachedCount(); n != 2 {
+		t.Errorf("two keepers attached = %d, want 2", n)
+	}
+	release()
+	release()
+	if n := r.attachedCount(); n != 1 {
+		t.Errorf("after one (double) release attached = %d, want 1", n)
+	}
+	other()
+	if n := r.attachedCount(); n != 0 {
+		t.Errorf("all released attached = %d, want 0", n)
+	}
+}

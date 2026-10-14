@@ -23,7 +23,11 @@ import (
 
 // remoteSockPath returns a unique B-side socket path for one connection.
 // On B the raw router binds it and chmods it 0600 (uid-only); a per-
-// connection name avoids collisions between concurrent sessions.
+// connection name avoids collisions between concurrent sessions. It is
+// minted once per connect and reused by every re-dial of that connection:
+// it is also the NAME of B's detached relay router (M2e), so a re-dial's
+// keeper finds the router the drop left running instead of starting a
+// second one.
 func remoteSockPath() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
@@ -39,13 +43,57 @@ type supervisor struct {
 	// reproduces StateService's shallow-snapshot-then-marshal and prove the
 	// mutators below are copy-on-write safe.
 	svc     stateMutator
-	conn    *sdk.Conn // for RegisterPeer/UnregisterPeer with A's router
-	sshPath string    // injectable for tests
-	sockDir string    // dir holding per-host ssh -L unix sockets
+	conn    peerRegistrar // A's router (nil in tests that don't care)
+	sshPath string        // injectable for tests
+	sockDir string        // dir holding per-host ssh -L unix sockets
+
+	// attempt runs one bring-up (runOnce); after is the backoff clock and
+	// now the health clock. Seams so the reconnect state machine is tested
+	// with fakes — no ssh, no real sleeps.
+	attempt func(ctx context.Context, a attemptSpec) (code, errMsg string)
+	after   func(time.Duration) <-chan time.Time
+	now     func() time.Time
 
 	mu    sync.Mutex
-	procs map[string]context.CancelFunc
+	procs map[string]*hostProc
 }
+
+// hostProc is one host's live run loop: cancel ends it (asking B's relay
+// router to stop, see runOnce), done closes once it has unwound.
+type hostProc struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// peerRegistrar is the slice of *sdk.Conn the supervisor drives.
+type peerRegistrar interface {
+	RegisterPeer(origin, network, addr, ingressAddr string) error
+	UnregisterPeer(origin string) error
+}
+
+// attemptSpec is everything one ssh bring-up needs. host is the connect
+// identity, dial the ssh target this attempt (name or fallback IP), sock /
+// ingressSock A's -L ends, remoteSock B's relay socket (stable across a
+// connection's re-dials). legacy drops --detach for a B whose wash-router
+// predates it.
+type attemptSpec struct {
+	host, dial                    string
+	port                          int
+	sock, ingressSock, remoteSock string
+	legacy                        bool
+}
+
+const (
+	// remoteLinger is how long B's detached relay router outlives its ssh
+	// session with no browser attached (docs/REMOTE.md §9 "linger, then
+	// exit"). Long enough to ride out a network blip or a short A outage —
+	// A's re-dial backoff caps at 30s — short enough that a host nobody
+	// comes back to doesn't keep its apps forever.
+	remoteLinger = 15 * time.Minute
+	// stopGrace bounds a deliberate disconnect: after asking B's keeper to
+	// stop the router, wait this long for ssh to exit before killing it.
+	stopGrace = 3 * time.Second
+)
 
 func newSupervisor(svc *sdk.StateService[State], conn *sdk.Conn) *supervisor {
 	// Per-instance dir for the ssh -L unix sockets. Same user as A's
@@ -54,13 +102,16 @@ func newSupervisor(svc *sdk.StateService[State], conn *sdk.Conn) *supervisor {
 	if err != nil {
 		dir = os.TempDir()
 	}
-	return &supervisor{
+	s := &supervisor{
 		svc:     svc,
-		conn:    conn,
 		sshPath: "ssh",
 		sockDir: dir,
-		procs:   map[string]context.CancelFunc{},
+		procs:   map[string]*hostProc{},
 	}
+	if conn != nil { // a nil *sdk.Conn in the interface would read as non-nil
+		s.conn = conn
+	}
+	return s
 }
 
 // sockPath returns this host's ssh -L unix socket path (deterministic per
@@ -90,7 +141,13 @@ func (s *supervisor) ingressSockPath(host string) string {
 // A's router proxies locally-unknown ingress tokens to it, so a remote
 // app's iframe (vscode et al) loads through A's origin. Both forwards ride
 // ONE ssh — one auth, one lifetime, one teardown.
-func buildSSHArgs(host, localSock, remoteSock, localIngressSock, remoteIngressSock string, port int) []string {
+//
+// B's router is started DETACHED (--detach, M2e): the ssh command is only a
+// keeper that reuses the router already serving remoteSock or starts one in
+// its own session, so an ssh drop leaves B's apps running for
+// remoteLinger while the supervisor re-dials. legacy omits it for a B too
+// old to know the flag (that router dies with the ssh, as before).
+func buildSSHArgs(host, localSock, remoteSock, localIngressSock, remoteIngressSock string, port int, legacy bool) []string {
 	args := []string{
 		"-o", "BatchMode=yes", // never block on an interactive prompt
 		"-o", "ExitOnForwardFailure=yes", // fail fast if the -L bind can't be set up
@@ -125,6 +182,10 @@ func buildSSHArgs(host, localSock, remoteSock, localIngressSock, remoteIngressSo
 		// on B fail without one.
 		"--control-socket", remoteSock+".ctl",
 	)
+	if !legacy {
+		linger := remoteLinger.String()
+		args = append(args, "--detach", "--idle-timeout", linger, "--idle-timeout-unattached", linger)
+	}
 	return args
 }
 
@@ -148,29 +209,46 @@ func (s *supervisor) connect(host, addr string, port int) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s.procs[host] = cancel
+	p := &hostProc{cancel: cancel, done: make(chan struct{})}
+	s.procs[host] = p
 	s.mu.Unlock()
 
 	s.setHost(host, HostState{Host: host, Origin: host, Status: StatusStarting})
-	go s.run(ctx, host, addr, port)
+	go func() {
+		defer close(p.done)
+		s.run(ctx, p, host, addr, port)
+	}()
 }
 
-// shutdown cancels every live host connection's context, killing its ssh
-// tunnel (and, with it, host B's --listen-raw router, which has no idle
-// timeout). Registered on sdk.OnTerminate so a router SIGTERM (Settings
-// restart, devreload) or conn-close teardown doesn't orphan the ssh
-// processes to PID 1 — one live B-side session would otherwise accumulate
-// per A-side restart (REVIEW-RECONNECT H5).
+// shutdown cancels every live host connection's context, which asks each
+// B-side relay router to stop and then ends its ssh tunnel. Registered on
+// sdk.OnTerminate so a router SIGTERM (Settings restart, devreload) or
+// conn-close teardown doesn't orphan the ssh processes to PID 1, nor leave a
+// detached B router lingering that no later connect would find (its socket
+// name is per connect) — one live B-side session would otherwise accumulate
+// per A-side restart (REVIEW-RECONNECT H5). Waits (bounded) for the stops
+// to go out before the process exits under them.
 func (s *supervisor) shutdown() {
 	s.mu.Lock()
-	cancels := make([]context.CancelFunc, 0, len(s.procs))
-	for host, cancel := range s.procs {
-		cancels = append(cancels, cancel)
+	procs := make([]*hostProc, 0, len(s.procs))
+	for host, p := range s.procs {
+		procs = append(procs, p)
 		delete(s.procs, host)
 	}
 	s.mu.Unlock()
-	for _, cancel := range cancels {
-		cancel()
+	for _, p := range procs {
+		p.cancel()
+	}
+	deadline := time.After(stopGrace + time.Second)
+	for _, p := range procs {
+		if p.done == nil {
+			continue
+		}
+		select {
+		case <-p.done:
+		case <-deadline:
+			return
+		}
 	}
 }
 
@@ -180,12 +258,32 @@ func (s *supervisor) shutdown() {
 // of going dead until the user clicks Reconnect. It stops only on a user
 // disconnect (ctx cancel) or an auth failure (a key refusal won't fix itself
 // on retry — the user must authenticate, which re-issues connect).
-func (s *supervisor) run(ctx context.Context, host, addr string, port int) {
+//
+// B's relay router is detached (M2e), so a drop no longer costs B's apps:
+// every re-dial targets the same remoteSock, whose keeper reuses the router
+// the drop left lingering, and the FE's reattach on "up" gets B's session
+// snapshot back — same instance ids, same windows.
+func (s *supervisor) run(ctx context.Context, self *hostProc, host, addr string, port int) {
 	sock := s.sockPath(host) // A side: in a 0700 temp dir; reused across attempts
 	ingressSock := s.ingressSockPath(host)
+	remoteSock := remoteSockPath() // B side: reused across attempts — names B's detached router
+	attempt, after, now := s.attempt, s.after, s.now
+	if attempt == nil {
+		attempt = s.runOnce
+	}
+	if after == nil {
+		after = time.After
+	}
+	if now == nil {
+		now = time.Now
+	}
 	defer func() {
 		s.mu.Lock()
-		delete(s.procs, host)
+		// Only drop our own entry: after a disconnect a fresh connect may
+		// already own the slot.
+		if s.procs[host] == self {
+			delete(s.procs, host)
+		}
 		s.mu.Unlock()
 		_ = os.Remove(sock)
 		_ = os.Remove(ingressSock)
@@ -209,13 +307,24 @@ func (s *supervisor) run(ctx context.Context, host, addr string, port int) {
 	// plain LAN with no DNS / no config entry for it).
 	dial := host
 	canFallback := addr != "" && addr != host
+	legacy := false
 	for {
-		start := time.Now()
-		code, msg := s.runOnce(ctx, host, dial, port, sock, ingressSock)
+		start := now()
+		code, msg := attempt(ctx, attemptSpec{
+			host: host, dial: dial, port: port,
+			sock: sock, ingressSock: ingressSock, remoteSock: remoteSock,
+			legacy: legacy,
+		})
 		if ctx.Err() != nil {
 			return // user-initiated disconnect; disconnect() removed the host
 		}
-		healthy := time.Since(start) >= minHealthy
+		// B's wash-router predates --detach: retry at once without it. That
+		// router dies with its ssh again, but the host still connects.
+		if !legacy && strings.Contains(msg, "flag provided but not defined: -detach") {
+			legacy = true
+			continue
+		}
+		healthy := now().Sub(start) >= minHealthy
 		if healthy {
 			backoff = time.Second // the connection was healthy; a fresh drop reconnects fast
 		}
@@ -250,7 +359,7 @@ func (s *supervisor) run(ctx context.Context, host, addr string, port int) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-after(backoff):
 		}
 		if backoff < maxBackoff {
 			if backoff *= 2; backoff > maxBackoff {
@@ -268,20 +377,35 @@ func (s *supervisor) run(ctx context.Context, host, addr string, port int) {
 // dial is the ssh target for this attempt — the name (so ssh reads
 // ~/.ssh/config) or, on fallback, the announced IP. host stays the connect
 // identity used for peer registration and published state.
-func (s *supervisor) runOnce(ctx context.Context, host, dial string, port int, sock, ingressSock string) (code, errMsg string) {
-	remoteSock := remoteSockPath() // B side: unique per attempt, chmod 0600 there
+func (s *supervisor) runOnce(ctx context.Context, a attemptSpec) (code, errMsg string) {
+	host, dial, port, sock, ingressSock, remoteSock := a.host, a.dial, a.port, a.sock, a.ingressSock, a.remoteSock
 	remoteIngressSock := remoteSock + ".i"
 
 	// ssh -L refuses to bind a unix socket whose file already exists.
 	_ = os.Remove(sock)
 	_ = os.Remove(ingressSock)
 
-	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(dial, sock, remoteSock, ingressSock, remoteIngressSock, port)...)
+	cmd := exec.CommandContext(ctx, s.sshPath, buildSSHArgs(dial, sock, remoteSock, ingressSock, remoteIngressSock, port, a.legacy)...)
 	// Backstop the ctx cancel: if wash-remote dies abruptly (SIGKILL, panic)
 	// before OnTerminate/ctx can reap it, Pdeathsig has the kernel SIGTERM the
-	// ssh — and with it B's --listen-raw router — instead of orphaning the
-	// tunnel to PID 1 (REVIEW-RECONNECT H5).
+	// ssh instead of orphaning the tunnel to PID 1 (REVIEW-RECONNECT H5). B's
+	// detached router then sees only an ssh drop and lingers (remoteLinger).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+	// stdin stays open for the attempt's whole life: B's keeper treats EOF
+	// as "the ssh session is gone" (a /dev/null stdin would end it at once).
+	stdin, _ := cmd.StdinPipe()
+	// A cancelled ctx is a deliberate disconnect / shutdown, not a blip: ask
+	// the keeper to stop B's router rather than leave it lingering, and give
+	// ssh stopGrace to carry that before WaitDelay kills it.
+	cmd.Cancel = func() error {
+		if !a.legacy && stdin != nil {
+			if _, err := io.WriteString(stdin, "stop\n"); err == nil {
+				return nil
+			}
+		}
+		return cmd.Process.Kill()
+	}
+	cmd.WaitDelay = stopGrace
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	log.Printf("wash-remote: connect host=%s dial=%s port=%d local=%s remote=%s", host, dial, port, sock, remoteSock)
@@ -424,14 +548,17 @@ func isAuthFailure(stderr string) bool {
 	return false
 }
 
-// disconnect tears down a host's ssh process (which takes the remote
-// router + the tunnel with it) and drops it from the published state.
+// disconnect tears down a host's ssh process — asking B's detached router
+// to stop on the way out (runOnce's Cancel) — and drops it from the
+// published state.
 func (s *supervisor) disconnect(host string) {
 	s.mu.Lock()
-	cancel := s.procs[host]
+	// The entry stays until run unwinds (its defer drops it), so a connect
+	// racing the stop stays a no-op rather than sharing the A-side sockets.
+	p := s.procs[host]
 	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if p != nil {
+		p.cancel()
 	}
 	s.removeHost(host)
 }

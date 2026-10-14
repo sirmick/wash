@@ -11,13 +11,13 @@ import (
 // the supervisor's proc table directly and assert shutdown() cancels each
 // context and clears the table.
 func TestSupervisorShutdownCancelsAllHosts(t *testing.T) {
-	s := &supervisor{procs: map[string]context.CancelFunc{}}
+	s := &supervisor{procs: map[string]*hostProc{}}
 
 	ctxs := map[string]context.Context{}
 	for _, host := range []string{"alice@a", "bob@b", "carol@c"} {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.mu.Lock()
-		s.procs[host] = cancel
+		s.procs[host] = &hostProc{cancel: cancel}
 		s.mu.Unlock()
 		ctxs[host] = ctx
 	}

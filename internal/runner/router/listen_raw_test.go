@@ -28,7 +28,7 @@ func TestRunRawListenerServesWire(t *testing.T) {
 
 	lnErr := make(chan error, 1)
 	go func() {
-		lnErr <- runRawListener(ctx, r, "unix", sock, func(f string, a ...any) { t.Logf("ln: "+f, a...) })
+		lnErr <- runRawListener(ctx, r, "unix", sock, func(f string, a ...any) { t.Logf("ln: "+f, a...) }, nil)
 	}()
 
 	// Dial once the listener is up (it removes+binds the socket async).

@@ -74,10 +74,24 @@ bug list — all fully landed; see `git log` if you need their content.)
   A single remote download is RTT-bound to `DefaultChannelCredit` (64 KiB)
   per credit round-trip, and over the relay that RTT is the ssh hop. Knobs:
   `internal/router/credit.go` `DefaultChannelCredit` + the fm bufio size.
-- [ ] **M2e — persist B's router across an SSH drop.** The supervisor ties
-  B's router to the `ssh` pid (`apps/remote/be/supervisor.go`); a blip kills
-  B's apps. Start B's router detached; re-dial with backoff, report
-  `reconnecting`, freeze→thaw windows (docs/REMOTE.md §2/§9).
+- [ ] **M2e — freeze→thaw B's windows across an SSH drop** (FE half; the BE
+  half landed: B's router is detached via `wash-router --detach`, survives
+  the drop for 15m, and the supervisor's re-dial reuses it — docs/REMOTE.md
+  §9). Today a blip still *drops* B's windows and they come back from B's
+  snapshot on reattach (same instance ids, apps kept running). To freeze
+  instead: (1) `channel.unbind` of a peer channel (`web/shell/src/main.tsx`)
+  must keep the RouterClient + windows when the host is `reconnecting`
+  rather than `detachClient`; (2) the session FE's
+  `reconcileRemoteAttachments` (`apps/session/fe/src/remote-reconcile.ts`)
+  and wash-connect's own reconcile must not detach on `reconnecting` (only
+  on `down`/gone) and must re-`peer.attach` on the reconnecting→up edge,
+  not just "not yet attached"; (3) `attachPeerChannel` must hand the new
+  relay channel to the EXISTING client (a swappable socket behind its
+  factory) instead of bailing on "already attached"; (4) render frozen —
+  dim + non-interactive + host badge "reconnecting" — and drop, not queue,
+  input while frozen (Conn currently queues frames across a reconnect).
+  E2e: extend `remote-vm.spec.ts` to kill A's ssh and assert the B window
+  survives (no cheap local seam — `?peer=` has no supervisor).
 - [ ] **M4/M5 — multi-host services** — plan of record:
   **docs/SIDEBAR.md** (supersedes REMOTE.md §6.2). The right rail is
   local-only in 8 of 11 sections: widgets reach services through the session

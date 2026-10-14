@@ -519,6 +519,23 @@ func (r *Router) ShellCount() int {
 	return len(r.shells)
 }
 
+// HoldOpen registers a relay keeper (docs/REMOTE.md §9): while held, the
+// idle reaper counts the router as attached even with zero shells, so a
+// detached B-side router whose browser view is merely closed is not reaped
+// while A's ssh session to it is still up. release drops the hold
+// (idempotent); the reaper's idle clock then starts from that tick.
+func (r *Router) HoldOpen() (release func()) {
+	r.keepers.Add(1)
+	var once sync.Once
+	return func() { once.Do(func() { r.keepers.Add(-1) }) }
+}
+
+// attachedCount is what the reaper means by "someone is here": live
+// shells plus relay keepers.
+func (r *Router) attachedCount() int {
+	return r.ShellCount() + int(r.keepers.Load())
+}
+
 // idleReapTickInterval bounds how often the reaper polls r.shells.
 // A coarse cadence is fine — idle-timeout granularity at the second
 // level is plenty, and a polling loop avoids retrofitting an
@@ -592,7 +609,7 @@ func (r *Router) ReapWhenIdle(ctx context.Context, pol IdlePolicy) error {
 	tick := time.NewTicker(idleReapTickInterval)
 	defer tick.Stop()
 	var idleSince time.Time
-	if r.ShellCount() == 0 {
+	if r.attachedCount() == 0 {
 		idleSince = time.Now()
 	}
 	// announced is the highest countdown percentage already logged for
@@ -604,7 +621,7 @@ func (r *Router) ReapWhenIdle(ctx context.Context, pol IdlePolicy) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case now := <-tick.C:
-			if r.ShellCount() > 0 {
+			if r.attachedCount() > 0 {
 				if !idleSince.IsZero() && announced > 0 {
 					r.log("idle countdown cleared — a shell attached after %s", now.Sub(idleSince).Round(time.Second))
 				}

@@ -214,10 +214,19 @@ func Run(args []string) int {
 	noActivity := fs.Bool("no-activity", false, "turn the activity journal off (kiosk, CI): nothing is recorded and the Timeline is empty")
 	activityRetention := fs.Duration("activity-retention", 0, "how long the activity journal keeps a day (default 30 days)")
 	activityMaxBytes := fs.Int64("activity-max-bytes", 0, "cap on the activity journal's directory, oldest day first (default 64 MiB)")
+	detach := fs.Bool("detach", false, `with --listen-raw unix:<path>: start (or reuse) a relay router serving these flags DETACHED from this process (its own session, log at <path>.log), print its "listening on" line, and stay in the foreground as its keeper until stdin closes. Host B's bring-up under com.wash.remote (docs/REMOTE.md §2/§9): an ssh drop then ends only the keeper, and the router lingers for --idle-timeout so A's re-dial finds it with the apps still running. A "stop" line on stdin shuts the router down instead.`)
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		// flag already printed the message.
 		return 2
+	}
+	if *detach {
+		network, addr, perr := parseListenRaw(*listenRaw)
+		if perr != nil || network != "unix" {
+			fmt.Fprintf(os.Stderr, "wash-router: --detach needs --listen-raw unix:<path> (got %q)\n", *listenRaw)
+			return 2
+		}
+		return runKeeper(addr, detachedArgv(args, addr), os.Stdin, os.Stdout, os.Stderr)
 	}
 
 	bi := gatherBuildInfo()
@@ -571,7 +580,28 @@ func Run(args []string) int {
 				}
 			}()
 		}
-		if err := runRawListener(rctx, r, network, addr, logf); err != nil {
+		// The keep socket (unix relays only) is how a --detach keeper holds
+		// this router open and how a deliberate disconnect stops it; bound
+		// once the relay socket serves, so reaching it implies both are up.
+		var ready func()
+		if network == "unix" {
+			ready = func() {
+				if err := serveKeepSocket(rctx, r, addr+keepSuffix, rcancel, logf); err != nil {
+					logf("keep socket: %v", err)
+				}
+			}
+		}
+		// A relay router has no ssh session to die with once it is detached,
+		// so it reaps itself like a --listen-unix session: the idle clock runs
+		// only while no browser shell AND no keeper is attached (the linger
+		// after an ssh drop). Unset flags leave it disabled, as before.
+		go func() {
+			pol := router.IdlePolicy{Unattached: idleUnattachedVal, Established: idleTimeoutVal}
+			if err := r.ReapWhenIdle(rctx, pol); err == nil {
+				rcancel()
+			}
+		}()
+		if err := runRawListener(rctx, r, network, addr, logf, ready); err != nil {
 			logger.Printf("listen-raw: %v", err)
 			return 1
 		}
@@ -749,7 +779,10 @@ func runIngressListener(ctx context.Context, r *router.Router, address string, l
 // accepted connection gets its own HandleShell over a StreamTransport (the
 // ws path minus HTTP/WebSocket framing). For unix sockets it removes a
 // stale socket file first and on shutdown. Blocks until ctx is cancelled.
-func runRawListener(ctx context.Context, r *router.Router, network, address string, logf func(string, ...any)) error {
+// ready (optional) runs once the socket is bound and chmodded — the detached
+// relay router binds its keep socket there, so a keeper that can reach it
+// knows the relay socket is already serving.
+func runRawListener(ctx context.Context, r *router.Router, network, address string, logf func(string, ...any), ready func()) error {
 	if network == "unix" {
 		_ = os.Remove(address) // clear a stale socket from a previous run
 	}
@@ -771,6 +804,9 @@ func runRawListener(ctx context.Context, r *router.Router, network, address stri
 	// "listening on" is the readiness marker com.wash.remote greps for over
 	// ssh (apps/remote/be/supervisor.go), so keep the wording.
 	logf("listening on %s://%s", network, address)
+	if ready != nil {
+		ready()
+	}
 	go func() {
 		<-ctx.Done()
 		ln.Close() // unblocks Accept

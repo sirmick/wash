@@ -473,9 +473,23 @@ matters (out of scope).
   (pre-existing geometry-not-persisted limitation).
 - **No token on B reconnect:** B's router is loopback + SSH-gated; a fresh tunnel
   needs no auth handshake.
-- **B router teardown policy (to pick):** default "router lives while its apps
-  live; on last-app exit, linger briefly then exit" — durable across blips,
-  self-cleaning when actually done.
+- **B router teardown policy (M2e, shipped):** the ssh command is
+  `wash-router --listen-raw unix:<sock> … --detach`, a *keeper*: it reuses the
+  router already serving `<sock>` (found via its 0600 `<sock>.keep` socket,
+  ownership-checked, starts serialised by a flock) or starts one in its own
+  session (setsid, log at `<sock>.log`), prints the `listening on` line, and
+  holds a keep connection. The router counts a held keeper as attached, so it
+  is never reaped while A's ssh is up. On an ssh drop the keeper sees stdin
+  EOF and exits; the router's ordinary idle reaper (`--idle-timeout`, 15m
+  from the supervisor) is the linger. A's supervisor re-dials (backoff 1s→30s,
+  `reconnecting`) to the SAME `<sock>` — minted once per connect — so the new
+  keeper reuses the router and B's apps are still there. A deliberate
+  disconnect / A shutdown writes `stop` to the ssh's stdin and the keeper
+  stops the router at once. A B too old for `--detach` is retried without it.
+  Caveat: if B's sshd never notices a dead client (no RST, no keepalive), the
+  stale keeper holds the router until sshd's TCP keepalive gives up. The FE
+  freeze→thaw half is still open (docs/Todo.md M2e): windows drop on the blip
+  and return from B's snapshot on reattach.
 
 Align with [RECONNECT-AUDIT.md](RECONNECT-AUDIT.md): the per-`RouterClient`
 reconnect loop is the existing shell reconnect logic, instantiated per origin.
@@ -690,7 +704,8 @@ architecture. WebRTC is an optimization on top, not a prerequisite.
 3. **B-side session manager:** reuse `wash-login` over SSH vs a thin per-uid session
    spawner (SSH already authenticated the user).
 4. **Host colour palette source** (§11): which `@wash/ui` slots; hash vs manual.
-5. **B router teardown policy** (§9): linger duration / idle timeout.
+5. **B router teardown policy** (§9): answered by M2e — 15m linger via the
+   idle reaper once the keeper is gone; revisit the figure with use.
 
 ---
 
