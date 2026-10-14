@@ -249,6 +249,24 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Reliability follow-ups  (residuals from the 2026-07-01 reviews)
 
+- [ ] **Residuals from the 2026-10-14 reconnect pass** (GH #21/#22/#23/#8):
+  - A respawned single-instance app (`com.wash.session`) starts with empty
+    `app_state`: the router keys it by instance id
+    (`internal/router/wmstate.go`) and drops it on teardown. Keying by app id
+    for singletons would let a crash-respawn restore. The reconnect path
+    that used to kill it is fixed; any other crash still loses it.
+  - Only the Agent windows re-pull on `wash:reconnected`
+    (`createAppBus({ onReconnect })`). Other push-fed apps go stale the same
+    way after a WS blip — wash-edit's agent roster first
+    (`apps/edit/fe/src/main.tsx`), then the rest of docs/RECONNECT-AUDIT.md.
+  - The shell drops bundle/asset/panel bytes that arrive before their Bind
+    (`web/shell/src/assets.ts` `pushBundleBytes`). The router now never sends
+    them in that order (qos.go `pick`), but buffering early bytes in the FE
+    would make it belt-and-braces.
+  - Superseded tabs still move/focus windows in the shared model and fight
+    over the router-wide keyboard focus; only wash-display traffic is gated
+    to the head (`ShellSession.mayDrive`).
+
 - [ ] Focus snapshot-claim still adopted when `focused()==null`
   (`web/shell/src/wm.ts:465-473`, kernel `web/shell/src/wm-focus.ts`) —
   residual of the 5523ef3 cross-origin focus fix. **Left deliberately**:
