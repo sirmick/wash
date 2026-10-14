@@ -16,6 +16,54 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-10-14 — `internal/loopback` TestSpine (#8): the harness was hiding a real scheduler bug (FIXED)
+
+**Seen during:** a re-investigation of issue #8, still open after the
+2026-08-02 harness fix (below). That fix held: the current test passed
+6,000/6,000 under `-race` with 48 busy loops on the 24-core box. But one of
+its three parts, `pendingRaw` (buffer raw frames that arrive before their
+bind), papered over something the real shell cannot survive.
+
+**Mechanism:** `replayBundleToShell` submits the Bind on Interactive and
+then the data on Bulk. `Scheduler.Next` (`internal/router/qos.go`) was only
+"approximately strict": its priority scan is not atomic, and the wait's
+select picks among ready lanes at random. Either way a Bulk frame could be
+handed out ahead of an Interactive one submitted before it. The shell
+starts its bundle accumulator on the bind (`web/shell/src/assets.ts`
+`beginBundle`), so data that beats its bind gets parked by `deliverRaw` as
+an unclaimed raw channel and dropped on the Unbind. That is a blank window,
+and the same exposure applies to assets and panels. Temporary logging in the
+harness's `pendingRaw` branch caught it 15 times in 100,000 runs (no
+`-race`, `-cpu 1,2,4,8,24`, 48 busy loops), always channel 2, 69 bytes,
+before the bind.
+
+**A/B** (harness made strict: a raw frame before its bind fails the
+test, as it would in the FE; `/tmp` script running `-test.count=N
+-test.cpu 1,2,4,8,24` alongside 48 `while :; do :; done` loops):
+
+| scheduler | build | failed / runs |
+|---|---|---|
+| before | plain | 34 / 100,000 |
+| before | `-race` | 6 / 20,000 |
+| after | plain | 0 / 100,000 |
+| after | `-race` | 0 / 20,000 |
+
+**Fix (product):** `Next` now takes a frame, re-checks every higher lane,
+and if one is non-empty keeps the taken frame as its class's head (not
+requeued, so FIFO holds) and serves the higher lane first. A frame can no
+longer overtake a higher-priority frame submitted before it. Deterministic
+tests: `TestSchedulerNoOvertakeMidScan` and `TestSchedulerNoOvertakeOnWake`,
+using an `onEmpty` seam that lands frames at an exact point in the scan.
+Both fail on the old `Next`. The harness drops `pendingRaw` and fails on
+data before its bind. docs/QOS.md §12.3 now states the start-of-transaction
+half of the rule.
+
+**Verdict:** not a flake. The issue's "product code is not implicated" was
+right about the original `""` mismatch (unbind overtaking data, expected)
+and wrong about what remained.
+
+---
+
 ## 2026-09-30 — fm-be "request_id is required": a race in the test, fixed
 
 **Seen during:** GitHub Actions e2e for PR #30 (`ce72024e`): 734 passed /

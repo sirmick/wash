@@ -244,6 +244,9 @@ the panic and fixed itself with a no-op logger; the fix never propagated.
 > 2. **Raw frames before their bind** were dropped by the `continue` in the raw branch when
 >    `bundleChannelID == 0`. They are now held in `pendingRaw` per channel and adopted when the
 >    bind names the channel — same reason as above, data need not follow its own control frame.
+>    **Reverted 2026-10-14 (#8):** this one was wrong. The shell FE does not buffer pre-bind
+>    data, so it was a router scheduler bug and the harness was hiding it. Fixed in
+>    `Scheduler.Next`; the harness now fails on data before its bind (FLAKE_LOG 2026-10-14).
 > 3. **Unmodelled ctrl frames are no longer fatal.** The router ships `link.stats` telemetry the
 >    harness does not model, and `DecodeCtrl` returned a plain error → `t.Fatalf("decode: …")`.
 >    Added `wire.ErrUnknownCtrl` (product side) so forward-compatible receivers can skip an

@@ -279,9 +279,9 @@ type frameReader struct {
 	bundleSize int
 	// bundleUnbound records the unbind for diagnostics only.
 	bundleUnbound bool
-	// pendingRaw holds raw frames seen before the bind that names their
-	// channel, for the same reason: data may precede its own bind.
-	pendingRaw map[uint32][]byte
+	// No buffering of raw frames that arrive before their bind: the shell
+	// FE (web/shell/src/assets.ts) has none, so such bytes are lost. An
+	// earlier pendingRaw here hid exactly that router bug (GH #8).
 
 	titlePatches []wire.ShellSessionPatch
 	// snapshotWindows captures any window upsert that lands in a
@@ -309,7 +309,7 @@ func (fr *frameReader) nextCtrl() any {
 }
 
 // readOne reads exactly one frame and accounts it: raw frames append to
-// the bundle (or to pendingRaw until the bind names their channel),
+// the bundle (and fail the test if no bind has named their channel yet),
 // control frames update the title/snapshot/bundle bookkeeping. Returns
 // the decoded ctrl message, or nil for a raw or unmodelled frame — so a
 // caller can re-test its wait condition after EVERY frame.
@@ -325,15 +325,14 @@ func (fr *frameReader) readOne() any {
 			fr.t.Fatalf("read: %v", err)
 		}
 		if f.Channel != 0 {
-			if fr.bundleChannelID != 0 && f.Channel == fr.bundleChannelID {
-				fr.bundleBytes = append(fr.bundleBytes, f.Payload...)
-			} else {
-				// Not bound yet: hold rather than drop.
-				if fr.pendingRaw == nil {
-					fr.pendingRaw = map[uint32][]byte{}
-				}
-				fr.pendingRaw[f.Channel] = append(fr.pendingRaw[f.Channel], f.Payload...)
+			if fr.bundleChannelID == 0 || f.Channel != fr.bundleChannelID {
+				// Data ahead of the bind naming its channel: the shell
+				// starts its accumulator on the bind, so these bytes would
+				// be lost (GH #8). The scheduler must never reorder that.
+				fr.t.Fatalf("raw frame on channel %d (%d bytes) before its bind (bound=%d)",
+					f.Channel, len(f.Payload), fr.bundleChannelID)
 			}
+			fr.bundleBytes = append(fr.bundleBytes, f.Payload...)
 			return nil
 		}
 		m, err := wire.DecodeCtrl(f.Payload)
@@ -351,10 +350,6 @@ func (fr *frameReader) readOne() any {
 				fr.targetInstance != "" && v.InstanceID == fr.targetInstance {
 				fr.bundleChannelID = v.ChannelID
 				fr.bundleSize = int(v.Size)
-				if held := fr.pendingRaw[v.ChannelID]; len(held) > 0 {
-					fr.bundleBytes = append(fr.bundleBytes, held...)
-					delete(fr.pendingRaw, v.ChannelID)
-				}
 			}
 		case wire.ShellChannelUnbind:
 			if fr.bundleChannelID != 0 && v.ChannelID == fr.bundleChannelID {

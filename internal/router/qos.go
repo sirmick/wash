@@ -74,6 +74,19 @@ type Scheduler struct {
 	// desktop died for no reason" and "the browser stopped reading 40
 	// seconds earlier". Set by the ShellSession; nil in tests.
 	onStall func(c wire.Class, depth, capacity int)
+
+	// head holds, per class, a frame already received off that class's
+	// queue but not yet handed out because a higher class turned out to
+	// be non-empty (see pick). It is logically the front of its queue,
+	// so FIFO within the class holds. Touched only by Next — one
+	// consumer — so it needs no lock; Depth does not count it.
+	head    [4]wire.Frame
+	hasHead [4]bool
+
+	// onEmpty is a test seam: it fires each time pick finds class c
+	// empty, so a test can land frames at an exact point in the scan.
+	// Nil in production.
+	onEmpty func(c wire.Class)
 }
 
 // SetStallHook installs the saturation callback. Called once at setup,
@@ -195,42 +208,96 @@ func (s *Scheduler) SubmitTelemetry(f wire.Frame) {
 //
 // Strict-priority order: Control → Interactive → Bulk → Background.
 //
-// The fast path scans queues in priority order with non-blocking
-// receives, so when multiple frames are already queued, the highest
-// priority always wins. The slow path waits on any queue; if it
-// happens to fire on a lower-priority queue WHILE a higher-priority
-// one is also arriving, the wakeup-loser is queued and will be
-// served on the next call's fast path. This is "approximately
-// strict" — at most one frame can be served "out of priority" per
-// race window, and FIFO within each class is preserved.
+// Ordering guarantee: a frame is never handed out ahead of a
+// higher-priority frame whose Submit returned before its own began.
+// That is what lets a Bind ride the Interactive ctrl lane while its
+// data rides Bulk: the shell only starts a bundle/asset/panel
+// accumulator on the Bind, so data that overtakes it is dropped
+// (GH #8). The reverse — an Unbind overtaking its data — is expected
+// and handled by completing on the Bind's Size.
 //
-// Deliberately we do NOT re-check higher-priority queues after a
-// slow-path dequeue and put the lower-priority frame BACK on its
-// queue: that would reorder the lower queue and violate FIFO. The
-// approach below is both correct and easier to reason about.
+// Neither a priority scan nor a multi-queue select is atomic: frames
+// can land in a lane the scan already passed, and a select over
+// several ready lanes picks at random. So pick re-checks every higher
+// lane AFTER taking a frame; one found non-empty wins, and the taken
+// frame is kept as its class's head rather than requeued (requeueing
+// at the back would break FIFO — an earlier version did exactly that).
 func (s *Scheduler) Next(ctx context.Context) (wire.Frame, error) {
-	// Fast-path: pick the highest-priority queue with a ready frame.
-	for _, c := range drainOrder {
-		select {
-		case f := <-s.queues[c]:
+	for {
+		if f, ok := s.pick(); ok {
 			return f, nil
-		default:
+		}
+		// Every lane empty: block on any queue (or close/cancel). The
+		// frame that wakes us becomes its class's head and goes back
+		// through pick, which validates it against the higher lanes.
+		var c wire.Class
+		var f wire.Frame
+		select {
+		case f = <-s.queues[wire.ClassControl]:
+			c = wire.ClassControl
+		case f = <-s.queues[wire.ClassInteractive]:
+			c = wire.ClassInteractive
+		case f = <-s.queues[wire.ClassBulk]:
+			c = wire.ClassBulk
+		case f = <-s.queues[wire.ClassBackground]:
+			c = wire.ClassBackground
+		case <-s.closed:
+			return wire.Frame{}, ErrSchedulerClosed
+		case <-ctx.Done():
+			return wire.Frame{}, ctx.Err()
+		}
+		s.head[c], s.hasHead[c] = f, true
+	}
+}
+
+// pick returns the head of the highest-priority non-empty class, or
+// false if every class is empty. A frame is returned only once every
+// higher class has been seen empty after it was taken: the receive
+// that took it happens after its Submit, which happens after any
+// earlier Submit by the same producer, so that re-check observes it.
+func (s *Scheduler) pick() (wire.Frame, bool) {
+	for i := 0; i < len(drainOrder); i++ {
+		c := drainOrder[i]
+		if !s.fill(c) {
+			if s.onEmpty != nil {
+				s.onEmpty(c)
+			}
+			continue
+		}
+		if s.higherFilled(i) {
+			i = -1 // rescan from the top; the taken frame stays as head
+			continue
+		}
+		f := s.head[c]
+		s.head[c], s.hasHead[c] = wire.Frame{}, false
+		return f, true
+	}
+	return wire.Frame{}, false
+}
+
+// higherFilled reports whether any class ahead of drainOrder[i] now has
+// a head frame, filling them as it goes.
+func (s *Scheduler) higherFilled(i int) bool {
+	for _, h := range drainOrder[:i] {
+		if s.fill(h) {
+			return true
 		}
 	}
-	// Slow-path: block on any queue (or close/cancel).
+	return false
+}
+
+// fill makes sure class c has a head frame, receiving one off its
+// queue without blocking if needed. Reports whether c has one.
+func (s *Scheduler) fill(c wire.Class) bool {
+	if s.hasHead[c] {
+		return true
+	}
 	select {
-	case f := <-s.queues[wire.ClassControl]:
-		return f, nil
-	case f := <-s.queues[wire.ClassInteractive]:
-		return f, nil
-	case f := <-s.queues[wire.ClassBulk]:
-		return f, nil
-	case f := <-s.queues[wire.ClassBackground]:
-		return f, nil
-	case <-s.closed:
-		return wire.Frame{}, ErrSchedulerClosed
-	case <-ctx.Done():
-		return wire.Frame{}, ctx.Err()
+	case f := <-s.queues[c]:
+		s.head[c], s.hasHead[c] = f, true
+		return true
+	default:
+		return false
 	}
 }
 

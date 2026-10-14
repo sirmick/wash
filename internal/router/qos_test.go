@@ -418,3 +418,68 @@ func TestSchedulerBulkUnderInteractiveLoad(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// submitBindThenData returns an onEmpty hook staging the shape
+// replayBundleToShell produces: a Bind on the default (Interactive) ctrl
+// lane, then its data on Bulk, from one producer — so the Bind's Submit
+// has returned before the data's begins. Fires once, when the scan
+// finds lane `at` empty.
+func submitBindThenData(t *testing.T, s *Scheduler, at wire.Class) func(wire.Class) {
+	t.Helper()
+	fired := false
+	return func(c wire.Class) {
+		if fired || c != at {
+			return
+		}
+		fired = true
+		if err := s.Submit(context.Background(), frameOf(wire.ClassInteractive, 0, 'B')); err != nil {
+			t.Errorf("submit bind: %v", err)
+		}
+		if err := s.Submit(context.Background(), frameOf(wire.ClassBulk, 7, 'd')); err != nil {
+			t.Errorf("submit data: %v", err)
+		}
+	}
+}
+
+// TestSchedulerNoOvertakeMidScan — a frame must never be handed out
+// ahead of a higher-priority frame submitted BEFORE it. The priority
+// scan is not atomic: if a Bind and then its data land after the scan
+// has passed the Bind's lane but before it reaches the data's, the old
+// scan returned the data first, and the shell — which only starts a
+// bundle/asset/panel accumulator on the Bind — lost those bytes
+// (GH #8). The hook stages exactly that interleaving.
+func TestSchedulerNoOvertakeMidScan(t *testing.T) {
+	s := NewScheduler()
+	defer s.Close()
+	s.onEmpty = submitBindThenData(t, s, wire.ClassInteractive)
+	for i, want := range []byte{'B', 'd'} {
+		f, err := s.Next(context.Background())
+		if err != nil {
+			t.Fatalf("next %d: %v", i, err)
+		}
+		if f.Payload[0] != want {
+			t.Fatalf("pos %d: got %q want %q — data overtook its bind", i, f.Payload[0], want)
+		}
+	}
+}
+
+// TestSchedulerNoOvertakeOnWake — the same guarantee when both frames
+// land after the scan has found every lane empty: the wait's select
+// then sees two ready lanes and picks one at random. Repeated so a
+// coin-flip pick fails all but 2^-64 of the time.
+func TestSchedulerNoOvertakeOnWake(t *testing.T) {
+	for n := 0; n < 64; n++ {
+		s := NewScheduler()
+		s.onEmpty = submitBindThenData(t, s, wire.ClassBackground)
+		for i, want := range []byte{'B', 'd'} {
+			f, err := s.Next(context.Background())
+			if err != nil {
+				t.Fatalf("round %d next %d: %v", n, i, err)
+			}
+			if f.Payload[0] != want {
+				t.Fatalf("round %d pos %d: got %q want %q — data overtook its bind", n, i, f.Payload[0], want)
+			}
+		}
+		s.Close()
+	}
+}

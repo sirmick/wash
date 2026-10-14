@@ -382,6 +382,16 @@ on that count, never on the Unbind. Then the data can ride whatever lane
 its size deserves and a control frame overtaking it cannot truncate
 anything. `assets.ts` and `panels.ts` both work this way.
 
+That only covers the END of the transaction. Its START is the other way
+round: the shell creates the accumulator on the bind, so data that beats
+its bind is parked as an unclaimed raw channel and lost. The scheduler
+guarantees it cannot: `Next` never hands out a frame ahead of a
+higher-priority frame whose `Submit` returned before its own began, so a
+bind submitted on Interactive always precedes the Bulk data submitted
+after it. Before GH #8 this held only "approximately" — a lane the scan
+had already passed, or the random pick of a multi-lane select, put the
+bundle's data first in ~1 in 3,000 loopback TestSpine runs under load.
+
 A flow that genuinely cannot announce its length must keep all of its
 frames in ONE lane — but it should be a low one.
 

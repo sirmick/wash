@@ -230,13 +230,15 @@ bug list — all fully landed; see `git log` if you need their content.)
   (readiness lines logged before bind, leak-on-throw, no process-group kill,
   env scrub, hardlink staging, freshness/teardown guards); Phase B Go-unit
   races (the t.Logf-after-test class, now ×36 test files and still
-  spreading, TestSpine byte-count —
-  tracked as **issue #8**, OpenWRT qemu pdeathsig); Phase C e2e spec sweeps
+  spreading, OpenWRT qemu pdeathsig); Phase C e2e spec sweeps
   (stale timeout overrides, fs-assert barriers, persist-before-reload);
   Phase D FE unit; Phase E the **test event bus** (control-socket
   `wait_event` + FE settle hook + guest `WASH-EVENT` lines) so tests drive
-  state machines instead of timing. Open flake trackers: **#8** (TestSpine).
-  (**#7**, display-input-smoke, was fixed 2026-08-06 and is closed.)
+  state machines instead of timing. **#8** (TestSpine) is fixed as of
+  2026-10-14 — its last mode was a real scheduler bug, bundle data
+  overtaking its bind (FLAKE_LOG 2026-10-14); close it once main has run
+  green for a while. (**#7**, display-input-smoke, was fixed 2026-08-06
+  and is closed.)
 - [ ] After phases B1–B3: trial dropping `-p 1` from the unit gate (it exists
   to dampen the loopback scheduling race).
 - [ ] After phase A6 (hardlink staging): measure control-socket RTTs and walk
