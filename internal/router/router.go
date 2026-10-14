@@ -179,6 +179,13 @@ type Router struct {
 	// connection across reconnects / stacked WS connections. Guarded
 	// by mu; nil when no shell is attached. See reattachChannelsToShell.
 	headShell *ShellSession
+	// headGen counts head changes; bumped under mu whenever headShell is
+	// assigned a new shell. A migration sweep samples it while holding a
+	// binding's shellMu (a leaf lock, under which mu may not be taken) to
+	// notice that a newer head has started its own sweep and stop rather
+	// than steal channels back from it. It also rides shell.head and
+	// shell.superseded so the FE can order the two.
+	headGen atomic.Uint64
 
 	// idleInhibits is instance id → reason for every app currently
 	// asking the reaper to hold off. Guarded by mu. Level-triggered, so
@@ -759,6 +766,9 @@ type channelBinding struct {
 func (r *Router) registerChannel(b *channelBinding) {
 	if b.credit == nil && !b.noCredit {
 		b.credit = NewChannelCredit(DefaultChannelCredit)
+	}
+	if b.app != nil && isVideoKind(b.kind) {
+		b.app.streamsVideo.Store(true)
 	}
 	r.channelsMu.Lock()
 	r.channels[b.channelID] = b
@@ -1573,10 +1583,20 @@ func (r *Router) ShellsSeen() uint64 { return r.shellsSeen.Load() }
 func (r *Router) unregisterShell(s *ShellSession) {
 	r.mu.Lock()
 	delete(r.shells, s)
-	if r.headShell == s {
+	wasHead := r.headShell == s
+	if wasHead {
 		r.headShell = nil
 	}
 	r.mu.Unlock()
+	if wasHead {
+		// The head left while another tab is still attached: hand that
+		// tab the head, or its terminals and display windows stay dark
+		// until the user clicks "Use here". Own goroutine — the sweep
+		// writes to the successor, and this is the departing shell's
+		// teardown. The orphaning below runs first or races harmlessly:
+		// the sweep rebinds whatever it finds.
+		defer func() { go r.promoteHead() }()
+	}
 
 	// Detach any channels owned by this shell. The channel itself
 	// stays alive (the app keeps writing, bytes accumulate in the
@@ -1679,14 +1699,53 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 	prev := r.headShell
 	_, prevLive := r.shells[prev]
 	r.headShell = s
+	gen := r.headGen.Add(1)
 	r.mu.Unlock()
 	if prev != nil && prev != s && prevLive {
 		// Best-effort: if prev is actually a dying/zombie connection the write
 		// just fails and no banner is shown. A genuine second tab is live and
 		// gets it. Sent WITHOUT r.mu held (WriteCtrl goes to the scheduler).
-		if err := prev.WriteCtrl(wire.NewShellSuperseded("This session is in use in another window.")); err != nil {
+		if err := prev.WriteCtrl(wire.NewShellSuperseded("This session is in use in another window.", gen)); err != nil {
 			r.log("superseded notice to prior head: %v", err)
 		}
+	}
+	r.migrateToHead(s, gen)
+}
+
+// promoteHead hands a vacant head to the most recently connected shell
+// still attached — the tab that was superseded when the departed head
+// arrived. A no-op when nothing is attached or a new connection has
+// already taken the head (it ran its own sweep).
+func (r *Router) promoteHead() {
+	r.mu.Lock()
+	if r.headShell != nil {
+		r.mu.Unlock()
+		return
+	}
+	var next *ShellSession
+	for sh := range r.shells {
+		if next == nil || sh.connID > next.connID {
+			next = sh
+		}
+	}
+	if next == nil {
+		r.mu.Unlock()
+		return
+	}
+	r.headShell = next
+	gen := r.headGen.Add(1)
+	r.mu.Unlock()
+	r.log("shell: head left, promoting conn=%d", next.connID)
+	r.migrateToHead(next, gen)
+}
+
+// migrateToHead tells s it holds the head and moves every channel to it.
+// gen is the head generation s took it at; the sweep stops as soon as a
+// newer head exists, because that head's own sweep owns the channels now.
+func (r *Router) migrateToHead(s *ShellSession, gen uint64) {
+	// Clears a "Use here" banner a promoted or reclaiming tab still shows.
+	if err := s.WriteCtrl(wire.NewShellHead(gen)); err != nil {
+		r.log("head notice: %v", err)
 	}
 
 	r.channelsMu.Lock()
@@ -1698,6 +1757,13 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 
 	for _, b := range bindings {
 		b.shellMu.Lock()
+		if r.headGen.Load() != gen {
+			// A newer head took over mid-sweep. It bumped headGen before
+			// starting its own sweep, so every binding not yet visited
+			// here is visited there after this lock is released.
+			b.shellMu.Unlock()
+			return
+		}
 		if b.shell == s {
 			b.shellMu.Unlock()
 			continue

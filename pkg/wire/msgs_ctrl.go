@@ -372,6 +372,11 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellClaimHead:
 		var m ShellClaimHead
 		return m, json.Unmarshal(data, &m)
+	case TShellHead:
+		// Every attach now gets one, so a Go client reading the shell
+		// stream (tests, tooling) must be able to decode it.
+		var m ShellHead
+		return m, json.Unmarshal(data, &m)
 	case TShellReload:
 		var m ShellReload
 		return m, json.Unmarshal(data, &m)

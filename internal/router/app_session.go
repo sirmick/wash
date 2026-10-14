@@ -73,6 +73,10 @@ type AppInstance struct {
 	// atomics so a reader elsewhere is not a data race.
 	shellGoneLogged atomic.Bool
 	shellGoneDrops  atomic.Int64
+	// streamsVideo is set once the app opens a video channel (wash-display).
+	// Its windows are pixels delivered only to the head shell, so only the
+	// head may drive it — see ShellSession.mayDrive.
+	streamsVideo atomic.Bool
 
 	// PeerUID is the kernel-attested uid of the connected app process,
 	// read via SO_PEERCRED at attach time. Zero means root; uidNoPeer

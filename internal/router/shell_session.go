@@ -878,6 +878,9 @@ func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend, class wire.Class
 			s.router.log("shell app_msg cross-instance: %s: %v", code, err)
 			return nil
 		}
+		if !s.mayDrive(target) {
+			return nil
+		}
 		return target.WriteEvtClass(wire.NewEvtAppMsg(target.WindowID, m.Data), class)
 	}
 	inst := s.router.appByInstance(m.InstanceID)
@@ -888,7 +891,26 @@ func (s *ShellSession) handleAppMsgSend(m wire.ShellAppMsgSend, class wire.Class
 		s.router.log("shell app_msg: dropping message for unknown instance=%s", m.InstanceID)
 		return nil
 	}
+	if !s.mayDrive(inst) {
+		return nil
+	}
 	return inst.WriteEvtClass(wire.NewEvtAppMsg(inst.WindowID, m.Data), class)
+}
+
+// mayDrive reports whether this shell's messages may reach inst. A video
+// app (wash-display) shows its windows only to the head, so a superseded
+// tab is looking at frozen pixels: its pointer and keys would land on
+// windows it cannot see, and its display.set_metrics would resize the one
+// output out from under the head. Those are dropped silently — on the hot
+// input path, so no log — until the tab clicks "Use here". With no head at
+// all (between a head leaving and the promotion) every shell may.
+func (s *ShellSession) mayDrive(inst *AppInstance) bool {
+	if !inst.streamsVideo.Load() || s.router == nil {
+		return true
+	}
+	s.router.mu.Lock()
+	defer s.router.mu.Unlock()
+	return s.router.headShell == nil || s.router.headShell == s
 }
 
 // handleLaunch spawns an app by id on behalf of the shell (docs/REMOTE.md

@@ -143,6 +143,9 @@ const (
 	// still-open connection — channels migrate here and the shell that
 	// holds the head now is sent shell.superseded in turn.
 	TShellClaimHead = "shell.claim_head"
+	// Router → shell: this connection holds the head (it attached, claimed
+	// it, or was promoted when the head left). Clears the banner.
+	TShellHead = "shell.head"
 
 	// Shell → router, settings-panel bundle pull. Read the cached
 	// panel.js bytes (Entry.PanelBundle) for an app that declared a
@@ -532,13 +535,28 @@ func NewShellPeerError(origin, msg string) ShellPeerError {
 
 // ShellSuperseded tells a still-live shell it lost the foreground head to a
 // newer connection. BE→FE only (no DecodeCtrl case): the FE JSON-parses it.
+//
+// Gen is the head generation that superseded it. shell.head carries the
+// generation it was granted at; the two travel on different shells' queues,
+// so the FE applies whichever is newer rather than whichever arrived last.
 type ShellSuperseded struct {
 	T   string `json:"t"`
 	Msg string `json:"msg"`
+	Gen uint64 `json:"gen,omitempty"`
 }
 
-func NewShellSuperseded(msg string) ShellSuperseded {
-	return ShellSuperseded{T: TShellSuperseded, Msg: msg}
+func NewShellSuperseded(msg string, gen uint64) ShellSuperseded {
+	return ShellSuperseded{T: TShellSuperseded, Msg: msg, Gen: gen}
+}
+
+// ShellHead tells a shell it holds the foreground head.
+type ShellHead struct {
+	T   string `json:"t"`
+	Gen uint64 `json:"gen"`
+}
+
+func NewShellHead(gen uint64) ShellHead {
+	return ShellHead{T: TShellHead, Gen: gen}
 }
 
 // ShellClaimHead asks the router to make this shell the foreground head

@@ -306,6 +306,12 @@ interface ShellPeerError {
 interface ShellSuperseded {
   t: 'shell.superseded';
   msg: string;
+  gen?: number;
+}
+
+interface ShellHead {
+  t: 'shell.head';
+  gen: number;
 }
 
 // A window was raised by something other than the user clicking it (an app
@@ -362,6 +368,7 @@ type ShellCtrlMsg =
   | ShellClipboardChanged
   | ShellPeerError
   | ShellSuperseded
+  | ShellHead
   | ShellActivityQueryOK
   | ShellActivityQueryErr
   | ShellActivityEntryMsg
@@ -684,7 +691,12 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         handleSnapshot(client, msg, isLocal);
         // A fresh snapshot from the LOCAL router means this tab just (re)attached
         // as the foreground head, so any prior "opened elsewhere" notice is stale.
-        if (isLocal) setSuperseded(null);
+        // The generation count restarts too: a restarted router counts from
+        // one again, and every head message for this connection follows.
+        if (isLocal) {
+          setSuperseded(null);
+          headGen = 0;
+        }
         break;
       case 'session.patch':
         handlePatch(client, msg);
@@ -890,8 +902,21 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         // silently dark (REVIEW-RECONNECT L2). LOCAL only — head is a
         // local-router concept.
         if (!isLocal) break;
+        if (!newerHeadGen(msg.gen)) break;
         shellLog('warn', 'conn', `superseded: ${msg.msg}`);
         setSuperseded(msg.msg);
+        break;
+      }
+      case 'shell.head': {
+        // This tab holds the head again — it claimed it, or the tab that
+        // had it went away and the router promoted this one. Its display
+        // metrics were overridden by that tab, so re-send them.
+        if (!isLocal || !newerHeadGen(msg.gen)) break;
+        if (superseded() !== null) {
+          shellLog('info', 'conn', 'head regained');
+          setSuperseded(null);
+          republishDisplayState();
+        }
         break;
       }
       case 'clipboard.changed': {
@@ -1563,17 +1588,38 @@ conn.onEvent((e) => {
 // keeping the session in the other window is an answer too.
 const [superseded, setSuperseded] = createSignal<string | null>(null);
 
-// claimHead is the banner's "Use here": the router migrates the terminal and
-// display channels back to this connection (and tells the tab that had them).
-// The compositor's one output was last sized by the other tab, so re-send
-// this tab's metrics and layout too.
-function claimHead(): void {
-  local.conn.sendCtrl({ t: 'shell.claim_head' });
-  setSuperseded(null);
+// headGen is the newest head generation this tab has heard about. The
+// router's shell.head (to the winner) and shell.superseded (to the loser)
+// ride different connections, so when two tabs swap the head quickly they
+// can arrive out of order; each carries the generation it belongs to and a
+// stale one is ignored. A router that predates gen sends none: apply it.
+let headGen = 0;
+function newerHeadGen(gen: number | undefined): boolean {
+  if (gen === undefined) return true;
+  if (gen <= headGen) return false;
+  headGen = gen;
+  return true;
+}
+
+// republishDisplayState re-sends this tab's display metrics and keyboard
+// layout. The compositor has one output, sized by whichever tab spoke
+// last; while this tab was superseded that was the other one.
+function republishDisplayState(): void {
   sentDisplayMetrics.delete(local.origin);
   publishDisplayMetrics(local);
   layoutSentTo.delete(local.origin);
   publishKeymap(local);
+}
+
+// claimHead is the banner's "Use here": the router migrates the terminal and
+// display channels back to this connection (and tells the tab that had them).
+// The metrics go now rather than on the router's shell.head: the router
+// drops a superseded tab's display traffic, and the claim is ahead of them
+// on the same queue.
+function claimHead(): void {
+  local.conn.sendCtrl({ t: 'shell.claim_head' });
+  setSuperseded(null);
+  republishDisplayState();
 }
 
 // connTick drives the banner's live "no contact for Ns / next retry" readout
