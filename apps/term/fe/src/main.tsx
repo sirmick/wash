@@ -1887,7 +1887,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           view={places()}
           onOpen={(target) => send({ kind: 'places_click', target, channel_id: active() })}
           disabled={active() ? undefined : 'No tab is open'}
-          style={{ 'margin-left': 'auto' }}
+          menuBar
         />
       </div>
       <Show when={openMenu() === 'edit'}>

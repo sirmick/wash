@@ -20,7 +20,7 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, PLACES_FILES, PlacesBar, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, tokens } from '@wash/ui';
+import { BulkConflictOverlay, BulkJobs, Button, ConfirmDialog, FileTree, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, PLACES_FILES, PlacesBar, Splitter, StatusBar, VirtualGrid, createFileClient, defineWashApp, saveDownload, tokens } from '@wash/ui';
 import type { PlacesView } from '@wash/ui';
 import type { BulkConflict, BulkJob } from '@wash/ui';
 import type { FileClient, FileTreeColumn } from '@wash/ui';
@@ -28,6 +28,7 @@ import {
   baseName, extName, formatDate, humanSize, joinPath, octalPerm, parentPath, ancestorChain,
   isThumbableName,
   createBus,
+  createDownloads,
   createWatch,
   DRAG_MIME, DRAG_ORIGIN_MIME, dragPayload, dropEffectFor, hasWashDrag, readDragPaths, readDragOrigin, crossOrigin,
   flattenTree,
@@ -667,6 +668,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // reach onListOk directly.
         onListOk(m);
         return;
+      case 'reveal':
+        // The path this window was launched on (fm's resolveLaunchDir).
+        revealLaunch(String(m.path));
+        return;
       case 'list_err':
         // Unsolicited failure with no path to attribute it to.
         if (m.code !== 'outside_root') {
@@ -751,37 +756,22 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         cancelledUploads.add(String(m.upload_id));
         return;
       }
-      case 'download_channel': {
-        // BE opened the raw channel for this download — hand its id to
-        // the awaiting receiver so it can subscribe for bytes.
-        const id = String(m.download_id);
-        const resolve = pendingDownloadChannels.get(id);
-        if (resolve) {
-          pendingDownloadChannels.delete(id);
-          resolve(Number(m.channel_id));
-        }
+      case 'download_channel':
+      case 'download_done':
+        downloads.onMessage(m);
         return;
-      }
-      case 'download_done': {
-        // Terminal status: all bytes are flushed, finalize the save.
-        // Also unblock a still-pending channel waiter (BE failed before
-        // the channel opened) with the -1 sentinel.
-        const id = String(m.download_id);
-        const chResolve = pendingDownloadChannels.get(id);
-        if (chResolve) {
-          pendingDownloadChannels.delete(id);
-          chResolve(-1);
-        }
-        const doneResolve = pendingDownloadDone.get(id);
-        if (doneResolve) {
-          pendingDownloadDone.delete(id);
-          doneResolve(String(m.status));
-        }
-        return;
-      }
     }
   };
 
+  // selectRevealed makes a revealed path the selection and the cursor.
+  const selectRevealed = (p: string, entry: Entry) => {
+    applySelection(new Set([p]), 'reveal');
+    selectionAnchor = p;
+    setSelectedEntry(entry);
+    setSelectedPath(p);
+    setGridDir(isDirLike(entry) ? p : '');
+    queueMicrotask(() => scrollRowIntoView(p));
+  };
   // onListOk swaps in a directory's fresh listing (replacing whatever was
   // cached — rows whose content is unchanged keep their DOM, see the
   // <FileTree> identity-stabilising layer).
@@ -794,14 +784,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       const target = pendingReveal;
       pendingReveal = null;
       const entry = entries.find((e) => e.name === baseName(target)) ?? null;
-      if (entry) {
-        applySelection(new Set([target]), 'reveal');
-        selectionAnchor = target;
-        setSelectedEntry(entry);
-        setSelectedPath(target);
-        setGridDir(isDirLike(entry) ? target : '');
-        queueMicrotask(() => scrollRowIntoView(target));
-      }
+      if (entry) selectRevealed(target, entry);
     }
     if (m.truncated) setTruncatedDirs(p, { shown: entries.length, total: Number(m.total) || 0 });
     else if (truncatedDirs[p]) setTruncatedDirs(produce((s) => { delete s[p]; }));
@@ -1610,11 +1593,6 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const pendingUploadChannels = new Map<string, (channelID: number) => void>();
   const pendingUploadDone = new Map<string, (status: string) => void>();
 
-  // Download egress mirrors upload's async handshake: the BE opens a raw
-  // channel and pushes its id (download_channel), streams the file/zip
-  // bytes, then signals completion (download_done). Keyed by download_id.
-  const pendingDownloadChannels = new Map<string, (channelID: number) => void>();
-  const pendingDownloadDone = new Map<string, (status: string) => void>();
 
   // Hidden native inputs that back the toolbar Upload buttons — the
   // only way to reach OS files from the browser. dirInputEl gets the
@@ -2066,64 +2044,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   });
 
   // runDownload asks the BE to stream one-or-more confined paths back to
-  // the browser. A lone file comes as-is; a directory or a multi-select
-  // arrives as a single zip. We open the raw channel the BE announces,
-  // concatenate every chunk, and on download_done synthesize an <a
-  // download> click to drop it in the browser's downloads. The terminal
-  // toast (Download ready / failed) is fired BE-side.
-  const runDownload = async (paths: string[]) => {
-    if (paths.length === 0) return;
-    const begin = await sendWithReply({ kind: 'download_begin', paths });
-    if (begin.kind !== 'download_begin_ok') {
-      setStatusOverride(`download: ${String(begin.msg ?? begin.code ?? 'failed')}`);
-      return;
-    }
-    const downloadID = String(begin.download_id);
-    const filename = String(begin.filename);
-    const channelID = await waitFor(pendingDownloadChannels, downloadID, 15_000, -1);
-    if (channelID < 0) {
-      setStatusOverride('download: channel never opened');
-      return;
-    }
-    const chunks: Uint8Array[] = [];
-    const unsubscribe = window.wash.openRawChannel(channelID, (bytes) => {
-      // Copy: the shell may reuse the backing buffer after the callback.
-      chunks.push(bytes.slice());
-    });
-    // No timeout spanning the stream — a big zip can run a while. The BE
-    // emits download_done right after the last frame flushes.
-    const donePromise = new Promise<string>((resolve) => pendingDownloadDone.set(downloadID, resolve));
-    try {
-      const status = await donePromise;
-      if (status === 'done') {
-        saveBytes(filename, chunks);
-      } else {
-        setStatusOverride(`download: ${filename} failed`);
-      }
-    } finally {
-      unsubscribe();
-      pendingDownloadChannels.delete(downloadID);
-      pendingDownloadDone.delete(downloadID);
-    }
-  };
-
-  // saveBytes drops a Blob into the browser's downloads under name via a
-  // synthetic anchor click. data-testid on the anchor lets the e2e assert
-  // the trigger fired without depending on the OS download chrome.
-  const saveBytes = (name: string, chunks: Uint8Array[]) => {
-    const blob = new Blob(chunks as BlobPart[], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.dataset.testid = 'fm-download-anchor';
-    a.dataset.name = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    // Revoke after a tick so the navigation/save has picked up the URL.
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  };
+  // the browser (internal/download): a lone file as-is, a directory or a
+  // multi-select as one zip. The terminal toast is fired BE-side.
+  const downloads = createDownloads({
+    request: (req) => sendWithReply(req),
+    openRawChannel: (ch, onBytes) => window.wash.openRawChannel(ch, onBytes),
+    save: (name, chunks) => saveDownload(name, chunks, 'fm-download-anchor'),
+    onError: (msg) => setStatusOverride(msg),
+  });
+  const runDownload = downloads.run;
 
   // commitSymlink creates a symlink at targetDir/basename(src)
   // pointing at src. Same trivial-skip rules as commitMove except
@@ -2534,15 +2463,21 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       // Already listed: onListOk won't fire, select now.
       const entry = findEntry(p);
       pendingReveal = null;
-      if (entry) {
-        applySelection(new Set([p]), 'reveal');
-        selectionAnchor = p;
-        setSelectedEntry(entry);
-        setSelectedPath(p);
-        setGridDir(isDirLike(entry) ? p : '');
-        queueMicrotask(() => scrollRowIntoView(p));
-      }
+      if (entry) selectRevealed(p, entry);
     }
+  };
+  // revealLaunch selects the path this window was opened on (the BE's
+  // `reveal`, after its initial list_ok). The folder being shown is
+  // selected where it is — the window stays inside it; a file is revealed
+  // in its folder like a search hit.
+  const revealLaunch = (p: string) => {
+    if (p !== path()) {
+      revealHit(p);
+      return;
+    }
+    applySelection(new Set([p]), 'reveal');
+    selectionAnchor = p;
+    queueMicrotask(() => scrollRowIntoView(p));
   };
   const filterStatus = createMemo(() => {
     const q = normalizeQuery(filterQuery());

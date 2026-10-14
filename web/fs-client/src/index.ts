@@ -62,3 +62,6 @@ export {
   entriesFromDataTransfer,
 } from './upload.ts';
 export type { UploadItem, UploadPlan, BlobLike } from './upload.ts';
+
+export { createDownloads } from './download.ts';
+export type { Downloads, DownloadOptions } from './download.ts';

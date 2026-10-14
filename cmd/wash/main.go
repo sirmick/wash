@@ -99,6 +99,11 @@ func dispatchApp(a *registry.App) {
 		writeManifest(os.Stdout, a)
 		return
 	}
+	// Typed at a wash terminal's prompt (`wash-edit notes.md`), not spawned
+	// by the router: the terminal opens it, in this app.
+	if launch.InTerminalShell(a.Manifest.ID) {
+		os.Exit(launch.RunOpenIn(a.Manifest.ID, os.Args[1:]))
+	}
 	if err := a.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "wash: %s: %v\n", a.Name, err)
 		os.Exit(1)

@@ -34,6 +34,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"github.com/sirmick/wash/internal/download"
 	"github.com/sirmick/wash/internal/places"
 	"github.com/sirmick/wash/internal/version"
 	"io"
@@ -176,6 +177,8 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	registerPrefsHandlers(bus)
 	registerFindHandlers(bus)
 	registerAgentHandlers(bus)
+	// The sidebar's "Download" (confined fs → browser save), fm's egress.
+	download.Register(bus, editFS)
 
 	if root == "" {
 		log.Printf("wash-edit ready instance=%s window=%d (unconfined)", instanceID, windowID)

@@ -138,6 +138,50 @@ func browserArgv(browser, url string) []string {
 	return argv
 }
 
+// InTerminalShell reports whether the process was started from a shell in
+// a wash terminal rather than spawned by the router as app appID. Such a
+// shell inherits wash-term's WASH_APP_ID, so an app binary run there
+// (`wash-edit notes.md`) would dial the router claiming to be the terminal
+// and be refused; it has to ask the terminal to open it instead (RunOpenIn).
+func InTerminalShell(appID string) bool {
+	return os.Getenv("WASH_TERM_INSTANCE") != "" && os.Getenv("WASH_APP_ID") != appID
+}
+
+// RunOpenIn is an app binary typed at a wash terminal's prompt: `wash-edit
+// a.go b.go` or `wash-fm ..`. Each path opens in THAT app (not whichever
+// registered its extension); no path opens a fresh window of it. Paths
+// resolve against the shell's cwd, here, before they cross the socket.
+func RunOpenIn(appID string, args []string) int {
+	var paths []string
+	for _, a := range args {
+		if a == "--open" {
+			continue // the router's own launch form, typed by hand
+		}
+		if strings.HasPrefix(a, "-") && len(a) > 1 {
+			fmt.Fprintf(os.Stderr, "%s: unknown flag %s (usage: %s [path...])\n", filepath.Base(os.Args[0]), a, filepath.Base(os.Args[0]))
+			return 2
+		}
+		paths = append(paths, a)
+	}
+	if len(paths) == 0 {
+		return sendPathOpen(appID, "")
+	}
+	for _, p := range paths {
+		abs, err := filepath.Abs(p)
+		if err == nil {
+			_, err = os.Stat(abs)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", filepath.Base(os.Args[0]), err)
+			return 1
+		}
+		if code := sendPathOpen(appID, abs); code != 0 {
+			return code
+		}
+	}
+	return 0
+}
+
 // openPath resolves the file, picks its handler, and starts it.
 func openPath(path string) int {
 	abs, err := filepath.Abs(path)
@@ -161,6 +205,18 @@ func openPath(path string) int {
 			return 1
 		}
 	}
+	if code := sendPathOpen("", abs); code != 0 {
+		return code
+	}
+	fmt.Printf("wash open: %s → %s\n", abs, name)
+	return 0
+}
+
+// sendPathOpen asks the terminal this shell runs in to open abs — in app
+// appID, or by extension when appID is empty. The terminal does the
+// opening because it holds CapOpen and CapSpawn; this process holds
+// nothing.
+func sendPathOpen(appID, abs string) int {
 	sock := os.Getenv("WASH_DISPLAY")
 	if sock == "" {
 		sock = os.Getenv("WASH_CONTROL_SOCKET")
@@ -170,19 +226,17 @@ func openPath(path string) int {
 		fmt.Fprintln(os.Stderr, "wash open: not inside a wash terminal ($WASH_DISPLAY / $WASH_TERM_INSTANCE unset)")
 		return 1
 	}
-	req := map[string]any{
-		"t":           "msg",
-		"instance_id": inst,
-		"data":        map[string]any{"kind": "path_open", "path": abs},
+	data := map[string]any{"kind": "path_open", "path": abs}
+	if appID != "" {
+		data["app"] = appID
 	}
-	resp, code := roundtrip(sock, 5, req)
+	resp, code := roundtrip(sock, 5, map[string]any{"t": "msg", "instance_id": inst, "data": data})
 	if code != 0 {
 		return code
 	}
 	if t, _ := resp["t"].(string); t == "error" {
 		return printErrAndExit(resp)
 	}
-	fmt.Printf("wash open: %s → %s\n", abs, name)
 	return 0
 }
 

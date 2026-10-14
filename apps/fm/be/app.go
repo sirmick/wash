@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirmick/wash/internal/download"
 	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/internal/thumbs"
 	"github.com/sirmick/wash/pkg/apps/registry"
@@ -122,7 +123,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 		log.Printf("wash-fm: sandbox root=%s (from router session)", fmRoot)
 	}
 	fmFS = wfs.New(fmRoot)
-	launchDir = resolveLaunchDir(c.LaunchOpenPath())
+	launchDir, launchReveal = resolveLaunchDir(c.LaunchOpenPath())
 
 	// The group names this window when it invites another; the instance id
 	// is only known now.
@@ -141,6 +142,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	// the FE treats unsolicited list_ok the same as a response.
 	if reply, err := listReplyFor("", initialPath()); err == nil {
 		bus.EmitOrLog("list_ok", reply)
+		emitLaunchReveal(bus)
 	}
 
 	// Seed the FE's file-clipboard view from whatever's already on
@@ -149,36 +151,46 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 }
 
 // launchDir is the folder a `--open <path>` launch asked for (see
-// resolveLaunchDir); empty for a normal launch.
-var launchDir string
+// resolveLaunchDir); empty for a normal launch. launchReveal is the path
+// itself — the folder, or the file inside launchDir — which the FE selects.
+var launchDir, launchReveal string
 
 // resolveLaunchDir turns the `--open <path>` launch argv (edit's "Reveal
-// in Files", or any spawn.request carrying an open path) into the folder
-// fm should land on: a directory is listed itself, a file's parent is
-// listed. Confined to fm's root like every other path; anything outside
-// or missing falls back to the default start so a bad argv never leaves
-// fm blank. Selecting the file within that listing is the FE's job and
-// is not wired yet — the launch only positions the window.
-func resolveLaunchDir(p string) string {
+// in Files", a places click, `wash-fm <path>`, or any spawn.request
+// carrying an open path) into the folder fm should land on: a directory is
+// listed itself, a file's parent is listed. Confined to fm's root like
+// every other path; anything outside or missing falls back to the default
+// start so a bad argv never leaves fm blank. The second result is the path
+// to select once that listing is shown (emitLaunchReveal).
+func resolveLaunchDir(p string) (dir, reveal string) {
 	if p == "" {
-		return ""
+		return "", ""
 	}
 	abs, err := fmFS.Confine(p)
 	if err != nil {
 		log.Printf("wash-fm: launch open=%q rejected: %v", p, err)
-		return ""
+		return "", ""
 	}
 	st, err := os.Stat(abs)
 	if err != nil {
 		log.Printf("wash-fm: launch open=%q rejected: %v", p, err)
-		return ""
+		return "", ""
 	}
-	dir := abs
+	dir = abs
 	if !st.IsDir() {
 		dir = filepath.Dir(abs)
 	}
 	log.Printf("wash-fm: launch open=%s dir=%s", abs, dir)
-	return dir
+	return dir, abs
+}
+
+// emitLaunchReveal follows the initial list_ok with the path the launch
+// named, so a window opened ON a folder shows it selected rather than
+// merely open, and one opened on a file shows the file selected.
+func emitLaunchReveal(b *sdk.Bus) {
+	if launchReveal != "" {
+		b.EmitOrLog("reveal", map[string]string{"path": launchReveal})
+	}
 }
 
 // initialPath is the directory fm shows on first paint.
@@ -391,8 +403,8 @@ func registerHandlers(b *sdk.Bus) {
 	// Upload ingestion (OS files → confined fs); see upload.go.
 	registerUploadHandlers(b)
 
-	// Download egress (confined fs → browser save); see download.go.
-	registerDownloadHandlers(b)
+	// Download egress (confined fs → browser save); see internal/download.
+	download.Register(b, fmFS)
 
 	// Recursive name search under a folder (the filter box's "search
 	// subtree" mode); see search.go.
@@ -444,7 +456,11 @@ func registerHandlers(b *sdk.Bus) {
 		if err != nil {
 			return err
 		}
-		return b.Emit("list_ok", reply)
+		if err := b.Emit("list_ok", reply); err != nil {
+			return err
+		}
+		emitLaunchReveal(b)
+		return nil
 	})
 	// save_state is sdk.HandlePersist plus one read: the blob's path is
 	// the folder this window is showing, which is what closing it records

@@ -50,6 +50,9 @@ const APPS: PlaceApp[] = [
 // Fully round ends whatever the height — the bar is a pill, not a card.
 const PILL = '999px';
 
+// The gap round the pill on every side when it sits in a menu bar.
+const MENUBAR_INSET = '2px';
+
 // The group palette. Deliberately NOT the four apps' own accents (Files blue,
 // Terminal green, Editor amber, Agent violet) or anything that reads as one
 // of them — a tint the colour of an app would look like a statement about
@@ -110,6 +113,10 @@ export const PlacesBar: Component<{
   /** Extra tooltip for an UNBOUND icon, e.g. which catalog a new agent will
    *  start on — the "nothing is a surprise at start" line. */
   describe?: (target: string) => string | undefined;
+  /** Sits in a window's menu bar (term, edit, ai) rather than a toolbar
+   *  with padding of its own (fm): an equal inset all round, so the pill
+   *  does not run into the title bar above and the bar's rule below. */
+  menuBar?: boolean;
   style?: JSX.CSSProperties;
 }> = (props) => {
   // Titles change (a terminal's cwd, an editor's file); re-read them when the
@@ -163,7 +170,7 @@ export const PlacesBar: Component<{
         border: `1px solid ${tokens.borderMenu}`,
         'border-radius': PILL,
         background: groupTint(props.view.group),
-        'margin-right': '4px',
+        ...(props.menuBar ? { margin: `${MENUBAR_INSET} ${MENUBAR_INSET} ${MENUBAR_INSET} auto` } : { 'margin-right': '4px' }),
         ...props.style,
       }}
     >

@@ -381,7 +381,7 @@ wash from a shell. They land in `out/` after `make wash`.
 
 | Tool | What it does |
 |---|---|
-| **wash** | The multicall binary itself: `wash <app>` runs an app without its symlink, `wash list-apps`, `wash launch …` (= wash-launch), `wash open <file\|url>` (hand a file to its registered app; also answers as `xdg-open` inside wash terminals). |
+| **wash** | The multicall binary itself: `wash <app>` runs an app without its symlink, `wash list-apps`, `wash launch …` (= wash-launch), `wash open <file\|url>` (hand a file to its registered app; also answers as `xdg-open` inside wash terminals). Inside a wash terminal an app's own name opens in that app: `wash-edit notes.md`, `wash-fm .` (a file opens its folder with the file selected). |
 | **wash-launch** | `wash-launch <app-id>` spawns an app from the terminal. `wash-launch msg <instance> <json>` relays an `app_msg`, optionally awaiting a reply. Finds the router via `WASH_CONTROL_SOCKET`. |
 | **wash-sudo** | A sudo-shaped CLI for wash-priv: `wash-sudo cmd args…`. Approval + password happen in the browser, never in the terminal. `--window` opens a root wash-term; `--app <id>` spawns a registered app as root. |
 | **wash-login** | The multi-user front door (see [Connecting](#connecting)) — browser auth, per-user session routers. |

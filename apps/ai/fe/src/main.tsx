@@ -662,6 +662,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onOpen={(target) => sendLocal({ kind: 'places_click', target })}
           disabled={row()?.cwd ? undefined : 'The session has no folder yet'}
           describe={() => row()?.cwd}
+          menuBar
         />
       }
       menus={[

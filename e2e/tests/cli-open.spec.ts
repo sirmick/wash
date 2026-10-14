@@ -102,6 +102,31 @@ test.describe('wash open', () => {
       .toMatch(/wash open: https:\/\/example\.invalid\/x → true https:\/\/example\.invalid\/x/);
   });
 
+  // An app binary typed at the prompt: the shell inherits wash-term's
+  // identity, so the binary must not dial the router itself — it asks the
+  // terminal to open the path in THAT app (launch.RunOpenIn).
+  test('wash-edit <relative file> opens it in the editor', async ({ page, router }) => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'wash-open-')));
+    writeFileSync(join(dir, 'typed.txt'), 'typed at the prompt\n');
+    const host = await openTerminal(page, router.url);
+    await run(page, host, `cd ${dir} && wash-edit typed.txt; echo "exit=$?"`);
+    await expect.poll(() => bufferOf(host), { timeout: 10_000 }).toMatch(/exit=0/);
+    const edit = page.locator('wash-app-edit');
+    await expect(edit).toBeVisible({ timeout: 20_000 });
+    await expect(edit.locator('.cm-content')).toContainText('typed at the prompt', { timeout: 10_000 });
+  });
+
+  test('wash-fm <file> opens its folder with the file selected', async ({ page, router }) => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'wash-open-')));
+    writeFileSync(join(dir, 'pick-me.txt'), 'x');
+    const host = await openTerminal(page, router.url);
+    await run(page, host, `wash-fm ${join(dir, 'pick-me.txt')}; echo "exit=$?"`);
+    await expect.poll(() => bufferOf(host), { timeout: 10_000 }).toMatch(/exit=0/);
+    const fm = page.locator('wash-app-fm');
+    await expect(fm).toBeVisible({ timeout: 20_000 });
+    await expect(fm.getByTestId('fm-entry-pick-me.txt')).toHaveAttribute('data-selected', 'true', { timeout: 10_000 });
+  });
+
   test('xdg-open is on a wash terminal’s PATH and is wash open', async ({ page, router }) => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'wash-open-')));
     const file = join(dir, 'shim.md');

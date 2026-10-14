@@ -1,14 +1,15 @@
-// Download egress: confined files streamed OUT to the browser, which
-// saves them via a synthetic <a download>. The mirror image of upload —
-// same raw-channel transport, opposite direction. fm decides the
-// bundling: a lone regular file streams as-is; anything else (a
-// directory, or a multi-selection) is zipped on the fly so the browser
-// receives a single archive.
+// Package download is download egress: confined files streamed OUT to the
+// browser, which saves them via a synthetic <a download> (the FE half is
+// @wash/fs-client's runDownload). The mirror image of fm's upload — same
+// raw-channel transport, opposite direction. The BE decides the bundling:
+// a lone regular file streams as-is; anything else (a directory, or a
+// multi-selection) is zipped on the fly so the browser receives a single
+// archive. fm and edit both register it.
 //
-//	FE → fm   download_begin   {paths:[…]}        → {download_id, filename}  (JSON)
-//	fm → FE   download_channel {download_id, channel_id}                     (JSON push)
-//	fm → FE   …file/zip bytes…                                              (raw channel, fm writes)
-//	fm → FE   download_done    {download_id, status, error}                  (JSON push)
+//	FE → BE   download_begin   {paths:[…]}        → {download_id, filename}  (JSON)
+//	BE → FE   download_channel {download_id, channel_id}                     (JSON push)
+//	BE → FE   …file/zip bytes…                                              (raw channel, BE writes)
+//	BE → FE   download_done    {download_id, status, error}                  (JSON push)
 //
 // Unlike upload there's no per-file framing: fm sends exactly one opaque
 // payload (the file, or the zip), so the FE just concatenates every
@@ -19,7 +20,7 @@
 // Why a goroutine: OpenChannel blocks on the router's channel.opened
 // reply delivered on the SDK read goroutine, so it can't run from a bus
 // handler — identical constraint to upload's reader.
-package fm
+package download
 
 import (
 	"bufio"
@@ -30,10 +31,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/sirmick/wash/internal/bulkops"
+	wfs "github.com/sirmick/wash/internal/fs"
 	"github.com/sirmick/wash/pkg/sdk"
 )
 
@@ -83,26 +86,32 @@ func clearDownload(id string) {
 	downloadsMu.Unlock()
 }
 
-func registerDownloadHandlers(b *sdk.Bus) {
+// Register wires download_begin on b. Every path is confined to fsys, the
+// app's own sandbox.
+func Register(b *sdk.Bus, fsys *wfs.FS) {
 	sdk.Handle(b, "download_begin", func(c *sdk.Conn, _ string, req downloadBeginReq) (downloadBeginResp, error) {
-		return downloadBegin(c, req)
+		return downloadBegin(c, b, fsys, req)
 	})
+}
+
+func fsErr(err error) error {
+	return sdk.Err{Code: wfs.ErrCode(err), Msg: err.Error()}
 }
 
 // downloadBegin confines+stats every requested path, decides single-file
 // vs zip and the save name, then hands off to the writer goroutine.
-func downloadBegin(c *sdk.Conn, req downloadBeginReq) (downloadBeginResp, error) {
+func downloadBegin(c *sdk.Conn, b *sdk.Bus, fsys *wfs.FS, req downloadBeginReq) (downloadBeginResp, error) {
 	if len(req.Paths) == 0 {
 		return downloadBeginResp{}, sdk.Errf(sdk.ErrBadRequest, "no paths")
 	}
 	abs := make([]string, 0, len(req.Paths))
 	for _, p := range req.Paths {
-		a, err := fmFS.Confine(p)
+		a, err := fsys.Confine(p)
 		if err != nil {
-			return downloadBeginResp{}, fsErr(err, p)
+			return downloadBeginResp{}, fsErr(err)
 		}
 		if _, err := os.Lstat(a); err != nil {
-			return downloadBeginResp{}, fsErr(err, p)
+			return downloadBeginResp{}, fsErr(err)
 		}
 		abs = append(abs, a)
 	}
@@ -115,7 +124,7 @@ func downloadBegin(c *sdk.Conn, req downloadBeginReq) (downloadBeginResp, error)
 	default:
 		fi, err := os.Lstat(abs[0])
 		if err != nil {
-			return downloadBeginResp{}, fsErr(err, req.Paths[0])
+			return downloadBeginResp{}, fsErr(err)
 		}
 		base := filepath.Base(abs[0])
 		if fi.IsDir() {
@@ -126,19 +135,19 @@ func downloadBegin(c *sdk.Conn, req downloadBeginReq) (downloadBeginResp, error)
 		}
 	}
 
-	id := "dl-" + fmInstance + "-" + strconv.FormatUint(downloadSeq.Add(1), 10)
+	id := "dl-" + c.InstanceID() + "-" + strconv.FormatUint(downloadSeq.Add(1), 10)
 	s := &downloadSession{id: id, paths: abs, zip: useZip, filename: name}
 	downloadsMu.Lock()
 	downloads[id] = s
 	downloadsMu.Unlock()
-	go runDownloadWriter(c, s)
+	go runDownloadWriter(c, b, s)
 	return downloadBeginResp{DownloadID: id, Filename: name}, nil
 }
 
 // runDownloadWriter opens the raw channel, announces it, streams the
 // payload, then reports the terminal status (which doubles as the FE's
 // finalize trigger).
-func runDownloadWriter(c *sdk.Conn, s *downloadSession) {
+func runDownloadWriter(c *sdk.Conn, b *sdk.Bus, s *downloadSession) {
 	defer clearDownload(s.id)
 
 	// File channel: bulk + creditless (lossless). A download yields to
@@ -146,11 +155,11 @@ func runDownloadWriter(c *sdk.Conn, s *downloadSession) {
 	ch, err := c.OpenChannelFile(context.Background(), c.WindowID())
 	if err != nil {
 		s.fail("channel open: " + err.Error())
-		finishDownload(c, s)
+		finishDownload(c, b, s)
 		return
 	}
 	defer ch.Close()
-	bus.EmitOrLog("download_channel", map[string]any{"download_id": s.id, "channel_id": uint64(ch.ID())})
+	b.EmitOrLog("download_channel", map[string]any{"download_id": s.id, "channel_id": uint64(ch.ID())})
 
 	bw := bufio.NewWriterSize(ch, 64*1024)
 	var werr error
@@ -165,17 +174,17 @@ func runDownloadWriter(c *sdk.Conn, s *downloadSession) {
 	if werr != nil {
 		s.fail(werr.Error())
 	}
-	finishDownload(c, s)
+	finishDownload(c, b, s)
 }
 
 // finishDownload pushes the terminal status to the FE and fires a toast
 // via the notify helpers — Info on success, Fail on error.
-func finishDownload(c *sdk.Conn, s *downloadSession) {
+func finishDownload(c *sdk.Conn, b *sdk.Bus, s *downloadSession) {
 	status := "done"
 	if s.failedMsg() != "" {
 		status = "failed"
 	}
-	log.Printf("wash-fm download id=%s status=%s file=%q zip=%v err=%q", s.id, status, s.filename, s.zip, s.failedMsg())
+	log.Printf("%s download id=%s status=%s file=%q zip=%v err=%q", "wash-"+strings.TrimPrefix(c.Manifest().ID, "com.wash."), s.id, status, s.filename, s.zip, s.failedMsg())
 	// EmitBulk, NOT Emit: download_done is the FE's finalize trigger and
 	// MUST arrive after the last file byte. The file channel streams at
 	// ClassBulk, but a plain Emit goes ClassInteractive — and the router's
@@ -184,7 +193,7 @@ func finishDownload(c *sdk.Conn, s *downloadSession) {
 	// Bulk lane and the FE saves an empty/truncated blob (a real e2e flake:
 	// fm-download "exact bytes" returned ""). Sent at Bulk it rides the same
 	// FIFO lane behind the bytes, so ordering holds.
-	bus.EmitBulkOrLog("download_done", map[string]any{"download_id": s.id, "status": status, "error": s.failedMsg()})
+	b.EmitBulkOrLog("download_done", map[string]any{"download_id": s.id, "status": status, "error": s.failedMsg()})
 	switch status {
 	case "done":
 		c.Info("Download ready", s.filename)

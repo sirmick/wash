@@ -567,6 +567,9 @@ type pathProbeReply struct {
 type pathOpenReq struct {
 	ChannelID uint64 `json:"channel_id"`
 	Path      string `json:"path"`
+	// App names the handler outright — `wash-edit <path>` typed in this
+	// terminal (launch.RunOpenIn). Empty: route by directory/extension.
+	App string `json:"app,omitempty"`
 }
 
 type closeTabReq struct {
@@ -667,6 +670,10 @@ func registerHandlers(b *sdk.Bus) {
 		return pathProbeReply{Ok: ok}, nil
 	})
 	sdk.HandleVoid(b, "path_open", func(c *sdk.Conn, _ string, req pathOpenReq) error {
+		if req.App != "" && req.Path == "" {
+			log.Printf("term: path_open app=%s (no path)", req.App)
+			return c.SpawnRequest(req.App)
+		}
 		abs := resolveTermPath(cwdOf(uint32(req.ChannelID)), req.Path)
 		if abs == "" {
 			return nil
@@ -680,6 +687,10 @@ func registerHandlers(b *sdk.Bus) {
 		// A directory has no extension for the router to route on, so
 		// term names the handler itself; anything else goes through open
 		// routing, which is where the edit/imageview association lives.
+		if req.App != "" {
+			log.Printf("term: path_open %q -> %s", abs, req.App)
+			return c.SpawnRequestOpen(req.App, abs)
+		}
 		if fi.IsDir() {
 			log.Printf("term: path_open dir=%q -> com.wash.fm", abs)
 			return c.SpawnRequestOpen("com.wash.fm", abs)

@@ -6,6 +6,7 @@ export { packs, defaultPackId, getPack, applyScheme, washAppearance, onAppearanc
 export type { Pack } from './packs';
 export { severityColor } from './severity';
 export { fmtBytes, fmtRate, fmtUptime, fmtClockTime } from './format';
+export { saveDownload } from './save-download';
 export { createAppBus } from './app-bus';
 export type { AppBus, AppBusMessage, AppBusMsgBound, AppBusOptions } from './app-bus';
 export { Button } from './button';

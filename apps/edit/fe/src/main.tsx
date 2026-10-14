@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Tab, Terminal, defineWashApp, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Tab, Terminal, defineWashApp, saveDownload, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
 import type { InsertedDraft } from '@wash/ui';
 import type { AgentStatus, PathHit, PathLinks, TerminalAPI, agentproto } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
@@ -25,6 +25,7 @@ import type { PlacesView } from '@wash/ui';
 import {
   joinPath, baseName, parentPath,
   createBus,
+  createDownloads,
   createWatch,
   DRAG_MIME, readDragPaths, hasWashDrag, dropEffectFor,
   flattenTree,
@@ -97,6 +98,7 @@ import {
   ChevronDown,
   ChevronUp,
   Code as CodeIcon,
+  Download as DownloadIcon,
   File as FileIcon,
   Folder as FolderIcon,
   Heading1,
@@ -1784,6 +1786,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // belongs to sends one for a `file.go:42` clicked in its transcript.
     // Which Agent session this editor serves, on adoption and whenever the
     // agent renames it.
+    if (downloads.onMessage(m)) return;
     if (m.kind === 'places') {
       setPlaces({ group: (m.group as string) ?? '', members: (m.members as Record<string, string>) ?? {} });
       return;
@@ -2553,6 +2556,15 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const ctxCopyPath = (p: string) => {
     washCopyText(p);
   };
+  // The sidebar's Download: the BE streams the file (a folder as a zip)
+  // over a raw channel and it lands in the browser's downloads — fm's
+  // egress, internal/download.
+  const downloads = createDownloads({
+    request: (req) => sendWithReply(req),
+    openRawChannel: (ch, onBytes) => window.wash.openRawChannel(ch, onBytes),
+    save: (name, chunks) => saveDownload(name, chunks, 'edit-download-anchor'),
+    onError: (msg) => setStatusError(msg),
+  });
 
   // ---- CodeMirror ----
   //
@@ -3476,7 +3488,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onOpen={(target) => send({ kind: 'places_click', target, cwd: root() })}
           disabled={root() ? undefined : 'Open a folder first'}
           describe={(t) => (t === PLACES_AGENT ? defaultCatalog()?.label ?? root() : root())}
-          style={{ 'margin-left': 'auto' }}
+          menuBar
         />
         <Show when={openMenu() === 'file'}>
           <Menu x={menuAnchor().x} y={menuAnchor().y} onDismiss={closeMenu} data-testid="edit-menu-file">
@@ -4341,6 +4353,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               ctxCopyPath(c.path);
             }}
             data-testid="edit-ctx-copy-path"
+          />
+          <MenuItem
+            label={isDirLike(ctxMenu()!.entry) ? 'Download as zip' : 'Download'}
+            icon={<DownloadIcon size={14} />}
+            onClick={() => {
+              const c = ctxMenu()!;
+              closeCtxMenu();
+              void downloads.run([c.path]);
+            }}
+            data-testid="edit-ctx-download"
           />
           {/* Diff against the currently-active file. Only shown when
               there's an active tab whose path differs from the
