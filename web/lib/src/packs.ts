@@ -257,8 +257,11 @@ const seoul: Pack = {
 // titlebar (NOT a colored caption), a raised 3D bevel, and a periwinkle-blue
 // selection highlight — all sampled straight off a Mac OS 9 Appearance
 // control-panel screenshot. Replaced the old Windows-NT pack. The wallpaper
-// is a vectorized 1997 vintage-sunset design on black, so the platinum
-// windows pop. A light theme.
+// is the desktop that era would have ray-traced in Bryce or Kai's Power
+// Tools — chrome and glossy spheres on an infinite periwinkle checkerboard
+// under a faint 1-bit dither — drawn in this scheme's own periwinkles and
+// platinums so desktop and chrome agree (design/packs/gen-copland.py,
+// original artwork). A light theme.
 const copland: Pack = {
   id: 'copland',
   name: 'Copland',
@@ -324,7 +327,7 @@ const copland: Pack = {
     '--wash-radius-lg': '0',
     '--wash-radius-xl': '0',
     '--wash-taskbar-bg': '#cccccc',
-    // Desktop info banner sits over the black 1997 wallpaper → light text.
+    // Desktop info banner sits over the wallpaper's dark periwinkle sky → light text.
     '--wash-banner-fg': '#e8e8f0',
     // Classic Mac type. Chicago — the original Macintosh System UI face
     // (Susan Kare, 1984; bundled scalable TrueType, see `fonts` below +
