@@ -21,7 +21,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { createAppBus, defineWashApp, tokens, Terminal, Button, Input, Checkbox } from '@wash/ui';
+import { createAppBus, defineWashApp, tokens, washAssetUrl, Terminal, Button, Input, Checkbox } from '@wash/ui';
 
 // ----- wire types -----
 
@@ -1018,7 +1018,7 @@ const SpriteIcon: Component<{ name: string; size: number }> = (props) => (
     stroke-linejoin="round"
     style={{ display: 'block' }}
   >
-    <use href={`/icons.svg#${props.name}`} />
+    <use href={washAssetUrl(`icons.svg#${props.name}`)} />
   </svg>
 );
 

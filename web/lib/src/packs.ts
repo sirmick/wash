@@ -53,6 +53,15 @@ export interface Pack {
    */
   wallpaper: string;
   /**
+   * Optional small raster preview of the wallpaper for the Settings
+   * gallery (convention: `wallpapers/thumbs/<id>.jpg`, made by
+   * web/shell/scripts/wallpaper-thumbs.mjs). The full wallpapers are up
+   * to 3.4 MB of SVG; pulling all six just to draw 160×90 cards cost
+   * seconds on a slow link and wedged the in-browser VM while the router
+   * read + gzipped them. A pack without one previews its full wallpaper.
+   */
+  thumbnail?: string;
+  /**
    * Optional taskbar start-menu icon SVG markup. When omitted the FE
    * falls back to the served default logo (wash-logo.svg).
    */
@@ -128,6 +137,7 @@ const midnight: Pack = {
   appearance: 'dark',
   scheme: midnightScheme(),
   wallpaper: 'wallpapers/midnight.svg',
+  thumbnail: 'wallpapers/thumbs/midnight.jpg',
 };
 
 // Tokyo — Solarized Dark. A neon Kabukichō alley (vectorized from a
@@ -189,6 +199,7 @@ const tokyo: Pack = {
     '--wash-banner-blur': '8px',
   },
   wallpaper: 'wallpapers/tokyo.svg',
+  thumbnail: 'wallpapers/thumbs/tokyo.jpg',
 };
 
 // Seoul — Hwatu (Go-Stop). The first LIGHT pack: warm ivory paper
@@ -249,6 +260,7 @@ const seoul: Pack = {
     '--wash-accent-pink': '#c2517e',
   },
   wallpaper: 'wallpapers/seoul.svg',
+  thumbnail: 'wallpapers/thumbs/seoul.jpg',
 };
 
 // Copland — Mac OS 8.5/9 "Platinum" appearance (named for Apple's Copland,
@@ -352,6 +364,7 @@ const copland: Pack = {
     '--wash-wallpaper-extent': 'desktop',
   },
   wallpaper: 'wallpapers/copland.svg',
+  thumbnail: 'wallpapers/thumbs/copland.jpg',
   fonts: [{ family: 'Chicago', url: 'fonts/Chicago.woff2' }],
 };
 
@@ -412,6 +425,7 @@ const oslo: Pack = {
     '--wash-banner-blur': '8px',
   },
   wallpaper: 'wallpapers/oslo.svg',
+  thumbnail: 'wallpapers/thumbs/oslo.jpg',
 };
 
 // Dreamtime — an Australian Aboriginal dot-painting pack. A DARK theme:
@@ -499,6 +513,7 @@ const dreamtime: Pack = {
     '--wash-font-sans': '"Quicksand", ui-rounded, "Segoe UI", system-ui, sans-serif',
   },
   wallpaper: 'wallpapers/dreamtime.svg',
+  thumbnail: 'wallpapers/thumbs/dreamtime.jpg',
   fonts: [
     {
       family: 'Quicksand',

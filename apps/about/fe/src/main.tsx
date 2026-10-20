@@ -13,7 +13,7 @@
 
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Button, createAppBus, defineWashApp, fmtBytes, fmtUptime, tokens } from '@wash/ui';
+import { Button, createAppBus, defineWashApp, fmtBytes, fmtUptime, tokens, washAssetUrl } from '@wash/ui';
 import { trafficRows } from './app-traffic';
 
 // ----- wire types -----
@@ -140,7 +140,7 @@ const SpriteIcon: Component<{ name: string; size: number }> = (props) => (
     stroke-linejoin="round"
     style={{ display: 'block' }}
   >
-    <use href={`/icons.svg#${props.name}`} />
+    <use href={washAssetUrl(`icons.svg#${props.name}`)} />
   </svg>
 );
 
