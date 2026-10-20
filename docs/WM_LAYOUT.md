@@ -33,8 +33,10 @@ web/lib/src/
 apps/term/fe/src/
   layout.ts            term's leaf (tab Group) + tab ops over the kernel
 web/shell/src/
-  tiling.ts            (M2) cell layouts, slot assignment, work area → rects
-  viewport-math.ts     work-area helper lives beside the other rect maths
+  tiling.ts            pure: cell layouts, slotting, reconcileAll (unit-tested)
+  tiling-runtime.ts    the store's copy, menu actions, head-only placement
+  layout-menu.tsx      the Layout menu (opened via window.wash.openLayoutMenu)
+  viewport-math.ts     workArea, beside the other rect maths
 ```
 
 The kernel is imported by subpath (`@wash/ui/split-tree`), not the package
@@ -141,19 +143,33 @@ later as a unit suffix; it fits the "unsized gets the rest" rule unchanged.
 
 `workArea(screen, vx, vy, insets)` (`viewport-math.ts`, pure) is a cell's
 screen less the chrome's insets, in plane coords. `cellWorkArea(vx, vy)`
-(`wm.ts`) feeds it this browser's screen size, `TASKBAR_H`, and the
-sidebar's `--wash-reserved-right` — observed on `<html>`, so the result is
-reactive in both the screen and the sidebar. Maximize, Move to 0,0 and
-new-window placement use it. Tiling re-places a cell when it changes.
-
-The taskbar height is still a constant mirroring the session app's 40px;
-publishing it the way the sidebar publishes its width is a later step.
+(`wm.ts`) feeds it this browser's screen size and the insets the session
+chrome publishes on `<html>`: `--wash-reserved-right` (the sidebar) and
+`--wash-reserved-top`/`-bottom` (the taskbar, which a pack can put on top).
+They are observed, so the result is reactive in the screen and the chrome.
+A chrome that publishes no taskbar edge gets a 40px bottom one
+(`TASKBAR_H`). Maximize, Move to 0,0, new-window placement and tiling use
+it; tiling re-places a cell when it changes.
 
 ## 6. Storage
 
-Layouts are stored by the router so every browser on a session agrees,
-using the session's existing app-state blobs keyed by cell — no wire
-change. Geometry still flows only through `window.move`/`window.resize`.
+Layouts are stored by the router so every browser on a session agrees, in
+the session's app-state map — the one that already reaches every shell as
+`app_state` patches and is in every snapshot — one key per cell,
+`shell:layout:<vx>,<vy>`. Only app backends could write that map, so the
+shell got one message: `shell.state_set {key, state}` (null clears). The
+router stores it opaquely, only under the reserved `shell:` prefix so a
+shell can never overwrite an app's blob, and caps a blob at 64 KiB. Like
+window geometry it lives as long as the router does. Geometry still flows
+only through `window.move`/`window.resize`.
+
+A cell's blob is `{shape, slots, floating, restore}` (`tiling.ts`
+`CellLayout`): the layout string; a window key (`origin#windowID`) or null
+per panel in tree order; windows explicitly floated in the cell; and each
+tiled window's pre-tile frame. A `restore` entry for a window that is no
+longer slotted is a pending restore the head applies and drops; `shape: ''`
+marks a layout being dissolved, which the head deletes once it has put
+every window back.
 
 **The head places; anyone edits.** Screen size is per browser but the plane
 is shared, so two tabs re-placing the same windows from different screen
@@ -181,12 +197,13 @@ is sized by it (`republishDisplayState`). Tiling follows the same rule:
   desktop (the current cell — but a fully tiled cell has no desktop left
   to click), right-click empty taskbar (the current cell), right-click a
   pager cell (that cell, without going there). Presets with diagrams, the
-  current one ticked; Float (no layout); Even out panels; Edit layout….
-  The taskbar and pager live in the session app, so this goes through a
-  `window.wash.setCellLayout(cell, shape)` API.
+  current one ticked; No layout. (Even out panels and Edit layout… come
+  with dividers and Settings.) The desktop, taskbar and pager live in the
+  session app, so they call `window.wash.openLayoutMenu(vx, vy, x, y)`;
+  `cellLayout`/`setCellLayout` are there for scripting.
 - Title-bar context menu (`window.tsx`, shared with the taskbar pill's
-  right-click): **Move to panel ▸** (a mini diagram, click a slot),
-  **Swap with main**, **Float**.
+  right-click): **Float** for a tiled window, **Tile** for a floating one
+  in a tiled cell (M4); **Move to panel ▸** and **Swap with main** (M5).
 - Dividers: an overlay in the shell over the cell's gutters (term's drag
   pattern, `apps/term/fe/src/main.tsx` ~750–790, copied rather than shared:
   the shell's dividers sit above windows, not inside one app).
@@ -213,15 +230,20 @@ is sized by it (`republishDisplayState`). Tiling follows the same rule:
 3. **Work area helper** — done. `workArea` (viewport-math.ts) + reactive
    `cellWorkArea` (wm.ts); maximize, Move to 0,0 and new-window placement
    use it.
-4. **Arrange (one cell, live)** — menu, slot assignment, re-placement on
-   close/resize/sidebar, storage.
+4. **Arrange (live)** — done. `tiling.ts` (pure, unit-tested: slotting,
+   arrivals, release, restore, dissolve), `tiling-runtime.ts` (head-only
+   placement), `layout-menu.tsx`, Float/Tile, `shell.state_set`, e2e in
+   `e2e/tests/layouts.spec.ts` incl. the head rule across two tabs. Known
+   gaps, for M5: dragging or edge-resizing a tiled window snaps it back to
+   its panel (drop-to-swap replaces that); per-window `minW/minH` are not
+   yet weighed against panel size; empty panels show wallpaper but are not
+   drop targets yet.
 5. **Dividers, drag-to-slot, focus keys.**
 6. Later: term gets **Layout ▸** presets for its own splits from the same
    syntax; fixed-px sizes; per-cell layout in the pager thumbnails.
 
 ## 9. Open questions
 
-- Gutter between tiled windows: 0 (borders touch) or a few px of wallpaper
-  that doubles as the divider's grab area.
-- Whether "Arrange" on a cell that already has a layout keeps window
-  placement (reshape) or refills by focus order.
+- ~~Gutter~~: 4px of wallpaper (`TILE_GUTTER`), the dividers' grab area.
+- ~~Re-arrange~~: picking a new layout for a tiled cell keeps each window's
+  slot index where the new shape has it; the rest fill by focus order.

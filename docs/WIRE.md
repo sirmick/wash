@@ -354,6 +354,11 @@ Carries window/lifecycle control and the FE half of app messages.
   window back for a round trip. Untagged (0/absent) keeps the old
   behaviour.
 - `{"t":"window.state","window_id":W,"state":"normal|minimized|maximized"}`
+- `{"t":"shell.state_set","key":"shell:…","state":<opaque>|null}` — store
+  (or clear) a shell-owned blob in the session's app_state map, under a key
+  that must start with `shell:`. Broadcast as an `app_state` patch and
+  carried in snapshots like an app's state. Window layouts use
+  `shell:layout:<vx>,<vy>` (docs/WM_LAYOUT.md §6).
 - `{"t":"app_msg.send","instance_id":"…","data":<opaque>,"to":{…}?}` —
   unified FE→BE / cross-app app message. When `to` is set, the router
   resolves the recipient and forwards as `app_msg` on the event channel
