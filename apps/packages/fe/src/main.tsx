@@ -12,7 +12,7 @@
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { CheckCircle2, Download, RefreshCw, Search, Trash2, X, XCircle } from 'lucide-solid';
-import { Button, ConfirmDialog, Menu, MenuItem, MenuSeparator, StatusBar, Terminal, createAppBus, defineWashApp, tokens } from '@wash/ui';
+import { Button, Chip, ConfirmDialog, Menu, MenuItem, MenuSeparator, StatusBar, Terminal, createAppBus, defineWashApp, tokens } from '@wash/ui';
 import type { TerminalAPI } from '@wash/ui';
 
 interface Package {
@@ -406,13 +406,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
                   <div style={rowNameStyle}>
                     <span data-testid={`pkg-name-${p.name}`}>{p.name}</span>
                     <Show when={p.kind === 'task'}>
-                      <span style={kindBadgeStyle} data-testid={`pkg-kind-${p.name}`}>task</span>
+                      <Chip tone="info" data-testid={`pkg-kind-${p.name}`}>task</Chip>
                     </Show>
                     <Show when={p.installed}>
-                      <span style={installedBadgeStyle} data-testid={`pkg-installed-${p.name}`}>
+                      <Chip tone="success" data-testid={`pkg-installed-${p.name}`}>
                         installed
                         <Show when={p.version}>{` ${p.version}`}</Show>
-                      </span>
+                      </Chip>
                     </Show>
                   </div>
                   <div style={rowSummaryStyle}>{p.summary}</div>
@@ -658,28 +658,6 @@ const rowNameStyle: JSX.CSSProperties = {
   color: tokens.fg,
   'font-size': tokens.fontSizeBase,
   'font-weight': 500,
-};
-
-const installedBadgeStyle: JSX.CSSProperties = {
-  'font-size': tokens.fontSizeSm,
-  color: tokens.fgMuted,
-  background: tokens.bgRowSelected,
-  padding: '1px 6px',
-  'border-radius': `${tokens.radiusSm}`,
-  'font-weight': 'normal',
-};
-
-// Tinted blue badge so collection-style rows (tasksel tasks today,
-// dnf groups / flatpak later) read at a glance against the regular-
-// package neutral row chrome.
-const kindBadgeStyle: JSX.CSSProperties = {
-  'font-size': tokens.fontSizeSm,
-  color: tokens.fgInfo,
-  background: tokens.bgInfo,
-  border: `1px solid ${tokens.borderFocus}`,
-  padding: '0 6px',
-  'border-radius': `${tokens.radiusSm}`,
-  'font-weight': 'normal',
 };
 
 const rowSummaryStyle: JSX.CSSProperties = {

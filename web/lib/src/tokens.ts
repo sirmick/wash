@@ -140,11 +140,13 @@ export const tokens = {
   fontSans: FONT_SANS,
   fontMono: FONT_MONO,
   fontTitle: FONT_TITLE,
-  // Back-compat raw sizes. Prefer the `type` scale below — these stay for
-  // the handful of non-`font:`-shorthand call sites (icon sizing, etc.).
-  fontSizeSm: '11px',
-  fontSizeMd: '12px',
-  fontSizeBase: '13px',
+  // Raw sizes for call sites that set `font-size` alone (inheriting family
+  // and weight). Prefer the `type` scale below. var()-backed through the
+  // same size vars as the scale, so a pack that resizes type moves these
+  // too; Md sits 1px under the scale's md step.
+  fontSizeSm: SIZE_SM,
+  fontSizeMd: `calc(${SIZE_MD} - 1px)`,
+  fontSizeBase: SIZE_MD,
 
   // --- The type scale: the ONLY font styles the UI should use. ---
   // Eight `font:` shorthands so the whole desktop reads from one small set

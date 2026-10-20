@@ -122,7 +122,7 @@ export const PrivWidget: Component<PrivWidgetProps> = (props) => {
             'font-style': 'italic',
             'text-align': 'center',
             padding: '12px 0',
-            'font-size': '11px',
+            'font-size': tokens.fontSizeSm,
           }}
         >
           no pending requests
@@ -177,7 +177,7 @@ const LockBar: Component<{ locked: () => boolean; onLock: () => void }> = (props
         padding: '4px 6px',
         background: props.locked() ? `color-mix(in srgb, ${tokens.fgMuted} 18%, transparent)` : `color-mix(in srgb, ${tokens.accentRed} 22%, transparent)`,
         'border-radius': tokens.radiusSm,
-        'font-size': '11px',
+        'font-size': tokens.fontSizeSm,
         color: tokens.fg,
       }}
     >
@@ -243,7 +243,7 @@ const GrantChip: Component<{ appID: string; onRevoke: () => void }> = (props) =>
           padding: '0 2px',
           cursor: 'pointer',
           'line-height': 1,
-          'font-size': '12px',
+          'font-size': tokens.fontSizeMd,
           opacity: 0.7,
         }}
       >
@@ -283,7 +283,7 @@ const PrivRow: Component<{
         display: 'flex',
         'flex-direction': 'column',
         gap: '3px',
-        'font-size': '11px',
+        'font-size': tokens.fontSizeSm,
       }}
     >
       <div

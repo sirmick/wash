@@ -15,7 +15,7 @@
 import { For, Index, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { Button, ConfirmDialog, createAppBus, defineWashApp, fmtBytes, fmtRate, tokens } from '@wash/ui';
+import { Button, ConfirmDialog, createAppBus, defineWashApp, fmtBytes, fmtRate, StatusBar as StatusStrip, tokens } from '@wash/ui';
 import { filterSortProcs, type SortKey } from './procsort.ts';
 import {
   ChevronDown,
@@ -1174,7 +1174,7 @@ const statusKeysOfInterest = [
 // ---- status bar ----
 
 const StatusBar: Component<{ snap: Snapshot | null; visible: number; paused: boolean }> = (props) => (
-  <div style={statusBarStyle} data-testid="top-statusbar">
+  <StatusStrip data-testid="top-statusbar" style={{ gap: '6px' }}>
     <span>{props.snap ? `${props.snap.procs.length} procs` : 'loading…'}</span>
     <span style={{ opacity: 0.5 }}>·</span>
     <span>{props.visible} visible</span>
@@ -1190,7 +1190,7 @@ const StatusBar: Component<{ snap: Snapshot | null; visible: number; paused: boo
     <Show when={props.snap}>
       <span style={{ opacity: 0.5 }}>updated {new Date(props.snap!.ts * 1000).toLocaleTimeString()}</span>
     </Show>
-  </div>
+  </StatusStrip>
 );
 
 // ---- styling ----
@@ -1414,17 +1414,6 @@ const chevronStyle: JSX.CSSProperties = {
   width: '12px',
   height: '12px',
   cursor: 'pointer',
-};
-
-const statusBarStyle: JSX.CSSProperties = {
-  display: 'flex',
-  'align-items': 'center',
-  gap: '6px',
-  padding: '2px 8px',
-  'border-top': `1px solid ${tokens.borderMenu}`,
-  background: tokens.bgMenu,
-  font: tokens.type.monoSm,
-  opacity: 0.85,
 };
 
 const killBodyStyle: JSX.CSSProperties = {

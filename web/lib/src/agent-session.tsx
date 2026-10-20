@@ -1542,7 +1542,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               onClick={() => void pickFiles()}
               style={{
                 flex: 'none',
-                font: tokens.type.monoSm,
+                font: tokens.type.textSm,
                 padding: `1px ${tokens.spaceSm}px`,
                 'border-radius': tokens.radiusSm,
                 border: `1px solid ${tokens.borderMenu}`,
@@ -1677,6 +1677,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
         <For each={props.status?.().configs ?? []}>
           {(cfg) => (
             <>
+              <span style={{ color: tokens.fgDim }}>·</span>
               <select
                 data-testid={`agent-config-${cfg.id}`}
                 value={cfg.current ?? ''}
@@ -1700,7 +1701,6 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                   )}
                 </For>
               </select>
-              <span style={{ color: tokens.fgDim }}>·</span>
             </>
           )}
         </For>
@@ -1712,6 +1712,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
             different decisions by different parties (the agent's policy
             vs wash's willingness to ask). */}
         <Show when={st().yolo}>
+          <span style={{ color: tokens.fgDim }}>·</span>
           <span
             data-testid="agent-yolo-badge"
             title="wash is approving this session's tool requests without asking"
@@ -1729,7 +1730,6 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           >
             YOLO
           </span>
-          <span style={{ color: tokens.fgDim }}>·</span>
         </Show>
 
         {/* The approval preset lives HERE, on the session it governs,
@@ -1747,6 +1747,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               composer's placeholder started following the turn state, the
               value landed first and the select sat on its first option.
               `selected` per option is order-proof. */}
+          <span style={{ color: tokens.fgDim }}>·</span>
           <select
             data-testid="agent-mode"
             title={`Approval mode: ${st().modes?.find((m) => m.id === st().mode)?.name ?? st().mode ?? 'Not reported'}${st().modes?.find((m) => m.id === st().mode)?.description ? ` — ${st().modes?.find((m) => m.id === st().mode)?.description}` : ''}`}
@@ -1769,7 +1770,6 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
               )}
             </For>
           </select>
-          <span style={{ color: tokens.fgDim }}>·</span>
         </Show>
 
         <Show when={st().used && st().size}>

@@ -66,3 +66,12 @@ Regular/Bold instances generated from the upstream variable font
 (`google/fonts`) via `fonttools varLib.instancer`. Bundled as
 `fonts/Quicksand-Regular.woff2` + `fonts/Quicksand-Bold.woff2`; license at
 `fonts/Quicksand-LICENSE.txt`.
+
+## Lisbon, Isfahan, Moscow — `wallpapers/{lisbon,isfahan,moscow}.svg`
+Original, no third-party artwork. Each source raster was generated with an
+image model (`design/packs/gen-ai-wallpaper.py`, prompts in the script; model
+`google/gemini-3-pro-image` via OpenRouter) in a cel-shaded stylized-3D look
+chosen to vectorize cleanly, then traced by `design/packs/vectorize.py`:
+vtracer for the scene, with the sky masked off and re-filled as a real SVG
+gradient sampled from the raster. Sources kept at
+`design/packs/src/{lisbon,isfahan,moscow}-source.png`.

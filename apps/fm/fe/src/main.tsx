@@ -3185,7 +3185,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <Show when={rootInitialized() && displayRows().length === 0 && !pendingNew()}>
               <div
                 data-testid="fm-empty"
-                style={{ padding: '20px 16px', color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px' }}
+                style={{ padding: '20px 16px', color: tokens.fgDim, 'font-style': 'italic', 'font-size': tokens.fontSizeBase }}
               >
                 {filterOpen() && normalizeQuery(filterQuery()) !== '' ? (searchMode() && searchState().status === 'running' ? 'searching…' : '(no matches)') : '(empty folder)'}
               </div>
@@ -3631,7 +3631,7 @@ const FailedJobRow: Component<{ job: BulkJob; onDismiss: () => void }> = (props)
         display: 'flex',
         'flex-direction': 'column',
         gap: '4px',
-        'font-size': '11px',
+        'font-size': tokens.fontSizeSm,
       }}
     >
       <div style={{ display: 'flex', 'align-items': 'baseline', gap: '6px' }}>
@@ -3686,7 +3686,10 @@ type PreviewContent = { binary: boolean; size: number; text: string; truncated: 
 const PreviewPane: Component<{ content: PreviewContent | null }> = (props) => {
   return (
     <div data-testid="fm-preview" style={previewStyle}>
-      <Show when={props.content} fallback="(select a file to preview)">
+      <Show
+        when={props.content}
+        fallback={<div style={previewEmptyStyle}>Select a file to preview it here.</div>}
+      >
         {(c) => (
           <>
             {c().binary
@@ -4083,7 +4086,7 @@ const ReplaceConfirmOverlay: Component<{
       <Show when={props.entry}>
         <div
           data-testid="fm-confirm-replace-detail"
-          style={{ 'font-size': '11px', opacity: 0.6, 'margin-top': '4px' }}
+          style={{ 'font-size': tokens.fontSizeSm, opacity: 0.6, 'margin-top': '4px' }}
         >
           {detail()}
         </div>
@@ -4108,7 +4111,7 @@ const UploadConflictOverlay: Component<{
   return (
     <Overlay onDismiss={props.onCancel} data-testid="fm-upload-conflict">
       <div style={{ 'font-weight': 600, 'margin-bottom': '6px' }}>Files already exist</div>
-      <div style={{ 'font-size': '12px', opacity: 0.8 }}>
+      <div style={{ 'font-size': tokens.fontSizeMd, opacity: 0.8 }}>
         {props.existing} of {props.total} file{plural(props.total)} already exist at the destination.
       </div>
       <div style={{ display: 'flex', gap: '8px', 'justify-content': 'flex-end', 'margin-top': '14px' }}>
@@ -4322,6 +4325,14 @@ const previewStyle: JSX.CSSProperties = {
   font: tokens.type.monoMd,
   'white-space': 'pre',
   background: tokens.bgInset,
+};
+
+// The empty pane is a hint, not file content: sans + muted, wrapping,
+// rather than the preview's mono `pre`.
+const previewEmptyStyle: JSX.CSSProperties = {
+  font: tokens.type.textMd,
+  color: tokens.fgDim,
+  'white-space': 'normal',
 };
 
 const infoToggleStyle: JSX.CSSProperties = {
@@ -4539,7 +4550,7 @@ const FolderGrid: Component<{
       <div
         data-testid="fm-folder-grid"
         data-upload-active={props.uploadActive ? 'true' : undefined}
-        style={{ ...paneStyle(), color: tokens.fgDim, 'font-style': 'italic', 'font-size': '13px', padding: '16px' }}
+        style={{ ...paneStyle(), color: tokens.fgDim, 'font-style': 'italic', 'font-size': tokens.fontSizeBase, padding: '16px' }}
         onDragOver={props.onPaneDragOver}
         onDragLeave={props.onPaneDragLeave}
         onDrop={props.onPaneDrop}
@@ -4715,7 +4726,7 @@ const tileImgStyle: JSX.CSSProperties = {
 };
 
 const tileNameStyle: JSX.CSSProperties = {
-  'font-size': '11px',
+  'font-size': tokens.fontSizeSm,
   color: tokens.fg,
   'max-width': '100%',
   overflow: 'hidden',

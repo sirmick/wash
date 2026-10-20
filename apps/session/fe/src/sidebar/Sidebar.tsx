@@ -109,7 +109,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       'justify-content': 'center',
       color: tokens.fgMuted,
       transition: 'background 120ms, color 120ms',
-      'font-size': '11px',
+      'font-size': tokens.fontSizeSm,
     };
     if (props.taskbarPos === 'top') {
       base.top = `${props.taskbarHeight}px`;
