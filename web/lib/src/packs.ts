@@ -508,12 +508,13 @@ const dreamtime: Pack = {
   ],
 };
 
-// Lisbon — azulejo. A LIGHT pack: tin-glaze white surfaces, cobalt ink for
-// focus and selection, ochre and terracotta from the tiles' accents and the
-// city's roofs. Square-ish corners like a cut tile. The one light pack with a
-// colored caption: active windows wear a cobalt titlebar (white text), so the
-// focused window reads at a glance against a wall of blue-and-white. The
-// wallpaper is procedural (design/packs/gen-lisbon.py), not traced.
+// Lisbon — the city from the river. A LIGHT pack: whitewash surfaces,
+// cobalt ink for focus and selection (azulejo blue), ochre and terracotta
+// from the facades and roofs. Square-ish corners like a cut tile. Active
+// windows wear a cobalt titlebar (white text) so the focused window reads at
+// a glance. The wallpaper — whitewashed houses and red roofs stacked up the
+// hill to the castle, over the water, under open sky — is an image-model
+// raster vectorized with a real gradient sky (design/packs/vectorize.py).
 const lisbon: Pack = {
   id: 'lisbon',
   name: 'Lisbon',

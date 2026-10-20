@@ -44,6 +44,19 @@ PROMPTS = {
         "Rendered like a modern 3D toy diorama: glossy rounded domes, soft shadows. "
         "Palette: brick red #b5372b, emerald #2f8a4a, gold #e0aa2a, cobalt #2456b3, snow #f4efe6."
     ),
+    "lisbon": (
+        "Subject: Lisbon seen from the water, a wide panoramic view straight across from the "
+        "river. Strict horizontal bands: the bottom sixth of the frame is calm deep-blue water "
+        "with a few clean stylized ripple highlights; above it a dense hillside city of "
+        "whitewashed houses with terracotta-red tiled roofs stacked up the hills, small windows, "
+        "a few ochre and pale-blue facades, a castle wall and a church dome on the crest; the "
+        "upper half is a clear soft blue daytime sky fading lighter toward the horizon, with "
+        "one or two small simple clouds and lots of calm empty sky. "
+        "Rendered like a modern 3D miniature diorama: chunky rounded buildings, soft sunlight "
+        "from the left, gentle shadows. "
+        "Palette: whitewash #f8f7f3, terracotta #c8643b, ochre #c9921f, cobalt #1f4fa3, "
+        "sky blue #8ec3ea."
+    ),
 }
 
 MODEL = "google/gemini-3-pro-image"
