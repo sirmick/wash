@@ -67,13 +67,20 @@ Regular/Bold instances generated from the upstream variable font
 `fonts/Quicksand-Regular.woff2` + `fonts/Quicksand-Bold.woff2`; license at
 `fonts/Quicksand-LICENSE.txt`.
 
-## Lisbon, Isfahan, Moscow — `wallpapers/{lisbon,isfahan,moscow}.svg`
-Original, no third-party artwork. Each source raster was generated with an
-image model (`design/packs/gen-ai-wallpaper.py`, prompts in the script; model
-`google/gemini-3-pro-image` via OpenRouter), then traced by
-`design/packs/vectorize.py`. Isfahan and Moscow are flat screen-print posters
-in five/six exact inks (Tokyo's source passed as a style-only reference),
-snapped to those inks before tracing so the SVG is lossless. Lisbon is a
-cel-shaded diorama, traced with the sky masked off and re-filled as a real
-SVG gradient sampled from the raster. Sources kept at
-`design/packs/src/{lisbon,isfahan,moscow}-source.png`.
+## Lisbon — `wallpapers/lisbon.svg`
+Original, no third-party artwork. The source raster was generated with an
+image model (`design/packs/gen-ai-wallpaper.py lisbon`, prompt in the script;
+model `google/gemini-3-pro-image` via OpenRouter) as a cel-shaded diorama,
+then traced by `design/packs/vectorize.py`: vtracer for the scene, with the
+sky masked off and re-filled as a real SVG gradient sampled from the raster.
+Source kept at `design/packs/src/lisbon-source.png`.
+
+## Isfahan — `wallpapers/isfahan.webp` · Moscow — `wallpapers/moscow.webp`
+Original, no third-party artwork. Abstract paintings generated with an image
+model at 21:9, 6336x2688 (`design/packs/gen-ai-wallpaper.py isfahan-bridge`
+and `moscow-soviet`, prompts in the script; `google/gemini-3-pro-image-preview`,
+the build that offers 4K, via OpenRouter). Moscow was recreated full-bleed from
+a `moscow-constructivist` candidate passed with `--ref`. Shipped as WebP
+(quality 82) rather than traced: painterly detail at this density does not
+survive vectorizing, and the WebPs are ~1 MB against 10-18 MB of SVG. The
+full-quality PNG masters are kept outside the repo.

@@ -595,13 +595,12 @@ const lisbon: Pack = {
   wallpaper: 'wallpapers/lisbon.svg',
 };
 
-// Isfahan — Safavid tilework at dusk. A DARK pack: lapis-night chrome, warm
-// ivory text, turquoise faience for focus and selection, gold for the
-// strapwork accents (the taskbar's top edge, the caption's icon). Softly
-// rounded like a pointed arch's spring. The wallpaper — the mosque's iwan,
-// minarets and patterned dome under a crescent, broken reflections in the
-// pool — is a flat five-ink screen-print poster from an image model, snapped
-// to its inks and traced (design/packs/vectorize.py --palette).
+// Isfahan — the Si-o-se-pol bridge at dusk. A DARK pack: lapis-night chrome,
+// warm ivory text, turquoise (the domes) for focus and selection, and the
+// painting's saffron dusk for the strapwork accents (the taskbar's top edge,
+// the caption's icon). Softly rounded like an arch's spring. The wallpaper
+// is an image-model painting shipped as a 21:9 raster (WebP, 6336px wide, so
+// a 32:9 ultrawide still gets full detail) — see design/packs/CREDITS.md.
 const isfahan: Pack = {
   id: 'isfahan',
   name: 'Isfahan',
@@ -641,8 +640,8 @@ const isfahan: Pack = {
     '--wash-sev-info': '#d9d1bd',
     '--wash-sev-debug': '#7f7a6c',
     '--wash-accent-red': '#d8544b',
-    '--wash-accent-orange': '#e07d3e', // saffron
-    '--wash-accent-amber': '#d9a93f', // gold
+    '--wash-accent-orange': '#e07d3e',
+    '--wash-accent-amber': '#e9a23b', // saffron dusk
     '--wash-accent-lime': '#a9c25a',
     '--wash-accent-green': '#45b072',
     '--wash-accent-teal': '#2fb5a5',
@@ -651,15 +650,15 @@ const isfahan: Pack = {
     '--wash-accent-indigo': '#6470d0',
     '--wash-accent-violet': '#9278d0',
     '--wash-accent-magenta': '#c95e9e',
-    '--wash-accent-pink': '#e07d9e',
+    '--wash-accent-pink': '#e48a9a', // dusk rose
     // Caption: a lapis a step brighter than the window when focused; the
-    // app icon in gold, like the strapwork.
+    // app icon in saffron, like the bridge's arches at dusk.
     '--wash-titlebar-active': '#1c3166',
     '--wash-titlebar-inactive': '#111c38',
     '--wash-titlebar-fg': '#efe6d2',
-    '--wash-titlebar-icon': '#d9a93f',
+    '--wash-titlebar-icon': '#e9a23b',
     '--wash-taskbar-bg': '#0a1328',
-    '--wash-taskbar-top': '#d9a93f', // a gold rule along the bar
+    '--wash-taskbar-top': '#e9a23b', // a saffron rule along the bar
     '--wash-banner-bg': 'rgba(8,15,34,0.5)',
     '--wash-banner-blur': '8px',
     '--wash-radius-sm': '4px',
@@ -667,85 +666,87 @@ const isfahan: Pack = {
     '--wash-radius-lg': '8px',
     '--wash-radius-xl': '12px',
   },
-  wallpaper: 'wallpapers/isfahan.svg',
+  wallpaper: 'wallpapers/isfahan.webp',
 };
 
-// Moscow — painted onion domes in snow at dusk. A LIGHT pack: snow-cream
-// surfaces, near-black brown ink, brick red for focus and the caption
-// (white text), gold and emerald from the domes for accents. The wallpaper
-// — St Basil's patterned domes in falling snow at night — is a flat six-ink
-// screen-print poster from an image model, snapped to its inks and traced
-// (design/packs/vectorize.py --palette).
+// Moscow — Constructivist poster. A LIGHT pack: warm poster-paper cream,
+// black ink, Soviet red for focus and the active caption, gold for accents,
+// and the avant-garde's hard geometry in the chrome: square corners, a black
+// window frame and a hard offset shadow instead of a soft blur. Inactive
+// captions go black, so red-and-black is the whole caption vocabulary. The
+// wallpaper — Suprematist red/black wedges cutting through St Basil's domes
+// and the Kremlin's red stars — is an image-model painting shipped as a 21:9
+// raster (WebP, 6336px wide) — see design/packs/CREDITS.md.
 const moscow: Pack = {
   id: 'moscow',
   name: 'Moscow',
   appearance: 'light',
   scheme: {
-    '--wash-bg-window': '#fbf7ef', // snow cream
-    '--wash-bg-menu': '#f5eee0',
-    '--wash-bg-inset': '#efe5d3',
-    '--wash-bg-canvas': '#fffbf4',
+    '--wash-bg-window': '#f6efdf', // poster paper
+    '--wash-bg-menu': '#efe5cf',
+    '--wash-bg-inset': '#e8dcc2',
+    '--wash-bg-canvas': '#fbf7ec',
     '--wash-bg-row': 'transparent',
-    '--wash-bg-row-hover': '#f1e5d0',
-    '--wash-bg-row-selected': '#f4d3c8', // brick wash
-    '--wash-bg-backdrop': 'rgba(60,14,10,0.35)',
-    '--wash-bg-drop-target': '#dbe9d6',
-    '--wash-border-menu': '#e5d6bc',
-    '--wash-border-window': '#c8a68a',
-    '--wash-border-focus': '#b5372b', // brick red
-    '--wash-border-drop-target': '#2f8a4a', // emerald, so a drop never reads as an error
-    '--wash-fg': '#2a1712',
-    '--wash-fg-muted': '#6b4d41',
-    '--wash-fg-dim': '#9c8274',
-    '--wash-bg-danger': '#f9d6d0',
-    '--wash-border-danger': '#d98478',
-    '--wash-fg-danger': '#a8201a',
-    '--wash-bg-success': '#d9ecd6',
-    '--wash-fg-success': '#2a6e3c',
-    '--wash-bg-warning': '#f8e6bf',
-    '--wash-fg-warning': '#8a5b00',
-    '--wash-bg-info': '#d8e3f4',
-    '--wash-fg-info': '#2456b3',
-    '--wash-bg-neutral': '#eee4d2',
-    '--wash-bg-denied': '#f4e1bf',
-    '--wash-border-denied': '#c4902f',
-    '--wash-sev-error': '#b3221a',
-    '--wash-sev-warn': '#8a5b00',
-    '--wash-sev-notice': '#2456b3',
-    '--wash-sev-info': '#4a3a33',
-    '--wash-sev-debug': '#9c8274',
-    '--wash-accent-red': '#c0362c',
-    '--wash-accent-orange': '#d9681f',
-    '--wash-accent-amber': '#c9921a', // dome gold
-    '--wash-accent-lime': '#7aa02a',
-    '--wash-accent-green': '#2f8a4a', // emerald
-    '--wash-accent-teal': '#1f8f84',
-    '--wash-accent-cyan': '#2a8fb5',
-    '--wash-accent-blue': '#2456b3', // cobalt stripe
-    '--wash-accent-indigo': '#3f4aa8',
-    '--wash-accent-violet': '#7a4aa8',
-    '--wash-accent-magenta': '#b5357a',
-    '--wash-accent-pink': '#d8577f',
-    // Brick caption with white text; dusty brick when inactive (dark
-    // enough that the shared white fg still reads).
-    '--wash-titlebar-active': '#b5372b',
-    '--wash-titlebar-inactive': '#8f5a50',
+    '--wash-bg-row-hover': '#ece0c6',
+    '--wash-bg-row-selected': '#f1cdc4', // red wash
+    '--wash-bg-backdrop': 'rgba(21,12,10,0.4)',
+    '--wash-bg-drop-target': '#f3e2b0', // gold wash, so a drop never reads as an error
+    '--wash-border-menu': '#dccfb2',
+    '--wash-border-window': '#151515', // black frame
+    '--wash-border-focus': '#c8102e', // Soviet red
+    '--wash-border-drop-target': '#a87c0c',
+    '--wash-fg': '#151515', // black ink
+    '--wash-fg-muted': '#4d4540',
+    '--wash-fg-dim': '#887e70',
+    '--wash-bg-danger': '#f6d3cf',
+    '--wash-border-danger': '#d47f78',
+    '--wash-fg-danger': '#a10e24',
+    '--wash-bg-success': '#d9e8d3',
+    '--wash-fg-success': '#2c6a3c',
+    '--wash-bg-warning': '#f6e4b8',
+    '--wash-fg-warning': '#7f5a00',
+    '--wash-bg-info': '#dbe2ef',
+    '--wash-fg-info': '#25488f',
+    '--wash-bg-neutral': '#e9dfca',
+    '--wash-bg-denied': '#f2dfb6',
+    '--wash-border-denied': '#b88a26',
+    '--wash-sev-error': '#b0102a',
+    '--wash-sev-warn': '#7f5a00',
+    '--wash-sev-notice': '#25488f',
+    '--wash-sev-info': '#3d3632',
+    '--wash-sev-debug': '#887e70',
+    '--wash-accent-red': '#c8102e', // Soviet red
+    '--wash-accent-orange': '#d4541c',
+    '--wash-accent-amber': '#c9970f', // poster gold
+    '--wash-accent-lime': '#7d9a2a',
+    '--wash-accent-green': '#3c7a4e', // the domes' green, muted
+    '--wash-accent-teal': '#2a7f78',
+    '--wash-accent-cyan': '#2a7fa3',
+    '--wash-accent-blue': '#2b5aa8', // the domes' blue, muted
+    '--wash-accent-indigo': '#3f4a9e',
+    '--wash-accent-violet': '#6e4a9e',
+    '--wash-accent-magenta': '#a8306e',
+    '--wash-accent-pink': '#c8506e',
+    // Red caption when focused, black when not; white text and icons on both.
+    '--wash-titlebar-active': '#c8102e',
+    '--wash-titlebar-inactive': '#151515',
     '--wash-titlebar-fg': '#ffffff',
     '--wash-titlebar-icon': '#ffffff',
-    '--wash-taskbar-bg': '#fbf7ef',
-    '--wash-taskbar-opacity': '90%',
-    '--wash-taskbar-top': '#b5372b',
-    '--wash-banner-bg': 'rgba(251,247,239,0.78)',
+    '--wash-taskbar-bg': '#f6efdf',
+    '--wash-taskbar-opacity': '94%',
+    '--wash-taskbar-top': '#c8102e',
+    '--wash-banner-bg': 'rgba(246,239,223,0.82)',
     '--wash-banner-blur': '6px',
-    '--wash-window-shadow': '0 8px 28px rgba(60,20,10,0.26)',
-    '--wash-shadow-menu': '0 6px 18px rgba(60,20,10,0.22)',
-    // Rounded like the domes.
-    '--wash-radius-sm': '4px',
-    '--wash-radius-md': '6px',
-    '--wash-radius-lg': '9px',
-    '--wash-radius-xl': '14px',
+    // Hard offset shadows, like a printed block, not a soft glow.
+    '--wash-window-shadow': '5px 5px 0 rgba(21,21,21,0.85)',
+    '--wash-shadow-menu': '3px 3px 0 rgba(21,21,21,0.8)',
+    // Square, cut-paper corners.
+    '--wash-radius-sm': '0',
+    '--wash-radius-md': '0',
+    '--wash-radius-lg': '0',
+    '--wash-radius-xl': '0',
   },
-  wallpaper: 'wallpapers/moscow.svg',
+  wallpaper: 'wallpapers/moscow.webp',
 };
 
 /** All built-in packs, in gallery order. Midnight is first / default. */
