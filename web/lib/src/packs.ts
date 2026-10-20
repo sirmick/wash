@@ -757,9 +757,24 @@ export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime, 
 
 export const defaultPackId = 'midnight';
 
-/** Resolve a pack id to a Pack, falling back to the default. */
+/**
+ * The packs this desktop actually ships. A size-trimmed build (the
+ * in-browser VM) embeds only some wallpapers and says which through
+ * window.wash.packIds(); a pack whose wallpaper is not there is never
+ * offered. Every pack everywhere else.
+ */
+export function availablePacks(): Pack[] {
+  const ids = typeof window !== 'undefined' ? window.wash?.packIds?.() : null;
+  if (!ids) return packs;
+  const avail = packs.filter((p) => ids.includes(p.id));
+  return avail.length ? avail : packs;
+}
+
+/** Resolve a pack id to a Pack the desktop ships, falling back to the
+ *  default — or, where even that is not shipped, the first that is. */
 export function getPack(id?: string | null): Pack {
-  return packs.find((p) => p.id === id) ?? packs.find((p) => p.id === defaultPackId)!;
+  const avail = availablePacks();
+  return avail.find((p) => p.id === id) ?? avail.find((p) => p.id === defaultPackId) ?? avail[0];
 }
 
 // The union of every --wash-* var any pack sets. Clearing these before

@@ -13,14 +13,15 @@
 // Makefile copy-stage that mirrored the router's bundle into wash-login.
 // The ./assets tree is a gitignored build artifact: the Makefile stages
 // web/shell/dist into it ($(SHELL_STAMP)) before the go build.
-package shellassets
-
-import "embed"
-
-// FS is the embedded shell-runtime tree, rooted such that the bundle
-// lives under "assets/" (e.g. "assets/index.html", "assets/shell.js",
-// "assets/vendor/…"). Consumers fs.Sub it to "assets". Empty in
-// router-only test builds where the embed stamp wasn't produced.
 //
-//go:embed all:assets
-var FS embed.FS
+// FS is the embedded shell-runtime tree, rooted such that the bundle lives
+// under "assets/" (e.g. "assets/index.html", "assets/shell.js",
+// "assets/vendor/…"). Consumers fs.Sub it to "assets". Empty in router-only
+// test builds where the embed stamp wasn't produced.
+//
+// Two builds pick what goes in. The default (embed_all.go) is the whole
+// tree. The in-browser VM, where every byte is a download, builds with
+// -tags wash_lite_packs (embed_lite.go): everything except the wallpapers
+// of the packs it does not ship, and Packs names the ones it does, so the
+// shell never offers a pack whose wallpaper is not there.
+package shellassets

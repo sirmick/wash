@@ -709,6 +709,13 @@ endif
 ifneq ($(WASH_VMLOGIN),)
 MULTICALL_TAGS := $(MULTICALL_TAGS),washvmlogin
 endif
+# WASH_LITE_PACKS=1 embeds only some theme packs' wallpapers (shellassets
+# embed_lite.go: Midnight + Copland, ~95 KB compressed against ~3.4 MB for
+# all nine). For the in-browser VM, where the rootfs is a download; the
+# shell offers only what is embedded. Set by wash-vm/image/rootfs/build.sh.
+ifneq ($(WASH_LITE_PACKS),)
+MULTICALL_TAGS := $(MULTICALL_TAGS),wash_lite_packs
+endif
 
 # .PHONY: the stamps key only on FE assets, so a Go-source change (router,
 # vmlogin, any app BE) would otherwise leave out/wash — and thus the baked VM

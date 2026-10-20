@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +101,22 @@ func TestShellStateSetRefusesAppKeys(t *testing.T) {
 	}
 	if _, ok := appState["shell:"]; ok {
 		t.Error("bare prefix key was stored")
+	}
+}
+
+// TestSnapshotNamesShippedPacksOnlyWhenTrimmed: a size-trimmed build (the
+// in-browser VM) tells the shell which theme packs it carries, so Settings
+// never offers one whose wallpaper is missing. A full build says nothing —
+// the field is omitted and the snapshot is exactly what it was.
+func TestSnapshotNamesShippedPacksOnlyWhenTrimmed(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+	full := r.shellSnapshot()
+	if raw, _ := json.Marshal(full); strings.Contains(string(raw), `"packs"`) {
+		t.Errorf("full build's snapshot carries packs: %s", raw)
+	}
+	r.SetShellPacks([]string{"midnight", "copland"})
+	got := r.shellSnapshot()
+	if strings.Join(got.Packs, ",") != "midnight,copland" {
+		t.Errorf("snapshot packs = %v", got.Packs)
 	}
 }

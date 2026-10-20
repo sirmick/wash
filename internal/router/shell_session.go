@@ -218,10 +218,7 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 			return err
 		}
 	}
-	wins, appState := r.winSession.snapshot()
-	msg := wire.NewShellSessionSnapshot(wins, appState)
-	msg.ShellID = r.shellCoherenceID()
-	if err := sess.writeCtrlLocked(msg); err != nil {
+	if err := sess.writeCtrlLocked(r.shellSnapshot()); err != nil {
 		sess.writeMu.Unlock()
 		return err
 	}

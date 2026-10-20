@@ -293,6 +293,10 @@ interface WashGlobals {
   openLayoutMenu(vx: number, vy: number, x: number, y: number): void;
   cellLayout(vx: number, vy: number): string | null;
   setCellLayout(vx: number, vy: number, shape: string | null): void;
+  // packIds names the theme packs this desktop ships, or null for all of
+  // them. A size-trimmed build (the in-browser VM) carries only some
+  // wallpapers; @wash/ui's availablePacks/getPack filter on this.
+  packIds(): string[] | null;
   moveWindow(id: number, x: number, y: number, origin?: string): void;
   resizeWindow(id: number, w: number, h: number, origin?: string): void;
   minimizeWindow(id: number, origin?: string): void;

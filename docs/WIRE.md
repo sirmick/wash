@@ -306,8 +306,11 @@ Carries window/lifecycle control and the FE half of app messages.
 
 - `{"t":"catalog","apps":[…]}` — initial app listing on connect.
 - `{"t":"app.declared","instance_id":"…","element":"wash-app-about","surface":"desktop|window|background|modal","manifest":{…}}`
-- `{"t":"session.snapshot","windows":[…],"app_state":{…}}` — the WM
-  snapshot the shell rebuilds its window list from.
+- `{"t":"session.snapshot","windows":[…],"app_state":{…},"packs":[…]?}` — the WM
+  snapshot the shell rebuilds its window list from. `packs` is present only
+  in a build that trims the embedded theme wallpapers (the in-browser VM,
+  `WASH_LITE_PACKS=1`): the pack ids it carries, which are all the shell
+  offers (`window.wash.packIds`). Absent means every pack ships.
 - `{"t":"session.patch","patches":[…]}` — incremental WM updates
   (window.upsert / window.delete / app_state).
 - `{"t":"app_msg.deliver","instance_id":"…","data":<opaque>,"from":{…}?}`

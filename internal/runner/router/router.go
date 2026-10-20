@@ -520,6 +520,7 @@ func Run(args []string) int {
 	// (redundant when transport=ws, but the ws branch may be skipped
 	// when we run over fd:3 / unix sockets).
 	r.SetAssets(assets)
+	r.SetShellPacks(shellassets.Packs)
 
 	// Start AutostartAtBoot background services now, before any shell
 	// connects — chiefly the mDNS advertiser, so an idle host is still

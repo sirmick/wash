@@ -193,6 +193,9 @@ interface ShellSessionSnapshot {
   windows: SessionWindow[];
   app_state?: Record<string, unknown>;
   shell_id?: string;
+  // The theme packs this router's shell bundle carries, when its build
+  // trims them (the in-browser VM); absent = every pack.
+  packs?: string[];
 }
 
 export interface SessionPatch {
@@ -1397,6 +1400,7 @@ function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot, isLocal
   replaceSavedStates(client.origin, msg.app_state);
   // Window layouts ride the same map under shell: keys, on the local router.
   if (isLocal) replaceTilingState(msg.app_state);
+  if (isLocal) shellPacks = msg.packs ?? null;
   // Seed first-sight bookkeeping BEFORE the windows land. A snapshot is the
   // router's full state, so every window in it already exists — none is a
   // fresh spawn. Without this the set starts empty on every (re)connect and
@@ -1606,6 +1610,11 @@ conn.onEvent((e) => {
 // session.snapshot), when it reconnects, or when the user dismisses it —
 // keeping the session in the other window is an answer too.
 const [superseded, setSuperseded] = createSignal<string | null>(null);
+
+// shellPacks: the theme packs whose wallpapers the local router's shell
+// bundle carries, or null for all (window.wash.packIds). Only a size-trimmed
+// build (the in-browser VM) sends a list.
+let shellPacks: string[] | null = null;
 
 // holdsHead: whether this tab is the router's foreground head right now. A
 // local snapshot or shell.head says yes, shell.superseded says no. Unlike
@@ -2402,6 +2411,7 @@ window.wash = {
     return l && l.shape !== '' ? l.shape : null;
   },
   setCellLayout: (vx, vy, shape) => setCellLayout({ vx, vy }, shape),
+  packIds: () => shellPacks,
   moveWindow(id, x, y, origin) {
     // Tagged commit: the store holds our geometry against in-flight
     // patches until the router echoes tok (wm.ts markGeomPending).

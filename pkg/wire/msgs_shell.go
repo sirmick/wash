@@ -340,6 +340,10 @@ type ShellSessionSnapshot struct {
 	// page, because already-imported ESM vendor modules cannot be swapped in
 	// place and can mismatch freshly delivered app bundles.
 	ShellID string `json:"shell_id,omitempty"`
+	// Packs lists the theme packs whose wallpapers this router's shell
+	// bundle carries, when a build trims them (the in-browser VM). Absent
+	// means every pack ships.
+	Packs []string `json:"packs,omitempty"`
 }
 
 func NewShellSessionSnapshot(wins []SessionWindow, appState map[string]json.RawMessage) ShellSessionSnapshot {

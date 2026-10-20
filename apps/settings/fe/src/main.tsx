@@ -26,7 +26,7 @@ import {
   defaultPackId,
   defineWashApp,
   getPack,
-  packs,
+  availablePacks,
   tokens,
 } from '@wash/ui';
 import type { Pack, SettingsPanelPort } from '@wash/ui';
@@ -481,7 +481,7 @@ const DesktopPane: Component<{
     <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
       <Section title="Theme">
         <div style={galleryStyle}>
-          <For each={packs}>
+          <For each={availablePacks()}>
             {(p) => (
               <PackCard pack={p} active={props.pack === p.id} onSelect={() => props.onSelectPack(p.id)} />
             )}
