@@ -678,3 +678,23 @@ are the one write path the role needs.
 
 ## WASH-R42 (2026-10-20)
 `plan_set {"nodes": {...}}` (the map upsert) accepts a title/body change on an ACTIVE node (WRITE1, WAKE1 with implementers on them) when the orchestrator calls it; the Architect's rule "never plan_set a started node" is a convention, not enforced. Expected: either enforce (refuse with the assignment id) or document that the orchestrator may correct an active node's prose. Used deliberately to retitle WRITE1/WAKE1 after their rulings corrected the premise.
+
+## WASH-R43 (2026-10-20): a new session cannot take over a paused workspace, and the tools do not say so
+
+Status: open.
+
+Wash 0.19.0 / API 4.2.0. The owner opened a fresh Claude Code session in the project and asked it to
+bring the workspace up. `about` listed the Redoubt workspace (`7bce76dc`, `state:"paused"`,
+`orchestrator_running:false`) and the caller as `role:"unattached"`; `workspace_get {}` answered "no
+workspace"; `workspace_configure {workspace:{name,project_root}, preview:true}` returned a brand-new
+configuration (`workspace_id:""`, no members, empty plan_file/qa_dir) with no hint that one of the same
+name and root is open. The source (`workspace.go: staleLead`) shows the design: only the lead session
+leads; another session may only `workspace_end` a stale workspace and rebuild. The project guide says
+"reuse a workspace that is already open", which this session could not do; the five paused members
+(architect, two reviewers, two implementers) would have gone with the workspace, none with a handoff.
+
+Asked: (1) `about` and the configure preview should say, for an open workspace at the caller's
+project_root, that it is led by another session and name the two routes (resume that session; or
+`workspace_end` + rebuild); (2) a lead-handover: let a paused workspace whose lead is not running be
+adopted by a new orchestrator session (`workspace_configure {adopt:"<id>"}` or a `member_control
+adopt`), keeping members and their sessions. The owner first chose to resume the old session, then had the new session end 7bce76dc and rebuild (8ac51843): five members with context lost, as predicted.
