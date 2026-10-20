@@ -328,3 +328,116 @@ export function focusNeighbor(
   return best?.path;
 }
 
+// ---- syntax (docs/WM_LAYOUT.md §3) ----
+//
+// A layout's SHAPE as a string, so presets, saved layouts and divider drags
+// all go through one representation:
+//
+//   node := "1"                       one leaf
+//         | ("r" | "c") N             N equal leaves: r = a row (side by side),
+//                                     c = a column (stacked)
+//         | ("r" | "c") "[" item+ "]" items separated by whitespace
+//   item := node ["@" pct]            pct = percent of the parent, e.g. 25, 37.5
+//
+//   r3               three columns          r[c2 c2]          2x2
+//   r[1@25 1 1@25]   25/50/25               c[1 r2]           one on top, two below
+//
+// Sizes never fail: items without one share whatever the sized ones leave,
+// and a parent whose sizes do not come to 100 is scaled until they do. Only
+// a malformed string is an error. The shape is all the syntax carries; the
+// leaves are made by the caller.
+
+export class LayoutSyntaxError extends Error {
+  // at is the character offset the parser stopped at.
+  readonly at: number;
+  constructor(message: string, at: number) {
+    super(`${message} at ${at}`);
+    this.at = at;
+  }
+}
+
+const MAX_EQUAL = 64;
+
+// parseLayout reads a layout string into a normalized tree whose leaves come
+// from leaf(). Throws LayoutSyntaxError on a malformed string.
+export function parseLayout<L>(src: string, leaf: () => L): Node<L> {
+  let i = 0;
+  const ws = () => { while (i < src.length && /\s/.test(src[i])) i++; };
+  const fail = (msg: string): never => { throw new LayoutSyntaxError(msg, i); };
+  const int = (): number => {
+    const m = /^\d+/.exec(src.slice(i));
+    if (!m) fail('expected a count');
+    i += m![0].length;
+    return Number(m![0]);
+  };
+  const pct = (): number => {
+    const m = /^\d+(\.\d+)?/.exec(src.slice(i));
+    if (!m) fail('expected a percentage');
+    i += m![0].length;
+    const v = Number(m![0]);
+    if (v <= 0) fail('a size must be above 0');
+    return v;
+  };
+
+  const node = (): Node<L> => {
+    ws();
+    const ch = src[i];
+    if (ch === '1') { i++; return leaf(); }
+    if (ch !== 'r' && ch !== 'c') return fail(`expected 1, r or c`);
+    i++;
+    const dir: Dir = ch === 'r' ? 'row' : 'col';
+    if (src[i] !== '[') {
+      const n = int();
+      if (n < 1 || n > MAX_EQUAL) fail(`a count must be 1..${MAX_EQUAL}`);
+      const children = Array.from({ length: n }, leaf);
+      return { kind: 'split', dir, children, sizes: children.map(() => 1 / n) };
+    }
+    i++;
+    const items: Array<[Node<L>, number | undefined]> = [];
+    for (;;) {
+      ws();
+      if (src[i] === ']') { i++; break; }
+      if (i >= src.length) fail('missing ]');
+      const child = node();
+      let size: number | undefined;
+      if (src[i] === '@') { i++; size = pct(); }
+      items.push([child, size]);
+    }
+    if (items.length === 0) fail('empty []');
+    return { kind: 'split', dir, children: items.map(([c]) => c), sizes: sharesOf(items.map(([, s]) => s)) };
+  };
+
+  const tree = node();
+  ws();
+  if (i < src.length) fail('unexpected trailing text');
+  return normalize(tree, { empty: leaf });
+}
+
+// sharesOf fills in unsized items and scales the lot to sum to 1. Unsized
+// items split what the sized ones leave; when they leave nothing, every item
+// is treated as if it had an even share and the whole set is scaled.
+function sharesOf(sizes: Array<number | undefined>): number[] {
+  const set = sizes.filter((s): s is number => s !== undefined);
+  const sum = set.reduce((a, b) => a + b, 0);
+  const unset = sizes.length - set.length;
+  const fill = unset === 0 ? 0 : sum < 100 ? (100 - sum) / unset : 100 / sizes.length;
+  const raw = sizes.map((s) => s ?? fill);
+  const total = raw.reduce((a, b) => a + b, 0);
+  return raw.map((s) => s / total);
+}
+
+const pctOf = (f: number): number => Math.round(f * 1000) / 10;
+
+// formatLayout writes a tree's shape back out in its one canonical form:
+// sizes to 0.1%, omitted when a split's children are even, and `rN`/`cN`
+// for an even split of bare leaves. Normalized trees that look the same
+// format the same, so "is this still the 2x2 preset" is a string compare.
+export function formatLayout<L>(tree: Node<L>): string {
+  if (!isSplit(tree)) return '1';
+  const d = tree.dir === 'row' ? 'r' : 'c';
+  const pcts = tree.sizes.map(pctOf);
+  const even = pcts.every((p) => p === pcts[0]);
+  if (even && tree.children.every((c) => !isSplit(c))) return `${d}${tree.children.length}`;
+  const items = tree.children.map((c, i) => formatLayout(c) + (even ? '' : `@${pcts[i]}`));
+  return `${d}[${items.join(' ')}]`;
+}
