@@ -167,6 +167,8 @@ type Router struct {
 	reg    *Registry
 	log    Logger
 	assets http.FileSystem // embedded shell-runtime FS; served via TShellAssetRead
+	// shellPacks: see SetShellPacks. nil = every pack ships.
+	shellPacks []string
 
 	mu     sync.Mutex
 	apps   map[string]*AppInstance // by instance id
@@ -377,6 +379,22 @@ func (r *Router) shellCoherenceID() string {
 // handlers can serve files from it. Called by the runner after the
 // router is constructed and the embedded FS is resolved.
 func (r *Router) SetAssets(fs http.FileSystem) { r.assets = fs }
+
+// shellSnapshot is the session.snapshot a shell gets on attach: every
+// window and app-state blob, the shell coherence id, and — in a build
+// that trims them — the theme packs the shell bundle carries.
+func (r *Router) shellSnapshot() wire.ShellSessionSnapshot {
+	wins, appState := r.winSession.snapshot()
+	msg := wire.NewShellSessionSnapshot(wins, appState)
+	msg.ShellID = r.shellCoherenceID()
+	msg.Packs = r.shellPacks
+	return msg
+}
+
+// SetShellPacks names the theme packs whose wallpapers the embedded shell
+// carries, for a build that trims them (the in-browser VM); nil means all.
+// Shells learn it from session.snapshot and offer only those.
+func (r *Router) SetShellPacks(ids []string) { r.shellPacks = ids }
 
 // tokenPending is a pending-attach record keyed by attach token
 // (Identity.AttachToken). Differs from pendingAttach (pid-keyed) in

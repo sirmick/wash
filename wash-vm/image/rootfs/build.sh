@@ -24,10 +24,13 @@ trap 'rm -rf "$work"' EXIT
 echo "==> cross-compiling wash multicall binary (linux/riscv64)"
 # WASH_VMLOGIN=1: this is the VM image, so compile in the wash-vmlogin dispatch
 # (wash-vm/guest is present here; the distro packaging build omits it).
+# WASH_LITE_PACKS=1: the rootfs is a browser download, so embed only two theme
+# packs' wallpapers (Midnight + Copland) rather than all of them.
 make -C "$REPO_ROOT" \
     GOARCH=riscv64 \
     OUT="$work/washrv64" \
     WASH_VMLOGIN=1 \
+    WASH_LITE_PACKS=1 \
     multicall-bin \
     >/dev/null
 

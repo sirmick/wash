@@ -143,6 +143,10 @@ const (
 	// still-open connection — channels migrate here and the shell that
 	// holds the head now is sent shell.superseded in turn.
 	TShellClaimHead = "shell.claim_head"
+	// Shell → router: store a shell-owned blob (window layouts) in the
+	// session's app_state map under a reserved "shell:" key. Broadcast
+	// and snapshotted like any app's state; the router never reads it.
+	TShellStateSet = "shell.state_set"
 	// Router → shell: this connection holds the head (it attached, claimed
 	// it, or was promoted when the head left). Clears the banner.
 	TShellHead = "shell.head"
@@ -336,6 +340,10 @@ type ShellSessionSnapshot struct {
 	// page, because already-imported ESM vendor modules cannot be swapped in
 	// place and can mismatch freshly delivered app bundles.
 	ShellID string `json:"shell_id,omitempty"`
+	// Packs lists the theme packs whose wallpapers this router's shell
+	// bundle carries, when a build trims them (the in-browser VM). Absent
+	// means every pack ships.
+	Packs []string `json:"packs,omitempty"`
 }
 
 func NewShellSessionSnapshot(wins []SessionWindow, appState map[string]json.RawMessage) ShellSessionSnapshot {
@@ -567,6 +575,25 @@ type ShellClaimHead struct {
 
 func NewShellClaimHead() ShellClaimHead {
 	return ShellClaimHead{T: TShellClaimHead}
+}
+
+// ShellStatePrefix namespaces shell-owned keys in the session's app_state
+// map so a shell can never overwrite an app instance's blob.
+const ShellStatePrefix = "shell:"
+
+// ShellStateSet stores (State non-null) or clears (null/absent) a shell-
+// owned blob. Key must carry ShellStatePrefix. Every shell on the session
+// sees the result as an app_state patch, and a reconnecting shell gets it
+// in its snapshot — the same path as app state, so the shell needs no
+// second store (docs/WM_LAYOUT.md §6).
+type ShellStateSet struct {
+	T     string          `json:"t"`
+	Key   string          `json:"key"`
+	State json.RawMessage `json:"state,omitempty"`
+}
+
+func NewShellStateSet(key string, state json.RawMessage) ShellStateSet {
+	return ShellStateSet{T: TShellStateSet, Key: key, State: state}
 }
 
 // ShellPing (shell → router) and ShellPong (router → shell) are the

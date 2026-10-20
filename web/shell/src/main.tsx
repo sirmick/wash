@@ -42,6 +42,7 @@ import {
   dismissCrashed,
   isFocused,
   originForWindow,
+  cellWorkArea,
   markCrashed,
   mountDesktop,
   raiseLocal,
@@ -72,6 +73,18 @@ import {
 import { SwitcherOverlay } from './switcher-ui';
 import { shouldSwallowDesktopKey } from './keyguard';
 import { FloatingWindow, openWindowMenu } from './window';
+import { LayoutMenuLayer, openLayoutMenu } from './layout-menu';
+import {
+  cellLayout,
+  focusNeighbourPanel,
+  patchTilingState,
+  replaceTilingState,
+  setCellLayout,
+  startTiling,
+  swapNeighbourPanel,
+} from './tiling-runtime';
+import { TilingOverlay } from './tiling-overlay';
+import type { FocusDir } from '@wash/ui/split-tree';
 import {
   CatalogApp,
   PanelDesc,
@@ -180,6 +193,9 @@ interface ShellSessionSnapshot {
   windows: SessionWindow[];
   app_state?: Record<string, unknown>;
   shell_id?: string;
+  // The theme packs this router's shell bundle carries, when its build
+  // trims them (the in-browser VM); absent = every pack.
+  packs?: string[];
 }
 
 export interface SessionPatch {
@@ -697,6 +713,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         if (isLocal) {
           setSuperseded(null);
           headGen = 0;
+          setHoldsHead(true);
         }
         break;
       case 'session.patch':
@@ -906,6 +923,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         if (!newerHeadGen(msg.gen)) break;
         shellLog('warn', 'conn', `superseded: ${msg.msg}`);
         setSuperseded(msg.msg);
+        setHoldsHead(false);
         break;
       }
       case 'shell.head': {
@@ -913,6 +931,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         // had it went away and the router promoted this one. Its display
         // metrics were overridden by that tab, so re-send them.
         if (!isLocal || !newerHeadGen(msg.gen)) break;
+        setHoldsHead(true);
         if (superseded() !== null) {
           shellLog('info', 'conn', 'head regained');
           setSuperseded(null);
@@ -1379,6 +1398,9 @@ function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot, isLocal
     localShellID = msg.shell_id;
   }
   replaceSavedStates(client.origin, msg.app_state);
+  // Window layouts ride the same map under shell: keys, on the local router.
+  if (isLocal) replaceTilingState(msg.app_state);
+  if (isLocal) shellPacks = msg.packs ?? null;
   // Seed first-sight bookkeeping BEFORE the windows land. A snapshot is the
   // router's full state, so every window in it already exists — none is a
   // fresh spawn. Without this the set starts empty on every (re)connect and
@@ -1467,17 +1489,12 @@ function handleCrash(client: RouterClient, msg: ShellAppCrashed): void {
 // waitForBundle, so a window-in-flight isn't in `windows` yet — without
 // the set, every pre-bundle patch looks "fresh" and we'd re-relocate the
 // same window N times.
-// reservedRight is the width the session app's sidebar reserves at the
-// screen's right edge (--wash-reserved-right, which it keeps current).
-function reservedRight(): number {
-  return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10) || 0;
-}
-
 function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   // Apply app_state ops first so when a window upsert in the same
   // patch triggers a remount, wash:state carries the latest blob.
   for (const p of msg.patches) {
     if (p.op === 'app_state' && typeof p.instance_id === 'string') {
+      if (client.origin === LOCAL_ORIGIN && patchTilingState(p.instance_id, p.state)) continue;
       setSavedState(compoundInstanceId(client.origin, p.instance_id), p.state ?? null);
     }
   }
@@ -1496,7 +1513,7 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   const s = screenSize();
   const moves: Array<{ id: number; x: number; y: number }> = [];
   const resizes: Array<{ id: number; w: number; h: number }> = [];
-  const reserved = reservedRight();
+  const area = cellWorkArea(vp.vx, vp.vy);
   for (const p of msg.patches) {
     if (p.op === 'window.upsert' && p.window && !client.seenWindowIDs.has(p.window.window_id)) {
       let { x, y } = p.window;
@@ -1514,8 +1531,8 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
       // cascades without knowing the sidebar is there, and a window whose
       // titlebar buttons land under it cannot be closed. Narrowed rather
       // than moved where it can be, so the cascade survives.
-      if (p.window.state === 'normal' && reserved > 0) {
-        const fit = fitLeftOf({ x, w: p.window.w + 2 }, vp.vx * s.w, s.w - reserved, 480);
+      if (p.window.state === 'normal' && area.w < s.w) {
+        const fit = fitLeftOf({ x, w: p.window.w + 2 }, area.x, area.w, 480);
         x = fit.x;
         if (fit.w - 2 !== p.window.w) {
           p.window.w = fit.w - 2;
@@ -1593,6 +1610,18 @@ conn.onEvent((e) => {
 // session.snapshot), when it reconnects, or when the user dismisses it —
 // keeping the session in the other window is an answer too.
 const [superseded, setSuperseded] = createSignal<string | null>(null);
+
+// shellPacks: the theme packs whose wallpapers the local router's shell
+// bundle carries, or null for all (window.wash.packIds). Only a size-trimmed
+// build (the in-browser VM) sends a list.
+let shellPacks: string[] | null = null;
+
+// holdsHead: whether this tab is the router's foreground head right now. A
+// local snapshot or shell.head says yes, shell.superseded says no. Unlike
+// superseded() it is not cleared by dismissing the banner — dismissing
+// leaves the head where it is. Window layouts are placed only by the head
+// (tiling-runtime.ts, docs/WM_LAYOUT.md §6).
+const [holdsHead, setHoldsHead] = createSignal(false);
 
 // headGen is the newest head generation this tab has heard about. The
 // router's shell.head (to the winner) and shell.superseded (to the loser)
@@ -1770,7 +1799,27 @@ window.addEventListener('drop', (ev: DragEvent) => {
 // on their own keydown handler — keypresses bubble up to here only when
 // nobody else stops them.
 window.addEventListener('keydown', (ev: KeyboardEvent) => {
-  if (!ev.ctrlKey || !ev.altKey || ev.shiftKey || ev.metaKey) return;
+  if (!ev.ctrlKey || !ev.altKey || ev.metaKey) return;
+  // In a tiled viewport the arrows move between panels first, and pan only
+  // past the last one that way (WM_LAYOUT §7); Shift swaps the focused
+  // window with its neighbour instead. Floating viewports just pan.
+  const dir = PANEL_DIRS[ev.key];
+  if (!dir) return;
+  // Only a window in the viewport on screen: once the camera has moved on,
+  // the arrows pan, whatever is focused back where it was.
+  const f = focused();
+  const fw = f ? windowById(f.origin, f.windowID) : undefined;
+  const here = viewport();
+  const fc = fw ? viewportFor(fw) : undefined;
+  const win = fc && fc.vx === here.vx && fc.vy === here.vy ? fw : undefined;
+  if (ev.shiftKey) {
+    if (swapNeighbourPanel(win, dir)) ev.preventDefault();
+    return;
+  }
+  if (focusNeighbourPanel(win, dir)) {
+    ev.preventDefault();
+    return;
+  }
   const vp = viewport();
   let dx = 0;
   let dy = 0;
@@ -1793,6 +1842,13 @@ window.addEventListener('keydown', (ev: KeyboardEvent) => {
   ev.preventDefault();
   setViewport(vp.vx + dx, vp.vy + dy);
 });
+
+const PANEL_DIRS: Record<string, FocusDir | undefined> = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+};
 
 // ---- window switcher (Ctrl+Alt+Tab) and show desktop (Ctrl+Alt+D) ----
 //
@@ -1936,6 +1992,7 @@ const App = () => (
     <Desktop />
     <div data-testid="wash-cam" style={camStyle()}>
       <For each={windows}>{(w) => <FloatingWindow win={w} onClose={onWindowClose} />}</For>
+      <TilingOverlay />
     </div>
     {/* Above the camera, so the blur covers every window rather than
         riding along with the viewport transform. */}
@@ -1944,6 +2001,7 @@ const App = () => (
     {/* Above the windows, below the connection banner: a field's menu must
         not cover the one notice that says why nothing is responding. */}
     <TextMenuLayer />
+    <LayoutMenuLayer />
     <ConnectionBanner state={connState()} />
   </>
 );
@@ -2111,6 +2169,17 @@ if (navigator.language) document.documentElement.lang = navigator.language;
 // shell never goes through that path, so it injects here.
 ensureHitStyles();
 render(App, document.getElementById('root')!);
+
+// Window layouts: any tab edits them, the head places them (WM_LAYOUT §6).
+// Moves go through window.wash so they are tagged and routed by origin like
+// every other geometry write.
+startTiling({
+  holdsHead,
+  sendState: (key, state) => local.conn.sendCtrl({ t: 'shell.state_set', key, state }),
+  move: (origin, id, x, y) => window.wash.moveWindow(id, x, y, origin),
+  resize: (origin, id, w, h) => window.wash.resizeWindow(id, w, h, origin),
+  log: (m) => shellLog('info', 'shell', m),
+});
 
 // Provide a tiny FE-side API for apps that want to send app_msg back
 // to their BE half. The session app uses this to send the "launch"
@@ -2334,6 +2403,15 @@ window.wash = {
   openWindowMenu(id, x, y, origin) {
     openWindowMenu(origin ?? originForWindow(id), id, x, y);
   },
+  openLayoutMenu(vx, vy, x, y) {
+    openLayoutMenu({ vx, vy }, x, y);
+  },
+  cellLayout: (vx, vy) => {
+    const l = cellLayout({ vx, vy });
+    return l && l.shape !== '' ? l.shape : null;
+  },
+  setCellLayout: (vx, vy, shape) => setCellLayout({ vx, vy }, shape),
+  packIds: () => shellPacks,
   moveWindow(id, x, y, origin) {
     // Tagged commit: the store holds our geometry against in-flight
     // patches until the router echoes tok (wm.ts markGeomPending).

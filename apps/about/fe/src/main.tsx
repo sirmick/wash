@@ -833,7 +833,7 @@ const sectionTitleStyle: JSX.CSSProperties = {
   'border-bottom': `1px solid ${tokens.borderMenu}`,
   'text-transform': 'uppercase',
   'letter-spacing': '0.06em',
-  'font-size': '11px',
+  'font-size': tokens.fontSizeSm,
   opacity: 0.7,
 };
 

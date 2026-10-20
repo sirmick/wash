@@ -12,10 +12,25 @@ import { accentColor, tokens, Menu, MenuItem, MenuSeparator } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId, LOCAL_ORIGIN, type Origin } from './clients';
 import { hostColor } from './host-colors';
-import { resizeRect, sendToViewportRect, type ResizeEdge } from './viewport-math.ts';
+import {
+  cellLayout,
+  floatInLayout,
+  floatWindowAt,
+  hasFreeSlot,
+  moveWindowToSlot,
+  setDragHover,
+  slotOf,
+  tileInLayout,
+  windowTiling,
+} from './tiling-runtime';
+import { frameToWin, slotAt, slotFrames } from './tiling';
+import { PanelPicker } from './layout-menu';
+import { resizeRect, sendToViewportRect, viewportForRect, type ResizeEdge } from './viewport-math.ts';
 import {
   VIEWPORTS_PER_AXIS,
   CrashInfo,
+  cellWorkArea,
+  viewport,
   isFocused,
   moveLocal,
   raiseLocal,
@@ -62,6 +77,7 @@ export function FloatingWindow(props: WindowProps) {
   // taskbar: opened from the window's taskbar pill (openWindowMenu), which
   // adds Move to 0,0 and Quit and must sit above the taskbar's layer.
   const [titleMenu, setTitleMenu] = createSignal<{ x: number; y: number; taskbar?: boolean } | null>(null);
+  const tiling = () => windowTiling(props.win);
   createEffect(() => {
     const req = windowMenuRequest();
     if (!req || req.windowID !== props.win.windowID || req.origin !== props.win.origin) return;
@@ -136,13 +152,43 @@ export function FloatingWindow(props: WindowProps) {
       const rawY = origY + (m.clientY - startY);
       setDragX(Math.round(Math.max(0, Math.min(maxX, rawX))));
       setDragY(Math.round(Math.max(0, Math.min(maxY, rawY))));
+      // Over a tiled cell, the panel under the pointer is where a drop
+      // lands (WM_LAYOUT §7). Shift drops it floating instead.
+      setDragHover(m.shiftKey ? null : panelUnder(m.clientX, m.clientY));
     };
-    const onUp = () => {
+    const onUp = (u: PointerEvent) => {
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
       target.releasePointerCapture(ev.pointerId);
       const x = dragX();
       const y = dragY();
+      const hover = u.shiftKey ? null : panelUnder(u.clientX, u.clientY);
+      setDragHover(null);
+      if (x != null && y != null && hover) {
+        // Dropped on a panel: the window goes straight to that panel's
+        // frame, not to where the pointer left it. A tall window dropped
+        // low would otherwise have its centre — and so its cell — below
+        // the panel it was dropped on, and tiling would let it go.
+        moveWindowToSlot(props.win, hover.cell, hover.slot);
+        const l = cellLayout(hover.cell);
+        const frame = l ? slotFrames(l.shape, cellWorkArea(hover.cell.vx, hover.cell.vy))[hover.slot] : undefined;
+        if (frame) {
+          const g = frameToWin(frame, props.win.chromeless);
+          moveLocal(props.win.origin, props.win.windowID, g.x, g.y);
+          window.wash.moveWindow(props.win.windowID, g.x, g.y, props.win.origin);
+          resizeLocal(props.win.origin, props.win.windowID, g.w, g.h);
+          window.wash.resizeWindow(props.win.windowID, g.w, g.h, props.win.origin);
+        }
+        setDragX(null);
+        setDragY(null);
+        return;
+      }
+      if (x != null && y != null && u.shiftKey) {
+        const vp = viewport();
+        const s = screenSize();
+        const dropCell = viewportForRect({ x: u.clientX + vp.vx * s.w, y: u.clientY + vp.vy * s.h, w: 0, h: 0 }, s, VIEWPORTS_PER_AXIS);
+        floatWindowAt(props.win, dropCell, x, y);
+      }
       if (x != null && y != null && (x !== origX || y !== origY)) {
         // Optimistic: commit to the store BEFORE clearing the
         // override so frameStyle reads the new position the next
@@ -156,6 +202,19 @@ export function FloatingWindow(props: WindowProps) {
     };
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);
+  };
+
+  // panelUnder is the tiled panel under a screen point, if any: the cell
+  // the point is in, and the slot whose frame holds it.
+  const panelUnder = (clientX: number, clientY: number): { cell: { vx: number; vy: number }; slot: number } | null => {
+    const vp = viewport();
+    const s = screenSize();
+    const p = { x: clientX + vp.vx * s.w, y: clientY + vp.vy * s.h };
+    const cell = viewportForRect({ ...p, w: 0, h: 0 }, s, VIEWPORTS_PER_AXIS);
+    const l = cellLayout(cell);
+    if (!l || l.shape === '') return null;
+    const slot = slotAt(l.shape, cellWorkArea(cell.vx, cell.vy), p);
+    return slot < 0 ? null : { cell, slot };
   };
 
   const onWindowPointerDown = () => window.wash.focusWindow(props.win.windowID, props.win.origin);
@@ -237,9 +296,8 @@ export function FloatingWindow(props: WindowProps) {
     target.addEventListener('pointerup', onUp);
   };
 
-  // Frame geometry depends on state. Maximized = top-left of viewport
-  // minus the chrome's bottom taskbar (40 px hardcoded; will become
-  // negotiable when the chrome publishes a workarea).
+  // Frame geometry depends on state. Maximized = the work area of the
+  // window's home cell (cellWorkArea: the screen less taskbar and sidebar).
   // Window chrome: the stored window w/h is the CONTENT (slot) size — what
   // the app element / guest surface actually gets. The frame adds a fixed-
   // height titlebar + a 1px border per side. TITLEBAR_H MUST equal the
@@ -296,25 +354,18 @@ export function FloatingWindow(props: WindowProps) {
       // window's home-viewport origin in plane coords so that, after the
       // cam translate, the frame lands flush at the screen's top-left.
       //
-      // Geometry comes from screenSize() — a signal updated on the
-      // window 'resize' event — so the maximized frame snaps to the
-      // current screen edges and re-renders reactively when the browser
-      // is resized (and stays aligned with the cam, which pans by the
-      // same screenSize).
-      //
-      // --wash-reserved-right reserves screen width for the session
-      // app's right sidebar (SIDEBAR_OPEN_WIDTH when open, a 14px tab when hidden).
-      // The session app writes the var on document.documentElement;
-      // here we just respect it so a maximized window's titlebar
-      // controls stay reachable instead of disappearing under chrome.
+      // cellWorkArea is reactive in the screen size (so the frame snaps
+      // to the screen edges on a browser resize and stays aligned with the
+      // cam, which pans by the same size) and in the sidebar's
+      // reservation (so the titlebar controls never sit under it).
       const vp = viewportFor(props.win);
-      const s = screenSize();
+      const a = cellWorkArea(vp.vx, vp.vy);
       return {
         ...base,
-        left: `${vp.vx * s.w}px`,
-        top: `${vp.vy * s.h}px`,
-        width: `calc(${s.w}px - var(--wash-reserved-right, 0px))`,
-        height: `${s.h - 40}px`,
+        left: `${a.x}px`,
+        top: `${a.y}px`,
+        width: `${a.w}px`,
+        height: `${a.h}px`,
       };
     }
     const x = dragX() ?? resizeX() ?? props.win.x;
@@ -361,16 +412,15 @@ export function FloatingWindow(props: WindowProps) {
   // back to the plane's origin, at a size that fits one screen, and the
   // camera brought to it. Restored first — a maximized or minimized window
   // ignores moves (wmstate.go) — and sized from what is actually free: the
-  // right sidebar's reservation, the taskbar, the frame's own chrome.
+  // home cell's work area less the frame's own chrome.
   const moveHome = () => {
     const id = props.win.windowID;
     const o = props.win.origin;
     if (props.win.state !== 'normal') window.wash.restoreWindow(id, o);
-    const s = screenSize();
-    const reserved = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10) || 0;
+    const a = cellWorkArea(0, 0);
     const margin = 16;
-    const maxW = Math.max(160, s.w - reserved - FRAME_BORDER * 2 - margin);
-    const maxH = Math.max(80, s.h - TASKBAR_H - TITLEBAR_H - FRAME_BORDER * 2 - margin);
+    const maxW = Math.max(160, a.w - FRAME_BORDER * 2 - margin);
+    const maxH = Math.max(80, a.h - TITLEBAR_H - FRAME_BORDER * 2 - margin);
     const w = Math.min(props.win.w, maxW);
     const h = Math.min(props.win.h, maxH);
     moveLocal(o, id, 0, 0);
@@ -420,14 +470,15 @@ export function FloatingWindow(props: WindowProps) {
   // process is uid 0 (or one of the privilege-chain reserved ids): a
   // dark red stripe identifies the privilege scope at a glance, and
   // the value comes from router-attested SessionWindow.is_root — apps
-  // cannot self-declare it. The non-focused tone is a darker maroon
-  // so focus is still distinguishable. A crashed window's titlebar
+  // cannot self-declare it. The non-focused tone mixes the red toward
+  // the window surface (darker on dark packs, paler on light ones) so
+  // focus is still distinguishable. A crashed window's titlebar
   // is a brighter red regardless of focus — the tombstone state needs
   // to be unmistakable.
   const titlebarBackground = () => {
     if (props.win.crashed) return tokens.borderDanger;
     if (props.win.isRoot) {
-      return isFocused(props.win) ? tokens.bgDanger : `color-mix(in srgb, ${tokens.bgDanger} 70%, #000)`;
+      return isFocused(props.win) ? tokens.bgDanger : `color-mix(in srgb, ${tokens.bgDanger} 70%, ${tokens.bgWindow})`;
     }
     // Titlebar bg via override vars (default to the pack's selected/menu
     // surfaces) so NT can paint a navy active / gray inactive caption.
@@ -442,10 +493,18 @@ export function FloatingWindow(props: WindowProps) {
   // the titlebar icon agree, and both re-skin with the pack. Root windows
   // keep a muted off-white so the accent doesn't clash with the red
   // privilege stripe (which already carries the identity signal).
+  // A pack with a colored caption (Lisbon's cobalt) sets
+  // --wash-titlebar-icon, since an accent hue can vanish into it.
   const titlebarIconColor = () => {
     if (props.win.isRoot) return undefined;
-    return accentColor(props.win.element || props.win.instanceID, props.win.accent);
+    return `var(--wash-titlebar-icon, ${accentColor(props.win.element || props.win.instanceID, props.win.accent)})`;
   };
+  // Root and crashed captions paint the pack's danger tones, which are
+  // chosen to carry the pack's ordinary fg — not a caption fg picked for
+  // a colored titlebar (white on Lisbon's cobalt would vanish on its pale
+  // danger pink). The buttons inherit this.
+  const titlebarForeground = () =>
+    props.win.crashed || props.win.isRoot ? tokens.fg : `var(--wash-titlebar-fg, ${tokens.fg})`;
 
   return (
     <div
@@ -520,7 +579,7 @@ export function FloatingWindow(props: WindowProps) {
           'box-sizing': 'border-box',
           padding: '0 8px',
           background: titlebarBackground(),
-          color: `var(--wash-titlebar-fg, ${tokens.fg})`,
+          color: titlebarForeground(),
           cursor: 'move',
           'user-select': 'none',
           // Window title uses the title type style (Chicago in Copland, etc.).
@@ -627,6 +686,54 @@ export function FloatingWindow(props: WindowProps) {
                 window.wash.minimizeWindow(props.win.windowID, props.win.origin);
               }}
             />
+            {/* In a cell with a layout: take the window out of its panel,
+                or put a floating one into the first free panel. */}
+            <Show when={tiling() !== 'none'}>
+              <MenuSeparator />
+              <PanelPicker
+                win={props.win}
+                onPick={(c, j) => {
+                  setTitleMenu(null);
+                  moveWindowToSlot(props.win, c, j);
+                }}
+              />
+              <Show when={tiling() === 'slotted' && slotOf(props.win) > 0}>
+                <MenuItem
+                  label="Swap with main"
+                  title="Swap places with the window in the first panel"
+                  data-testid="window-ctx-swap-main"
+                  onClick={() => {
+                    setTitleMenu(null);
+                    moveWindowToSlot(props.win, viewportFor(props.win), 0);
+                  }}
+                />
+              </Show>
+              <Show
+                when={tiling() === 'slotted'}
+                fallback={
+                  <MenuItem
+                    label="Tile"
+                    title="Put this window in the layout's first free panel"
+                    disabled={!hasFreeSlot(viewportFor(props.win))}
+                    data-testid="window-ctx-tile"
+                    onClick={() => {
+                      setTitleMenu(null);
+                      tileInLayout(props.win);
+                    }}
+                  />
+                }
+              >
+                <MenuItem
+                  label="Float"
+                  title="Take this window out of the layout"
+                  data-testid="window-ctx-float"
+                  onClick={() => {
+                    setTitleMenu(null);
+                    floatInLayout(props.win);
+                  }}
+                />
+              </Show>
+            </Show>
             <MenuSeparator />
             {/* One row per cell of the VIEWPORTS_PER_AXIS² plane, numbered
                 the way the pager reads (left to right, top to bottom). The
@@ -694,7 +801,9 @@ export function FloatingWindow(props: WindowProps) {
       {/* The other seven edges and corners: invisible strips along each
           side, a little wider at the corners. Not on a maximized window,
           which has no edges to move (the router drops its resizes). */}
-      <Show when={props.win.state !== 'maximized'}>
+      {/* Not on a tiled window either: its size is its panel's, and the
+          dividers between panels are what resize it. */}
+      <Show when={props.win.state !== 'maximized' && tiling() !== 'slotted'}>
         <For each={EDGE_HANDLES}>
           {(hd) => (
             <div
@@ -705,6 +814,7 @@ export function FloatingWindow(props: WindowProps) {
           )}
         </For>
       </Show>
+      <Show when={tiling() !== 'slotted'}>
       <div
         class="wash-resize-handle"
         data-testid="window-resize"
@@ -723,6 +833,7 @@ export function FloatingWindow(props: WindowProps) {
             : 'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 70%, transparent 70%)',
         }}
       />
+      </Show>
     </div>
   );
 }
@@ -755,8 +866,6 @@ export function openWindowMenu(origin: Origin, windowID: number, x: number, y: n
 // Above the session app's taskbar layer (z-index 10000), which a menu
 // opened from it would otherwise sit under.
 const TASKBAR_MENU_Z = 10001;
-// The chrome's bottom taskbar, as the maximized frame reserves it.
-const TASKBAR_H = 40;
 
 // Re-exported for the desktop button click path, which raises a
 // window before invoking a wire helper.
@@ -791,7 +900,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
       style={{
         position: 'absolute',
         inset: '0',
-        background: `color-mix(in srgb, ${tokens.bgDanger} 55%, #000)`,
+        background: `color-mix(in srgb, ${tokens.bgDanger} 55%, ${tokens.bgWindow})`,
         color: tokens.fgDanger,
         display: 'flex',
         'flex-direction': 'column',
@@ -814,7 +923,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
         <AlertOctagon size={16} />
         <div style={{ flex: 1 }}>
           <div style={{ 'font-weight': '600' }}>{props.title} crashed</div>
-          <div style={{ opacity: '0.75', 'font-size': '11px' }}>
+          <div style={{ opacity: '0.75', 'font-size': tokens.fontSizeSm }}>
             {props.info.appID} — {summary()}
           </div>
         </div>
@@ -836,7 +945,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
             padding: '4px 8px',
             cursor: 'pointer',
             font: 'inherit',
-            'font-size': '12px',
+            'font-size': tokens.fontSizeMd,
           }}
         >
           <Copy size={12} />
@@ -852,13 +961,13 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           flex: 1,
           margin: '0',
           padding: '10px 12px',
-          background: `color-mix(in srgb, ${tokens.bgDanger} 40%, #000)`,
+          background: `color-mix(in srgb, ${tokens.bgDanger} 40%, ${tokens.bgInset})`,
           color: tokens.fgDanger,
           border: 'none',
           outline: 'none',
           resize: 'none',
           'font-family': 'inherit',
-          'font-size': '12px',
+          'font-size': tokens.fontSizeMd,
           'line-height': '1.45',
           'white-space': 'pre',
           'overflow': 'auto',
@@ -872,7 +981,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
 // left the glyphs a pixel or two off the titlebar's vertical centre.
 const titlebarBtnStyle = {
   background: 'transparent',
-  color: `var(--wash-titlebar-fg, ${tokens.fg})`,
+  color: 'inherit',
   border: 'none',
   cursor: 'pointer',
   padding: '0 8px',

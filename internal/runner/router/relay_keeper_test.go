@@ -23,7 +23,24 @@ func startRelay(t *testing.T, sock string) (cancel context.CancelFunc, done <-ch
 	r := router.NewRouter(router.Config{NoSession: true}, router.NewRegistry(), func(f string, a ...any) {})
 	ctx, cancelFn := context.WithCancel(context.Background())
 	d := make(chan struct{})
-	logf := func(f string, a ...any) { t.Logf("relay: "+f, a...) }
+	// The keeper goroutines (holdForKeeper) are not joined by cleanup and
+	// log as they exit, which can be after the test has returned — a data
+	// race on t, and a "Log in goroutine after Test has completed" panic.
+	// Cleanup closes the logger first; an in-flight call holds the lock.
+	var logMu sync.Mutex
+	logClosed := false
+	logf := func(f string, a ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		if !logClosed {
+			t.Logf("relay: "+f, a...)
+		}
+	}
+	t.Cleanup(func() {
+		logMu.Lock()
+		logClosed = true
+		logMu.Unlock()
+	})
 	go func() {
 		defer close(d)
 		_ = runRawListener(ctx, r, "unix", sock, logf, func() {

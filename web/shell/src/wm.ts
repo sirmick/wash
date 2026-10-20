@@ -12,7 +12,8 @@ import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { SessionPatch, SessionWindow } from './main';
 import { type Origin, LOCAL_ORIGIN } from './clients';
-import { clampViewport, viewportForRect } from './viewport-math';
+import { TASKBAR_H, clampViewport, viewportForRect, workArea } from './viewport-math';
+import type { Insets, Rect } from './viewport-math';
 import { focusFromSnapshot } from './wm-focus';
 import { beginWindowLoad, endWindowLoad } from './boot';
 
@@ -162,6 +163,42 @@ const [screenSize, setScreenSize] = createSignal({
 window.addEventListener('resize', () => {
   setScreenSize({ w: window.innerWidth, h: window.innerHeight });
 });
+
+// insets mirror what the session chrome reserves along the screen's edges:
+// --wash-reserved-right (the sidebar) and --wash-reserved-top/-bottom (the
+// taskbar, which a pack can put at either edge). The session app writes
+// them inline on <html>; observing that attribute turns them into a signal,
+// so everything sized from the work area (maximize, tiling) follows the
+// chrome without the session app having to call into the shell. A chrome
+// that publishes no taskbar edge gets the classic bottom taskbar.
+function readInsets(): Insets {
+  const cs = getComputedStyle(document.documentElement);
+  const px = (name: string): number | null => {
+    const v = parseInt(cs.getPropertyValue(name), 10);
+    return Number.isFinite(v) ? v : null;
+  };
+  const top = px('--wash-reserved-top');
+  const bottom = px('--wash-reserved-bottom');
+  return {
+    top: top ?? 0,
+    right: px('--wash-reserved-right') ?? 0,
+    bottom: bottom ?? (top === null ? TASKBAR_H : 0),
+  };
+}
+const [insets, setInsets] = createSignal(readInsets(), {
+  equals: (a, b) => a.top === b.top && a.right === b.right && a.bottom === b.bottom,
+});
+if (typeof MutationObserver !== 'undefined') {
+  new MutationObserver(() => setInsets(readInsets()))
+    .observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+}
+
+// cellWorkArea is the usable part of viewport cell (vx, vy) in plane coords
+// on this browser's screen: less the taskbar and the sidebar. Reactive in
+// the screen size and the chrome's insets.
+export function cellWorkArea(vx: number, vy: number): Rect {
+  return workArea(screenSize(), vx, vy, insets());
+}
 
 // Viewport persists across reloads so the user comes back to whichever
 // cell they were on. LocalStorage is per-origin and tab-shared; if a

@@ -2,7 +2,7 @@
 
 export { tokens, accentColor } from './tokens';
 export type { Tokens } from './tokens';
-export { packs, defaultPackId, getPack, applyScheme, washAppearance, onAppearanceChange } from './packs';
+export { packs, availablePacks, defaultPackId, getPack, applyScheme, washAppearance, onAppearanceChange } from './packs';
 export type { Pack } from './packs';
 export { severityColor } from './severity';
 export { fmtBytes, fmtRate, fmtUptime, fmtClockTime } from './format';
@@ -31,6 +31,8 @@ export { Overlay, ConfirmDialog } from './overlay';
 export type { OverlayProps, ConfirmDialogProps } from './overlay';
 export { StatusBar } from './status-bar';
 export type { StatusBarProps } from './status-bar';
+export { Chip } from './chip';
+export type { ChipProps, ChipTone } from './chip';
 export { FilePicker } from './file-picker';
 export type { FilePickerProps, FilterSpec } from './file-picker';
 export { Splitter } from './splitter';

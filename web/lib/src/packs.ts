@@ -269,8 +269,11 @@ const seoul: Pack = {
 // titlebar (NOT a colored caption), a raised 3D bevel, and a periwinkle-blue
 // selection highlight — all sampled straight off a Mac OS 9 Appearance
 // control-panel screenshot. Replaced the old Windows-NT pack. The wallpaper
-// is a vectorized 1997 vintage-sunset design on black, so the platinum
-// windows pop. A light theme.
+// is the desktop that era would have ray-traced in Bryce or Kai's Power
+// Tools — chrome and glossy spheres on an infinite periwinkle checkerboard
+// under a faint 1-bit dither — drawn in this scheme's own periwinkles and
+// platinums so desktop and chrome agree (design/packs/gen-copland.py,
+// original artwork). A light theme.
 const copland: Pack = {
   id: 'copland',
   name: 'Copland',
@@ -336,7 +339,7 @@ const copland: Pack = {
     '--wash-radius-lg': '0',
     '--wash-radius-xl': '0',
     '--wash-taskbar-bg': '#cccccc',
-    // Desktop info banner sits over the black 1997 wallpaper → light text.
+    // Desktop info banner sits over the wallpaper's dark periwinkle sky → light text.
     '--wash-banner-fg': '#e8e8f0',
     // Classic Mac type. Chicago — the original Macintosh System UI face
     // (Susan Kare, 1984; bundled scalable TrueType, see `fonts` below +
@@ -523,14 +526,270 @@ const dreamtime: Pack = {
   ],
 };
 
+// Lisbon — the city from the river. A LIGHT pack: whitewash surfaces,
+// cobalt ink for focus and selection (azulejo blue), ochre and terracotta
+// from the facades and roofs. Square-ish corners like a cut tile. Active
+// windows wear a cobalt titlebar (white text) so the focused window reads at
+// a glance. The wallpaper — whitewashed houses and red roofs stacked up the
+// hill to the castle, over the water, under open sky — is an image-model
+// raster vectorized with a real gradient sky (design/packs/vectorize.py).
+const lisbon: Pack = {
+  id: 'lisbon',
+  name: 'Lisbon',
+  appearance: 'light',
+  scheme: {
+    '--wash-bg-window': '#f8f7f3', // tin-glaze white
+    '--wash-bg-menu': '#eff2f7', // faint cobalt cast for menus / bars
+    '--wash-bg-inset': '#e7ecf3', // sunken fields
+    '--wash-bg-canvas': '#fcfcfa', // editor/terminal canvas
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#e4eaf4',
+    '--wash-bg-row-selected': '#cbdaf0', // cobalt wash
+    '--wash-bg-backdrop': 'rgba(12,28,64,0.35)',
+    '--wash-bg-drop-target': '#d5e4f8',
+    '--wash-border-menu': '#d4dbe7',
+    '--wash-border-window': '#9fb0cc',
+    '--wash-border-focus': '#1f4fa3', // cobalt
+    '--wash-border-drop-target': '#1f4fa3',
+    '--wash-fg': '#1a2333', // deep navy ink
+    '--wash-fg-muted': '#4e5a6f',
+    '--wash-fg-dim': '#7f8aa0',
+    '--wash-bg-danger': '#f8ddd6',
+    '--wash-border-danger': '#d48c7a',
+    '--wash-fg-danger': '#a3301c', // terracotta-red
+    '--wash-bg-success': '#dcebdd',
+    '--wash-fg-success': '#2e6a3b',
+    '--wash-bg-warning': '#f5e6c4',
+    '--wash-fg-warning': '#855a0c', // ochre
+    '--wash-bg-info': '#d9e5f6',
+    '--wash-fg-info': '#1f4fa3',
+    '--wash-bg-neutral': '#e4e8ef',
+    '--wash-bg-denied': '#f3e4c8',
+    '--wash-border-denied': '#c49440',
+    '--wash-sev-error': '#b0281c',
+    '--wash-sev-warn': '#855a0c',
+    '--wash-sev-notice': '#1f4fa3',
+    '--wash-sev-info': '#3a4456',
+    '--wash-sev-debug': '#7f8aa0',
+    '--wash-accent-red': '#c0392b',
+    '--wash-accent-orange': '#c8643b', // terracotta roofs
+    '--wash-accent-amber': '#c9921f', // ochre (the tiles' yellow)
+    '--wash-accent-lime': '#7a9a3a',
+    '--wash-accent-green': '#3f8a5a',
+    '--wash-accent-teal': '#2a8a86',
+    '--wash-accent-cyan': '#2b87b5', // Tagus
+    '--wash-accent-blue': '#1f4fa3', // cobalt
+    '--wash-accent-indigo': '#3c4fa8',
+    '--wash-accent-violet': '#6d5aa8',
+    '--wash-accent-magenta': '#a3427f',
+    '--wash-accent-pink': '#c45a7c',
+    // Cobalt caption, dusty-cobalt when inactive: both carry white text
+    // (the one --wash-titlebar-fg serves both), so the inactive tone stays
+    // dark enough to read rather than fading to the window white.
+    '--wash-titlebar-active': '#1f4fa3',
+    '--wash-titlebar-inactive': '#5d73a0',
+    '--wash-titlebar-fg': '#ffffff',
+    // App icons in the caption go white too: a cobalt or Tagus-blue accent
+    // icon would vanish into the cobalt bar.
+    '--wash-titlebar-icon': '#ffffff',
+    // Taskbar: the window white, nearly solid over the busy tiles, with a
+    // cobalt edge like a tile border.
+    '--wash-taskbar-bg': '#f8f7f3',
+    '--wash-taskbar-opacity': '92%',
+    '--wash-taskbar-top': '#1f4fa3',
+    // The info banner sits on the tiles: a glaze-white backdrop keeps the
+    // ink text legible.
+    '--wash-banner-bg': 'rgba(248,247,243,0.85)',
+    '--wash-banner-blur': '6px',
+    // A light theme wants a softer, cooler window shadow than the default.
+    '--wash-window-shadow': '0 8px 28px rgba(16,36,84,0.24)',
+    '--wash-shadow-menu': '0 6px 18px rgba(16,36,84,0.22)',
+    // Cut-tile corners: barely softened.
+    '--wash-radius-sm': '2px',
+    '--wash-radius-md': '3px',
+    '--wash-radius-lg': '4px',
+    '--wash-radius-xl': '6px',
+  },
+  wallpaper: 'wallpapers/lisbon.svg',
+};
+
+// Isfahan — the Si-o-se-pol bridge at dusk. A DARK pack: lapis-night chrome,
+// warm ivory text, turquoise (the domes) for focus and selection, and the
+// painting's saffron dusk for the strapwork accents (the taskbar's top edge,
+// the caption's icon). Softly rounded like an arch's spring. The wallpaper
+// is an image-model painting shipped as a 21:9 raster (WebP, 6336px wide, so
+// a 32:9 ultrawide still gets full detail) — see design/packs/CREDITS.md.
+const isfahan: Pack = {
+  id: 'isfahan',
+  name: 'Isfahan',
+  appearance: 'dark',
+  scheme: {
+    '--wash-bg-window': '#111c38', // lapis night
+    '--wash-bg-menu': '#0e1830',
+    '--wash-bg-inset': '#0a1328',
+    '--wash-bg-canvas': '#070d1d', // editor/terminal: near-black lapis
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#1a2a4e',
+    '--wash-bg-row-selected': '#16566a', // deep turquoise
+    '--wash-bg-backdrop': 'rgba(2,6,18,0.55)',
+    '--wash-bg-drop-target': '#123d55',
+    '--wash-border-menu': '#1f2e52',
+    '--wash-border-window': '#2b3d68',
+    '--wash-border-focus': '#3fc1c9', // turquoise
+    '--wash-border-drop-target': '#3fc1c9',
+    '--wash-fg': '#efe6d2', // warm ivory
+    '--wash-fg-muted': '#b2aa95',
+    '--wash-fg-dim': '#7f7a6c',
+    '--wash-bg-danger': '#3d1519',
+    '--wash-border-danger': '#b43c3a',
+    '--wash-fg-danger': '#ff9283',
+    '--wash-bg-success': '#0f3221',
+    '--wash-fg-success': '#71d49c',
+    '--wash-bg-warning': '#3a2c0c',
+    '--wash-fg-warning': '#e8bb52',
+    '--wash-bg-info': '#0d3142',
+    '--wash-fg-info': '#72d6dc',
+    '--wash-bg-neutral': '#1a2747',
+    '--wash-bg-denied': '#3a2a10',
+    '--wash-border-denied': '#9c7a2c',
+    '--wash-sev-error': '#ff7d6d',
+    '--wash-sev-warn': '#e8bb52',
+    '--wash-sev-notice': '#72d6dc',
+    '--wash-sev-info': '#d9d1bd',
+    '--wash-sev-debug': '#7f7a6c',
+    '--wash-accent-red': '#d8544b',
+    '--wash-accent-orange': '#e07d3e',
+    '--wash-accent-amber': '#e9a23b', // saffron dusk
+    '--wash-accent-lime': '#a9c25a',
+    '--wash-accent-green': '#45b072',
+    '--wash-accent-teal': '#2fb5a5',
+    '--wash-accent-cyan': '#3fc1c9', // turquoise faience
+    '--wash-accent-blue': '#5f8fe0', // lapis, lifted to read on the night chrome
+    '--wash-accent-indigo': '#6470d0',
+    '--wash-accent-violet': '#9278d0',
+    '--wash-accent-magenta': '#c95e9e',
+    '--wash-accent-pink': '#e48a9a', // dusk rose
+    // Caption: a lapis a step brighter than the window when focused; the
+    // app icon in saffron, like the bridge's arches at dusk.
+    '--wash-titlebar-active': '#1c3166',
+    '--wash-titlebar-inactive': '#111c38',
+    '--wash-titlebar-fg': '#efe6d2',
+    '--wash-titlebar-icon': '#e9a23b',
+    '--wash-taskbar-bg': '#0a1328',
+    '--wash-taskbar-top': '#e9a23b', // a saffron rule along the bar
+    '--wash-banner-bg': 'rgba(8,15,34,0.5)',
+    '--wash-banner-blur': '8px',
+    '--wash-radius-sm': '4px',
+    '--wash-radius-md': '6px',
+    '--wash-radius-lg': '8px',
+    '--wash-radius-xl': '12px',
+  },
+  wallpaper: 'wallpapers/isfahan.webp',
+};
+
+// Moscow — Constructivist poster. A LIGHT pack: warm poster-paper cream,
+// black ink, Soviet red for focus and the active caption, gold for accents,
+// and the avant-garde's hard geometry in the chrome: square corners, a black
+// window frame and a hard offset shadow instead of a soft blur. Inactive
+// captions go black, so red-and-black is the whole caption vocabulary. The
+// wallpaper — Suprematist red/black wedges cutting through St Basil's domes
+// and the Kremlin's red stars — is an image-model painting shipped as a 21:9
+// raster (WebP, 6336px wide) — see design/packs/CREDITS.md.
+const moscow: Pack = {
+  id: 'moscow',
+  name: 'Moscow',
+  appearance: 'light',
+  scheme: {
+    '--wash-bg-window': '#f6efdf', // poster paper
+    '--wash-bg-menu': '#efe5cf',
+    '--wash-bg-inset': '#e8dcc2',
+    '--wash-bg-canvas': '#fbf7ec',
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#ece0c6',
+    '--wash-bg-row-selected': '#f1cdc4', // red wash
+    '--wash-bg-backdrop': 'rgba(21,12,10,0.4)',
+    '--wash-bg-drop-target': '#f3e2b0', // gold wash, so a drop never reads as an error
+    '--wash-border-menu': '#dccfb2',
+    '--wash-border-window': '#151515', // black frame
+    '--wash-border-focus': '#c8102e', // Soviet red
+    '--wash-border-drop-target': '#a87c0c',
+    '--wash-fg': '#151515', // black ink
+    '--wash-fg-muted': '#4d4540',
+    '--wash-fg-dim': '#887e70',
+    '--wash-bg-danger': '#f6d3cf',
+    '--wash-border-danger': '#d47f78',
+    '--wash-fg-danger': '#a10e24',
+    '--wash-bg-success': '#d9e8d3',
+    '--wash-fg-success': '#2c6a3c',
+    '--wash-bg-warning': '#f6e4b8',
+    '--wash-fg-warning': '#7f5a00',
+    '--wash-bg-info': '#dbe2ef',
+    '--wash-fg-info': '#25488f',
+    '--wash-bg-neutral': '#e9dfca',
+    '--wash-bg-denied': '#f2dfb6',
+    '--wash-border-denied': '#b88a26',
+    '--wash-sev-error': '#b0102a',
+    '--wash-sev-warn': '#7f5a00',
+    '--wash-sev-notice': '#25488f',
+    '--wash-sev-info': '#3d3632',
+    '--wash-sev-debug': '#887e70',
+    '--wash-accent-red': '#c8102e', // Soviet red
+    '--wash-accent-orange': '#d4541c',
+    '--wash-accent-amber': '#c9970f', // poster gold
+    '--wash-accent-lime': '#7d9a2a',
+    '--wash-accent-green': '#3c7a4e', // the domes' green, muted
+    '--wash-accent-teal': '#2a7f78',
+    '--wash-accent-cyan': '#2a7fa3',
+    '--wash-accent-blue': '#2b5aa8', // the domes' blue, muted
+    '--wash-accent-indigo': '#3f4a9e',
+    '--wash-accent-violet': '#6e4a9e',
+    '--wash-accent-magenta': '#a8306e',
+    '--wash-accent-pink': '#c8506e',
+    // Red caption when focused, black when not; white text and icons on both.
+    '--wash-titlebar-active': '#c8102e',
+    '--wash-titlebar-inactive': '#151515',
+    '--wash-titlebar-fg': '#ffffff',
+    '--wash-titlebar-icon': '#ffffff',
+    '--wash-taskbar-bg': '#f6efdf',
+    '--wash-taskbar-opacity': '94%',
+    '--wash-taskbar-top': '#c8102e',
+    '--wash-banner-bg': 'rgba(246,239,223,0.82)',
+    '--wash-banner-blur': '6px',
+    // Hard offset shadows, like a printed block, not a soft glow.
+    '--wash-window-shadow': '5px 5px 0 rgba(21,21,21,0.85)',
+    '--wash-shadow-menu': '3px 3px 0 rgba(21,21,21,0.8)',
+    // Square, cut-paper corners.
+    '--wash-radius-sm': '0',
+    '--wash-radius-md': '0',
+    '--wash-radius-lg': '0',
+    '--wash-radius-xl': '0',
+  },
+  wallpaper: 'wallpapers/moscow.webp',
+};
+
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime];
+export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime, lisbon, isfahan, moscow];
 
 export const defaultPackId = 'midnight';
 
-/** Resolve a pack id to a Pack, falling back to the default. */
+/**
+ * The packs this desktop actually ships. A size-trimmed build (the
+ * in-browser VM) embeds only some wallpapers and says which through
+ * window.wash.packIds(); a pack whose wallpaper is not there is never
+ * offered. Every pack everywhere else.
+ */
+export function availablePacks(): Pack[] {
+  const ids = typeof window !== 'undefined' ? window.wash?.packIds?.() : null;
+  if (!ids) return packs;
+  const avail = packs.filter((p) => ids.includes(p.id));
+  return avail.length ? avail : packs;
+}
+
+/** Resolve a pack id to a Pack the desktop ships, falling back to the
+ *  default — or, where even that is not shipped, the first that is. */
 export function getPack(id?: string | null): Pack {
-  return packs.find((p) => p.id === id) ?? packs.find((p) => p.id === defaultPackId)!;
+  const avail = availablePacks();
+  return avail.find((p) => p.id === id) ?? avail.find((p) => p.id === defaultPackId) ?? avail[0];
 }
 
 // The union of every --wash-* var any pack sets. Clearing these before

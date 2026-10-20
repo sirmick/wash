@@ -34,7 +34,7 @@ export const ViewportWidget: Component<ViewportWidgetProps> = (props) => {
       {props.renderPager()}
       <div
         style={{
-          'font-size': '11px',
+          'font-size': tokens.fontSizeSm,
           opacity: 0.55,
           color: tokens.fgMuted,
           'text-align': 'center',

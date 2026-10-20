@@ -833,7 +833,7 @@ export function NetApp(props: WashAppProps) {
                     <span class="wash-net-conn-name">
                       <Icon name={s.role === "vpn" ? "shield" : s.role === "wan" ? "ethernet-port" : "git-branch"} /> {s.name}
                     </span>
-                    <span class="wash-net-conn-kind" data-testid={`segment-role-${s.name}`}>{s.role.toUpperCase()}</span>
+                    <span class="wash-net-conn-kind" data-testid={`segment-role-${s.name}`}>{s.role}</span>
                     <span class="wash-net-conn-dev">{carrierLabel(s.carrier)}</span>
                   </div>
                   <div class="wash-net-seg-detail">
@@ -1648,28 +1648,28 @@ const STYLE = `
 .wash-net-head { display:flex; align-items:stretch; padding:0 6px; border-bottom:1px solid ${tokens.borderMenu}; }
 .wash-net-head h1 { font-size:14px; font-weight:600; margin:0; }
 .wash-net-toolbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:8px 12px; border-bottom:1px solid ${tokens.borderMenu}; }
-.wash-net-addlabel { font-size:12px; font-weight:600; color:${tokens.fgMuted}; align-self:center; margin-right:2px; }
+.wash-net-addlabel { font-size:${tokens.fontSizeMd}; font-weight:600; color:${tokens.fgMuted}; align-self:center; margin-right:2px; }
 .wash-net-addlabel::after { content:":"; }
 .wash-net-tabs { display:flex; gap:2px; align-items:stretch; }
 .wash-net-tab { background:transparent; border:none; border-bottom:2px solid transparent; color:${tokens.fgMuted};
-  padding:10px 12px; font-size:12px; font-weight:600; cursor:pointer; }
+  padding:10px 12px; font-size:${tokens.fontSizeMd}; font-weight:600; cursor:pointer; }
 .wash-net-tab:hover { color:${tokens.fg}; }
 .wash-net-tab.active { color:${tokens.accentBlue}; border-bottom-color:${tokens.accentBlue}; }
 .wash-net-body { flex:1; overflow:auto; padding:10px 12px; }
 .wash-net-list { display:flex; flex-direction:column; gap:6px; }
-.wash-net-empty { opacity:.6; font-size:12px; padding:16px; text-align:center; }
+.wash-net-empty { opacity:.6; font-size:${tokens.fontSizeMd}; padding:16px; text-align:center; }
 .wash-net-conn { display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; gap:2px 8px;
                  border:1px solid ${tokens.borderMenu}; border-radius:6px; padding:8px 10px; align-items:center; }
 .wash-net-conn-main { display:flex; align-items:baseline; gap:8px; }
-.wash-net-conn-name { font-weight:600; font-size:13px; }
-.wash-net-conn-kind { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:${tokens.accentBlue}; border:1px solid ${tokens.borderMenu}; border-radius:9px; padding:1px 7px; }
-.wash-net-conn-dev { font-size:11px; opacity:.6; font-family:ui-monospace,Menlo,monospace; }
-.wash-net-conn-sub { grid-column:1; font-size:11px; opacity:.7; }
+.wash-net-conn-name { font-weight:600; font-size:${tokens.fontSizeBase}; }
+.wash-net-conn-kind { font-size:${tokens.fontSizeSm}; font-weight:400; color:${tokens.fgInfo}; background:${tokens.bgInfo}; border-radius:${tokens.radiusSm}; padding:1px 7px; white-space:nowrap; }
+.wash-net-conn-dev { font-size:${tokens.fontSizeSm}; opacity:.6; font-family:${tokens.fontMono}; }
+.wash-net-conn-sub { grid-column:1; font-size:${tokens.fontSizeSm}; opacity:.7; }
 .wash-net-link { background:none; border:none; padding:0; color:${tokens.accentBlue}; font:inherit; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
 .wash-net-link:hover { color:${tokens.fgInfo}; }
 .wash-net-segments { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
-.wash-net-seg-h { font-size:12px; text-transform:uppercase; letter-spacing:.06em; opacity:.55; margin:0 0 2px; font-weight:600; }
-.wash-net-seg-detail { grid-column:1; display:flex; gap:8px; align-items:center; font-size:11px; opacity:.7; font-family:ui-monospace,Menlo,monospace; }
+.wash-net-seg-h { font-size:${tokens.fontSizeMd}; text-transform:uppercase; letter-spacing:.06em; opacity:.55; margin:0 0 2px; font-weight:600; }
+.wash-net-seg-detail { grid-column:1; display:flex; gap:8px; align-items:center; font-size:${tokens.fontSizeSm}; opacity:.7; font-family:${tokens.fontMono}; }
 .wash-net-seg-tag { font-family:inherit; opacity:1; color:${tokens.accentBlue}; border:1px solid ${tokens.borderMenu}; border-radius:9px; padding:0 6px; }
 /* role colour-coding: LAN blue · WAN violet · VPN teal — consistent across the
    type chips, segment cards, and role badges. */
@@ -1678,7 +1678,7 @@ const STYLE = `
 .wash-net-conn[data-role="wan"] .wash-net-conn-kind { color:${tokens.accentViolet}; border-color:color-mix(in srgb, ${tokens.accentViolet} 50%, transparent); }
 .wash-net-conn[data-role="vpn"] .wash-net-conn-kind { color:${tokens.accentTeal}; border-color:color-mix(in srgb, ${tokens.accentTeal} 50%, transparent); }
 .wash-net-chips { display:flex; gap:8px; }
-.wash-net-chip { display:inline-flex; align-items:center; gap:5px; border:1px solid ${tokens.borderMenu}; background:${tokens.bgInset}; color:${tokens.fgMuted}; border-radius:16px; padding:5px 14px; cursor:pointer; font-size:12px; font-weight:600; }
+.wash-net-chip { display:inline-flex; align-items:center; gap:5px; border:1px solid ${tokens.borderMenu}; background:${tokens.bgInset}; color:${tokens.fgMuted}; border-radius:16px; padding:5px 14px; cursor:pointer; font-size:${tokens.fontSizeMd}; font-weight:600; }
 .wash-net-chip:hover:not(:disabled) { border-color:${tokens.borderFocus}; color:${tokens.fg}; }
 .wash-net-chip:disabled { opacity:.55; cursor:default; }
 .wash-net-chip.on[data-role="lan"] { background:${tokens.bgInfo}; color:${tokens.accentBlue}; border-color:${tokens.accentBlue}; }
@@ -1687,18 +1687,18 @@ const STYLE = `
 .wash-net-dhcp-row { display:flex; gap:6px; }
 .wash-net-dhcp-row input { width:5.5em; }
 .wash-net-diags { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
-.wash-net-diag { display:flex; gap:8px; align-items:baseline; font-size:12px; padding:6px 10px; border-radius:6px; border:1px solid; }
+.wash-net-diag { display:flex; gap:8px; align-items:baseline; font-size:${tokens.fontSizeMd}; padding:6px 10px; border-radius:6px; border:1px solid; }
 .wash-net-diag[data-sev="error"] { background:color-mix(in srgb, ${tokens.accentRed} 14%, transparent); border-color:color-mix(in srgb, ${tokens.accentRed} 45%, transparent); color:${tokens.fgDanger}; }
 .wash-net-diag[data-sev="warning"] { background:color-mix(in srgb, ${tokens.accentAmber} 14%, transparent); border-color:color-mix(in srgb, ${tokens.accentAmber} 45%, transparent); color:${tokens.fgWarning}; }
 .wash-net-diag-sev { font-weight:700; }
 .wash-net-diag-msg { flex:1; }
-.wash-net-diag-path { opacity:.6; font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+.wash-net-diag-path { opacity:.6; font-family:${tokens.fontMono}; font-size:${tokens.fontSizeSm}; }
 .wash-net-matrix { margin-bottom:14px; }
-.wash-net-grid { display:grid; gap:2px; font-size:11px; }
+.wash-net-grid { display:grid; gap:2px; font-size:${tokens.fontSizeSm}; }
 .wash-net-grid-corner { opacity:.5; padding:3px 6px; font-size:10px; }
 .wash-net-grid-h { text-align:center; padding:3px 4px; font-weight:600; color:${tokens.accentBlue}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .wash-net-grid-rh { padding:3px 6px; font-weight:600; display:flex; align-items:center; }
-.wash-net-cell { border:1px solid ${tokens.borderMenu}; border-radius:4px; background:${tokens.bgInset}; color:${tokens.fg}; cursor:pointer; padding:4px 0; font-size:11px; }
+.wash-net-cell { border:1px solid ${tokens.borderMenu}; border-radius:4px; background:${tokens.bgInset}; color:${tokens.fg}; cursor:pointer; padding:4px 0; font-size:${tokens.fontSizeSm}; }
 .wash-net-cell:hover:not(:disabled) { border-color:${tokens.borderFocus}; }
 .wash-net-cell[data-state="allow"] { background:color-mix(in srgb, ${tokens.accentGreen} 16%, transparent); color:${tokens.fgSuccess}; border-color:color-mix(in srgb, ${tokens.accentGreen} 45%, transparent); }
 .wash-net-cell[data-state="block"] { background:color-mix(in srgb, ${tokens.accentRed} 14%, transparent); color:${tokens.fgDanger}; border-color:color-mix(in srgb, ${tokens.accentRed} 45%, transparent); }
@@ -1709,7 +1709,7 @@ const STYLE = `
 .wash-net-l2 { margin:12px 0 16px; }
 .wash-net-l2-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .wash-net-l2-addv { display:flex; gap:4px; align-items:center; }
-.wash-net-l2-addv input { width:5em; background:${tokens.bgInset}; border:1px solid ${tokens.borderMenu}; border-radius:5px; color:${tokens.fg}; padding:3px 6px; font-size:12px; }
+.wash-net-l2-addv input { width:5em; background:${tokens.bgInset}; border:1px solid ${tokens.borderMenu}; border-radius:5px; color:${tokens.fg}; padding:3px 6px; font-size:${tokens.fontSizeMd}; }
 .wash-net-l2-grid { margin-top:6px; }
 .wash-net-l2-grid .wash-net-grid-h { display:flex; flex-direction:column; align-items:center; gap:3px; }
 .wash-net-l2-transit { opacity:.65; }
@@ -1719,13 +1719,13 @@ const STYLE = `
 .wash-net-l2-cell[data-state="none"] { background:${tokens.bgInset}; color:${tokens.fgDim}; border-color:${tokens.borderMenu}; }
 .wash-net-l2-cell[data-state="untagged"] { background:color-mix(in srgb, ${tokens.accentGreen} 16%, transparent); color:${tokens.fgSuccess}; border-color:color-mix(in srgb, ${tokens.accentGreen} 45%, transparent); font-weight:600; }
 .wash-net-l2-cell[data-state="tagged"] { background:color-mix(in srgb, ${tokens.accentViolet} 16%, transparent); color:${tokens.accentViolet}; border-color:color-mix(in srgb, ${tokens.accentViolet} 50%, transparent); font-weight:600; }
-.wash-net-l2-vdel { background:none; border:none; color:${tokens.fgMuted}; cursor:pointer; margin-left:5px; font-size:13px; line-height:1; }
+.wash-net-l2-vdel { background:none; border:none; color:${tokens.fgMuted}; cursor:pointer; margin-left:5px; font-size:${tokens.fontSizeBase}; line-height:1; }
 .wash-net-l2-vdel:hover { color:${tokens.accentRed}; }
 .wash-net-l2-legend { font-size:10px; opacity:.6; margin-top:6px; }
 .wash-net-l2-legend code { font-family:${tokens.fontMono}; }
 .wash-net-adv-toggle { cursor:pointer; user-select:none; }
 .wash-net-adv-kind { margin:6px 0 10px; }
-.wash-net-adv-h { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:${tokens.accentBlue}; margin-bottom:4px; }
+.wash-net-adv-h { display:flex; align-items:center; gap:8px; font-size:${tokens.fontSizeMd}; font-weight:600; color:${tokens.accentBlue}; margin-bottom:4px; }
 .wash-net-adv-item { border:1px solid ${tokens.borderMenu}; border-radius:6px; padding:6px 8px; margin-bottom:4px; display:flex; flex-direction:column; gap:4px; }
 .wash-net-adv-item .wash-net-btn { align-self:flex-end; }
 .wash-net-conn-actions { grid-row:1 / span 2; grid-column:2; display:flex; gap:4px; align-items:center; }
@@ -1733,30 +1733,34 @@ const STYLE = `
 .wash-net-conn[data-status="edited"] { border-color:color-mix(in srgb, ${tokens.accentAmber} 45%, transparent); }
 .wash-net-conn.removed { opacity:.6; border-style:dashed; }
 .wash-net-conn.removed .wash-net-conn-name { text-decoration:line-through; }
-.wash-net-badge { font-size:9px; text-transform:uppercase; letter-spacing:.05em; border-radius:8px; padding:1px 6px; border:1px solid; }
-.wash-net-badge[data-badge="new"] { color:${tokens.accentGreen}; border-color:color-mix(in srgb, ${tokens.accentGreen} 45%, transparent); }
-.wash-net-badge[data-badge="edited"] { color:${tokens.accentAmber}; border-color:color-mix(in srgb, ${tokens.accentAmber} 45%, transparent); }
-.wash-net-badge[data-badge="removed"] { color:${tokens.accentRed}; border-color:color-mix(in srgb, ${tokens.accentRed} 45%, transparent); }
+/* Same filled shape as @wash/ui <Chip>: one tag vocabulary across apps.
+   The base rule is the neutral tone, so a badge with no rule of its own
+   (unconfigured) reads quiet instead of a currentColor outline. */
+.wash-net-badge { font-size:${tokens.fontSizeSm}; font-weight:400; border-radius:${tokens.radiusSm}; padding:1px 7px; white-space:nowrap;
+                  color:${tokens.fgMuted}; background:${tokens.bgNeutral}; }
+.wash-net-badge[data-badge="new"] { color:${tokens.fgSuccess}; background:${tokens.bgSuccess}; }
+.wash-net-badge[data-badge="edited"] { color:${tokens.fgWarning}; background:${tokens.bgWarning}; }
+.wash-net-badge[data-badge="removed"] { color:${tokens.fgDanger}; background:${tokens.bgDanger}; }
 .wash-net-pending { display:flex; align-items:center; gap:10px; padding:8px 12px; border-top:1px solid ${tokens.borderMenu};
   background:${tokens.bgMenu}; flex-shrink:0; }
-.wash-net-pending-msg { flex:1; font-size:12px; color:${tokens.accentAmber}; }
+.wash-net-pending-msg { flex:1; font-size:${tokens.fontSizeMd}; color:${tokens.accentAmber}; }
 .wash-net-greyed { display:flex; gap:10px; align-items:center; margin-top:14px; padding-top:10px; border-top:1px dashed ${tokens.borderMenu}; }
-.wash-net-lock { font-size:12px; opacity:.45; }
-.wash-net-hint { font-size:11px; opacity:.4; font-style:italic; }
+.wash-net-lock { font-size:${tokens.fontSizeMd}; opacity:.45; }
+.wash-net-hint { font-size:${tokens.fontSizeSm}; opacity:.4; font-style:italic; }
 .wash-net-wizard { border:1px solid ${tokens.borderFocus}; border-radius:8px; padding:10px 12px; margin-bottom:12px; background:${tokens.bgMenu}; }
-.wash-net-wizard-title { font-size:13px; font-weight:600; margin-bottom:8px; }
+.wash-net-wizard-title { font-size:${tokens.fontSizeBase}; font-weight:600; margin-bottom:8px; }
 .wash-net-wizard-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
 .wash-net-field { display:grid; grid-template-columns:130px 1fr; align-items:center; gap:8px; margin:5px 0; }
-.wash-net-label { font-size:12px; opacity:.85; }
-.wash-net-derived { font-size:12px; font-family:ui-monospace,Menlo,monospace; opacity:.8; }
+.wash-net-label { font-size:${tokens.fontSizeMd}; opacity:.85; }
+.wash-net-derived { font-size:${tokens.fontSizeMd}; font-family:${tokens.fontMono}; opacity:.8; }
 .wash-net-field input, .wash-net-field select, .wash-net-field textarea {
   background:${tokens.bgMenu}; color:${tokens.fg}; border:1px solid ${tokens.borderMenu}; border-radius:4px; padding:3px 6px; font:inherit; }
 .wash-net-field input:focus, .wash-net-field select:focus, .wash-net-field textarea:focus {
   outline:none; border-color:${tokens.borderFocus}; }
 .wash-net-field textarea { resize:vertical; font:${tokens.type.monoMd}; }
 .wash-net-reflist { display:flex; flex-wrap:wrap; gap:8px; }
-.wash-net-reflist label { display:flex; gap:4px; align-items:center; font-size:12px; }
-.wash-net-diag { grid-column:2; font-size:11px; color:${tokens.accentAmber}; }
+.wash-net-reflist label { display:flex; gap:4px; align-items:center; font-size:${tokens.fontSizeMd}; }
+.wash-net-diag { grid-column:2; font-size:${tokens.fontSizeSm}; color:${tokens.accentAmber}; }
 .wash-net-field.error input, .wash-net-field.error select, .wash-net-field.error textarea { border-color:${tokens.borderDanger}; }
 .wash-net-field.error .wash-net-diag { color:${tokens.accentRed}; }
 .wash-net-members { display:flex; flex-wrap:wrap; gap:10px; }
@@ -1766,7 +1770,7 @@ const STYLE = `
 .wash-net-method { margin:5px 0; }
 .wash-net-method select { width:100%; background:${tokens.bgMenu}; color:${tokens.fg}; border:1px solid ${tokens.borderMenu}; border-radius:4px; padding:4px 6px; font:inherit; }
 .wash-net-method select:focus { outline:none; border-color:${tokens.borderFocus}; }
-.wash-net-grouplabel { font-size:11px; opacity:.6; text-transform:uppercase; letter-spacing:.04em; margin:6px 0 2px; }
+.wash-net-grouplabel { font-size:${tokens.fontSizeSm}; opacity:.6; text-transform:uppercase; letter-spacing:.04em; margin:6px 0 2px; }
 .wash-net-wg-key { display:flex; gap:6px; }
 .wash-net-wg-key input { flex:1; min-width:0; }
 .wash-net-wg-endpoint { display:flex; gap:6px; }
@@ -1778,9 +1782,9 @@ const STYLE = `
 .wash-net-wg-importbox { width:100%; box-sizing:border-box; resize:vertical; font:${tokens.type.monoSm};
   background:${tokens.bgCanvas}; color:${tokens.fg}; border:1px solid ${tokens.borderMenu}; border-radius:3px; padding:5px 6px; }
 .wash-net-wg-importbar { display:flex; align-items:center; gap:6px; }
-.wash-net-wg-importerr { color:${tokens.fgDanger}; font-size:11px; }
+.wash-net-wg-importerr { color:${tokens.fgDanger}; font-size:${tokens.fontSizeSm}; }
 .wash-net-addressing .wash-net-group { margin:0 0 6px; }
-.wash-net-member { font-size:12px; display:flex; gap:4px; align-items:center; }
+.wash-net-member { font-size:${tokens.fontSizeMd}; display:flex; gap:4px; align-items:center; }
 .wash-net-wifi-scan { margin:4px 0 10px; }
 .wash-net-wifi-scanhead { display:flex; align-items:center; justify-content:space-between; }
 .wash-net-wifi-off { display:flex; align-items:center; gap:10px; padding:8px 0; }
@@ -1790,7 +1794,7 @@ const STYLE = `
 .wash-net-ap:hover { background:${tokens.bgRowHover}; border-color:${tokens.borderFocus}; }
 .wash-net-ap[data-inuse="1"] { border-color:color-mix(in srgb, ${tokens.accentGreen} 45%, transparent); }
 .wash-net-ap-ssid { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.wash-net-ap-meta { font-size:12px; opacity:.7; flex-shrink:0; font-family:ui-monospace,Menlo,monospace; }
+.wash-net-ap-meta { font-size:${tokens.fontSizeMd}; opacity:.7; flex-shrink:0; font-family:${tokens.fontMono}; }
 .wash-net-btn { display:inline-flex; align-items:center; gap:5px; background:${tokens.bgRowHover}; color:${tokens.fg}; border:1px solid ${tokens.borderMenu}; border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
 .wash-net-ico { flex-shrink:0; opacity:.9; }
 .wash-net-btn:hover:not(:disabled) { background:${tokens.bgRowSelected}; }
@@ -1812,7 +1816,7 @@ const STYLE = `
 .wash-net-step[data-state="done"]::before, .wash-net-step[data-state="active"]::before { background:color-mix(in srgb, ${tokens.accentGreen} 50%, transparent); }
 .wash-net-step[data-state="bad"]::before { background:color-mix(in srgb, ${tokens.accentRed} 50%, transparent); }
 .wash-net-stepnode { position:relative; z-index:1; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
-  font-size:11px; font-weight:700; border:2px solid ${tokens.borderMenu}; background:${tokens.bgInset}; color:${tokens.fgMuted}; box-sizing:border-box; transition:border-color .2s, background .2s; }
+  font-size:${tokens.fontSizeSm}; font-weight:700; border:2px solid ${tokens.borderMenu}; background:${tokens.bgInset}; color:${tokens.fgMuted}; box-sizing:border-box; transition:border-color .2s, background .2s; }
 .wash-net-stepglyph { line-height:1; }
 .wash-net-step[data-state="done"] .wash-net-stepnode { background:color-mix(in srgb, ${tokens.accentGreen} 50%, transparent); border-color:color-mix(in srgb, ${tokens.accentGreen} 50%, transparent); color:${tokens.fgSuccess}; }
 .wash-net-step[data-state="active"] .wash-net-stepnode { border-color:${tokens.accentBlue}; color:${tokens.fgInfo}; background:${tokens.bgInset}; box-shadow:0 0 0 3px color-mix(in srgb, ${tokens.accentBlue} 20%, transparent); }
@@ -1834,7 +1838,7 @@ const STYLE = `
 .wash-net-logline[data-level="warn"] .wash-net-logmsg { color:${tokens.accentAmber}; }
 .wash-net-logline[data-level="error"] .wash-net-logmsg { color:${tokens.accentRed}; }
 .wash-net-applybar { display:flex; align-items:center; gap:8px; padding:8px 12px; }
-.wash-net-status { flex:1; font-size:12px; opacity:.8; font-variant:tabular-nums; }
+.wash-net-status { flex:1; font-size:${tokens.fontSizeMd}; opacity:.8; font-variant:tabular-nums; }
 /* Confirm prompt: a banner pinned to the top of the app (over the header),
  * so Keep/Discard are reachable even when the window's bottom is clipped
  * under the taskbar on a short screen. See ApplyTerminal.tsx. */
@@ -1843,7 +1847,7 @@ const STYLE = `
   background:${tokens.bgDenied}; border-bottom:1px solid color-mix(in srgb, ${tokens.accentAmber} 45%, transparent); box-shadow:0 4px 12px rgba(0,0,0,.45); }
 .wash-net-countdown { flex:1; position:relative; height:22px; border-radius:4px; overflow:hidden; background:${tokens.bgInset}; border:1px solid color-mix(in srgb, ${tokens.accentAmber} 45%, transparent); display:flex; align-items:center; }
 .wash-net-countbar { position:absolute; inset:0 auto 0 0; background:color-mix(in srgb, ${tokens.accentAmber} 18%, transparent); transition:width .25s linear; }
-.wash-net-counttext { position:relative; padding:0 8px; font-size:11px; color:${tokens.fgWarning}; }
+.wash-net-counttext { position:relative; padding:0 8px; font-size:${tokens.fontSizeSm}; color:${tokens.fgWarning}; }
 `;
 
 defineWashApp("wash-app-net", NetApp, { style: `display:block;height:100%;overflow:hidden;font:${tokens.type.textMd};color:${tokens.fg};` });

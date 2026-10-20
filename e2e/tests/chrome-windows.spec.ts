@@ -308,6 +308,41 @@ test.describe('chrome (test app via --show-hidden)', () => {
     expect(frameZ!).toBeGreaterThan(winZ);
   });
 
+  test('maximized window tracks the sidebar opening and hiding', async ({ page, router }) => {
+    await page.goto(router.url);
+    await launchTestApp(page);
+    const app = page.locator('wash-app-test');
+    await expect(app).toBeVisible();
+    await expect(page.locator('[data-testid="sidebar"]')).toHaveAttribute('data-mode', 'open');
+
+    await page.getByRole('button', { name: 'Maximize window' }).click();
+    await expect(app.locator('[data-testid="window-state"] b')).toHaveText('maximized');
+
+    // The frame's width is the work area: the screen less the sidebar's
+    // reservation, which the session app publishes as --wash-reserved-right
+    // and the shell observes (wm.ts cellWorkArea). It must follow the
+    // sidebar both ways without a browser resize to nudge it.
+    const frame = page.locator('.wash-window').first();
+    const expectWidth = async () => {
+      const { innerW, reserved } = await page.evaluate(() => ({
+        innerW: window.innerWidth,
+        reserved: parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10),
+      }));
+      await expect.poll(async () => (await frame.boundingBox())?.width).toBeCloseTo(innerW - reserved, 0);
+      return reserved;
+    };
+    const open = await expectWidth();
+
+    await page.keyboard.press('Control+Alt+s');
+    await expect(page.locator('[data-testid="sidebar"]')).toHaveAttribute('data-mode', 'hidden');
+    const hidden = await expectWidth();
+    expect(hidden).toBeLessThan(open);
+
+    await page.locator('[data-testid="sidebar-tab"]').click();
+    await expect(page.locator('[data-testid="sidebar"]')).toHaveAttribute('data-mode', 'open');
+    await expectWidth();
+  });
+
   test('maximized window tracks a browser resize', async ({ page, router }) => {
     await page.goto(router.url);
     await launchTestApp(page);

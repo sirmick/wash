@@ -69,7 +69,7 @@ export const HostOpen: Component<HostOpenProps> = (props) => (
               'border-radius': tokens.radiusSm,
               padding: '4px 8px',
               cursor: 'pointer',
-              'font-size': '11px',
+              'font-size': tokens.fontSizeSm,
               'text-align': 'left',
               display: 'flex',
               'align-items': 'center',

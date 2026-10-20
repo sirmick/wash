@@ -115,7 +115,7 @@ const Bar: Component<{
     display: 'flex',
     'align-items': 'baseline',
     'justify-content': 'space-between',
-    'font-size': '11px',
+    'font-size': tokens.fontSizeSm,
     'margin-bottom': '3px',
   };
   return (

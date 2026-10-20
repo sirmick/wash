@@ -58,11 +58,15 @@ row_meta() { # -> "<docker-image> <pkgmgr>"
   esac
 }
 
-# In-container smoke (POSIX sh; $1=pkg basename, $2=pkgmgr). Mirrors the
-# build-time Dockerfile smoke: static checks + `-version` + boot/serve/kill.
+# In-container smoke (POSIX sh; $1=wash pkg basename, $2=pkgmgr, $3=wash-login
+# pkg basename or ""). Mirrors the build-time Dockerfile smoke: static checks +
+# `-version` + boot/serve/kill for wash, then wash-login on top and what its
+# postinst owns. The split matters: core wash runs as the invoking user and
+# creates no system user (debian/wash.postinst); the wash group, wash-system
+# and /etc/wash are wash-login's.
 read -r -d '' SMOKE <<'EOS' || true
 set -eu
-PKG="$1"; MGR="$2"; F="/pkg/$PKG"
+PKG="$1"; MGR="$2"; LOGIN="${3:-}"; F="/pkg/$PKG"
 echo "  install ($MGR): $PKG"
 case "$MGR" in
   apt) export DEBIAN_FRONTEND=noninteractive
@@ -71,13 +75,12 @@ case "$MGR" in
   dnf) dnf install -y -q "$F" wget >/dev/null ;;
   apk) apk add --no-cache --allow-untrusted "$F" wget >/dev/null ;;
 esac
-echo "  static: binaries, user/group, /etc/wash, wash-priv mode"
+echo "  static: binaries, wash-priv trust anchor"
 test -x /usr/bin/wash-router
 test -x /usr/bin/wash-priv
-grep -q '^wash-system:' /etc/passwd
-grep -q '^wash:' /etc/group
-test -d /etc/wash
-[ "$(stat -c '%U %a' /usr/bin/wash-priv)" = "root 755" ]
+# wash-priv is a symlink to the multicall binary; the router's trust gate
+# stats THROUGH it, so the anchor is the target: root, 0755.
+[ "$(stat -L -c '%U %a' /usr/bin/wash-priv)" = "root 755" ]
 echo "  -version"; /usr/bin/wash-router -version
 echo "  boot: serve HTTP on loopback"
 mkdir -p /tmp/empty-apps
@@ -90,6 +93,20 @@ for _ in $(seq 1 15); do
 done
 kill $R 2>/dev/null || true; wait $R 2>/dev/null || true
 if [ "$ok" != 1 ]; then echo "  BOOT FAIL"; echo '--- router.log ---'; cat /tmp/router.log; exit 1; fi
+if [ -n "$LOGIN" ]; then
+  echo "  install ($MGR): $LOGIN"
+  L="/pkg/$LOGIN"
+  case "$MGR" in
+    apt) apt-get install -y -qq "$L" >/dev/null ;;
+    dnf) dnf install -y -q "$L" >/dev/null ;;
+    apk) apk add --no-cache --allow-untrusted "$L" >/dev/null ;;
+  esac
+  echo "  static (wash-login): binary, wash group, wash-system user, /etc/wash"
+  test -x /usr/bin/wash-login
+  grep -q '^wash-system:' /etc/passwd
+  grep -q '^wash:' /etc/group
+  test -d /etc/wash
+fi
 echo "  SMOKE-OK"
 EOS
 
@@ -99,12 +116,21 @@ for row in $ROWS; do
   # shellcheck disable=SC2086
   set -- $meta; IMAGE=$1; MGR=$2
   pkgdir="$DL/amd64-${row}-wash-package"
-  pkgfile=$(find "$pkgdir" -maxdepth 2 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) 2>/dev/null | head -1 || true)
+  # The wash package, not wash-login: the artifact carries both, wash-login
+  # depends on wash, and the smoke boots the router wash ships. A bare
+  # `head -1` picked whichever find listed first, so a row failed with
+  # "nothing provides wash" whenever wash-login came first.
+  pkgfile=$(find "$pkgdir" -maxdepth 2 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) ! -name 'wash-login*' 2>/dev/null | head -1 || true)
   echo
   echo "════ $row → $IMAGE ════"
   if [ -z "$pkgfile" ]; then echo "  ✗ no package under $pkgdir"; FAIL="$FAIL $row"; continue; fi
   echo "  pkg: $(basename "$pkgfile")"
-  if docker run --rm -v "$(dirname "$pkgfile")":/pkg:ro "$IMAGE" sh -c "$SMOKE" sh "$(basename "$pkgfile")" "$MGR"; then
+  loginfile=$(find "$(dirname "$pkgfile")" -maxdepth 1 -type f -name 'wash-login*' \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) 2>/dev/null | head -1 || true)
+  [ -n "$loginfile" ] && echo "  pkg: $(basename "$loginfile")"
+  # --platform: the packages are amd64, and a host that has built an arm64 row
+  # holds the arm64 variant of the same tag (debian:13), which docker would
+  # otherwise run here — dpkg then refuses the amd64 .deb.
+  if docker run --rm --platform linux/amd64 -v "$(dirname "$pkgfile")":/pkg:ro "$IMAGE" sh -c "$SMOKE" sh "$(basename "$pkgfile")" "$MGR" "$(basename "${loginfile:-}")"; then
     echo "  ✓ $row PASS"; PASS="$PASS $row"
   else
     echo "  ✗ $row FAIL"; FAIL="$FAIL $row"

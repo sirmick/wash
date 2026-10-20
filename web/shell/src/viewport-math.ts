@@ -19,6 +19,30 @@ export interface Size {
   h: number;
 }
 
+// TASKBAR_H is the session chrome's taskbar (apps/session/fe's is 40px
+// tall). The fallback bottom inset for a chrome that publishes none.
+export const TASKBAR_H = 40;
+
+// Insets are what the chrome reserves along the screen's edges.
+export interface Insets {
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+// workArea is the part of viewport cell (vx, vy) windows may use, in plane
+// coords: the cell's screen less the chrome's insets. Maximize fills it,
+// placement keeps new windows inside it, and tiling divides it
+// (docs/WM_LAYOUT.md §5).
+export function workArea(screen: Size, vx: number, vy: number, insets: Insets): Rect {
+  return {
+    x: vx * screen.w,
+    y: vy * screen.h + insets.top,
+    w: Math.max(0, screen.w - insets.right),
+    h: Math.max(0, screen.h - insets.top - insets.bottom),
+  };
+}
+
 // Round a (possibly fractional) viewport coordinate and clamp it into the
 // perAxis×perAxis grid. Used when the user pans/sets the camera.
 export function clampViewport(vx: number, vy: number, perAxis: number): ViewportCoord {

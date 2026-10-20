@@ -210,7 +210,7 @@ export const AgentRoster: Component<AgentRosterProps> = (props) => {
             'font-style': 'italic',
             'text-align': 'center',
             padding: '12px 0',
-            'font-size': '11px',
+            'font-size': tokens.fontSizeSm,
           }}
         >
           no agents running
@@ -319,7 +319,7 @@ const AskRow: Component<{
         background: 'rgba(224,178,95,0.14)',
         padding: '7px 8px',
         'border-radius': tokens.radiusSm,
-        'font-size': '11px',
+        'font-size': tokens.fontSizeSm,
         display: 'flex',
         'flex-direction': 'column',
         gap: '5px',
@@ -398,7 +398,7 @@ const AskBtn: Component<{
       'border-radius': tokens.radiusSm,
       padding: '3px 8px',
       cursor: 'pointer',
-      'font-size': '11px',
+      'font-size': tokens.fontSizeSm,
       'max-width': '100%',
       overflow: 'hidden',
       'text-overflow': 'ellipsis',
@@ -480,7 +480,7 @@ const AgentRowView: Component<{
     padding: '6px 8px',
     'border-radius': tokens.radiusSm,
     cursor: 'pointer',
-    'font-size': '11px',
+    'font-size': tokens.fontSizeSm,
     opacity: props.row.state === 'stale' ? 0.55 : 1,
     display: 'flex',
     'flex-direction': 'column',
@@ -634,7 +634,7 @@ const AgentRowView: Component<{
               border: 'none',
               padding: '0 2px',
               cursor: 'pointer',
-              'font-size': '12px',
+              'font-size': tokens.fontSizeMd,
               'line-height': 1,
               'flex-shrink': 0,
             }}
