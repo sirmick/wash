@@ -4,7 +4,9 @@
 WebSocket, from one static Go binary that runs anywhere — a laptop, a
 home server, a Raspberry Pi, or a RISC-V emulator compiled to WASM.**
 
-> 🖥️ **Try it now, no install:** **[sirmick.github.io/wash](https://sirmick.github.io/wash/)**
+> 🌐 **Project site:** **[sirmick.github.io/wash](https://sirmick.github.io/wash/)**
+>
+> 🖥️ **Try it now, no install:** **[sirmick.github.io/wash/demo](https://sirmick.github.io/wash/demo/)**
 > — a full wash desktop running on *real* Linux (Linux 6.6 LTS riscv64
 > + busybox userland) inside a WASM-compiled RISC-V emulator, booting
 > in ~3 seconds. The whole thing is ~24 MiB of static assets served
@@ -431,7 +433,7 @@ a self-re-exec.
 
 ## Running the browser demo locally
 
-The thing hosted at [sirmick.github.io/wash](https://sirmick.github.io/wash/)
+The demo hosted at [sirmick.github.io/wash/demo](https://sirmick.github.io/wash/demo/)
 lives in [`wash-vm/`](wash-vm/): wash running inside a **real** Linux
 VM (upstream Linux 6.6 LTS riscv64 + OpenSBI + a buildroot/musl
 rootfs) on **TinyEMU compiled to WASM**, talking to the browser over a
@@ -458,7 +460,8 @@ S3, Cloudflare), `vite build --base=/your-path/` the host page and
 ship `wash-vm/web/dist/` — the recipe and the static-hosting caveats
 are in [`wash-vm/README.md`](wash-vm/README.md). CI rebuilds and
 publishes it on every push to `main`
-([`.github/workflows/demo.yml`](.github/workflows/demo.yml)), pulling
+([`.github/workflows/demo.yml`](.github/workflows/demo.yml)) under the
+project site (built from [`site/`](site/) by `site/build.sh`), pulling
 prebuilt kernel/firmware/wasm blobs from a rolling release so the
 build stays fast.
 
