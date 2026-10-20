@@ -84,6 +84,10 @@ const (
 type storeRec struct {
 	sessionID string
 	line      []byte
+	// done marks a barrier rather than a write: the writer flushes every
+	// file and closes it. The queue is FIFO, so everything enqueued before
+	// the barrier is on disk when done closes.
+	done chan struct{}
 }
 
 var (
@@ -98,9 +102,6 @@ var (
 	// run rather than per event, which would itself be the stall.
 	storeDropped int
 	storeWarned  bool
-	// storeIdle is pulsed by the writer whenever it has drained and
-	// flushed, so rewrite and tests can wait on a fact rather than sleep.
-	storeIdle = make(chan struct{}, 1)
 )
 
 // transcriptDir is $XDG_STATE_HOME/wash/agent-transcripts (else
@@ -282,6 +283,11 @@ func runStore(ch <-chan storeRec) {
 	}
 
 	write := func(rec storeRec) {
+		if rec.done != nil {
+			flushAll()
+			close(rec.done)
+			return
+		}
 		if rec.line == nil {
 			closeSink(rec.sessionID)
 			return
@@ -335,12 +341,6 @@ func runStore(ch <-chan storeRec) {
 			}
 		}
 		flushAll()
-		// Signal the barrier non-blockingly: whoever is waiting wants to
-		// know the queue reached empty, and a second signal adds nothing.
-		select {
-		case storeIdle <- struct{}{}:
-		default:
-		}
 	}
 }
 
@@ -561,9 +561,16 @@ func rewriteTranscript(sessionID string, launch launchRecord, cwd string, events
 	return os.Rename(tmp.Name(), path)
 }
 
-// waitForTranscriptWrites blocks until the writer has drained and
-// flushed. Used by rewrite (which must not race queued appends) and by
-// tests, which would otherwise have to sleep.
+// waitForTranscriptWrites blocks until everything enqueued before the call
+// is written and flushed. Used by rewrite (which must not race queued
+// appends) and by tests, which would otherwise have to sleep.
+//
+// It is a barrier on the writer's own queue, not a guess from outside. The
+// old version treated an empty queue plus an idle pulse (or 20ms of quiet)
+// as done. Under load the writer could still be mid-batch after 20ms, and a
+// stale pulse from an earlier batch could satisfy a later wait, so it could
+// return before the last write reached disk. That made TestToolStatusReachesDisk
+// flaky in the full suite.
 func waitForTranscriptWrites() {
 	storeMu.Lock()
 	started := storeCh != nil
@@ -571,26 +578,18 @@ func waitForTranscriptWrites() {
 	if !started {
 		return
 	}
+	done := make(chan struct{})
 	deadline := time.After(5 * time.Second)
-	for {
-		if len(storeCh) == 0 {
-			// The queue is empty, but the writer may still be mid-batch;
-			// one idle signal after that point means it has flushed.
-			select {
-			case <-storeIdle:
-			case <-time.After(20 * time.Millisecond):
-			}
-			if len(storeCh) == 0 {
-				return
-			}
-		}
-		select {
-		case <-deadline:
-			log.Printf("agentd: transcript writer did not drain in time")
-			return
-		case <-storeIdle:
-		case <-time.After(5 * time.Millisecond):
-		}
+	select {
+	case storeCh <- storeRec{done: done}:
+	case <-deadline:
+		log.Printf("agentd: transcript writer did not drain in time")
+		return
+	}
+	select {
+	case <-done:
+	case <-deadline:
+		log.Printf("agentd: transcript writer did not drain in time")
 	}
 }
 
