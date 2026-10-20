@@ -18,7 +18,10 @@ import {
   cellStateKey,
   decodeCellLayout,
   dissolve,
+  floatAt,
   floatWindow,
+  moveToSlot,
+  neighbourSlot,
   parseCellStateKey,
   reconcileAll,
   splitWinKey,
@@ -28,21 +31,56 @@ import {
 import type { Cell, CellLayout, TileWin } from './tiling';
 import { cellWorkArea, moveLocal, resizeLocal, viewportFor, windows } from './wm';
 import type { Win } from './wm';
+import type { FocusDir } from '@wash/ui/split-tree';
 
 const [layouts, setLayouts] = createSignal<ReadonlyMap<string, CellLayout>>(new Map());
+
+// previews are shapes being dragged (a divider in flight), by cellId. They
+// stand in for the stored shape until the drag commits, so the panels move
+// under the pointer: on the head for real (the edge-resize path already
+// streams live resizes), elsewhere locally only.
+const [previews, setPreviews] = createSignal<ReadonlyMap<string, string>>(new Map());
+
+export function setPreview(c: Cell, shape: string | null): void {
+  const next = new Map(previews());
+  if (shape === null) next.delete(cellId(c));
+  else next.set(cellId(c), shape);
+  setPreviews(next);
+}
+
+// effectiveShape is what a cell looks like right now: the preview if a
+// divider is being dragged, else the stored shape.
+export const effectiveShape = (c: Cell): string | undefined =>
+  previews().get(cellId(c)) ?? cellLayout(c)?.shape;
+
+// dragHover is the panel under a window being dragged by its titlebar —
+// where a drop would put it. The overlay highlights it.
+const [dragHover, setDragHover] = createSignal<{ cell: Cell; slot: number } | null>(null);
+export { dragHover, setDragHover };
 
 export interface TilingDeps {
   // Whether this tab holds the router's foreground head.
   holdsHead: () => boolean;
   // shell.state_set on the LOCAL router (layouts live there, as the head
   // does; remote hosts' windows are tiled by the local head too).
-  sendState: (key: string, state: CellLayout | null) => void;
+  sendState: (key: string, state: StoredLayout | null) => void;
   move: (origin: string, windowID: number, x: number, y: number) => void;
   resize: (origin: string, windowID: number, w: number, h: number) => void;
   log: (msg: string) => void;
 }
 
 let deps: TilingDeps | null = null;
+
+// What goes on the wire: the layout plus who wrote it and their revision.
+// The router echoes every write back to every shell, the writer included,
+// so a tab that writes twice in a row sees its first write come back after
+// its second — and reverting to it, even for one reconcile, can undo a
+// drop. Own echoes older than this tab's latest write are ignored (the same
+// idea as window geometry's geomTok); everyone else's writes apply.
+export type StoredLayout = CellLayout & { by: string; rev: number };
+const TAB_ID = Math.random().toString(36).slice(2, 10);
+let rev = 0;
+const latestRev = new Map<string, number>();
 
 const toTileWin = (w: Win): TileWin => ({
   key: winKey(w.origin, w.windowID),
@@ -74,6 +112,8 @@ export function replaceTilingState(appState: Record<string, unknown> | undefined
 export function patchTilingState(key: string, state: unknown): boolean {
   const c = parseCellStateKey(key);
   if (!c) return false;
+  const own = state as Partial<StoredLayout> | null;
+  if (own?.by === TAB_ID && typeof own.rev === 'number' && own.rev < (latestRev.get(key) ?? 0)) return true;
   const l = state == null ? null : decodeCellLayout(state);
   const next = new Map(layouts());
   if (l) next.set(cellId(c), l);
@@ -89,7 +129,10 @@ function write(c: Cell, l: CellLayout | null): void {
   if (l) next.set(cellId(c), l);
   else next.delete(cellId(c));
   setLayouts(next);
-  deps?.sendState(cellStateKey(c), l);
+  const key = cellStateKey(c);
+  const r = ++rev;
+  latestRev.set(key, r);
+  deps?.sendState(key, l ? { ...l, by: TAB_ID, rev: r } : null);
 }
 
 // ---- queries + actions (any shell) ----
@@ -147,21 +190,112 @@ export function tileInLayout(w: Win): void {
 
 export const hasFreeSlot = (c: Cell): boolean => (cellLayout(c)?.slots ?? []).includes(null);
 
-// ---- the head's loop ----
+// setCellShape changes a tiled cell's shape without touching who sits
+// where — a divider drag or Even out panels, which keep the slot count.
+export function setCellShape(c: Cell, shape: string): void {
+  const l = cellLayout(c);
+  if (!l || l.shape === '' || l.shape === shape) return;
+  write(c, { ...l, shape });
+}
 
-function reconcileNow(): void {
-  if (!deps || !deps.holdsHead()) return;
-  const live = windows.filter((w) => !w.crashed);
-  const { changed, ops } = reconcileAll({
-    layouts: new Map(layouts()),
-    wins: live.map(toTileWin),
-    cellOf: (w) => viewportFor(w),
-    areaOf: (c) => cellWorkArea(c.vx, c.vy),
-  });
+// slotOf is a window's panel index in its cell's layout, or -1.
+export function slotOf(w: Win): number {
+  const l = cellLayout(viewportFor(w));
+  return l ? l.slots.indexOf(winKey(w.origin, w.windowID)) : -1;
+}
+
+// moveWindowToSlot puts a window into slot j of cell c (a swap within the
+// cell, a move from anywhere else).
+export function moveWindowToSlot(w: Win, c: Cell, j: number): void {
+  const changed = moveToSlot(layouts(), winKey(w.origin, w.windowID), c, j, { x: w.x, y: w.y, w: w.w, h: w.h });
   batch(() => {
     for (const [id, l] of changed) {
       const [vx, vy] = id.split(',').map(Number);
       write({ vx, vy }, l);
+    }
+  });
+}
+
+// floatWindowAt takes a window out of cell c's layout where it was dropped
+// (Shift-drop): its floating size, at (x, y).
+export function floatWindowAt(w: Win, c: Cell, x: number, y: number): void {
+  const l = cellLayout(c);
+  if (!l || l.shape === '') return;
+  const k = winKey(w.origin, w.windowID);
+  write(c, l.slots.includes(k) ? floatAt(l, k, x, y) : { ...l, floating: l.floating.includes(k) ? l.floating : [...l.floating, k] });
+}
+
+// focusNeighbourPanel focuses the window in the panel next to the focused
+// one, by geometry. False when the focused window is not tiled or there is
+// no occupied panel that way — the caller then pans the viewport instead.
+export function focusNeighbourPanel(w: Win | undefined, dir: FocusDir): boolean {
+  if (!w) return false;
+  const c = viewportFor(w);
+  const l = cellLayout(c);
+  const i = slotOf(w);
+  if (!l || i < 0) return false;
+  const j = neighbourSlot(l.shape, cellWorkArea(c.vx, c.vy), i, dir, (k) => l.slots[k] !== null);
+  if (j < 0) return false;
+  const { origin, windowID } = splitWinKey(l.slots[j]!);
+  window.wash.focusWindow(windowID, origin);
+  return true;
+}
+
+// swapNeighbourPanel moves the focused window into the panel next to it,
+// swapping with whatever is there. False when there is nothing that way.
+export function swapNeighbourPanel(w: Win | undefined, dir: FocusDir): boolean {
+  if (!w) return false;
+  const c = viewportFor(w);
+  const l = cellLayout(c);
+  const i = slotOf(w);
+  if (!l || i < 0) return false;
+  const j = neighbourSlot(l.shape, cellWorkArea(c.vx, c.vy), i, dir);
+  if (j < 0) return false;
+  moveWindowToSlot(w, c, j);
+  return true;
+}
+
+// ---- the head's loop ----
+
+function reconcileNow(): void {
+  if (!deps) return;
+  const head = deps.holdsHead();
+  const pv = previews();
+  // A non-head tab only ever places a divider drag of its own, locally.
+  if (!head && pv.size === 0) return;
+  const live = windows.filter((w) => !w.crashed);
+  const stored = layouts();
+  const effective = new Map(stored);
+  for (const [id, shape] of pv) {
+    const l = stored.get(id);
+    if (l && l.shape !== '') effective.set(id, { ...l, shape });
+  }
+  const { changed, ops } = reconcileAll({
+    layouts: effective,
+    wins: live.map(toTileWin),
+    cellOf: (w) => viewportFor(w),
+    areaOf: (c) => cellWorkArea(c.vx, c.vy),
+  });
+  if (!head) {
+    // Local preview: only the windows in the cells being dragged, and
+    // nothing sent — the head places for real once the drag commits.
+    const inPreview = new Set<string>();
+    for (const id of pv.keys()) for (const k of stored.get(id)?.slots ?? []) if (k) inPreview.add(k);
+    for (const op of ops) {
+      if (!inPreview.has(op.key)) continue;
+      const { origin, windowID } = splitWinKey(op.key);
+      moveLocal(origin, windowID, op.x, op.y);
+      resizeLocal(origin, windowID, op.w, op.h);
+    }
+    return;
+  }
+  batch(() => {
+    for (const [id, l] of changed) {
+      const [vx, vy] = id.split(',').map(Number);
+      // Never persist a preview: the stored shape stays until the drag
+      // commits.
+      const keep = l && pv.has(id) ? { ...l, shape: stored.get(id)?.shape ?? l.shape } : l;
+      write({ vx, vy }, keep);
     }
     for (const op of ops) {
       const { origin, windowID } = splitWinKey(op.key);
@@ -204,12 +338,13 @@ export function startTiling(d: TilingDeps): void {
         // geometry, state and focus order, each cell's work area (one
         // read covers them all: they share a size), and the head.
         layouts();
+        previews();
         for (const w of windows) void [w.x, w.y, w.w, w.h, w.state, w.gz, w.crashed];
         cellWorkArea(0, 0);
         return d.holdsHead();
       },
       () => {
-        if (layouts().size) schedule();
+        if (layouts().size || previews().size) schedule();
       },
     ));
   });

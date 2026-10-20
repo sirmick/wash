@@ -9,7 +9,8 @@
 // slots far more often than the shape changes. Every window in a tiled cell
 // is either slotted or floating; one that is neither has just arrived.
 
-import { formatLayout, parseLayout, place } from '@wash/ui/split-tree';
+import { focusNeighbor, formatLayout, parseLayout, place } from '@wash/ui/split-tree';
+import type { FocusDir } from '@wash/ui/split-tree';
 import type { Rect } from './viewport-math.ts';
 
 // Panels are separated by this much wallpaper. Room for a divider's grab
@@ -182,6 +183,94 @@ export function tileWindow(prev: CellLayout, w: TileWin): CellLayout {
     floating: prev.floating.filter((k) => k !== w.key),
     restore: { ...prev.restore, [w.key]: { x: w.x, y: w.y, w: w.w, h: w.h } },
   };
+}
+
+// slotAt is the index of the slot whose frame holds point p (plane coords),
+// or -1 over a gutter or outside the area.
+export function slotAt(shape: string, area: Rect, p: { x: number; y: number }): number {
+  return slotFrames(shape, area).findIndex((f) => p.x >= f.x && p.x < f.x + f.w && p.y >= f.y && p.y < f.y + f.h);
+}
+
+// moveToSlot puts window `key` into slot j of cell `to`, wherever it was
+// before. Within one cell it is a swap: the window already in j takes the
+// mover's old slot. From elsewhere, the displaced window takes the first
+// other free slot, else floats (and is restored to its own floating frame).
+// The mover's pre-tile frame moves with it; `current` is the fallback for a
+// window that was never tiled. Returns every layout it changed, by cellId.
+export function moveToSlot(
+  layouts: ReadonlyMap<string, CellLayout>,
+  key: string,
+  to: Cell,
+  j: number,
+  current: Rect,
+): Map<string, CellLayout> {
+  const out = new Map<string, CellLayout>();
+  const toId = cellId(to);
+  const target = layouts.get(toId);
+  if (!target || target.shape === '' || j < 0 || j >= target.slots.length) return out;
+  if (target.slots[j] === key) return out;
+
+  // Same cell, already slotted: a swap.
+  const i = target.slots.indexOf(key);
+  if (i >= 0) {
+    const slots = [...target.slots];
+    [slots[i], slots[j]] = [slots[j], slots[i]];
+    out.set(toId, { ...target, slots });
+    return out;
+  }
+
+  // From elsewhere: take the mover out of wherever it was, keeping its
+  // pre-tile frame.
+  let restore: Rect = current;
+  for (const [id, l] of layouts) {
+    if (id === toId) continue;
+    if (!l.slots.includes(key) && !l.floating.includes(key) && !l.restore[key]) continue;
+    if (l.restore[key]) restore = l.restore[key];
+    const { [key]: _gone, ...rest } = l.restore;
+    void _gone;
+    out.set(id, {
+      ...l,
+      slots: l.slots.map((s) => (s === key ? null : s)),
+      floating: l.floating.filter((k) => k !== key),
+      restore: rest,
+    });
+  }
+  const slots = [...target.slots];
+  const displaced = slots[j];
+  slots[j] = key;
+  let floating = target.floating.filter((k) => k !== key);
+  if (displaced) {
+    const free = slots.indexOf(null);
+    if (free >= 0) slots[free] = displaced;
+    else floating = [...floating, displaced];
+  }
+  out.set(toId, { ...target, slots, floating, restore: { ...target.restore, [key]: target.restore[key] ?? restore } });
+  return out;
+}
+
+// floatAt floats a window where it was dropped: the head gives it back its
+// floating SIZE at (x, y), rather than its whole pre-tile frame.
+export function floatAt(prev: CellLayout, key: string, x: number, y: number): CellLayout {
+  const l = floatWindow(prev, key);
+  const r = prev.restore[key];
+  return r ? { ...l, restore: { ...l.restore, [key]: { x, y, w: r.w, h: r.h } } } : l;
+}
+
+// neighbourSlot is the slot a directional key lands on from slot i, by
+// geometry (the kernel's focusNeighbor), or -1 at the edge. `only` limits
+// the candidates (focus skips empty panels; a swap may land in one).
+export function neighbourSlot(
+  shape: string,
+  area: Rect,
+  i: number,
+  dir: FocusDir,
+  only: (k: number) => boolean = () => true,
+): number {
+  const frames = slotFrames(shape, area)
+    .map((rect, k) => ({ path: String(k), rect }))
+    .filter((_, k) => k === i || only(k));
+  const p = focusNeighbor(frames, String(i), dir);
+  return p === undefined ? -1 : Number(p);
 }
 
 // ---- reconcile (head only) ----

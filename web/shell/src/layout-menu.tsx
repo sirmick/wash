@@ -5,10 +5,12 @@
 
 import { For, Show, createSignal, type Component } from 'solid-js';
 import { Menu, MenuItem, MenuSeparator, tokens } from '@wash/ui';
-import { parseLayout, place } from '@wash/ui/split-tree';
-import { PRESETS, canonicalShape } from './tiling';
+import { equalizeAll, formatLayout, parseLayout, place } from '@wash/ui/split-tree';
+import { PRESETS, canonicalShape, winKey } from './tiling';
 import type { Cell } from './tiling';
-import { cellLayout, setCellLayout } from './tiling-runtime';
+import { cellLayout, setCellLayout, setCellShape } from './tiling-runtime';
+import { viewportFor } from './wm';
+import type { Win } from './wm';
 
 const [request, setRequest] = createSignal<(Cell & { x: number; y: number }) | null>(null);
 
@@ -56,6 +58,10 @@ export const LayoutMenuLayer: Component = () => (
         const l = cellLayout(r());
         return l && l.shape !== '' ? l.shape : null;
       };
+      const evened = () => {
+        const c = current();
+        return c ? formatLayout(equalizeAll(parseLayout(c, () => ({ kind: 'slot' as const })), { empty: () => ({ kind: 'slot' as const }) })) : null;
+      };
       const pick = (shape: string | null) => {
         // Read the cell before closing: closing ends this <Show>, and its
         // accessor goes stale with it.
@@ -79,6 +85,18 @@ export const LayoutMenuLayer: Component = () => (
           </For>
           <MenuSeparator />
           <MenuItem
+            label="Even out panels"
+            title="Give every panel an equal share again"
+            disabled={current() === null || evened() === current()}
+            data-testid="layout-even"
+            onClick={() => {
+              const cell = { vx: r().vx, vy: r().vy };
+              const even = evened();
+              setRequest(null);
+              if (even) setCellShape(cell, even);
+            }}
+          />
+          <MenuItem
             label="No layout"
             title="Float every window in this viewport again"
             disabled={current() === null}
@@ -90,3 +108,53 @@ export const LayoutMenuLayer: Component = () => (
     }}
   </Show>
 );
+
+// PanelPicker is the window menu's "Move to panel": the window's cell
+// layout in miniature, one clickable rect per panel. The window's own panel
+// is marked and not clickable; an occupied one swaps.
+export const PanelPicker: Component<{ win: Win; onPick: (c: Cell, slot: number) => void }> = (props) => {
+  const W = 120;
+  const H = 70;
+  const cell = () => viewportFor(props.win);
+  const layout = () => cellLayout(cell());
+  const rects = () => {
+    const l = layout();
+    if (!l || l.shape === '') return [];
+    return place(parseLayout(l.shape, () => ({ kind: 'slot' as const })), { x: 0, y: 0, w: W, h: H }, 3).leaves;
+  };
+  const mine = () => layout()?.slots.indexOf(winKey(props.win.origin, props.win.windowID)) ?? -1;
+  return (
+    <div style={{ padding: '4px 10px' }}>
+      <div style={{ font: tokens.type.textMd, color: tokens.fgMuted, 'margin-bottom': '4px' }}>Move to panel</div>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="group" aria-label="Panels">
+        <For each={rects()}>
+          {(l, i) => (
+            <rect
+              data-testid={`window-ctx-panel-${i()}`}
+              x={l.rect.x}
+              y={l.rect.y}
+              width={l.rect.w}
+              height={l.rect.h}
+              rx="2"
+              role="button"
+              aria-label={i() === mine() ? `Panel ${i() + 1} (this window)` : `Panel ${i() + 1}`}
+              fill={i() === mine()
+                ? `color-mix(in srgb, ${tokens.accentBlue} 45%, transparent)`
+                : layout()?.slots[i()]
+                  ? `color-mix(in srgb, ${tokens.fg} 20%, transparent)`
+                  : 'transparent'}
+              stroke={tokens.fgMuted}
+              stroke-width="1"
+              stroke-dasharray={layout()?.slots[i()] ? undefined : '3 2'}
+              style={{ cursor: i() === mine() ? 'default' : 'pointer' }}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                if (i() !== mine()) props.onPick(cell(), i());
+              }}
+            />
+          )}
+        </For>
+      </svg>
+    </div>
+  );
+};

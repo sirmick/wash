@@ -11,10 +11,14 @@ import {
   cellStateKey,
   decodeCellLayout,
   dissolve,
+  floatAt,
   floatWindow,
   frameToWin,
+  moveToSlot,
+  neighbourSlot,
   parseCellStateKey,
   reconcileAll,
+  slotAt,
   slotFrames,
   tileWindow,
 } from './tiling.ts';
@@ -183,4 +187,79 @@ test('decodeCellLayout refuses junk rather than tiling with it', () => {
   assert.equal(decodeCellLayout(null), null);
   assert.equal(decodeCellLayout({ shape: 'x[' }), null);
   assert.deepEqual(decodeCellLayout({ shape: 'r2', slots: ['a', 7] }), { shape: 'r2', slots: ['a', null], floating: [], restore: {} });
+});
+
+// ---- M5: moving between panels ----
+
+const pos = (w: { x: number; y: number; w: number; h: number }) => ({ x: w.x, y: w.y, w: w.w, h: w.h });
+
+const L = (shape: string, slots: (string | null)[], extra: Partial<CellLayout> = {}): CellLayout =>
+  ({ shape, slots, floating: [], restore: {}, ...extra });
+
+test('slotAt finds the panel under a point, and nothing over a gutter', () => {
+  const area = areaOf({ vx: 0, vy: 0 });
+  assert.equal(slotAt('r2', area, { x: 10, y: 10 }), 0);
+  assert.equal(slotAt('r2', area, { x: 900, y: 10 }), 1);
+  assert.equal(slotAt('r2', area, { x: 499, y: 10 }), -1);
+  assert.equal(slotAt('r[c2 c2]', area, { x: 900, y: 500 }), 3);
+});
+
+test('moveToSlot within a cell swaps', () => {
+  const out = moveToSlot(new Map([['0,0', L('r3', ['a', 'b', 'c'])]]), 'a', { vx: 0, vy: 0 }, 2, { x: 0, y: 0, w: 1, h: 1 });
+  assert.deepEqual(out.get('0,0')!.slots, ['c', 'b', 'a']);
+});
+
+test('moveToSlot from a floating window displaces the occupant to a free slot, else floats it', () => {
+  const cur = { x: 1, y: 2, w: 3, h: 4 };
+  let out = moveToSlot(new Map([['0,0', L('r3', ['a', 'b', null], { floating: ['f'] })]]), 'f', { vx: 0, vy: 0 }, 0, cur);
+  assert.deepEqual(out.get('0,0')!.slots, ['f', 'b', 'a']);
+  assert.deepEqual(out.get('0,0')!.floating, []);
+  assert.deepEqual(out.get('0,0')!.restore.f, cur);
+  out = moveToSlot(new Map([['0,0', L('r2', ['a', 'b'], { floating: ['f'] })]]), 'f', { vx: 0, vy: 0 }, 1, cur);
+  assert.deepEqual(out.get('0,0')!.slots, ['a', 'f']);
+  assert.deepEqual(out.get('0,0')!.floating, ['b']);
+});
+
+test('moveToSlot across cells carries the pre-tile frame and empties the old slot', () => {
+  const pre = { x: 9, y: 9, w: 300, h: 200 };
+  const layouts = new Map([
+    ['0,0', L('r2', ['a', null], { restore: { a: pre } })],
+    ['1,0', L('r2', [null, null])],
+  ]);
+  const out = moveToSlot(layouts, 'a', { vx: 1, vy: 0 }, 1, { x: 0, y: 0, w: 1, h: 1 });
+  assert.deepEqual(out.get('0,0')!.slots, [null, null]);
+  assert.deepEqual(out.get('0,0')!.restore, {});
+  assert.deepEqual(out.get('1,0')!.slots, [null, 'a']);
+  assert.deepEqual(out.get('1,0')!.restore.a, pre);
+});
+
+test('a window moved to another cell panel settles there without a restore', () => {
+  const pre = { x: 9, y: 9, w: 300, h: 200 };
+  const layouts = {
+    '0,0': L('r2', ['a', null], { restore: { a: pre } }),
+    '1,0': L('r2', [null, null]),
+  };
+  const moved = moveToSlot(new Map(Object.entries(layouts)), 'a', { vx: 1, vy: 0 }, 1, pre);
+  for (const [id, l] of moved) (layouts as Record<string, CellLayout>)[id] = l;
+  // The drop itself put the window in cell (1,0).
+  const { layouts: l, wins } = settle(layouts, [win('a', 1700, 100)]);
+  assert.deepEqual(l['1,0'].slots, [null, 'a']);
+  const right = slotFrames('r2', areaOf({ vx: 1, vy: 0 }))[1];
+  assert.deepEqual(pos(wins[0]), frameToWin(right));
+});
+
+test('floatAt keeps the floating size but takes the drop position', () => {
+  const l = floatAt(L('r2', ['a', null], { restore: { a: { x: 9, y: 9, w: 300, h: 200 } } }), 'a', 120, 80);
+  assert.deepEqual(l.restore.a, { x: 120, y: 80, w: 300, h: 200 });
+  const { wins } = settle({ '0,0': l }, [win('a', 120, 80, { w: 496, h: 570 })]);
+  assert.deepEqual(pos(wins[0]), { x: 120, y: 80, w: 300, h: 200 });
+});
+
+test('neighbourSlot moves by geometry, -1 at the edge', () => {
+  const area = areaOf({ vx: 0, vy: 0 });
+  // Main + stack: main on the left, two stacked on the right.
+  assert.equal(neighbourSlot('r[1 c2]', area, 0, 'right'), 1);
+  assert.equal(neighbourSlot('r[1 c2]', area, 1, 'down'), 2);
+  assert.equal(neighbourSlot('r[1 c2]', area, 2, 'left'), 0);
+  assert.equal(neighbourSlot('r[1 c2]', area, 0, 'left'), -1);
 });

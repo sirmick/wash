@@ -36,6 +36,8 @@ web/shell/src/
   tiling.ts            pure: cell layouts, slotting, reconcileAll (unit-tested)
   tiling-runtime.ts    the store's copy, menu actions, head-only placement
   layout-menu.tsx      the Layout menu (opened via window.wash.openLayoutMenu)
+                       and the window menu's Move to panel picker
+  tiling-overlay.tsx   dividers, empty-panel outlines, the drop highlight
   viewport-math.ts     workArea, beside the other rect maths
 ```
 
@@ -171,6 +173,12 @@ longer slotted is a pending restore the head applies and drops; `shape: ''`
 marks a layout being dissolved, which the head deletes once it has put
 every window back.
 
+Each write also carries `by` (a per-tab id) and `rev` (that tab's write
+counter). The router echoes every write to every shell, the writer
+included, so a tab that writes twice quickly gets its first write back
+after its second; it ignores its own echoes older than its latest write,
+as window geometry does with `geomTok`. Other tabs' writes always apply.
+
 **The head places; anyone edits.** Screen size is per browser but the plane
 is shared, so two tabs re-placing the same windows from different screen
 sizes would fight. wash already has the answer: the router's foreground
@@ -203,21 +211,30 @@ is sized by it (`republishDisplayState`). Tiling follows the same rule:
   `cellLayout`/`setCellLayout` are there for scripting.
 - Title-bar context menu (`window.tsx`, shared with the taskbar pill's
   right-click): **Float** for a tiled window, **Tile** for a floating one
-  in a tiled cell (M4); **Move to panel ▸** and **Swap with main** (M5).
-- Dividers: an overlay in the shell over the cell's gutters (term's drag
-  pattern, `apps/term/fe/src/main.tsx` ~750–790, copied rather than shared:
-  the shell's dividers sit above windows, not inside one app).
+  in a tiled cell; **Move to panel** (the layout in miniature, click a
+  panel) and **Swap with main**.
+- Dividers: an overlay inside the camera over each tiled cell's gutters
+  (`tiling-overlay.tsx`), grabbing 3px past the gutter either side. A drag
+  edits the shape it started from (`resizeSplit`, clamped to a 160×100
+  frame), shown as a preview that stands in for the stored shape: the head
+  places it live, another tab moves its windows locally only. Release
+  commits the shape once. Tiled windows have no resize edges — the
+  dividers resize them. Layout ▸ Even out panels undoes it.
 - Keys (Super stays untouched):
-  - Ctrl+Alt+Arrow already pans the viewport. In a tiled cell it moves
-    focus to the neighbouring panel by geometry (`focusNeighbor`) and pans
-    only when there is no panel further that way — i3's focus-across-
-    outputs. Floating cells are unchanged.
+  - Ctrl+Alt+Arrow already pans the viewport. When the focused window is
+    tiled in the viewport on screen, it moves focus to the neighbouring
+    occupied panel by geometry (`focusNeighbor`) and pans only when there
+    is none that way — i3's focus-across-outputs. Floating cells, and a
+    focused window left behind in another viewport, just pan.
   - Ctrl+Alt+Shift+Arrow swaps the window with that neighbour. Free in the
     shell today, but some host desktops grab it (GNOME: move to
     workspace), so the menu and drag remain the dependable paths.
-- Drag a window's title bar over a tiled cell: the slot under the pointer
-  highlights; drop swaps with its occupant. Shift-drop, or dropping
-  outside the cell, floats it.
+- Drag a window's title bar over a tiled cell: the panel under the pointer
+  highlights; a drop puts the window straight into that panel's frame
+  (not where the pointer left it — a tall window dropped low would
+  otherwise have its centre, and so its cell, below the panel) and swaps
+  with the occupant. Shift-drop floats it where it lands, at its floating
+  size. Empty panels show a faint dashed outline.
 - Later: Rotate windows (every window one slot along).
 - Settings: the cell's layout string, editable, errors shown with offset.
 
@@ -233,12 +250,12 @@ is sized by it (`republishDisplayState`). Tiling follows the same rule:
 4. **Arrange (live)** — done. `tiling.ts` (pure, unit-tested: slotting,
    arrivals, release, restore, dissolve), `tiling-runtime.ts` (head-only
    placement), `layout-menu.tsx`, Float/Tile, `shell.state_set`, e2e in
-   `e2e/tests/layouts.spec.ts` incl. the head rule across two tabs. Known
-   gaps, for M5: dragging or edge-resizing a tiled window snaps it back to
-   its panel (drop-to-swap replaces that); per-window `minW/minH` are not
-   yet weighed against panel size; empty panels show wallpaper but are not
-   drop targets yet.
-5. **Dividers, drag-to-slot, focus keys.**
+   `e2e/tests/layouts.spec.ts` incl. the head rule across two tabs.
+5. **Dividers, drag-to-panel, keys** — done. `tiling-overlay.tsx`;
+   `slotAt`/`moveToSlot`/`floatAt`/`neighbourSlot` in `tiling.ts` (unit-
+   tested); Move to panel, Swap with main, Even out panels; Ctrl+Alt(+Shift)
+   +Arrow; e2e for each. Still open: per-window `minW/minH` are not weighed
+   against panel size (only the 160×100 divider floor is).
 6. Later: term gets **Layout ▸** presets for its own splits from the same
    syntax; fixed-px sizes; per-cell layout in the pager thumbnails.
 

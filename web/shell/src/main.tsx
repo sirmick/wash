@@ -74,7 +74,17 @@ import { SwitcherOverlay } from './switcher-ui';
 import { shouldSwallowDesktopKey } from './keyguard';
 import { FloatingWindow, openWindowMenu } from './window';
 import { LayoutMenuLayer, openLayoutMenu } from './layout-menu';
-import { cellLayout, patchTilingState, replaceTilingState, setCellLayout, startTiling } from './tiling-runtime';
+import {
+  cellLayout,
+  focusNeighbourPanel,
+  patchTilingState,
+  replaceTilingState,
+  setCellLayout,
+  startTiling,
+  swapNeighbourPanel,
+} from './tiling-runtime';
+import { TilingOverlay } from './tiling-overlay';
+import type { FocusDir } from '@wash/ui/split-tree';
 import {
   CatalogApp,
   PanelDesc,
@@ -1780,7 +1790,27 @@ window.addEventListener('drop', (ev: DragEvent) => {
 // on their own keydown handler — keypresses bubble up to here only when
 // nobody else stops them.
 window.addEventListener('keydown', (ev: KeyboardEvent) => {
-  if (!ev.ctrlKey || !ev.altKey || ev.shiftKey || ev.metaKey) return;
+  if (!ev.ctrlKey || !ev.altKey || ev.metaKey) return;
+  // In a tiled viewport the arrows move between panels first, and pan only
+  // past the last one that way (WM_LAYOUT §7); Shift swaps the focused
+  // window with its neighbour instead. Floating viewports just pan.
+  const dir = PANEL_DIRS[ev.key];
+  if (!dir) return;
+  // Only a window in the viewport on screen: once the camera has moved on,
+  // the arrows pan, whatever is focused back where it was.
+  const f = focused();
+  const fw = f ? windowById(f.origin, f.windowID) : undefined;
+  const here = viewport();
+  const fc = fw ? viewportFor(fw) : undefined;
+  const win = fc && fc.vx === here.vx && fc.vy === here.vy ? fw : undefined;
+  if (ev.shiftKey) {
+    if (swapNeighbourPanel(win, dir)) ev.preventDefault();
+    return;
+  }
+  if (focusNeighbourPanel(win, dir)) {
+    ev.preventDefault();
+    return;
+  }
   const vp = viewport();
   let dx = 0;
   let dy = 0;
@@ -1803,6 +1833,13 @@ window.addEventListener('keydown', (ev: KeyboardEvent) => {
   ev.preventDefault();
   setViewport(vp.vx + dx, vp.vy + dy);
 });
+
+const PANEL_DIRS: Record<string, FocusDir | undefined> = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+};
 
 // ---- window switcher (Ctrl+Alt+Tab) and show desktop (Ctrl+Alt+D) ----
 //
@@ -1946,6 +1983,7 @@ const App = () => (
     <Desktop />
     <div data-testid="wash-cam" style={camStyle()}>
       <For each={windows}>{(w) => <FloatingWindow win={w} onClose={onWindowClose} />}</For>
+      <TilingOverlay />
     </div>
     {/* Above the camera, so the blur covers every window rather than
         riding along with the viewport transform. */}

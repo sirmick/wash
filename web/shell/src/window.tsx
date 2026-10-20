@@ -12,12 +12,25 @@ import { accentColor, tokens, Menu, MenuItem, MenuSeparator } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId, LOCAL_ORIGIN, type Origin } from './clients';
 import { hostColor } from './host-colors';
-import { floatInLayout, hasFreeSlot, tileInLayout, windowTiling } from './tiling-runtime';
-import { resizeRect, sendToViewportRect, type ResizeEdge } from './viewport-math.ts';
+import {
+  cellLayout,
+  floatInLayout,
+  floatWindowAt,
+  hasFreeSlot,
+  moveWindowToSlot,
+  setDragHover,
+  slotOf,
+  tileInLayout,
+  windowTiling,
+} from './tiling-runtime';
+import { frameToWin, slotAt, slotFrames } from './tiling';
+import { PanelPicker } from './layout-menu';
+import { resizeRect, sendToViewportRect, viewportForRect, type ResizeEdge } from './viewport-math.ts';
 import {
   VIEWPORTS_PER_AXIS,
   CrashInfo,
   cellWorkArea,
+  viewport,
   isFocused,
   moveLocal,
   raiseLocal,
@@ -139,13 +152,43 @@ export function FloatingWindow(props: WindowProps) {
       const rawY = origY + (m.clientY - startY);
       setDragX(Math.round(Math.max(0, Math.min(maxX, rawX))));
       setDragY(Math.round(Math.max(0, Math.min(maxY, rawY))));
+      // Over a tiled cell, the panel under the pointer is where a drop
+      // lands (WM_LAYOUT §7). Shift drops it floating instead.
+      setDragHover(m.shiftKey ? null : panelUnder(m.clientX, m.clientY));
     };
-    const onUp = () => {
+    const onUp = (u: PointerEvent) => {
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
       target.releasePointerCapture(ev.pointerId);
       const x = dragX();
       const y = dragY();
+      const hover = u.shiftKey ? null : panelUnder(u.clientX, u.clientY);
+      setDragHover(null);
+      if (x != null && y != null && hover) {
+        // Dropped on a panel: the window goes straight to that panel's
+        // frame, not to where the pointer left it. A tall window dropped
+        // low would otherwise have its centre — and so its cell — below
+        // the panel it was dropped on, and tiling would let it go.
+        moveWindowToSlot(props.win, hover.cell, hover.slot);
+        const l = cellLayout(hover.cell);
+        const frame = l ? slotFrames(l.shape, cellWorkArea(hover.cell.vx, hover.cell.vy))[hover.slot] : undefined;
+        if (frame) {
+          const g = frameToWin(frame, props.win.chromeless);
+          moveLocal(props.win.origin, props.win.windowID, g.x, g.y);
+          window.wash.moveWindow(props.win.windowID, g.x, g.y, props.win.origin);
+          resizeLocal(props.win.origin, props.win.windowID, g.w, g.h);
+          window.wash.resizeWindow(props.win.windowID, g.w, g.h, props.win.origin);
+        }
+        setDragX(null);
+        setDragY(null);
+        return;
+      }
+      if (x != null && y != null && u.shiftKey) {
+        const vp = viewport();
+        const s = screenSize();
+        const dropCell = viewportForRect({ x: u.clientX + vp.vx * s.w, y: u.clientY + vp.vy * s.h, w: 0, h: 0 }, s, VIEWPORTS_PER_AXIS);
+        floatWindowAt(props.win, dropCell, x, y);
+      }
       if (x != null && y != null && (x !== origX || y !== origY)) {
         // Optimistic: commit to the store BEFORE clearing the
         // override so frameStyle reads the new position the next
@@ -159,6 +202,19 @@ export function FloatingWindow(props: WindowProps) {
     };
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);
+  };
+
+  // panelUnder is the tiled panel under a screen point, if any: the cell
+  // the point is in, and the slot whose frame holds it.
+  const panelUnder = (clientX: number, clientY: number): { cell: { vx: number; vy: number }; slot: number } | null => {
+    const vp = viewport();
+    const s = screenSize();
+    const p = { x: clientX + vp.vx * s.w, y: clientY + vp.vy * s.h };
+    const cell = viewportForRect({ ...p, w: 0, h: 0 }, s, VIEWPORTS_PER_AXIS);
+    const l = cellLayout(cell);
+    if (!l || l.shape === '') return null;
+    const slot = slotAt(l.shape, cellWorkArea(cell.vx, cell.vy), p);
+    return slot < 0 ? null : { cell, slot };
   };
 
   const onWindowPointerDown = () => window.wash.focusWindow(props.win.windowID, props.win.origin);
@@ -625,6 +681,24 @@ export function FloatingWindow(props: WindowProps) {
                 or put a floating one into the first free panel. */}
             <Show when={tiling() !== 'none'}>
               <MenuSeparator />
+              <PanelPicker
+                win={props.win}
+                onPick={(c, j) => {
+                  setTitleMenu(null);
+                  moveWindowToSlot(props.win, c, j);
+                }}
+              />
+              <Show when={tiling() === 'slotted' && slotOf(props.win) > 0}>
+                <MenuItem
+                  label="Swap with main"
+                  title="Swap places with the window in the first panel"
+                  data-testid="window-ctx-swap-main"
+                  onClick={() => {
+                    setTitleMenu(null);
+                    moveWindowToSlot(props.win, viewportFor(props.win), 0);
+                  }}
+                />
+              </Show>
               <Show
                 when={tiling() === 'slotted'}
                 fallback={
@@ -718,7 +792,9 @@ export function FloatingWindow(props: WindowProps) {
       {/* The other seven edges and corners: invisible strips along each
           side, a little wider at the corners. Not on a maximized window,
           which has no edges to move (the router drops its resizes). */}
-      <Show when={props.win.state !== 'maximized'}>
+      {/* Not on a tiled window either: its size is its panel's, and the
+          dividers between panels are what resize it. */}
+      <Show when={props.win.state !== 'maximized' && tiling() !== 'slotted'}>
         <For each={EDGE_HANDLES}>
           {(hd) => (
             <div
@@ -729,6 +805,7 @@ export function FloatingWindow(props: WindowProps) {
           )}
         </For>
       </Show>
+      <Show when={tiling() !== 'slotted'}>
       <div
         class="wash-resize-handle"
         data-testid="window-resize"
@@ -747,6 +824,7 @@ export function FloatingWindow(props: WindowProps) {
             : 'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 70%, transparent 70%)',
         }}
       />
+      </Show>
     </div>
   );
 }
