@@ -1,17 +1,34 @@
-// wash-term split layout — the pure kernel (docs/TERM_LAYOUT.md §3, §4).
-//
-// A window is a tree whose leaves are tab GROUPS: a group owns a tab list
-// and one active tab, so a "pane" is just a group holding one tab and an
-// unsplit window is a single group. Nothing here touches Solid or the DOM —
-// every function is pure and returns a NEW tree, which is what makes the
-// whole layer unit-testable and keeps the renderer a projection.
+// wash-term split layout — the term half of the kernel (docs/TERM_LAYOUT.md
+// §3, §4). The splits themselves — paths, flattening, fractions, rects,
+// dividers, geometric focus — are the shared kernel in @wash/ui/split-tree
+// (docs/WM_LAYOUT.md §2), which the window manager tiles with too. What
+// lives here is the leaf: a tab GROUP owns a tab list and one active tab, so
+// a "pane" is just a group holding one tab and an unsplit window is a single
+// group. Nothing here touches Solid or the DOM — every function is pure and
+// returns a NEW tree, which is what makes the whole layer unit-testable and
+// keeps the renderer a projection.
 //
 // The one rule the renderer must honour: terminal hosts are flat,
 // absolutely-positioned siblings addressed by the rects this file computes.
 // They are never reparented, because reparenting a mounted xterm loses its
 // buffer (docs/TERM_LAYOUT.md §2).
 
-export type Dir = 'row' | 'col';
+import {
+  ROOT,
+  equalize as kEqualize,
+  equalizeAll as kEqualizeAll,
+  leafPaths,
+  minFractionFor as kMinFractionFor,
+  nodeAt,
+  normalize as kNormalize,
+  place,
+  replaceAt,
+  resizeSplit as kResizeSplit,
+} from '@wash/ui/split-tree';
+import type { Dir, LeafOps, PlacedDivider, Rect, Split as KSplit } from '@wash/ui/split-tree';
+
+export { ROOT, childPath, parentPath, nodeAt, isSplit, focusNeighbor } from '@wash/ui/split-tree';
+export type { Dir, FocusDir, PlacedDivider, Rect } from '@wash/ui/split-tree';
 
 export interface Group {
   kind: 'group';
@@ -21,19 +38,9 @@ export interface Group {
   active: number;
 }
 
-export interface Split {
-  kind: 'split';
-  // row = children side by side; col = children stacked.
-  dir: Dir;
-  children: LayoutNode[];
-  // Fractions of the split's inner span (the span less the gutters),
-  // parallel to children, summing to 1.
-  sizes: number[];
-}
+export type Split = KSplit<Group>;
 
 export type LayoutNode = Group | Split;
-
-export interface Rect { x: number; y: number; w: number; h: number }
 
 export interface PlacedGroup {
   path: string;
@@ -44,19 +51,6 @@ export interface PlacedGroup {
   rect: Rect;
   content: Rect;
   status: Rect;
-}
-
-export interface PlacedDivider {
-  // The split this divider belongs to, and the index of the child on its
-  // leading side — i.e. dragging it trades size between children i and i+1.
-  path: string;
-  index: number;
-  dir: Dir;
-  rect: Rect;
-  // The split's inner span in px along its axis (its extent less the
-  // gutters). A drag converts pixels to fractions with this, so the
-  // renderer never has to reconstruct the parent's geometry.
-  span: number;
 }
 
 export interface LayoutOpts {
@@ -81,32 +75,16 @@ export const DEFAULT_STATUS = 0;
 export const MIN_PANE_W = 140;
 export const MIN_PANE_H = 92;
 
-// ---- paths ----
-//
-// A path addresses a node by child indices: '' is the root, '0' its first
-// child, '0.1' that child's second. Paths are derived per render and never
-// persisted — they move when the tree changes. Identity is always a
-// channel id.
-
-export const ROOT = '';
-
-export const childPath = (path: string, i: number): string =>
-  path === ROOT ? String(i) : `${path}.${i}`;
-
-export const parentPath = (path: string): string => {
-  const i = path.lastIndexOf('.');
-  return i < 0 ? ROOT : path.slice(0, i);
+// GROUP_OPS is how the kernel's normalize treats groups: an emptied group
+// does not survive — its space goes back to the siblings — and a group's
+// active tab is always one of its tabs.
+const GROUP_OPS: LeafOps<Group> = {
+  empty: () => ({ kind: 'group', tabs: [], active: 0 }),
+  keep: (g) => g.tabs.length > 0,
+  repair: (g) => (g.tabs.includes(g.active)
+    ? g
+    : { kind: 'group', tabs: [...g.tabs], active: g.tabs[0] ?? 0 }),
 };
-
-export function nodeAt(tree: LayoutNode, path: string): LayoutNode | undefined {
-  if (path === ROOT) return tree;
-  let n: LayoutNode | undefined = tree;
-  for (const seg of path.split('.')) {
-    if (!n || n.kind !== 'split') return undefined;
-    n = n.children[Number(seg)];
-  }
-  return n;
-}
 
 export function groupAt(tree: LayoutNode, path: string): Group | undefined {
   const n = nodeAt(tree, path);
@@ -115,15 +93,7 @@ export function groupAt(tree: LayoutNode, path: string): Group | undefined {
 
 // ---- queries ----
 
-export function groupPaths(tree: LayoutNode): string[] {
-  const out: string[] = [];
-  const walk = (n: LayoutNode, path: string) => {
-    if (n.kind === 'group') { out.push(path); return; }
-    n.children.forEach((c, i) => walk(c, childPath(path, i)));
-  };
-  walk(tree, ROOT);
-  return out;
-}
+export const groupPaths = (tree: LayoutNode): string[] => leafPaths(tree);
 
 export function channels(tree: LayoutNode): number[] {
   const out: number[] = [];
@@ -153,8 +123,6 @@ export function visibleChannels(tree: LayoutNode): number[] {
     .filter((c) => c > 0);
 }
 
-export const isSplit = (n: LayoutNode): n is Split => n.kind === 'split';
-
 // ---- construction ----
 
 export const singleGroup = (tabs: number[], active?: number): Group => ({
@@ -163,72 +131,14 @@ export const singleGroup = (tabs: number[], active?: number): Group => ({
   active: active !== undefined && tabs.includes(active) ? active : (tabs[0] ?? 0),
 });
 
-const cloneNode = (n: LayoutNode): LayoutNode =>
-  n.kind === 'group'
-    ? { kind: 'group', tabs: [...n.tabs], active: n.active }
-    : { kind: 'split', dir: n.dir, children: n.children.map(cloneNode), sizes: [...n.sizes] };
-
-// replaceAt returns a copy of tree with the node at path swapped out.
-function replaceAt(tree: LayoutNode, path: string, next: LayoutNode): LayoutNode {
-  if (path === ROOT) return next;
-  const segs = path.split('.').map(Number);
-  const rec = (n: LayoutNode, depth: number): LayoutNode => {
-    if (n.kind !== 'split') return n;
-    const i = segs[depth];
-    const child = n.children[i];
-    if (!child) return n;
-    const replaced = depth === segs.length - 1 ? next : rec(child, depth + 1);
-    const children = [...n.children];
-    children[i] = replaced;
-    return { kind: 'split', dir: n.dir, children, sizes: [...n.sizes] };
-  };
-  return rec(tree, 0);
-}
-
 // ---- normalize ----
 //
 // Every invariant in docs/TERM_LAYOUT.md §3 is repaired here, and every
-// mutation below runs its result through it. In particular a split never
-// directly contains a split of the SAME direction — it is flattened into
-// the parent, absorbing its fractions. Without that rule repeated
-// splitting degenerates into a binary spine and n-ary buys nothing.
+// mutation below runs its result through it. The split rules (fractions,
+// same-direction flattening) are the kernel's; GROUP_OPS adds the group
+// ones.
 
-export function normalize(node: LayoutNode): LayoutNode {
-  if (node.kind === 'group') {
-    if (node.tabs.includes(node.active)) return node;
-    return { kind: 'group', tabs: [...node.tabs], active: node.tabs[0] ?? 0 };
-  }
-
-  const pairs: Array<[LayoutNode, number]> = [];
-  node.children.forEach((child, i) => {
-    const size = node.sizes[i] ?? 1 / node.children.length;
-    if (size <= 0) return;
-    const n = normalize(child);
-    if (n.kind === 'group') {
-      // Empty groups do not survive: their space goes back to the siblings.
-      if (n.tabs.length) pairs.push([n, size]);
-      return;
-    }
-    if (n.dir === node.dir) {
-      // Same-direction nesting flattens, splitting this child's fraction
-      // among the grandchildren in their own proportions.
-      n.children.forEach((gc, j) => pairs.push([gc, size * n.sizes[j]]));
-      return;
-    }
-    pairs.push([n, size]);
-  });
-
-  if (pairs.length === 0) return { kind: 'group', tabs: [], active: 0 };
-  if (pairs.length === 1) return pairs[0][0];
-
-  const total = pairs.reduce((s, [, f]) => s + f, 0) || 1;
-  return {
-    kind: 'split',
-    dir: node.dir,
-    children: pairs.map(([c]) => c),
-    sizes: pairs.map(([, f]) => f / total),
-  };
-}
+export const normalize = (node: LayoutNode): LayoutNode => kNormalize(node, GROUP_OPS);
 
 // ---- mutations (all return a new, normalized tree) ----
 
@@ -329,58 +239,28 @@ export function moveTabBefore(
 
 // resizeSplit trades size between children i and i+1 of a split. delta is a
 // fraction of the split's inner span. Clamped so neither side goes under
-// minFrac. (Wired to divider drag in M2; kernel-complete now.)
-export function resizeSplit(
+// minFrac.
+export const resizeSplit = (
   tree: LayoutNode,
   path: string,
   index: number,
   delta: number,
   minFrac = 0.08,
-): LayoutNode {
-  const n = nodeAt(tree, path);
-  if (!n || n.kind !== 'split' || index < 0 || index + 1 >= n.children.length) return tree;
-  const a = n.sizes[index];
-  const b = n.sizes[index + 1];
-  const pair = a + b;
-  const next = Math.max(minFrac, Math.min(pair - minFrac, a + delta));
-  if (next === a) return tree;
-  const sizes = [...n.sizes];
-  sizes[index] = next;
-  sizes[index + 1] = pair - next;
-  return normalize(replaceAt(tree, path, { kind: 'split', dir: n.dir, children: n.children, sizes }));
-}
+): LayoutNode => kResizeSplit(tree, path, index, delta, GROUP_OPS, minFrac);
 
 // equalize gives every child of a split the same fraction.
-export function equalize(tree: LayoutNode, path: string): LayoutNode {
-  const n = nodeAt(tree, path);
-  if (!n || n.kind !== 'split') return tree;
-  const even = 1 / n.children.length;
-  return normalize(replaceAt(tree, path, {
-    kind: 'split', dir: n.dir, children: n.children, sizes: n.children.map(() => even),
-  }));
-}
+export const equalize = (tree: LayoutNode, path: string): LayoutNode =>
+  kEqualize(tree, path, GROUP_OPS);
 
 // equalizeAll rebalances EVERY split in the tree, not just one level.
-// "Equalize" means the window looks even afterwards; evening one split
-// while a nested one stays lopsided is not what anyone is asking for.
-export function equalizeAll(tree: LayoutNode): LayoutNode {
-  const walk = (n: LayoutNode): LayoutNode => {
-    if (n.kind === 'group') return n;
-    const children = n.children.map(walk);
-    return { kind: 'split', dir: n.dir, children, sizes: children.map(() => 1 / children.length) };
-  };
-  return normalize(walk(tree));
-}
+export const equalizeAll = (tree: LayoutNode): LayoutNode => kEqualizeAll(tree, GROUP_OPS);
 
-// minFractionFor converts the pixel minimum into the fraction a divider
+// minFractionFor converts the pane minimum into the fraction a divider
 // drag may not cross, given the span it is dividing. A pane can't be
 // dragged below a readable grid — the same rule canSplit enforces up
 // front, applied continuously.
-export function minFractionFor(dir: Dir, span: number): number {
-  if (span <= 0) return 0.08;
-  const px = dir === 'row' ? MIN_PANE_W : MIN_PANE_H;
-  return Math.min(0.45, px / span);
-}
+export const minFractionFor = (dir: Dir, span: number): number =>
+  kMinFractionFor(dir, span, MIN_PANE_W, MIN_PANE_H);
 
 // pruneToChannels drops every tab whose channel is no longer live and
 // repairs the tree around the holes. This is the restore path: a persisted
@@ -399,117 +279,28 @@ export function pruneToChannels(tree: LayoutNode, live: Set<number>): LayoutNode
 
 // ---- placement ----
 
-// layout assigns a rect to every group and every divider. Gutters come off
-// a split's span before the fractions are applied, so children never
-// overlap their dividers; each group's content rect is its rect less the
+// layout assigns a rect to every group and every divider (the kernel's
+// place), then cuts each group's content rect out of it: the rect less the
 // strip along the top and the status bar along the bottom.
 export function layout(tree: LayoutNode, rect: Rect, opts: LayoutOpts = {}): {
   groups: PlacedGroup[];
   dividers: PlacedDivider[];
 } {
-  const gutter = opts.gutter ?? DEFAULT_GUTTER;
   const strip = opts.strip ?? DEFAULT_STRIP;
   const status = opts.status ?? DEFAULT_STATUS;
-  const groups: PlacedGroup[] = [];
-  const dividers: PlacedDivider[] = [];
-
-  const walk = (n: LayoutNode, r: Rect, path: string) => {
-    if (n.kind === 'group') {
-      const usable = Math.max(0, r.h - strip);
-      const statusH = Math.min(status, usable);
-      groups.push({
-        path,
-        group: n,
-        rect: r,
-        content: { x: r.x, y: r.y + strip, w: r.w, h: Math.max(0, usable - statusH) },
-        status: { x: r.x, y: r.y + r.h - statusH, w: r.w, h: statusH },
-      });
-      return;
-    }
-    const horizontal = n.dir === 'row';
-    const span = horizontal ? r.w : r.h;
-    const inner = Math.max(0, span - gutter * (n.children.length - 1));
-    let at = horizontal ? r.x : r.y;
-    n.children.forEach((child, i) => {
-      const size = inner * n.sizes[i];
-      const childRect: Rect = horizontal
-        ? { x: at, y: r.y, w: size, h: r.h }
-        : { x: r.x, y: at, w: r.w, h: size };
-      walk(child, childRect, childPath(path, i));
-      at += size;
-      if (i < n.children.length - 1) {
-        dividers.push({
-          path,
-          index: i,
-          dir: n.dir,
-          span: inner,
-          rect: horizontal
-            ? { x: at, y: r.y, w: gutter, h: r.h }
-            : { x: r.x, y: at, w: r.w, h: gutter },
-        });
-        at += gutter;
-      }
-    });
-  };
-
-  walk(tree, rect, ROOT);
+  const { leaves, dividers } = place(tree, rect, opts.gutter ?? DEFAULT_GUTTER);
+  const groups = leaves.map(({ path, leaf, rect: r }): PlacedGroup => {
+    const usable = Math.max(0, r.h - strip);
+    const statusH = Math.min(status, usable);
+    return {
+      path,
+      group: leaf,
+      rect: r,
+      content: { x: r.x, y: r.y + strip, w: r.w, h: Math.max(0, usable - statusH) },
+      status: { x: r.x, y: r.y + r.h - statusH, w: r.w, h: statusH },
+    };
+  });
   return { groups, dividers };
-}
-
-// ---- focus ----
-
-export type FocusDir = 'left' | 'right' | 'up' | 'down';
-
-// focusNeighbor picks the pane a directional key should land on, by
-// GEOMETRY rather than tree order — in a nested tree the tree-order
-// neighbour is routinely not the one under the arrow. Candidates are the
-// panes strictly beyond the source edge in that direction; the winner is
-// the nearest one, tie-broken by how well it lines up across the axis.
-export function focusNeighbor(
-  groups: PlacedGroup[],
-  fromPath: string,
-  dir: FocusDir,
-): string | undefined {
-  const from = groups.find((g) => g.path === fromPath);
-  if (!from) return undefined;
-  const r = from.rect;
-  const cx = r.x + r.w / 2;
-  const cy = r.y + r.h / 2;
-  const eps = 1;
-
-  let best: { path: string; gap: number; off: number } | undefined;
-  for (const g of groups) {
-    if (g.path === fromPath) continue;
-    const o = g.rect;
-    let gap: number;
-    let off: number;
-    switch (dir) {
-      case 'left':
-        if (o.x + o.w > r.x + eps) continue;
-        gap = r.x - (o.x + o.w);
-        off = Math.abs(o.y + o.h / 2 - cy);
-        break;
-      case 'right':
-        if (o.x < r.x + r.w - eps) continue;
-        gap = o.x - (r.x + r.w);
-        off = Math.abs(o.y + o.h / 2 - cy);
-        break;
-      case 'up':
-        if (o.y + o.h > r.y + eps) continue;
-        gap = r.y - (o.y + o.h);
-        off = Math.abs(o.x + o.w / 2 - cx);
-        break;
-      default:
-        if (o.y < r.y + r.h - eps) continue;
-        gap = o.y - (r.y + r.h);
-        off = Math.abs(o.x + o.w / 2 - cx);
-        break;
-    }
-    if (!best || gap < best.gap - eps || (Math.abs(gap - best.gap) <= eps && off < best.off)) {
-      best = { path: g.path, gap, off };
-    }
-  }
-  return best?.path;
 }
 
 // ---- persistence (docs/TERM_LAYOUT.md §7) ----
