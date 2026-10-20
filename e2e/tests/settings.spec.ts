@@ -156,6 +156,7 @@ test.describe('wash-settings — Theme packs', () => {
     await expect(app.locator('[data-testid="pack-card-seoul"]')).toBeVisible();
     await expect(app.locator('[data-testid="pack-card-copland"]')).toBeVisible();
     await expect(app.locator('[data-testid="pack-card-oslo"]')).toBeVisible();
+    await expect(app.locator('[data-testid="pack-card-lisbon"]')).toBeVisible();
   });
 
   test('selecting the Seoul pack applies a light scheme', async ({ page, router }) => {

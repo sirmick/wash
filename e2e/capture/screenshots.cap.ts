@@ -185,10 +185,12 @@ const STAGE = ['session', 'about', 'test', 'notify',
 // Theme each app shot with a different pack so the README grid shows the
 // range. The montage + a few apps stay on the default (Midnight) dark.
 // Packs: midnight (default dark), tokyo (neon), seoul (light paper),
-// copland (Mac OS 9), oslo (cool slate). See web/lib/src/packs.ts.
+// copland (Mac OS 9), oslo (cool slate), lisbon (azulejo light). See
+// web/lib/src/packs.ts.
 const THEME: Record<string, string> = {
   edit: 'tokyo', about: 'tokyo', radio: 'tokyo',
-  settings: 'seoul', services: 'seoul', imageview: 'seoul', music: 'seoul',
+  settings: 'seoul', imageview: 'seoul', music: 'seoul',
+  fm: 'lisbon', services: 'lisbon',
   packages: 'copland', connect: 'copland',
   net: 'oslo', top: 'oslo', disks: 'oslo',
 };
@@ -360,7 +362,7 @@ test.describe('screenshots', () => {
 
   // --- per-app window shots --------------------------------------------------
   test('fm', async ({ page, router }) => {
-    await bootDesktop(page, router.url);
+    await bootThemed(page, router, 'fm');
     await openApp(page, 'com.wash.fm');
     const w = win(page, 'wash-app-fm');
     await expect(w).toBeVisible();

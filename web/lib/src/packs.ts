@@ -508,8 +508,94 @@ const dreamtime: Pack = {
   ],
 };
 
+// Lisbon — azulejo. A LIGHT pack: tin-glaze white surfaces, cobalt ink for
+// focus and selection, ochre and terracotta from the tiles' accents and the
+// city's roofs. Square-ish corners like a cut tile. The one light pack with a
+// colored caption: active windows wear a cobalt titlebar (white text), so the
+// focused window reads at a glance against a wall of blue-and-white. The
+// wallpaper is procedural (design/packs/gen-lisbon.py), not traced.
+const lisbon: Pack = {
+  id: 'lisbon',
+  name: 'Lisbon',
+  appearance: 'light',
+  scheme: {
+    '--wash-bg-window': '#f8f7f3', // tin-glaze white
+    '--wash-bg-menu': '#eff2f7', // faint cobalt cast for menus / bars
+    '--wash-bg-inset': '#e7ecf3', // sunken fields
+    '--wash-bg-canvas': '#fcfcfa', // editor/terminal canvas
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#e4eaf4',
+    '--wash-bg-row-selected': '#cbdaf0', // cobalt wash
+    '--wash-bg-backdrop': 'rgba(12,28,64,0.35)',
+    '--wash-bg-drop-target': '#d5e4f8',
+    '--wash-border-menu': '#d4dbe7',
+    '--wash-border-window': '#9fb0cc',
+    '--wash-border-focus': '#1f4fa3', // cobalt
+    '--wash-border-drop-target': '#1f4fa3',
+    '--wash-fg': '#1a2333', // deep navy ink
+    '--wash-fg-muted': '#4e5a6f',
+    '--wash-fg-dim': '#7f8aa0',
+    '--wash-bg-danger': '#f8ddd6',
+    '--wash-border-danger': '#d48c7a',
+    '--wash-fg-danger': '#a3301c', // terracotta-red
+    '--wash-bg-success': '#dcebdd',
+    '--wash-fg-success': '#2e6a3b',
+    '--wash-bg-warning': '#f5e6c4',
+    '--wash-fg-warning': '#855a0c', // ochre
+    '--wash-bg-info': '#d9e5f6',
+    '--wash-fg-info': '#1f4fa3',
+    '--wash-bg-neutral': '#e4e8ef',
+    '--wash-bg-denied': '#f3e4c8',
+    '--wash-border-denied': '#c49440',
+    '--wash-sev-error': '#b0281c',
+    '--wash-sev-warn': '#855a0c',
+    '--wash-sev-notice': '#1f4fa3',
+    '--wash-sev-info': '#3a4456',
+    '--wash-sev-debug': '#7f8aa0',
+    '--wash-accent-red': '#c0392b',
+    '--wash-accent-orange': '#c8643b', // terracotta roofs
+    '--wash-accent-amber': '#c9921f', // ochre (the tiles' yellow)
+    '--wash-accent-lime': '#7a9a3a',
+    '--wash-accent-green': '#3f8a5a',
+    '--wash-accent-teal': '#2a8a86',
+    '--wash-accent-cyan': '#2b87b5', // Tagus
+    '--wash-accent-blue': '#1f4fa3', // cobalt
+    '--wash-accent-indigo': '#3c4fa8',
+    '--wash-accent-violet': '#6d5aa8',
+    '--wash-accent-magenta': '#a3427f',
+    '--wash-accent-pink': '#c45a7c',
+    // Cobalt caption, dusty-cobalt when inactive: both carry white text
+    // (the one --wash-titlebar-fg serves both), so the inactive tone stays
+    // dark enough to read rather than fading to the window white.
+    '--wash-titlebar-active': '#1f4fa3',
+    '--wash-titlebar-inactive': '#5d73a0',
+    '--wash-titlebar-fg': '#ffffff',
+    // App icons in the caption go white too: a cobalt or Tagus-blue accent
+    // icon would vanish into the cobalt bar.
+    '--wash-titlebar-icon': '#ffffff',
+    // Taskbar: the window white, nearly solid over the busy tiles, with a
+    // cobalt edge like a tile border.
+    '--wash-taskbar-bg': '#f8f7f3',
+    '--wash-taskbar-opacity': '92%',
+    '--wash-taskbar-top': '#1f4fa3',
+    // The info banner sits on the tiles: a glaze-white backdrop keeps the
+    // ink text legible.
+    '--wash-banner-bg': 'rgba(248,247,243,0.85)',
+    '--wash-banner-blur': '6px',
+    // A light theme wants a softer, cooler window shadow than the default.
+    '--wash-window-shadow': '0 8px 28px rgba(16,36,84,0.24)',
+    '--wash-shadow-menu': '0 6px 18px rgba(16,36,84,0.22)',
+    // Cut-tile corners: barely softened.
+    '--wash-radius-sm': '2px',
+    '--wash-radius-md': '3px',
+    '--wash-radius-lg': '4px',
+    '--wash-radius-xl': '6px',
+  },
+  wallpaper: 'wallpapers/lisbon.svg',
+};
+
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime];
+export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime, lisbon];
 
 export const defaultPackId = 'midnight';
 
