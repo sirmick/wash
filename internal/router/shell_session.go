@@ -512,6 +512,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		s.router.log("shell: claim head conn=%d", s.connID)
 		s.router.reattachChannelsToShell(s)
 		return nil
+	case wire.ShellStateSet:
+		return s.handleStateSet(m)
 	case wire.ShellLog:
 		return s.handleShellLog(m)
 	case wire.ShellChannelCredit:
@@ -823,6 +825,31 @@ func (s *ShellSession) handleWindowFocus(m wire.ShellWindowFocus) error {
 		s.router.noteWindow("window.focus", inst, m.WindowID, title, title, nil)
 	}
 	return inst.WriteEvt(wire.NewEvtWindowFocus(m.WindowID))
+}
+
+// maxShellStateBytes caps one shell blob. A cell layout is a few hundred
+// bytes; this only stops a confused client from parking megabytes in a map
+// every snapshot carries.
+const maxShellStateBytes = 64 << 10
+
+// handleStateSet stores a shell-owned blob under its reserved key and
+// broadcasts it to every shell, the sender included — the echo is how the
+// sender learns the router has it, as with window geometry.
+func (s *ShellSession) handleStateSet(m wire.ShellStateSet) error {
+	if !strings.HasPrefix(m.Key, wire.ShellStatePrefix) || len(m.Key) == len(wire.ShellStatePrefix) {
+		s.router.log("shell: state_set with non-shell key %q", m.Key)
+		return nil
+	}
+	if len(m.State) > maxShellStateBytes {
+		s.router.log("shell: state_set %q too large (%d bytes)", m.Key, len(m.State))
+		return nil
+	}
+	var state json.RawMessage
+	if len(m.State) > 0 && string(m.State) != "null" {
+		state = m.State
+	}
+	s.router.broadcastPatches(s.router.winSession.setAppState(m.Key, state))
+	return nil
 }
 
 func (s *ShellSession) handleWindowMove(m wire.ShellWindowMove) error {

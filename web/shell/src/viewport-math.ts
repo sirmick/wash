@@ -19,13 +19,13 @@ export interface Size {
   h: number;
 }
 
-// TASKBAR_H is the session chrome's bottom taskbar (apps/session/fe's
-// taskbar is 40px tall). Fixed until the chrome publishes its own height the
-// way the sidebar publishes --wash-reserved-right.
+// TASKBAR_H is the session chrome's taskbar (apps/session/fe's is 40px
+// tall). The fallback bottom inset for a chrome that publishes none.
 export const TASKBAR_H = 40;
 
 // Insets are what the chrome reserves along the screen's edges.
 export interface Insets {
+  top: number;
   right: number;
   bottom: number;
 }
@@ -37,9 +37,9 @@ export interface Insets {
 export function workArea(screen: Size, vx: number, vy: number, insets: Insets): Rect {
   return {
     x: vx * screen.w,
-    y: vy * screen.h,
+    y: vy * screen.h + insets.top,
     w: Math.max(0, screen.w - insets.right),
-    h: Math.max(0, screen.h - insets.bottom),
+    h: Math.max(0, screen.h - insets.top - insets.bottom),
   };
 }
 

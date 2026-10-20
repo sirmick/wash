@@ -12,6 +12,7 @@ import { accentColor, tokens, Menu, MenuItem, MenuSeparator } from '@wash/ui';
 import { registerMountedElement, unregisterMountedElement } from './api';
 import { tagFor, compoundInstanceId, LOCAL_ORIGIN, type Origin } from './clients';
 import { hostColor } from './host-colors';
+import { floatInLayout, hasFreeSlot, tileInLayout, windowTiling } from './tiling-runtime';
 import { resizeRect, sendToViewportRect, type ResizeEdge } from './viewport-math.ts';
 import {
   VIEWPORTS_PER_AXIS,
@@ -63,6 +64,7 @@ export function FloatingWindow(props: WindowProps) {
   // taskbar: opened from the window's taskbar pill (openWindowMenu), which
   // adds Move to 0,0 and Quit and must sit above the taskbar's layer.
   const [titleMenu, setTitleMenu] = createSignal<{ x: number; y: number; taskbar?: boolean } | null>(null);
+  const tiling = () => windowTiling(props.win);
   createEffect(() => {
     const req = windowMenuRequest();
     if (!req || req.windowID !== props.win.windowID || req.origin !== props.win.origin) return;
@@ -619,6 +621,36 @@ export function FloatingWindow(props: WindowProps) {
                 window.wash.minimizeWindow(props.win.windowID, props.win.origin);
               }}
             />
+            {/* In a cell with a layout: take the window out of its panel,
+                or put a floating one into the first free panel. */}
+            <Show when={tiling() !== 'none'}>
+              <MenuSeparator />
+              <Show
+                when={tiling() === 'slotted'}
+                fallback={
+                  <MenuItem
+                    label="Tile"
+                    title="Put this window in the layout's first free panel"
+                    disabled={!hasFreeSlot(viewportFor(props.win))}
+                    data-testid="window-ctx-tile"
+                    onClick={() => {
+                      setTitleMenu(null);
+                      tileInLayout(props.win);
+                    }}
+                  />
+                }
+              >
+                <MenuItem
+                  label="Float"
+                  title="Take this window out of the layout"
+                  data-testid="window-ctx-float"
+                  onClick={() => {
+                    setTitleMenu(null);
+                    floatInLayout(props.win);
+                  }}
+                />
+              </Show>
+            </Show>
             <MenuSeparator />
             {/* One row per cell of the VIEWPORTS_PER_AXIS² plane, numbered
                 the way the pager reads (left to right, top to bottom). The

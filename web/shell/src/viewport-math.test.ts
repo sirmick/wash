@@ -147,8 +147,10 @@ test('fitLeftOf: too narrow after fitting, it shifts left instead', () => {
 
 test('workArea is the cell less the chrome insets, in plane coords', () => {
   const screen = { w: 1920, h: 1080 };
-  assert.deepEqual(workArea(screen, 0, 0, { right: 340, bottom: 40 }), { x: 0, y: 0, w: 1580, h: 1040 });
-  assert.deepEqual(workArea(screen, 2, 1, { right: 14, bottom: 40 }), { x: 3840, y: 1080, w: 1906, h: 1040 });
+  assert.deepEqual(workArea(screen, 0, 0, { top: 0, right: 340, bottom: 40 }), { x: 0, y: 0, w: 1580, h: 1040 });
+  assert.deepEqual(workArea(screen, 2, 1, { top: 0, right: 14, bottom: 40 }), { x: 3840, y: 1080, w: 1906, h: 1040 });
+  // A taskbar along the top moves the area down instead.
+  assert.deepEqual(workArea(screen, 0, 1, { top: 40, right: 0, bottom: 0 }), { x: 0, y: 1120, w: 1920, h: 1040 });
   // Insets larger than the screen leave an empty area, never a negative one.
-  assert.deepEqual(workArea({ w: 300, h: 30 }, 0, 0, { right: 340, bottom: 40 }), { x: 0, y: 0, w: 0, h: 0 });
+  assert.deepEqual(workArea({ w: 300, h: 30 }, 0, 0, { top: 0, right: 340, bottom: 40 }), { x: 0, y: 0, w: 0, h: 0 });
 });

@@ -285,6 +285,14 @@ interface WashGlobals {
   // openWindowMenu opens the window's own titlebar menu at viewport
   // (x, y), with the taskbar's extras (Move to 0,0, Quit).
   openWindowMenu(id: number, x: number, y: number, origin?: string): void;
+  // Window layouts (docs/WM_LAYOUT.md). openLayoutMenu opens the Layout
+  // menu for viewport cell (vx, vy) at screen (x, y) — the desktop, taskbar
+  // and pager's right-click. cellLayout is the cell's layout string, or null
+  // when it floats; setCellLayout sets one (a layout string, e.g. "r2" or
+  // "r[c2 c2]") or, with null, floats the cell again.
+  openLayoutMenu(vx: number, vy: number, x: number, y: number): void;
+  cellLayout(vx: number, vy: number): string | null;
+  setCellLayout(vx: number, vy: number, shape: string | null): void;
   moveWindow(id: number, x: number, y: number, origin?: string): void;
   resizeWindow(id: number, w: number, h: number, origin?: string): void;
   minimizeWindow(id: number, origin?: string): void;

@@ -73,6 +73,8 @@ import {
 import { SwitcherOverlay } from './switcher-ui';
 import { shouldSwallowDesktopKey } from './keyguard';
 import { FloatingWindow, openWindowMenu } from './window';
+import { LayoutMenuLayer, openLayoutMenu } from './layout-menu';
+import { cellLayout, patchTilingState, replaceTilingState, setCellLayout, startTiling } from './tiling-runtime';
 import {
   CatalogApp,
   PanelDesc,
@@ -698,6 +700,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         if (isLocal) {
           setSuperseded(null);
           headGen = 0;
+          setHoldsHead(true);
         }
         break;
       case 'session.patch':
@@ -907,6 +910,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         if (!newerHeadGen(msg.gen)) break;
         shellLog('warn', 'conn', `superseded: ${msg.msg}`);
         setSuperseded(msg.msg);
+        setHoldsHead(false);
         break;
       }
       case 'shell.head': {
@@ -914,6 +918,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         // had it went away and the router promoted this one. Its display
         // metrics were overridden by that tab, so re-send them.
         if (!isLocal || !newerHeadGen(msg.gen)) break;
+        setHoldsHead(true);
         if (superseded() !== null) {
           shellLog('info', 'conn', 'head regained');
           setSuperseded(null);
@@ -1380,6 +1385,8 @@ function handleSnapshot(client: RouterClient, msg: ShellSessionSnapshot, isLocal
     localShellID = msg.shell_id;
   }
   replaceSavedStates(client.origin, msg.app_state);
+  // Window layouts ride the same map under shell: keys, on the local router.
+  if (isLocal) replaceTilingState(msg.app_state);
   // Seed first-sight bookkeeping BEFORE the windows land. A snapshot is the
   // router's full state, so every window in it already exists — none is a
   // fresh spawn. Without this the set starts empty on every (re)connect and
@@ -1473,6 +1480,7 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   // patch triggers a remount, wash:state carries the latest blob.
   for (const p of msg.patches) {
     if (p.op === 'app_state' && typeof p.instance_id === 'string') {
+      if (client.origin === LOCAL_ORIGIN && patchTilingState(p.instance_id, p.state)) continue;
       setSavedState(compoundInstanceId(client.origin, p.instance_id), p.state ?? null);
     }
   }
@@ -1588,6 +1596,13 @@ conn.onEvent((e) => {
 // session.snapshot), when it reconnects, or when the user dismisses it —
 // keeping the session in the other window is an answer too.
 const [superseded, setSuperseded] = createSignal<string | null>(null);
+
+// holdsHead: whether this tab is the router's foreground head right now. A
+// local snapshot or shell.head says yes, shell.superseded says no. Unlike
+// superseded() it is not cleared by dismissing the banner — dismissing
+// leaves the head where it is. Window layouts are placed only by the head
+// (tiling-runtime.ts, docs/WM_LAYOUT.md §6).
+const [holdsHead, setHoldsHead] = createSignal(false);
 
 // headGen is the newest head generation this tab has heard about. The
 // router's shell.head (to the winner) and shell.superseded (to the loser)
@@ -1939,6 +1954,7 @@ const App = () => (
     {/* Above the windows, below the connection banner: a field's menu must
         not cover the one notice that says why nothing is responding. */}
     <TextMenuLayer />
+    <LayoutMenuLayer />
     <ConnectionBanner state={connState()} />
   </>
 );
@@ -2106,6 +2122,17 @@ if (navigator.language) document.documentElement.lang = navigator.language;
 // shell never goes through that path, so it injects here.
 ensureHitStyles();
 render(App, document.getElementById('root')!);
+
+// Window layouts: any tab edits them, the head places them (WM_LAYOUT §6).
+// Moves go through window.wash so they are tagged and routed by origin like
+// every other geometry write.
+startTiling({
+  holdsHead,
+  sendState: (key, state) => local.conn.sendCtrl({ t: 'shell.state_set', key, state }),
+  move: (origin, id, x, y) => window.wash.moveWindow(id, x, y, origin),
+  resize: (origin, id, w, h) => window.wash.resizeWindow(id, w, h, origin),
+  log: (m) => shellLog('info', 'shell', m),
+});
 
 // Provide a tiny FE-side API for apps that want to send app_msg back
 // to their BE half. The session app uses this to send the "launch"
@@ -2329,6 +2356,14 @@ window.wash = {
   openWindowMenu(id, x, y, origin) {
     openWindowMenu(origin ?? originForWindow(id), id, x, y);
   },
+  openLayoutMenu(vx, vy, x, y) {
+    openLayoutMenu({ vx, vy }, x, y);
+  },
+  cellLayout: (vx, vy) => {
+    const l = cellLayout({ vx, vy });
+    return l && l.shape !== '' ? l.shape : null;
+  },
+  setCellLayout: (vx, vy, shape) => setCellLayout({ vx, vy }, shape),
   moveWindow(id, x, y, origin) {
     // Tagged commit: the store holds our geometry against in-flight
     // patches until the router echoes tok (wm.ts markGeomPending).

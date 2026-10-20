@@ -293,6 +293,16 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   // active cell and scale window outlines correctly when the user
   // resizes the browser.
   const [vp, setVp] = createSignal(window.wash.getViewport());
+  // openLayoutMenuAt opens the shell's Layout menu for a viewport cell — the
+  // one in view unless a pager cell says otherwise. Only for a right-click
+  // on the surface itself (target === currentTarget), so a click on a pill,
+  // a widget or a button keeps whatever menu it has.
+  const openLayoutMenuAt = (ev: MouseEvent, cell = vp()) => {
+    if (ev.target !== ev.currentTarget) return;
+    ev.preventDefault();
+    window.wash.openLayoutMenu(cell.vx, cell.vy, ev.clientX, ev.clientY);
+  };
+  const onDesktopContextMenu = (ev: MouseEvent) => openLayoutMenuAt(ev);
   const [screen, setScreen] = createSignal({ w: window.innerWidth, h: window.innerHeight });
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [paletteOpen, setPaletteOpen] = createSignal(false);
@@ -433,6 +443,13 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   createEffect(() => {
     const px = sidebarMode() === 'open' ? SIDEBAR_OPEN_WIDTH : SIDEBAR_TAB_WIDTH;
     document.documentElement.style.setProperty('--wash-reserved-right', `${px}px`);
+  });
+  // Same for the taskbar's edge (a pack can put it on top): the work area
+  // starts below a top taskbar and ends above a bottom one.
+  createEffect(() => {
+    const top = taskbarPosition() === 'top';
+    document.documentElement.style.setProperty('--wash-reserved-top', `${top ? taskbarHeight : 0}px`);
+    document.documentElement.style.setProperty('--wash-reserved-bottom', `${top ? 0 : taskbarHeight}px`);
   });
   // Section helpers. Widgets call autoExpandSection when an event
   // arrives the user might want to see (new bulk job, new priv req,
@@ -1265,6 +1282,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     window.wash.sendAppMsg(props.instance, { kind: 'audio_subscribe' });
     window.wash.sendAppMsg(props.instance, { kind: 'agent_subscribe' });
     props.host.addEventListener('wash:msg', onMsg);
+    // Right-click on bare desktop (the wallpaper is pointer-events:none,
+    // so empty space lands on the host itself): the Layout menu for the
+    // viewport in view (docs/WM_LAYOUT.md §7).
+    props.host.addEventListener('contextmenu', onDesktopContextMenu);
 
     // wash:state restores the persisted sidebar config on (re)mount.
     // Fires once on first attach and again on any browser refresh.
@@ -1341,6 +1362,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       offHostgw?.();
       props.host.removeEventListener('wash:msg', onMsg);
       props.host.removeEventListener('wash:state', onState);
+      props.host.removeEventListener('contextmenu', onDesktopContextMenu);
       // Cooperative unsubscribe via the session BE gateways. Cheap
       // fire-and-forget; gateways forward with proper sender
       // attestation.
@@ -1740,7 +1762,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           });
         }}
       />
-      <div style={taskbarPosition() === 'top' ? taskbarStyleTop : taskbarStyle}>
+      <div
+        style={taskbarPosition() === 'top' ? taskbarStyleTop : taskbarStyle}
+        data-testid="taskbar"
+        onContextMenu={(ev) => openLayoutMenuAt(ev)}
+      >
         <IconButton
           title="Apps"
           onClick={toggleMenu}
@@ -1764,7 +1790,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
           <Search size={16} />
         </IconButton>
         <div style={separatorStyle} />
-        <div style={windowListStyle}>
+        <div style={windowListStyle} data-testid="taskbar-windows" onContextMenu={(ev) => openLayoutMenuAt(ev)}>
           <For each={windows()}>
             {(w) => (
               // Two roads to the same dot. The notification one is
@@ -2316,6 +2342,12 @@ const PagerCell: Component<{
       data-active={props.active ? 'true' : 'false'}
       style={cellStyle()}
       onClick={onCellClick}
+      onContextMenu={(ev) => {
+        // The whole cell, window thumbnails included: the pager is where a
+        // viewport is set up without going to it.
+        ev.preventDefault();
+        window.wash.openLayoutMenu(props.cell.vx, props.cell.vy, ev.clientX, ev.clientY);
+      }}
     >
       <For each={props.windows}>
         {(w) => <PagerWindow win={w} cell={props.cell} cellW={props.cellW} cellH={props.cellH} screen={props.screen} />}
