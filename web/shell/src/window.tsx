@@ -16,6 +16,7 @@ import { resizeRect, sendToViewportRect, type ResizeEdge } from './viewport-math
 import {
   VIEWPORTS_PER_AXIS,
   CrashInfo,
+  cellWorkArea,
   isFocused,
   moveLocal,
   raiseLocal,
@@ -237,9 +238,8 @@ export function FloatingWindow(props: WindowProps) {
     target.addEventListener('pointerup', onUp);
   };
 
-  // Frame geometry depends on state. Maximized = top-left of viewport
-  // minus the chrome's bottom taskbar (40 px hardcoded; will become
-  // negotiable when the chrome publishes a workarea).
+  // Frame geometry depends on state. Maximized = the work area of the
+  // window's home cell (cellWorkArea: the screen less taskbar and sidebar).
   // Window chrome: the stored window w/h is the CONTENT (slot) size — what
   // the app element / guest surface actually gets. The frame adds a fixed-
   // height titlebar + a 1px border per side. TITLEBAR_H MUST equal the
@@ -296,25 +296,18 @@ export function FloatingWindow(props: WindowProps) {
       // window's home-viewport origin in plane coords so that, after the
       // cam translate, the frame lands flush at the screen's top-left.
       //
-      // Geometry comes from screenSize() — a signal updated on the
-      // window 'resize' event — so the maximized frame snaps to the
-      // current screen edges and re-renders reactively when the browser
-      // is resized (and stays aligned with the cam, which pans by the
-      // same screenSize).
-      //
-      // --wash-reserved-right reserves screen width for the session
-      // app's right sidebar (SIDEBAR_OPEN_WIDTH when open, a 14px tab when hidden).
-      // The session app writes the var on document.documentElement;
-      // here we just respect it so a maximized window's titlebar
-      // controls stay reachable instead of disappearing under chrome.
+      // cellWorkArea is reactive in the screen size (so the frame snaps
+      // to the screen edges on a browser resize and stays aligned with the
+      // cam, which pans by the same size) and in the sidebar's
+      // reservation (so the titlebar controls never sit under it).
       const vp = viewportFor(props.win);
-      const s = screenSize();
+      const a = cellWorkArea(vp.vx, vp.vy);
       return {
         ...base,
-        left: `${vp.vx * s.w}px`,
-        top: `${vp.vy * s.h}px`,
-        width: `calc(${s.w}px - var(--wash-reserved-right, 0px))`,
-        height: `${s.h - 40}px`,
+        left: `${a.x}px`,
+        top: `${a.y}px`,
+        width: `${a.w}px`,
+        height: `${a.h}px`,
       };
     }
     const x = dragX() ?? resizeX() ?? props.win.x;
@@ -361,16 +354,15 @@ export function FloatingWindow(props: WindowProps) {
   // back to the plane's origin, at a size that fits one screen, and the
   // camera brought to it. Restored first — a maximized or minimized window
   // ignores moves (wmstate.go) — and sized from what is actually free: the
-  // right sidebar's reservation, the taskbar, the frame's own chrome.
+  // home cell's work area less the frame's own chrome.
   const moveHome = () => {
     const id = props.win.windowID;
     const o = props.win.origin;
     if (props.win.state !== 'normal') window.wash.restoreWindow(id, o);
-    const s = screenSize();
-    const reserved = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10) || 0;
+    const a = cellWorkArea(0, 0);
     const margin = 16;
-    const maxW = Math.max(160, s.w - reserved - FRAME_BORDER * 2 - margin);
-    const maxH = Math.max(80, s.h - TASKBAR_H - TITLEBAR_H - FRAME_BORDER * 2 - margin);
+    const maxW = Math.max(160, a.w - FRAME_BORDER * 2 - margin);
+    const maxH = Math.max(80, a.h - TITLEBAR_H - FRAME_BORDER * 2 - margin);
     const w = Math.min(props.win.w, maxW);
     const h = Math.min(props.win.h, maxH);
     moveLocal(o, id, 0, 0);
@@ -755,8 +747,6 @@ export function openWindowMenu(origin: Origin, windowID: number, x: number, y: n
 // Above the session app's taskbar layer (z-index 10000), which a menu
 // opened from it would otherwise sit under.
 const TASKBAR_MENU_Z = 10001;
-// The chrome's bottom taskbar, as the maximized frame reserves it.
-const TASKBAR_H = 40;
 
 // Re-exported for the desktop button click path, which raises a
 // window before invoking a wire helper.

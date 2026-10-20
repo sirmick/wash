@@ -139,11 +139,15 @@ later as a unit suffix; it fits the "unsized gets the rest" rule unchanged.
 
 ## 5. Work area
 
-The usable area is hard-coded today: the 40px taskbar in several places,
-the sidebar via `--wash-reserved-right`. M2 starts by adding one helper —
-`workArea(cell, screen, reservedRight)` beside `viewport-math.ts` — and
-moving the existing callers (`moveHome`, `fitLeftOf`, maximize's CSS) onto
-it. Tiling re-places a cell when that area changes.
+`workArea(screen, vx, vy, insets)` (`viewport-math.ts`, pure) is a cell's
+screen less the chrome's insets, in plane coords. `cellWorkArea(vx, vy)`
+(`wm.ts`) feeds it this browser's screen size, `TASKBAR_H`, and the
+sidebar's `--wash-reserved-right` — observed on `<html>`, so the result is
+reactive in both the screen and the sidebar. Maximize, Move to 0,0 and
+new-window placement use it. Tiling re-places a cell when it changes.
+
+The taskbar height is still a constant mirroring the session app's 40px;
+publishing it the way the sidebar publishes its width is a later step.
 
 ## 6. Storage
 
@@ -206,7 +210,9 @@ is sized by it (`republishDisplayState`). Tiling follows the same rule:
    `layout.ts` is its leaf layer, and its 35 tests pass unchanged.
 2. **Syntax** — done. `parseLayout`/`formatLayout` in the kernel, tested in
    `web/lib/src/split-tree.test.ts`.
-3. **Work area helper** and its callers.
+3. **Work area helper** — done. `workArea` (viewport-math.ts) + reactive
+   `cellWorkArea` (wm.ts); maximize, Move to 0,0 and new-window placement
+   use it.
 4. **Arrange (one cell, live)** — menu, slot assignment, re-placement on
    close/resize/sidebar, storage.
 5. **Dividers, drag-to-slot, focus keys.**

@@ -42,6 +42,7 @@ import {
   dismissCrashed,
   isFocused,
   originForWindow,
+  cellWorkArea,
   markCrashed,
   mountDesktop,
   raiseLocal,
@@ -1467,12 +1468,6 @@ function handleCrash(client: RouterClient, msg: ShellAppCrashed): void {
 // waitForBundle, so a window-in-flight isn't in `windows` yet — without
 // the set, every pre-bundle patch looks "fresh" and we'd re-relocate the
 // same window N times.
-// reservedRight is the width the session app's sidebar reserves at the
-// screen's right edge (--wash-reserved-right, which it keeps current).
-function reservedRight(): number {
-  return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10) || 0;
-}
-
 function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   // Apply app_state ops first so when a window upsert in the same
   // patch triggers a remount, wash:state carries the latest blob.
@@ -1496,7 +1491,7 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
   const s = screenSize();
   const moves: Array<{ id: number; x: number; y: number }> = [];
   const resizes: Array<{ id: number; w: number; h: number }> = [];
-  const reserved = reservedRight();
+  const area = cellWorkArea(vp.vx, vp.vy);
   for (const p of msg.patches) {
     if (p.op === 'window.upsert' && p.window && !client.seenWindowIDs.has(p.window.window_id)) {
       let { x, y } = p.window;
@@ -1514,8 +1509,8 @@ function handlePatch(client: RouterClient, msg: ShellSessionPatch): void {
       // cascades without knowing the sidebar is there, and a window whose
       // titlebar buttons land under it cannot be closed. Narrowed rather
       // than moved where it can be, so the cascade survives.
-      if (p.window.state === 'normal' && reserved > 0) {
-        const fit = fitLeftOf({ x, w: p.window.w + 2 }, vp.vx * s.w, s.w - reserved, 480);
+      if (p.window.state === 'normal' && area.w < s.w) {
+        const fit = fitLeftOf({ x, w: p.window.w + 2 }, area.x, area.w, 480);
         x = fit.x;
         if (fit.w - 2 !== p.window.w) {
           p.window.w = fit.w - 2;

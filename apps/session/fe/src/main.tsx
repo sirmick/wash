@@ -426,10 +426,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setSidebarMode(sidebarMode() === 'open' ? 'hidden' : 'open');
     persistSidebar();
   };
-  // Keep --wash-reserved-right in sync with sidebar mode so the
-  // shell's window.tsx can shrink maximized windows away from the
-  // sidebar — otherwise titlebar controls (close, restore) fall
-  // under it.
+  // Keep --wash-reserved-right in sync with sidebar mode. The shell
+  // observes it as part of every cell's work area (wm.ts cellWorkArea),
+  // so maximized and tiled windows stay clear of the sidebar — otherwise
+  // titlebar controls (close, restore) fall under it.
   createEffect(() => {
     const px = sidebarMode() === 'open' ? SIDEBAR_OPEN_WIDTH : SIDEBAR_TAB_WIDTH;
     document.documentElement.style.setProperty('--wash-reserved-right', `${px}px`);

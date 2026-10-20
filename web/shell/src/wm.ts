@@ -12,7 +12,8 @@ import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import type { SessionPatch, SessionWindow } from './main';
 import { type Origin, LOCAL_ORIGIN } from './clients';
-import { clampViewport, viewportForRect } from './viewport-math';
+import { TASKBAR_H, clampViewport, viewportForRect, workArea } from './viewport-math';
+import type { Rect } from './viewport-math';
 import { focusFromSnapshot } from './wm-focus';
 import { beginWindowLoad, endWindowLoad } from './boot';
 
@@ -162,6 +163,27 @@ const [screenSize, setScreenSize] = createSignal({
 window.addEventListener('resize', () => {
   setScreenSize({ w: window.innerWidth, h: window.innerHeight });
 });
+
+// reservedRight mirrors --wash-reserved-right, the width the session app's
+// sidebar reserves at the screen's right edge. The session app writes it
+// inline on <html> whenever the sidebar opens or hides; observing that
+// attribute turns it into a signal, so everything sized from the work area
+// (maximize, tiling) follows the sidebar without the session app having to
+// call into the shell.
+const readReservedRight = (): number =>
+  parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wash-reserved-right'), 10) || 0;
+const [reservedRight, setReservedRight] = createSignal(readReservedRight());
+if (typeof MutationObserver !== 'undefined') {
+  new MutationObserver(() => setReservedRight(readReservedRight()))
+    .observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+}
+
+// cellWorkArea is the usable part of viewport cell (vx, vy) in plane coords
+// on this browser's screen: less the taskbar and the sidebar. Reactive in
+// the screen size and the sidebar.
+export function cellWorkArea(vx: number, vy: number): Rect {
+  return workArea(screenSize(), vx, vy, { right: reservedRight(), bottom: TASKBAR_H });
+}
 
 // Viewport persists across reloads so the user comes back to whichever
 // cell they were on. LocalStorage is per-origin and tab-shared; if a
