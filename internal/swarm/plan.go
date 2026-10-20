@@ -543,12 +543,30 @@ func Accept(w *Workspace, m *Member, id string, gates []Gate) (Accepted, error) 
 
 // ActiveNodes lists nodes still active or reported, for the end-of-workspace
 // check.
-func ActiveNodes(w *Workspace) []string {
-	var out []string
+// Unfinished sorts the plan's active and reported nodes by what ending the
+// workspace would lose: working nodes have an open assignment or a live
+// member on them; reported nodes await acceptance; stale nodes are marked
+// active with nobody on them, bookkeeping the orchestrator never updated
+// (Redoubt's forced end: SCHED5 and B94 were stale, and blocked the end
+// like work in flight).
+func Unfinished(w *Workspace) (working, reported, stale []string) {
 	for _, n := range w.Plan {
-		if n.State == "active" || n.State == "reported" {
-			out = append(out, n.ID)
+		switch n.State {
+		case "reported":
+			reported = append(reported, n.ID)
+		case "active":
+			busy := len(OpenOn(w, n.ID)) > 0
+			for _, m := range w.Members {
+				if m.Node == n.ID && m.State != "ended" {
+					busy = true
+				}
+			}
+			if busy {
+				working = append(working, n.ID)
+			} else {
+				stale = append(stale, n.ID)
+			}
 		}
 	}
-	return out
+	return working, reported, stale
 }

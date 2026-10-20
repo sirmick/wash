@@ -223,10 +223,14 @@ type Workspace struct {
 	// member's `model` resolves against it): the orchestrator's own catalog
 	// at setup, changeable with workspace_configure.catalog for later
 	// launches.
-	Catalog    string `json:"catalog,omitempty"`
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Root       string `json:"project_root"`
+	Catalog string `json:"catalog,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Root    string `json:"project_root"`
+	// RepoURL is the project's web home (its git origin as https, no
+	// .git), filled in on the published view, not stored: the Plan tab
+	// links the commit hashes a node's body names to it.
+	RepoURL    string `json:"repo_url,omitempty"`
 	Lead       string `json:"orchestrator"`
 	State      string `json:"state"`
 	Revision   int64  `json:"revision"`

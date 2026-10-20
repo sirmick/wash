@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/sirmick/wash/internal/acp"
+	"github.com/sirmick/wash/internal/swarm"
 	"github.com/sirmick/wash/internal/workspacemcp"
 )
 
@@ -115,7 +116,7 @@ func (ws *workspaceService) about(h *hosted) workspacemcp.Discovery {
 		if w.State == "ended" {
 			continue
 		}
-		result.OpenWorkspaces = append(result.OpenWorkspaces, map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "project_root": w.Root, "orchestrator_running": hostedBySession(workspaceLeadSession(w)) != nil})
+		result.OpenWorkspaces = append(result.OpenWorkspaces, openWorkspaceRow(w, h.sessionID))
 	}
 	bin, _ := os.Executable()
 	result.Agentd = map[string]any{"binary": bin, "pid": os.Getpid(), "started_at": agentdStarted.UTC().Format(time.RFC3339)}
@@ -124,3 +125,32 @@ func (ws *workspaceService) about(h *hosted) workspacemcp.Discovery {
 
 // agentdStarted is when this agentd started, for about.
 var agentdStarted = time.Now()
+
+// openWorkspaceRow is one open workspace as about lists it, with what the
+// caller can do about it. Two things that read as contradictions are
+// spelled out (Redoubt, WASH-R43 and the 16:09Z restart): a workspace is
+// led only by its orchestrator's session, so another session's routes are
+// to resume that session or to end the workspace and configure anew; and a
+// restart pauses every workspace while its orchestrator's session comes
+// back on its own, so "paused" with the orchestrator running means a
+// resume is owed, not that anything is wrong.
+func openWorkspaceRow(w swarm.Workspace, caller string) map[string]any {
+	lead := workspaceLeadSession(w)
+	running := hostedBySession(lead) != nil
+	row := map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "project_root": w.Root, "orchestrator_running": running}
+	switch {
+	case lead == caller:
+		row["lead"] = "this session"
+	case running:
+		row["lead"] = "another session, running"
+		row["routes"] = "only its orchestrator's session leads it: continue in that session, or workspace_end {workspace_id} here and configure a new workspace (its members and their context end with it)"
+	default:
+		row["lead"] = "another session, not running"
+		row["routes"] = "only its orchestrator's session leads it: resume that session (the Agent window lists it), or workspace_end {workspace_id} here and configure a new workspace (its members and their context end with it)"
+	}
+	if w.State == "paused" && running {
+		row["resume_needed"] = true
+		row["hint"] = "paused by a restart or a stopped turn while the orchestrator's session is up; nothing is wrong. It continues when the orchestrator resumes: member_control {action:resume} on the orchestrator from its own session, or the Agent window's Resume"
+	}
+	return row
+}

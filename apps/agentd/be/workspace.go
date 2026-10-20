@@ -103,6 +103,7 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 			// Only member_inspect's answer is read: the other operations'
 			// effects reach the window through the next frame.
 			var transcript *agentproto.WorkspaceTranscript
+			var thread *swarm.QAThread
 			var err error
 			// The operations share the MCP tools' argument parsing, which
 			// reads JSON: only the fields the operation set are sent.
@@ -165,10 +166,12 @@ func startWorkspaces(c *sdk.Conn, bus *sdk.Bus) error {
 					ws.previews[h.key] = member
 					ws.mu.Unlock()
 				}
+			case "qa_thread":
+				thread, err = ws.qaThread(h.sessionID, req.Arguments.ThreadID)
 			default:
 				err = errors.New("unknown workspace UI operation")
 			}
-			reply := agentproto.WorkspaceResult{Key: h.key, Operation: req.Name, Transcript: transcript}
+			reply := agentproto.WorkspaceResult{Key: h.key, Operation: req.Name, Transcript: transcript, Thread: thread}
 			if err != nil {
 				reply.Error = err.Error()
 			}
@@ -291,8 +294,8 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 	sid := h.sessionID
 	switch call.Name {
 	case "workspace_get":
-		if a.View != "" && a.View != "state" && a.View != "about" && a.View != "qa" && a.View != "team" && a.View != "message" {
-			return nil, errors.New("view must be state, about, qa, team or message")
+		if a.View != "" && a.View != "state" && a.View != "about" && a.View != "qa" && a.View != "team" && a.View != "message" && a.View != "dossier" {
+			return nil, errors.New("view must be state, about, qa, team, message or dossier")
 		}
 		if a.View == "about" {
 			var fields map[string]json.RawMessage
@@ -311,6 +314,12 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		}
 		if a.View == "qa" {
 			return qaView(w, a)
+		}
+		if a.View == "dossier" {
+			// The handover document for folding the team back to one
+			// agent at a milestone's tail (workspace_dossier.go).
+			text, truncated := dossier(w)
+			return map[string]any{"dossier": text, "truncated": truncated, "bytes": len(text)}, nil
 		}
 		if a.View == "message" {
 			return messageView(w, workspaceMember(w, sid), a)
@@ -370,11 +379,24 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		}
 		return map[string]any{"workspace": w, "approvals": workspaceApprovals(w), "delivery_counts": counts, "activity": activity, "activity_detail": detail, "usage": usage, "message_history_included": a.IncludeMessages, "message_page": messagePage, "sessions": sessions}, nil
 	case "workspace_end":
-		// Ending with work in flight is a decision, not an accident.
-		if a.Workspace == "" && !a.Confirm {
+		// Ending with work in flight, or with reported work nobody has
+		// accepted, is a decision, not an accident. A node marked active
+		// with nobody on it is stale bookkeeping and does not block; it
+		// is reported with the end.
+		var stale []string
+		if a.Workspace == "" {
 			if w := ws.store.View(sid); w != nil {
-				if active := swarm.ActiveNodes(w); len(active) > 0 {
-					return nil, fmt.Errorf("nodes still active or reported: %s. Finish or accept them, or end anyway with confirm:true", strings.Join(active, ", "))
+				var working, reported []string
+				working, reported, stale = swarm.Unfinished(w)
+				if !a.Confirm && (len(working) > 0 || len(reported) > 0) {
+					var parts []string
+					if len(working) > 0 {
+						parts = append(parts, "work in flight on "+strings.Join(working, ", "))
+					}
+					if len(reported) > 0 {
+						parts = append(parts, "reported and not yet accepted: "+strings.Join(reported, ", "))
+					}
+					return nil, fmt.Errorf("%s. Finish or accept them, or end anyway with confirm:true", strings.Join(parts, "; "))
 				}
 			}
 		}
@@ -394,7 +416,12 @@ func (ws *workspaceService) callCore(h *hosted, call workspacemcp.Call) (any, er
 		}
 		// find() deliberately hides ended workspaces; report the final save
 		// explicitly, while failed exports keep retrying in the service loop.
-		return map[string]any{"ended": true, "qa_document_status": ws.qaDocumentStatus(old)}, nil
+		out := map[string]any{"ended": true, "qa_document_status": ws.qaDocumentStatus(old)}
+		if len(stale) > 0 {
+			out["stale_nodes"] = stale
+			out["note"] = "these nodes were still marked active with nobody on them; the plan file keeps that state"
+		}
+		return out, nil
 	case "inbox_read":
 		w := ws.store.View(sid)
 		if w == nil {
@@ -1127,6 +1154,7 @@ func (ws *workspaceService) publish(force bool) {
 		}
 		from := publishedFrom{workspace: shared, rest: rest}
 		if w := ws.store.View(sessionID); w != nil {
+			w.RepoURL = repoWebURL(w.Root)
 			frame.Workspace = w
 			frame.QAMarkdown = swarm.QAMarkdown(w)
 			qaSummary(w)

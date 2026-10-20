@@ -349,6 +349,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	// Per member key: advisory settings this provider, or the adapter this
 	// host last ran, will not enforce. Part of the receipt, not a refusal.
 	advisories := map[string][]string{}
+	// Open workspaces at this root led by other sessions: a new one here
+	// does not reuse them, and the caller should know before committing
+	// (Redoubt, WASH-R43: a fresh session previewed a brand-new workspace
+	// with no word that a paused one of the same name and root was open).
+	var elsewhere []map[string]any
 	result, err := ws.store.Transaction(h.sessionID, "workspace_configure", p.Request, raw, p.Preview, func(s *swarm.Store) (any, error) {
 		current := s.View(h.sessionID)
 		if current == nil {
@@ -357,6 +362,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			}
 			if p.Workspace == nil || p.Workspace.Name == "" {
 				return nil, errors.New("initial configuration requires workspace.name")
+			}
+			for _, w := range s.Snapshot().Workspaces {
+				if w.State != "ended" && w.Root == root {
+					elsewhere = append(elsewhere, openWorkspaceRow(w, h.sessionID))
+				}
 			}
 			if _, err := s.Setup(h.sessionID, h.agent, h.cwd, p.Workspace.Name, root); err != nil {
 				return nil, err
@@ -563,6 +573,10 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 		}
 		if resumed != nil {
 			out["qa_resumed"] = *resumed
+		}
+		if len(elsewhere) > 0 {
+			out["open_workspaces_at_this_root"] = elsewhere
+			out["open_workspaces_note"] = "this configuration makes a new workspace; it does not take those over. Only a workspace's orchestrator session leads it: continue in that session, or workspace_end {workspace_id} and then configure"
 		}
 		return out, nil
 	})

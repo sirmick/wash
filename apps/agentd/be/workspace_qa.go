@@ -116,3 +116,55 @@ func qaSummary(w *swarm.Workspace) {
 		w.QA[i].Events = nil
 	}
 }
+
+// qaThread is one thread with every event, for the Questions tab's card
+// when it opens: the frame's QA document carries only the last few events
+// of an open thread and none of an archived one. An ended workspace's
+// record is in its archive.
+func (ws *workspaceService) qaThread(session, id string) (*swarm.QAThread, error) {
+	if id == "" {
+		return nil, errors.New("thread_id required")
+	}
+	w := ws.store.View(session)
+	if w == nil {
+		for _, stub := range ws.store.Snapshot().Workspaces {
+			if stub.Archive == "" || !workspaceHasSession(stub, session) {
+				continue
+			}
+			full, err := swarm.LoadArchived(stub.Archive)
+			if err != nil {
+				return nil, err
+			}
+			w = full
+			break
+		}
+		if w == nil {
+			return nil, errors.New("workspace ended")
+		}
+	}
+	q := swarm.QA(w, id)
+	if q == nil {
+		return nil, swarm.UnknownThread(w, id)
+	}
+	thread := *q
+	if thread.Archived {
+		events, err := loadQAEvents(w.QADir, thread.ID)
+		if err != nil {
+			return nil, err
+		}
+		thread.Events = events
+		thread.Archived = false
+	}
+	thread.Events = swarm.LinkAnswers(w, thread.ID, thread.Events)
+	return &thread, nil
+}
+
+// workspaceHasSession says whether session is one of w's members.
+func workspaceHasSession(w swarm.Workspace, session string) bool {
+	for _, m := range w.Members {
+		if m.Session == session {
+			return true
+		}
+	}
+	return false
+}
