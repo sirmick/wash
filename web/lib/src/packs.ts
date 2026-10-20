@@ -594,8 +594,159 @@ const lisbon: Pack = {
   wallpaper: 'wallpapers/lisbon.svg',
 };
 
+// Isfahan — Safavid tilework at dusk. A DARK pack: lapis-night chrome, warm
+// ivory text, turquoise faience for focus and selection, gold for the
+// strapwork accents (the taskbar's top edge, the caption's icon). Softly
+// rounded like a pointed arch's spring. The wallpaper — a mosque iwan with
+// muqarnas vaulting over a reflecting pool — is an image-model raster
+// vectorized with a real gradient sky (design/packs/vectorize.py).
+const isfahan: Pack = {
+  id: 'isfahan',
+  name: 'Isfahan',
+  appearance: 'dark',
+  scheme: {
+    '--wash-bg-window': '#111c38', // lapis night
+    '--wash-bg-menu': '#0e1830',
+    '--wash-bg-inset': '#0a1328',
+    '--wash-bg-canvas': '#070d1d', // editor/terminal: near-black lapis
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#1a2a4e',
+    '--wash-bg-row-selected': '#16566a', // deep turquoise
+    '--wash-bg-backdrop': 'rgba(2,6,18,0.55)',
+    '--wash-bg-drop-target': '#123d55',
+    '--wash-border-menu': '#1f2e52',
+    '--wash-border-window': '#2b3d68',
+    '--wash-border-focus': '#3fc1c9', // turquoise
+    '--wash-border-drop-target': '#3fc1c9',
+    '--wash-fg': '#efe6d2', // warm ivory
+    '--wash-fg-muted': '#b2aa95',
+    '--wash-fg-dim': '#7f7a6c',
+    '--wash-bg-danger': '#3d1519',
+    '--wash-border-danger': '#b43c3a',
+    '--wash-fg-danger': '#ff9283',
+    '--wash-bg-success': '#0f3221',
+    '--wash-fg-success': '#71d49c',
+    '--wash-bg-warning': '#3a2c0c',
+    '--wash-fg-warning': '#e8bb52',
+    '--wash-bg-info': '#0d3142',
+    '--wash-fg-info': '#72d6dc',
+    '--wash-bg-neutral': '#1a2747',
+    '--wash-bg-denied': '#3a2a10',
+    '--wash-border-denied': '#9c7a2c',
+    '--wash-sev-error': '#ff7d6d',
+    '--wash-sev-warn': '#e8bb52',
+    '--wash-sev-notice': '#72d6dc',
+    '--wash-sev-info': '#d9d1bd',
+    '--wash-sev-debug': '#7f7a6c',
+    '--wash-accent-red': '#d8544b',
+    '--wash-accent-orange': '#e07d3e', // saffron
+    '--wash-accent-amber': '#d9a93f', // gold
+    '--wash-accent-lime': '#a9c25a',
+    '--wash-accent-green': '#45b072',
+    '--wash-accent-teal': '#2fb5a5',
+    '--wash-accent-cyan': '#3fc1c9', // turquoise faience
+    '--wash-accent-blue': '#5f8fe0', // lapis, lifted to read on the night chrome
+    '--wash-accent-indigo': '#6470d0',
+    '--wash-accent-violet': '#9278d0',
+    '--wash-accent-magenta': '#c95e9e',
+    '--wash-accent-pink': '#e07d9e',
+    // Caption: a lapis a step brighter than the window when focused; the
+    // app icon in gold, like the strapwork.
+    '--wash-titlebar-active': '#1c3166',
+    '--wash-titlebar-inactive': '#111c38',
+    '--wash-titlebar-fg': '#efe6d2',
+    '--wash-titlebar-icon': '#d9a93f',
+    '--wash-taskbar-bg': '#0a1328',
+    '--wash-taskbar-top': '#d9a93f', // a gold rule along the bar
+    '--wash-banner-bg': 'rgba(8,15,34,0.5)',
+    '--wash-banner-blur': '8px',
+    '--wash-radius-sm': '4px',
+    '--wash-radius-md': '6px',
+    '--wash-radius-lg': '8px',
+    '--wash-radius-xl': '12px',
+  },
+  wallpaper: 'wallpapers/isfahan.svg',
+};
+
+// Moscow — painted onion domes in snow at dusk. A LIGHT pack: snow-cream
+// surfaces, near-black brown ink, brick red for focus and the caption
+// (white text), gold and emerald from the domes for accents. The wallpaper
+// — a toy-like St Basil's cluster — is an image-model raster vectorized
+// with a real gradient sky (design/packs/vectorize.py).
+const moscow: Pack = {
+  id: 'moscow',
+  name: 'Moscow',
+  appearance: 'light',
+  scheme: {
+    '--wash-bg-window': '#fbf7ef', // snow cream
+    '--wash-bg-menu': '#f5eee0',
+    '--wash-bg-inset': '#efe5d3',
+    '--wash-bg-canvas': '#fffbf4',
+    '--wash-bg-row': 'transparent',
+    '--wash-bg-row-hover': '#f1e5d0',
+    '--wash-bg-row-selected': '#f4d3c8', // brick wash
+    '--wash-bg-backdrop': 'rgba(60,14,10,0.35)',
+    '--wash-bg-drop-target': '#dbe9d6',
+    '--wash-border-menu': '#e5d6bc',
+    '--wash-border-window': '#c8a68a',
+    '--wash-border-focus': '#b5372b', // brick red
+    '--wash-border-drop-target': '#2f8a4a', // emerald, so a drop never reads as an error
+    '--wash-fg': '#2a1712',
+    '--wash-fg-muted': '#6b4d41',
+    '--wash-fg-dim': '#9c8274',
+    '--wash-bg-danger': '#f9d6d0',
+    '--wash-border-danger': '#d98478',
+    '--wash-fg-danger': '#a8201a',
+    '--wash-bg-success': '#d9ecd6',
+    '--wash-fg-success': '#2a6e3c',
+    '--wash-bg-warning': '#f8e6bf',
+    '--wash-fg-warning': '#8a5b00',
+    '--wash-bg-info': '#d8e3f4',
+    '--wash-fg-info': '#2456b3',
+    '--wash-bg-neutral': '#eee4d2',
+    '--wash-bg-denied': '#f4e1bf',
+    '--wash-border-denied': '#c4902f',
+    '--wash-sev-error': '#b3221a',
+    '--wash-sev-warn': '#8a5b00',
+    '--wash-sev-notice': '#2456b3',
+    '--wash-sev-info': '#4a3a33',
+    '--wash-sev-debug': '#9c8274',
+    '--wash-accent-red': '#c0362c',
+    '--wash-accent-orange': '#d9681f',
+    '--wash-accent-amber': '#c9921a', // dome gold
+    '--wash-accent-lime': '#7aa02a',
+    '--wash-accent-green': '#2f8a4a', // emerald
+    '--wash-accent-teal': '#1f8f84',
+    '--wash-accent-cyan': '#2a8fb5',
+    '--wash-accent-blue': '#2456b3', // cobalt stripe
+    '--wash-accent-indigo': '#3f4aa8',
+    '--wash-accent-violet': '#7a4aa8',
+    '--wash-accent-magenta': '#b5357a',
+    '--wash-accent-pink': '#d8577f',
+    // Brick caption with white text; dusty brick when inactive (dark
+    // enough that the shared white fg still reads).
+    '--wash-titlebar-active': '#b5372b',
+    '--wash-titlebar-inactive': '#8f5a50',
+    '--wash-titlebar-fg': '#ffffff',
+    '--wash-titlebar-icon': '#ffffff',
+    '--wash-taskbar-bg': '#fbf7ef',
+    '--wash-taskbar-opacity': '90%',
+    '--wash-taskbar-top': '#b5372b',
+    '--wash-banner-bg': 'rgba(251,247,239,0.78)',
+    '--wash-banner-blur': '6px',
+    '--wash-window-shadow': '0 8px 28px rgba(60,20,10,0.26)',
+    '--wash-shadow-menu': '0 6px 18px rgba(60,20,10,0.22)',
+    // Rounded like the domes.
+    '--wash-radius-sm': '4px',
+    '--wash-radius-md': '6px',
+    '--wash-radius-lg': '9px',
+    '--wash-radius-xl': '14px',
+  },
+  wallpaper: 'wallpapers/moscow.svg',
+};
+
 /** All built-in packs, in gallery order. Midnight is first / default. */
-export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime, lisbon];
+export const packs: Pack[] = [midnight, tokyo, seoul, copland, oslo, dreamtime, lisbon, isfahan, moscow];
 
 export const defaultPackId = 'midnight';
 

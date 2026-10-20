@@ -185,14 +185,17 @@ const STAGE = ['session', 'about', 'test', 'notify',
 // Theme each app shot with a different pack so the README grid shows the
 // range. The montage + a few apps stay on the default (Midnight) dark.
 // Packs: midnight (default dark), tokyo (neon), seoul (light paper),
-// copland (Mac OS 9), oslo (cool slate), lisbon (azulejo light). See
+// copland (Mac OS 9), oslo (cool slate), lisbon (azulejo light),
+// isfahan (lapis night), moscow (snow + brick light). See
 // web/lib/src/packs.ts.
 const THEME: Record<string, string> = {
-  edit: 'tokyo', about: 'tokyo', radio: 'tokyo',
-  settings: 'seoul', imageview: 'seoul', music: 'seoul',
+  edit: 'tokyo', about: 'tokyo',
+  settings: 'seoul', imageview: 'seoul',
   fm: 'lisbon', services: 'lisbon',
   packages: 'copland', connect: 'copland',
-  net: 'oslo', top: 'oslo', disks: 'oslo',
+  net: 'oslo', disks: 'oslo',
+  top: 'isfahan', radio: 'isfahan',
+  music: 'moscow',
 };
 
 test.describe('screenshots', () => {
