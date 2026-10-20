@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.18.0
+Version:        0.19.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,16 @@ fi
 exit 0
 
 %changelog
+* Tue Oct 20 2026 sirmick <sirmick@gmail.com> - 0.19.0-1
+- Window layouts: any viewport tiles its windows into panels (r2,
+  r[c2 c2], 25/50/25, ...), live, with dividers, drag-to-panel, Float
+  and Tile, and Ctrl+Alt arrows between panels; only the head tab
+  places windows. Lisbon, Isfahan and Moscow packs; Copland gets a 90s
+  ray-traced wallpaper. Terminal OSC 9/777/99 notifications, OSC 8
+  links and OSC 52 copy. The head is promoted when it leaves; relay
+  routers outlive an ssh drop; ingress re-ensures a dead token; the QoS
+  scheduler never lets data overtake its bind.
+
 * Sun Oct 11 2026 sirmick <sirmick@gmail.com> - 0.18.0-1
 - wash-install replaces wash-start/wash-update (systemd --user, one
   command from a fresh login, "release" picks the newest tag); workspace

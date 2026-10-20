@@ -1,3 +1,38 @@
+wash (0.19.0-1) unstable; urgency=low
+
+  * Window layouts: any viewport cell can be given a layout and its
+    windows tile into panels, live. Right-click the desktop, the empty
+    taskbar or a pager cell for presets (halves, thirds, 25/50/25, main
+    + stack, 2x2, 3x3, ...); a closed or minimized window empties its
+    panel, a new or arriving one takes the first free panel, and the
+    panels follow the browser size and the sidebar. Drag the dividers;
+    drop a window on a panel to swap, Shift-drop to float; Float, Tile,
+    Move to panel and Swap with main in the window menu; Ctrl+Alt+arrows
+    move between panels before panning, Shift swaps. Only the head tab
+    places windows, so tabs with different screens never fight; "Use
+    here" re-fits the panels. Layouts ride a new shell.state_set and are
+    a layout string (r2, r[c2 c2], r[1@25 1 1@25]) over a split-tree
+    kernel now shared with the terminal's panes.
+  * Work area: maximize, placement and tiling share one work-area helper
+    that follows the sidebar and a top or bottom taskbar.
+  * Packs: Lisbon (azulejo light), Isfahan and Moscow (abstract
+    paintings); Copland's wallpaper is a 90s ray-traced desktop in its
+    own Platinum palette, generated as SVG. Chrome audit: one status
+    bar, one chip, a real toggle.
+  * Terminal: OSC 9/777/99 notifications become toasts, OSC 8 links open
+    in wash, OSC 52 copies reach the wash clipboard.
+  * Shell head: "Use here" claims the head on the open socket, and the
+    survivor is promoted when the head leaves. Agent windows re-ask
+    agentd after a connection blip; an app_msg fan-out keeps going past
+    a departed shell.
+  * Remote: B's relay router outlives an ssh drop and re-dials reuse it.
+    Ingress: apps re-ensure a dead /app/<token>/. Router: the QoS
+    scheduler never lets data overtake its bind.
+  * agentd: waiting for transcript writes is a barrier on the writer's
+    queue, not a guess.
+
+ -- Michael <sirmick@gmail.com>  Tue, 20 Oct 2026 04:53:01 +0000
+
 wash (0.18.0-1) unstable; urgency=low
 
   * Host install: wash-install replaces wash-start and wash-update. One
