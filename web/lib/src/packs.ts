@@ -598,9 +598,10 @@ const lisbon: Pack = {
 // Isfahan — Safavid tilework at dusk. A DARK pack: lapis-night chrome, warm
 // ivory text, turquoise faience for focus and selection, gold for the
 // strapwork accents (the taskbar's top edge, the caption's icon). Softly
-// rounded like a pointed arch's spring. The wallpaper — a mosque iwan with
-// muqarnas vaulting over a reflecting pool — is an image-model raster
-// vectorized with a real gradient sky (design/packs/vectorize.py).
+// rounded like a pointed arch's spring. The wallpaper — the mosque's iwan,
+// minarets and patterned dome under a crescent, broken reflections in the
+// pool — is a flat five-ink screen-print poster from an image model, snapped
+// to its inks and traced (design/packs/vectorize.py --palette).
 const isfahan: Pack = {
   id: 'isfahan',
   name: 'Isfahan',
@@ -672,8 +673,9 @@ const isfahan: Pack = {
 // Moscow — painted onion domes in snow at dusk. A LIGHT pack: snow-cream
 // surfaces, near-black brown ink, brick red for focus and the caption
 // (white text), gold and emerald from the domes for accents. The wallpaper
-// — a toy-like St Basil's cluster — is an image-model raster vectorized
-// with a real gradient sky (design/packs/vectorize.py).
+// — St Basil's patterned domes in falling snow at night — is a flat six-ink
+// screen-print poster from an image model, snapped to its inks and traced
+// (design/packs/vectorize.py --palette).
 const moscow: Pack = {
   id: 'moscow',
   name: 'Moscow',

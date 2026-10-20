@@ -70,8 +70,10 @@ Regular/Bold instances generated from the upstream variable font
 ## Lisbon, Isfahan, Moscow — `wallpapers/{lisbon,isfahan,moscow}.svg`
 Original, no third-party artwork. Each source raster was generated with an
 image model (`design/packs/gen-ai-wallpaper.py`, prompts in the script; model
-`google/gemini-3-pro-image` via OpenRouter) in a cel-shaded stylized-3D look
-chosen to vectorize cleanly, then traced by `design/packs/vectorize.py`:
-vtracer for the scene, with the sky masked off and re-filled as a real SVG
-gradient sampled from the raster. Sources kept at
+`google/gemini-3-pro-image` via OpenRouter), then traced by
+`design/packs/vectorize.py`. Isfahan and Moscow are flat screen-print posters
+in five/six exact inks (Tokyo's source passed as a style-only reference),
+snapped to those inks before tracing so the SVG is lossless. Lisbon is a
+cel-shaded diorama, traced with the sky masked off and re-filled as a real
+SVG gradient sampled from the raster. Sources kept at
 `design/packs/src/{lisbon,isfahan,moscow}-source.png`.

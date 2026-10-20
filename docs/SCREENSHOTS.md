@@ -71,7 +71,7 @@ wash-session reads it at spawn and the shell applies the scheme to the document
 root, so every open window re-skins. The nine packs (`web/lib/src/packs.ts`):
 `midnight` (default dark), `tokyo`, `seoul` (light), `copland` (Mac OS 9 light),
 `oslo` (dark slate), `dreamtime` (black, dot-painting wallpaper), `lisbon`
-(light, red-roofed city over the river), `isfahan` (dark, mosque iwan), `moscow` (light, onion
+(light, red-roofed city over the river), `isfahan` (dark, mosque poster), `moscow` (light, onion
 domes in snow). The
 `THEME` map in the capture assigns one per app so the README grid shows the
 range — same desktop, different packs.

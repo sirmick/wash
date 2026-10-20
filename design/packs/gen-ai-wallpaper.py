@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Generate a pack wallpaper's source raster with an image model.
 
-The raster is the SOURCE, not the shipped wallpaper: it is drawn in a
-stylized, cel-shaded 3D look (crisp edges between flat tone bands, no
-texture or grain) precisely so `vtracer` can turn it into a clean SVG.
+The raster is the SOURCE, not the shipped wallpaper, and it is drawn to
+survive `vtracer`. Two styles:
+
+  - "flat": a screen-print poster in a handful of exact inks on one flat
+    field, with Tokyo's source passed as a style reference. Traces
+    losslessly (vectorize.py --palette snaps it to those inks first).
+    Prefer this: anything that tries to look really 3D shows its tracing.
+  - "3d": a cel-shaded miniature-diorama look. Fine for simple, chunky
+    subjects (Lisbon), too lossy for intricate ones.
+
 The prompts live here so a wallpaper can be regenerated or iterated.
 
     python3 design/packs/gen-ai-wallpaper.py isfahan [--n 2] [--model M]
@@ -18,7 +25,7 @@ import json
 import pathlib
 import urllib.request
 
-STYLE = (
+STYLE_3D = (
     "Contemporary stylized 3D illustration for a 16:9 desktop wallpaper. "
     "Soft clay-render / cel-shaded look: smooth rounded forms, gentle volumetric lighting, "
     "a limited harmonious palette, and CRISP clean edges between flat bands of tone. "
@@ -27,24 +34,38 @@ STYLE = (
     "Premium, modern, polished, like a high-end OS wallpaper."
 )
 
+STYLE_FLAT = (
+    "Flat graphic screen-print poster for a 16:9 desktop wallpaper, in the style of the "
+    "attached reference image. Take ONLY its style; do not copy, include or collage any of "
+    "its content (no buildings, signs or windows from it). ONE flat background color covering most of the frame, the "
+    "subject built from bold flat shapes in a few solid inks, abstract and graphic rather than "
+    "realistic. Strictly flat color: no gradients, no shading, no lighting effects, no "
+    "texture, no grain, no outlines in extra colors, no anti-aliasing tricks, no text, no "
+    "logos, no people. Use ONLY the listed colors. Generous empty background, calm upper-left."
+)
+
+# The reference image for "flat" packs: Tokyo's source, whose style traces perfectly.
+FLAT_REF = pathlib.Path(__file__).resolve().parent / "src" / "solarized-dark-source.png"
+
 PROMPTS = {
-    "isfahan": (
-        "Subject: a Persian mosque interior-exterior scene in the spirit of Isfahan's Shah Mosque. "
-        "A grand pointed iwan arch framing a glowing turquoise dome, with layered muqarnas "
-        "honeycomb vaulting rendered as clean stepped 3D cells, eight-pointed star tile panels "
-        "in turquoise, lapis blue and gold, slender minarets, a reflecting pool in the foreground "
-        "mirroring the arch. Deep lapis night-blue sky turning to warm gold near the horizon. "
-        "Palette: lapis #13285a, turquoise #1f9aa6, gold #d9a93f, ivory #efe6d2."
+    "isfahan": ("flat",
+        "Subject: the Shah Mosque in Isfahan at night as a poster. The great dome and a tall "
+        "pointed iwan arch with two slender minarets, as bold flat silhouettes; the dome and "
+        "iwan carry simple flat eight-pointed star and arabesque motifs; a thin crescent moon "
+        "and a few small stars; a long reflecting pool below rendered as broken horizontal "
+        "reflection stripes, like the puddle reflections in the reference. "
+        "Exactly five colors: background deep lapis #13285a; dark navy #0b1838; turquoise "
+        "#2bb3b9; gold #d9a93f; ivory #efe6d2."
     ),
-    "moscow": (
-        "Subject: a whimsical St Basil's Cathedral style cluster of onion domes, each dome a "
-        "different bold pattern (spiral stripes red/green, yellow/green, blue/white, zigzag, "
-        "scales), brick-red towers with white arch trim and gold crosses, on a snowy square at "
-        "dusk with a few soft snowflakes. Sky from deep blue to warm peach at the horizon. "
-        "Rendered like a modern 3D toy diorama: glossy rounded domes, soft shadows. "
-        "Palette: brick red #b5372b, emerald #2f8a4a, gold #e0aa2a, cobalt #2456b3, snow #f4efe6."
+    "moscow": ("flat",
+        "Subject: St Basil's Cathedral at night in snow, as a poster. A cluster of onion domes "
+        "on towers as bold flat silhouettes, each dome with a simple flat pattern (diagonal "
+        "stripes, zigzags, scales) in the listed inks; gold crosses as simple flat shapes; a few "
+        "lit windows; snow as flat white drifts along the bottom and a scatter of round flakes. "
+        "Exactly six colors: background deep night blue #1d2f63; brick red #c0392b; emerald "
+        "#2f8a4a; gold #e0aa2a; cobalt #3b78d8; snow white #f4efe6."
     ),
-    "lisbon": (
+    "lisbon": ("3d",
         "Subject: Lisbon seen from the water, a wide panoramic view straight across from the "
         "river. Strict horizontal bands: the bottom sixth of the frame is calm deep-blue water "
         "with a few clean stylized ripple highlights; above it a dense hillside city of "
@@ -63,13 +84,30 @@ MODEL = "google/gemini-3-pro-image"
 OUT = pathlib.Path(__file__).resolve().parent / "src"
 
 
-def generate(prompt: str, model: str) -> bytes:
+def _ref_jpeg(path: pathlib.Path) -> str:
+    """The reference, downscaled: the model needs its style, not 8K pixels."""
+    import io
+
+    from PIL import Image
+
+    im = Image.open(path).convert("RGB")
+    im.thumbnail((1280, 1280))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=88)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def generate(style: str, prompt: str, model: str) -> bytes:
     key = (pathlib.Path.home() / "openrouter.token").read_text().strip()
+    text = f"{STYLE_FLAT if style == 'flat' else STYLE_3D}\n\n{prompt}"
+    content: list = [{"type": "text", "text": text}]
+    if style == "flat":
+        content.append({"type": "image_url", "image_url": {"url": _ref_jpeg(FLAT_REF)}})
     body = {
         "model": model,
         "modalities": ["image", "text"],
         "image_config": {"aspect_ratio": "16:9", "image_size": "2K"},
-        "messages": [{"role": "user", "content": f"{STYLE}\n\n{prompt}"}],
+        "messages": [{"role": "user", "content": content}],
     }
     req = urllib.request.Request(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -93,7 +131,7 @@ def main() -> None:
     OUT.mkdir(exist_ok=True)
     for i in range(a.n):
         p = OUT / f"{a.pack}-{i + 1}.png"
-        p.write_bytes(generate(PROMPTS[a.pack], a.model))
+        p.write_bytes(generate(*PROMPTS[a.pack], a.model))
         print(p)
 
 
