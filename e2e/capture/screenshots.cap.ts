@@ -207,10 +207,14 @@ test.describe('screenshots', () => {
       // The montage's Agent window: fake adapter on PATH + posed replies.
       PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}`,
       ACP_FAKE_SCRIPT: MONTAGE_SCRIPT,
-      // Deterministic LAN peers for the Connect "On your network" shot; the
-      // no-advertise flag keeps headless runs from broadcasting mDNS. Only the
+      // Deterministic LAN peers for the Connect "On your network" shot. NO_MDNS
+      // stops it browsing the real LAN — otherwise the capture host's actual
+      // neighbours (names + addresses) land in a public screenshot — and
+      // no-advertise keeps headless runs from broadcasting. Only the
       // remote/connect apps read these — harmless for every other shot.
-      WASH_DISCOVERY_STATIC: 'labbox=10.42.0.9:2222,prod-db=10.42.0.10,build01=10.42.0.11',
+      WASH_DISCOVERY_STATIC: 'labbox=10.42.0.9:2222,prod-db=10.42.0.10,build01=10.42.0.11,' +
+        'nas=10.42.0.4,pi-garage=10.42.0.23,router=10.42.0.1,media=10.42.0.12',
+      WASH_DISCOVERY_NO_MDNS: '1',
       WASH_DISCOVERY_NO_ADVERTISE: '1',
     },
   } });
@@ -556,12 +560,15 @@ test.describe('screenshots', () => {
     // it: chromium first, a short sleep, then xclock — so xclock maps last and
     // stays visible on top.
     const html =
-      'data:text/html,<body style=margin:0;height:100vh;background:%230b1020;color:%23e6edf3;' +
+      'data:text/html,<title>wash: a real browser</title><body style=margin:0;height:100vh;background:%230b1020;color:%23e6edf3;' +
       'font-family:system-ui;display:grid;place-items:center>' +
       '<div style=text-align:center><div style=font-size:46px;font-weight:600>wash</div>' +
       '<div style=font-size:17px;opacity:.55;margin-top:10px>a real browser, composited into a real window</div></div></body>';
+    // --no-sandbox: containers (Incus, docker) deny the user-namespace sandbox
+    // and chromium aborts at startup; it only renders the inline page above.
+    // --test-type hides the "unsupported flag" infobar --no-sandbox would draw.
     const chrome =
-      `${chromiumBin} --ozone-platform=x11 --disable-gpu --no-first-run ` +
+      `${chromiumBin} --ozone-platform=x11 --disable-gpu --no-first-run --no-sandbox --test-type ` +
       `--no-default-browser-check --hide-crash-restore-bubble ` +
       `--window-position=300,235 --window-size=940,600 ` +
       `--user-data-dir=/tmp/wash-shot-chrome '${html}'`;

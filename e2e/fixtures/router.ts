@@ -248,6 +248,7 @@ function stageApps(paths: string[]): string {
       }
       symlinkSync('wash', join(dir, name));
     }
+    stageDisplayLibs(dir, binaries);
     return dir;
   }
   // Default: each app is its own separate binary (today's layout).
@@ -256,7 +257,18 @@ function stageApps(paths: string[]): string {
     copyFileSync(bin, dest);
     chmodSync(dest, 0o755);
   }
+  stageDisplayLibs(dir, binaries);
   return dir;
+}
+
+// A WLROOTS_VENDORED wash-display links the out/lib/libwlroots.so it was built
+// with, found via its $ORIGIN/lib rpath — so the staged copy needs a lib/ beside
+// it. Distro-wlroots builds have no out/lib and need nothing.
+function stageDisplayLibs(dir: string, binaries: string[]): void {
+  const lib = join(REPO_ROOT, 'out', 'lib');
+  if (binaries.some((b) => b.endsWith('/wash-display')) && existsSync(lib)) {
+    symlinkSync(lib, join(dir, 'lib'));
+  }
 }
 
 export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandle> {

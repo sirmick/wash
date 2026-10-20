@@ -542,7 +542,9 @@ $(WLROOTS_PC):
 ifeq ($(WLROOTS_VENDORED),1)
 WASH_DISPLAY_PREREQ := $(WLROOTS_PC)
 WASH_DISPLAY_PKGCFG := PKG_CONFIG_PATH="$(WLROOTS_PREFIX)/lib/pkgconfig:$$PKG_CONFIG_PATH"
-WASH_DISPLAY_RPATH  := -DCMAKE_INSTALL_RPATH=$(WASH_LIBDIR) -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+# $ORIGIN/lib second: an unpackaged out/wash-display finds the out/lib copy
+# (make run, the e2e/screenshot fixtures) without /usr/lib/wash existing.
+WASH_DISPLAY_RPATH  := '-DCMAKE_INSTALL_RPATH=$(WASH_LIBDIR);$$ORIGIN/lib' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
 endif
 
 # PANEL_PREBUILT=1 means wash-display/fe/dist/panel.js is already present
