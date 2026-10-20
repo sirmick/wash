@@ -186,7 +186,7 @@ const STAGE = ['session', 'about', 'test', 'notify',
 // range. The montage + a few apps stay on the default (Midnight) dark.
 // Packs: midnight (default dark), tokyo (neon), seoul (light paper),
 // copland (Mac OS 9), oslo (cool slate), lisbon (whitewash + cobalt light),
-// isfahan (lapis night), moscow (snow + brick light). See
+// isfahan (lapis night), moscow (Constructivist light). See
 // web/lib/src/packs.ts.
 const THEME: Record<string, string> = {
   edit: 'tokyo', about: 'tokyo',

@@ -35,13 +35,23 @@ STYLE_3D = (
 )
 
 STYLE_FLAT = (
-    "Flat graphic screen-print poster for a 16:9 desktop wallpaper, in the style of the "
-    "attached reference image. Take ONLY its style; do not copy, include or collage any of "
-    "its content (no buildings, signs or windows from it). ONE flat background color covering most of the frame, the "
+    "Flat graphic screen-print poster for a 16:9 desktop wallpaper (if a reference image is "
+    "attached, take ONLY its style; do not copy, include or collage any of its content). "
+    "ONE flat background color covering most of the frame, the "
     "subject built from bold flat shapes in a few solid inks, abstract and graphic rather than "
     "realistic. Strictly flat color: no gradients, no shading, no lighting effects, no "
     "texture, no grain, no outlines in extra colors, no anti-aliasing tricks, no text, no "
     "logos, no people. Use ONLY the listed colors. Generous empty background, calm upper-left."
+)
+
+STYLE_RASTER = (
+    "A striking contemporary abstract art print, made to be a premium ultra-wide desktop "
+    "wallpaper shipped as a high-resolution raster (it is not traced, so rich texture, "
+    "gradients and painterly or printmaking marks are welcome). Panoramic composition: keep "
+    "the important content in the central horizontal band so it survives cropping to both "
+    "16:9 and 32:9, and leave calmer space toward the left edge. Gallery quality, bold and "
+    "confident, abstract and stylized rather than photographic. No text, no lettering, no "
+    "logos, no watermark, no people, no frame or border."
 )
 
 # The reference image for "flat" packs: Tokyo's source, whose style traces perfectly.
@@ -49,21 +59,74 @@ FLAT_REF = pathlib.Path(__file__).resolve().parent / "src" / "solarized-dark-sou
 
 PROMPTS = {
     "isfahan": ("flat",
-        "Subject: the Shah Mosque in Isfahan at night as a poster. The great dome and a tall "
-        "pointed iwan arch with two slender minarets, as bold flat silhouettes; the dome and "
-        "iwan carry simple flat eight-pointed star and arabesque motifs; a thin crescent moon "
-        "and a few small stars; a long reflecting pool below rendered as broken horizontal "
-        "reflection stripes, like the puddle reflections in the reference. "
-        "Exactly five colors: background deep lapis #13285a; dark navy #0b1838; turquoise "
-        "#2bb3b9; gold #d9a93f; ivory #efe6d2."
+        "Subject: the Shah Mosque in Isfahan at night, drawn as a highly TECHNICAL, intricate "
+        "architectural screen print: precise and dense, like an engraved elevation drawing "
+        "printed in flat inks. The great iwan portal fills much of the right two-thirds: its "
+        "pointed arch packed with dozens of stepped muqarnas cells drawn as crisp geometric "
+        "facets; every panel around it covered in exact girih star-and-polygon tilework and "
+        "interlaced arabesque scrolls; a band of thuluth-style calligraphic frieze (abstract, "
+        "illegible); the dome behind with a fine spiral of arabesque medallions; two minarets "
+        "with balconies of tiny lattice detail; rows of arched alcoves with their own tile "
+        "panels. Fine line work and small repeated detail everywhere on the building, while the "
+        "sky stays one flat field with a crescent moon and a few stars. Below, the reflecting "
+        "pool mirrors it in broken horizontal strokes. "
+        "Exactly six flat colors: background deep lapis #13285a; dark navy #0b1838; turquoise "
+        "#2bb3b9; light turquoise #7fd6d4; gold #d9a93f; ivory #efe6d2."
     ),
     "moscow": ("flat",
-        "Subject: St Basil's Cathedral at night in snow, as a poster. A cluster of onion domes "
-        "on towers as bold flat silhouettes, each dome with a simple flat pattern (diagonal "
-        "stripes, zigzags, scales) in the listed inks; gold crosses as simple flat shapes; a few "
-        "lit windows; snow as flat white drifts along the bottom and a scatter of round flakes. "
-        "Exactly six colors: background deep night blue #1d2f63; brick red #c0392b; emerald "
-        "#2f8a4a; gold #e0aa2a; cobalt #3b78d8; snow white #f4efe6."
+        "Subject: St Basil's Cathedral at night in snow, drawn as a highly TECHNICAL, intricate "
+        "architectural screen print: precise and dense, like an engraved elevation drawing "
+        "printed in flat inks. The full cathedral on the right two-thirds: the central tent "
+        "spire faceted with a fine diamond lattice; eight onion domes each covered in exact "
+        "repeated patterns (twisted stripes, chevrons, scales, faceted pineapple knobs) drawn "
+        "with crisp small shapes; tiers of kokoshnik gables stacked up every tower; brick "
+        "courses, window surrounds, columns, cornices and the galleried base all drawn with "
+        "fine, precise detail; gold crosses with chains. Fine line work and small repeated "
+        "detail everywhere on the building, while the sky stays one flat field with a scatter "
+        "of round snowflakes, and flat snow drifts along the bottom. "
+        "Exactly seven flat colors: background deep night blue #1d2f63; dark navy #121c3e; "
+        "brick red #c0392b; emerald #2f8a4a; gold #e0aa2a; cobalt #3b78d8; snow white #f4efe6."
+    ),
+    # Raster concepts (ship as WebP, not traced).
+    "isfahan-geometry": ("raster",
+        "Subject: Isfahan, abstracted. The turquoise-and-lapis dome and pointed iwan of the "
+        "Shah Mosque dissolve into a sweeping field of Persian geometry: girih star tessellations, "
+        "muqarnas facets and arabesque spirals that fragment and recombine across the panorama "
+        "like a modernist collage, glazed tile textures, gold leaf accents, deep night lapis and "
+        "a glowing turquoise core."
+    ),
+    "isfahan-bridge": ("raster",
+        "Subject: Isfahan at dusk, abstracted. The long double-tiered arcade of the Si-o-se-pol "
+        "bridge stretches across the panorama, its arches reflected and fractured in the "
+        "Zayanderud river into rhythmic geometric bands; a turquoise dome and minarets rise "
+        "softly beyond; sky in layered bands of saffron, rose and lapis. Painterly, textured, "
+        "geometric, warm light against deep blue."
+    ),
+    "moscow-constructivist": ("raster",
+        "Subject: Moscow through Russian Constructivism and Suprematism (El Lissitzky, Rodchenko, "
+        "Malevich): bold red wedges, black and cream planes, dynamic diagonals and circles, "
+        "interlocking with the colorful patterned onion domes of St Basil's Cathedral, a Kremlin "
+        "tower star, and falling snow, as a graphic avant-garde poster with screen-print "
+        "texture. Palette of brick red, black, cream, gold, emerald and cobalt."
+    ),
+    # Recreates a picked moscow-constructivist candidate (passed with --ref)
+    # full-bleed: the first pass came out as a print mounted on a wall.
+    "moscow-soviet": ("raster",
+        "Recreate the attached artwork as the full image, edge to edge: the artwork itself must "
+        "fill the ENTIRE frame with no paper card, mat, mount, border, wall, shadow or margin "
+        "around it. Keep its composition and Constructivist/Suprematist style: dynamic red and "
+        "black wedges and diagonals, circles, Kremlin towers with red stars, and the patterned "
+        "onion domes of St Basil's Cathedral on the right. Remove all snow and snowflakes. "
+        "Shift the palette toward classic Soviet poster colors: deep Soviet red #c8102e, black "
+        "#151515, warm cream paper #efe4cc, and gold #d4a017 as the dominant colors, with the "
+        "domes' greens and blues kept but slightly muted. Screen-print texture."
+    ),
+    "moscow-domes": ("raster",
+        "Subject: Moscow in winter, abstracted. The onion domes of St Basil's Cathedral — "
+        "twisted stripes, zigzags and scales in red, emerald, gold and cobalt — rendered as a "
+        "rich, almost folk-art abstraction with expressive brush and gouache texture, stacked "
+        "and overlapping across the panorama against a deep blue snowy night with soft "
+        "falling snow and warm lit windows."
     ),
     "lisbon": ("3d",
         "Subject: Lisbon seen from the water, a wide panoramic view straight across from the "
@@ -81,6 +144,8 @@ PROMPTS = {
 }
 
 MODEL = "google/gemini-3-pro-image"
+# 4K output is only offered on the preview build of the pro model.
+MODEL_4K = "google/gemini-3-pro-image-preview"
 OUT = pathlib.Path(__file__).resolve().parent / "src"
 
 
@@ -91,22 +156,25 @@ def _ref_jpeg(path: pathlib.Path) -> str:
     from PIL import Image
 
     im = Image.open(path).convert("RGB")
-    im.thumbnail((1280, 1280))
+    im.thumbnail((2048, 2048))
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=88)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def generate(style: str, prompt: str, model: str) -> bytes:
+def generate(style: str, prompt: str, model: str, ref: bool = True,
+             aspect: str = "16:9", size: str = "2K", ref_path: pathlib.Path | None = None) -> bytes:
     key = (pathlib.Path.home() / "openrouter.token").read_text().strip()
-    text = f"{STYLE_FLAT if style == 'flat' else STYLE_3D}\n\n{prompt}"
+    text = f"{ {'flat': STYLE_FLAT, 'raster': STYLE_RASTER}.get(style, STYLE_3D)}\n\n{prompt}"
     content: list = [{"type": "text", "text": text}]
-    if style == "flat":
+    if ref_path:
+        content.append({"type": "image_url", "image_url": {"url": _ref_jpeg(ref_path)}})
+    elif style == "flat" and ref:
         content.append({"type": "image_url", "image_url": {"url": _ref_jpeg(FLAT_REF)}})
     body = {
         "model": model,
         "modalities": ["image", "text"],
-        "image_config": {"aspect_ratio": "16:9", "image_size": "2K"},
+        "image_config": {"aspect_ratio": aspect, "image_size": size},
         "messages": [{"role": "user", "content": content}],
     }
     req = urllib.request.Request(
@@ -126,12 +194,24 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("pack", choices=sorted(PROMPTS))
     ap.add_argument("--n", type=int, default=1)
-    ap.add_argument("--model", default=MODEL)
+    ap.add_argument("--model", default=None, help=f"default {MODEL}, or {MODEL_4K} at 4K")
+    # The model sometimes collages the reference's own content into the
+    # picture (Moscow did, every time); a detailed prompt carries the style alone.
+    # Raster wallpapers: panoramic and big enough for an ultrawide (cover-cropped).
+    ap.add_argument("--aspect", default=None, help="default 21:9 for raster styles, else 16:9")
+    ap.add_argument("--size", default=None, help="default 4K for raster styles, else 2K")
+    ap.add_argument("--ref", type=pathlib.Path, help="an image to work from (e.g. a candidate to recreate)")
+    ap.add_argument("--no-ref", action="store_true", help="flat style without the Tokyo reference image")
     a = ap.parse_args()
     OUT.mkdir(exist_ok=True)
     for i in range(a.n):
         p = OUT / f"{a.pack}-{i + 1}.png"
-        p.write_bytes(generate(*PROMPTS[a.pack], a.model))
+        style, prompt = PROMPTS[a.pack]
+        raster = style == "raster"
+        size = a.size or ("4K" if raster else "2K")
+        model = a.model or (MODEL_4K if size == "4K" else MODEL)
+        p.write_bytes(generate(style, prompt, model, ref=not a.no_ref, ref_path=a.ref,
+                               aspect=a.aspect or ("21:9" if raster else "16:9"), size=size))
         print(p)
 
 
