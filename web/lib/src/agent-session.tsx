@@ -18,7 +18,7 @@ import type { Component, JSX } from 'solid-js';
 import { tokens } from './tokens';
 import { Tab } from './tab';
 import { agentStateColor, agentStateLabel } from './agent-status';
-import { HighlightedCode, Markdown } from './markdown';
+import { HighlightedCode, LinkText, Markdown } from './markdown';
 import { PathLinksProvider, hitTitle, looksLikePath, pathResolver, useHits, usePathLinks } from './path-links';
 import type { PathLinks } from './path-links';
 import { Terminal } from './terminal';
@@ -538,7 +538,7 @@ export const Collaboration: Component<{
     return line.length > 120 ? line.slice(0, 117) + '…' : line;
   };
   const body = (s: InboxSection) => (
-    <Show when={!fromHuman(s)} fallback={<div style={{ 'white-space': 'pre-wrap' }}>{s.body}</div>}>
+    <Show when={!fromHuman(s)} fallback={<div style={{ 'white-space': 'pre-wrap' }}><LinkText text={s.body} /></div>}>
       <Markdown text={s.body} />
     </Show>
   );
@@ -1273,11 +1273,12 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
                     : {}),
                 }}
               >
-                {/* Agent-authored prose is Markdown; what you typed is literal.
-                    Rendering your own prompt as Markdown would eat the
-                    asterisks and backticks you meant to send. */}
+                {/* Agent-authored prose is Markdown; what you typed is literal
+                    (rendering your own prompt as Markdown would eat the
+                    asterisks and backticks you meant to send), except that a
+                    web address in it is a link, like everywhere in wash. */}
                 <Show when={e.kind === 'message'} fallback={
-                  <Show when={e.kind === 'collaboration'} fallback={<>{e.text}</>}>
+                  <Show when={e.kind === 'collaboration'} fallback={<LinkText text={e.text ?? ''} />}>
                     <Collaboration
                       text={e.text ?? ''}
                       open={(key) => openInbox().has(`${e.seq}:${key}`)}

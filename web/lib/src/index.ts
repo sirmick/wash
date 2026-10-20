@@ -59,7 +59,7 @@ export type { TermNotification } from './term-notify';
 export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
-export { Markdown, parseBlocks, parseInline } from './markdown';
+export { Markdown, LinkText, parseBlocks, parseInline, isWebURL, trimURL } from './markdown';
 export type { MarkdownProps, Align } from './markdown';
 export { looksLikePath, pathTokens } from './path-links';
 export { MenuPicker, filterOptions } from './menu-picker';
