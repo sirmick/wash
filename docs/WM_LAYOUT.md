@@ -116,8 +116,22 @@ later as a unit suffix; it fits the "unsized gets the rest" rule unchanged.
   ignores moves for them).
 - **More windows than slots:** the extras stay floating. **Fewer:** the
   remaining slots stay empty and render as drop targets.
+- **Moving into a slot swaps** with its occupant (an empty slot is a plain
+  move). The shape never changes as a side effect — that is what keeping
+  shape and occupancy separate buys.
+- **Membership follows the centre, whatever moved it.** A window belongs to
+  the cell holding its centre (`viewportForRect`), and "send to viewport"
+  is only a move by whole screens (`sendToViewportRect`). So tiling reacts
+  to *a window's cell changed* — menu, drag across a cell edge, an app
+  moving its own window — not to the menu item:
+  - **Leaving a tiled cell** empties its slot and returns the window to
+    its pre-tile floating rect. That rect is recorded when it enters a
+    slot, in the cell's layout blob — not the router's `Restore*`, which
+    belongs to maximize.
+  - **Arriving in a tiled cell** takes the first empty slot in tree order;
+    with none free it floats, as the overflow rule says.
 - **A window leaves its slot** when it is closed, minimized, dragged out by
-  its title bar, or sent to another cell. Its slot goes empty; the shape
+  its title bar, or moved to another cell. Its slot goes empty; the shape
   does not change.
 - **Minimum sizes win over fractions.** A divider drag clamps at the
   window's `minW/minH` (`minFractionFor`); a layout whose slots would be
@@ -137,18 +151,53 @@ Layouts are stored by the router so every browser on a session agrees,
 using the session's existing app-state blobs keyed by cell — no wire
 change. Geometry still flows only through `window.move`/`window.resize`.
 
+**The head places; anyone edits.** Screen size is per browser but the plane
+is shared, so two tabs re-placing the same windows from different screen
+sizes would fight. wash already has the answer: the router's foreground
+**head** shell (`router.go` `headShell`; `shell.head` /
+`shell.superseded` / `shell.claim_head`) is the one driver of terminal
+channels (`docs/PTY_ROBUST.md` Fix A), and `wash-display`'s single output
+is sized by it (`republishDisplayState`). Tiling follows the same rule:
+
+- The layout *data* — shape, slot assignment, pre-tile rects — may be
+  edited by any tab.
+- Only the head *computes geometry* and sends the moves/resizes. It
+  re-places a cell when that cell's data changes (from any tab), when its
+  own work area changes, and when it **gains the head** — so "Use here" on
+  a laptop reflows the panels to the laptop, as the display does.
+- A non-head tab renders what the router echoes. The one local exception is
+  a divider drag in progress, which moves windows live for feedback and
+  commits fractions to the data on release.
+- Head is a local-router concept, so the local head places every window in
+  a tiled cell, remote-host windows included.
+
 ## 7. Controls
 
+- **Layout menu**, one menu reachable from three places: right-click the
+  desktop (the current cell — but a fully tiled cell has no desktop left
+  to click), right-click empty taskbar (the current cell), right-click a
+  pager cell (that cell, without going there). Presets with diagrams, the
+  current one ticked; Float (no layout); Even out panels; Edit layout….
+  The taskbar and pager live in the session app, so this goes through a
+  `window.wash.setCellLayout(cell, shape)` API.
 - Title-bar context menu (`window.tsx`, shared with the taskbar pill's
-  right-click): **Arrange ▸** with the presets, each with a small diagram,
-  the current one ticked; **Float** to take the window out.
+  right-click): **Move to panel ▸** (a mini diagram, click a slot),
+  **Swap with main**, **Float**.
 - Dividers: an overlay in the shell over the cell's gutters (term's drag
   pattern, `apps/term/fe/src/main.tsx` ~750–790, copied rather than shared:
   the shell's dividers sit above windows, not inside one app).
-- Keys (Ctrl+Alt, capture phase like the switcher; Super stays untouched):
-  focus the neighbouring panel by geometry (`focusNeighbor`).
+- Keys (Super stays untouched):
+  - Ctrl+Alt+Arrow already pans the viewport. In a tiled cell it moves
+    focus to the neighbouring panel by geometry (`focusNeighbor`) and pans
+    only when there is no panel further that way — i3's focus-across-
+    outputs. Floating cells are unchanged.
+  - Ctrl+Alt+Shift+Arrow swaps the window with that neighbour. Free in the
+    shell today, but some host desktops grab it (GNOME: move to
+    workspace), so the menu and drag remain the dependable paths.
 - Drag a window's title bar over a tiled cell: the slot under the pointer
-  highlights; drop swaps with its occupant.
+  highlights; drop swaps with its occupant. Shift-drop, or dropping
+  outside the cell, floats it.
+- Later: Rotate windows (every window one slot along).
 - Settings: the cell's layout string, editable, errors shown with offset.
 
 ## 8. Milestones
