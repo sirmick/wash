@@ -20,7 +20,7 @@ export interface SectionProps {
   /** Optional Lucide sprite icon name rendered left of the title. */
   icon?: string;
   /** Optional color for the icon glyph only — gives each section a bit
-   *  of per-widget identity without tinting the chevron/badge. Falls
+   *  of per-widget identity without tinting the badge. Falls
    *  back to `accent`, then a neutral grey. */
   iconColor?: string;
   state: SectionState;
@@ -29,7 +29,7 @@ export interface SectionProps {
   /** Optional badge text rendered right-aligned in the header (e.g. "3"
    *  for a count of pending items). Hidden when empty. */
   badge?: string;
-  /** Optional accent color for the chevron + badge — used by widgets
+  /** Optional accent color for the icon + badge — used by widgets
    *  that want a strong visual signal (e.g. priv = red trust). */
   accent?: string;
   children?: JSX.Element;
@@ -64,7 +64,9 @@ export const Section: Component<SectionProps> = (props) => {
     'justify-content': 'center',
     transition: 'transform 120ms',
     transform: isOpen() ? 'rotate(90deg)' : 'rotate(0deg)',
-    color: props.accent ?? tokens.fgMuted,
+    // Always neutral: a tinted chevron on every accented section reads as
+    // a status light. The accent lives on the icon and badge instead.
+    color: tokens.fgMuted,
   });
 
   return (

@@ -68,7 +68,7 @@ export const NetWidget: Component<NetWidgetProps> = (props) => {
     <div
       data-testid="net-widget"
       data-status={status()}
-      style={{ display: 'flex', 'flex-direction': 'column', gap: '6px', 'font-size': '11px' }}
+      style={{ display: 'flex', 'flex-direction': 'column', gap: '6px', 'font-size': tokens.fontSizeSm }}
     >
       <div style={{ display: 'flex', 'align-items': 'center', gap: '6px' }}>
         <span

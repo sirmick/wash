@@ -68,7 +68,7 @@ export const AudioWidget: Component<AudioWidgetProps> = (props) => {
               'font-style': 'italic',
               'text-align': 'center',
               padding: '12px 0',
-              'font-size': '11px',
+              'font-size': tokens.fontSizeSm,
             }}
           >
             nothing playing

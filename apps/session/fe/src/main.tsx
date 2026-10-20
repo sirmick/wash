@@ -3384,7 +3384,7 @@ const PaletteRow: Component<{
         </Show>
       </span>
       <span style={{ flex: 1 }}>{props.app.name}</span>
-      <span style={{ opacity: 0.55, 'font-size': '12px' }}>{props.app.subtitle ?? props.app.id}</span>
+      <span style={{ opacity: 0.55, 'font-size': tokens.fontSizeMd }}>{props.app.subtitle ?? props.app.id}</span>
     </button>
   );
 };
@@ -3465,7 +3465,7 @@ const windowListStyle: JSX.CSSProperties = {
 };
 
 const screenshotStatusStyle: JSX.CSSProperties = {
-  'font-size': '12px',
+  'font-size': tokens.fontSizeMd,
   transition: 'opacity 0.25s',
   color: tokens.fgMuted,
   'white-space': 'nowrap',
@@ -3476,7 +3476,7 @@ const clockStyle: JSX.CSSProperties = {
   padding: '0 14px',
   'font-variant-numeric': 'tabular-nums',
   opacity: 0.7,
-  'font-size': '13px',
+  'font-size': tokens.fontSizeBase,
 };
 
 // Keyboard highlight for a start-menu row. MenuItem paints itself
@@ -3500,7 +3500,7 @@ const sectionHeaderStyle: JSX.CSSProperties = {
 const emptyStyle: JSX.CSSProperties = {
   padding: '10px 14px',
   color: tokens.fgMuted,
-  'font-size': '13px',
+  'font-size': tokens.fontSizeBase,
 };
 
 // ---- custom element wrapper ----

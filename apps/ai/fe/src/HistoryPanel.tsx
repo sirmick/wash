@@ -361,7 +361,7 @@ export const HistoryPanel: Component<{
                         border: 'none',
                         padding: '0 2px',
                         cursor: 'pointer',
-                        'font-size': '12px',
+                        'font-size': tokens.fontSizeMd,
                         'line-height': 1,
                         'flex-shrink': 0,
                       }}

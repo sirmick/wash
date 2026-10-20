@@ -46,7 +46,7 @@ export const NotifyWidget: Component<NotifyWidgetProps> = (props) => {
             'font-style': 'italic',
             'text-align': 'center',
             padding: '12px 0',
-            'font-size': '11px',
+            'font-size': tokens.fontSizeSm,
           }}
         >
           no notifications
@@ -99,7 +99,7 @@ const NotifyRow: Component<{ entry: NotifyEntry; onMarkRead: () => void }> = (pr
     padding: '6px 8px',
     'border-radius': tokens.radiusSm,
     cursor: 'pointer',
-    'font-size': '11px',
+    'font-size': tokens.fontSizeSm,
     transition: 'background 0.12s',
     opacity: props.entry.read ? 0.65 : 1,
   });

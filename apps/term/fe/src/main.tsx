@@ -2670,7 +2670,7 @@ const findBarStyle: JSX.CSSProperties = {
 };
 const findCountStyle: JSX.CSSProperties = {
   color: tokens.fgDim,
-  'font-size': '11px',
+  'font-size': tokens.fontSizeSm,
   'white-space': 'nowrap',
   'min-width': '52px',
   'text-align': 'right',
@@ -2679,7 +2679,7 @@ const findCountStyle: JSX.CSSProperties = {
 // Shortcut hint in the Split menu's trailing slot.
 const shortcutStyle: JSX.CSSProperties = {
   color: tokens.fgDim,
-  'font-size': '11px',
+  'font-size': tokens.fontSizeSm,
   'padding-left': '18px',
 };
 

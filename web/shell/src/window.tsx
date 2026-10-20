@@ -414,14 +414,15 @@ export function FloatingWindow(props: WindowProps) {
   // process is uid 0 (or one of the privilege-chain reserved ids): a
   // dark red stripe identifies the privilege scope at a glance, and
   // the value comes from router-attested SessionWindow.is_root — apps
-  // cannot self-declare it. The non-focused tone is a darker maroon
-  // so focus is still distinguishable. A crashed window's titlebar
+  // cannot self-declare it. The non-focused tone mixes the red toward
+  // the window surface (darker on dark packs, paler on light ones) so
+  // focus is still distinguishable. A crashed window's titlebar
   // is a brighter red regardless of focus — the tombstone state needs
   // to be unmistakable.
   const titlebarBackground = () => {
     if (props.win.crashed) return tokens.borderDanger;
     if (props.win.isRoot) {
-      return isFocused(props.win) ? tokens.bgDanger : `color-mix(in srgb, ${tokens.bgDanger} 70%, #000)`;
+      return isFocused(props.win) ? tokens.bgDanger : `color-mix(in srgb, ${tokens.bgDanger} 70%, ${tokens.bgWindow})`;
     }
     // Titlebar bg via override vars (default to the pack's selected/menu
     // surfaces) so NT can paint a navy active / gray inactive caption.
@@ -436,10 +437,18 @@ export function FloatingWindow(props: WindowProps) {
   // the titlebar icon agree, and both re-skin with the pack. Root windows
   // keep a muted off-white so the accent doesn't clash with the red
   // privilege stripe (which already carries the identity signal).
+  // A pack with a colored caption (Lisbon's cobalt) sets
+  // --wash-titlebar-icon, since an accent hue can vanish into it.
   const titlebarIconColor = () => {
     if (props.win.isRoot) return undefined;
-    return accentColor(props.win.element || props.win.instanceID, props.win.accent);
+    return `var(--wash-titlebar-icon, ${accentColor(props.win.element || props.win.instanceID, props.win.accent)})`;
   };
+  // Root and crashed captions paint the pack's danger tones, which are
+  // chosen to carry the pack's ordinary fg — not a caption fg picked for
+  // a colored titlebar (white on Lisbon's cobalt would vanish on its pale
+  // danger pink). The buttons inherit this.
+  const titlebarForeground = () =>
+    props.win.crashed || props.win.isRoot ? tokens.fg : `var(--wash-titlebar-fg, ${tokens.fg})`;
 
   return (
     <div
@@ -514,7 +523,7 @@ export function FloatingWindow(props: WindowProps) {
           'box-sizing': 'border-box',
           padding: '0 8px',
           background: titlebarBackground(),
-          color: `var(--wash-titlebar-fg, ${tokens.fg})`,
+          color: titlebarForeground(),
           cursor: 'move',
           'user-select': 'none',
           // Window title uses the title type style (Chicago in Copland, etc.).
@@ -813,7 +822,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
       style={{
         position: 'absolute',
         inset: '0',
-        background: `color-mix(in srgb, ${tokens.bgDanger} 55%, #000)`,
+        background: `color-mix(in srgb, ${tokens.bgDanger} 55%, ${tokens.bgWindow})`,
         color: tokens.fgDanger,
         display: 'flex',
         'flex-direction': 'column',
@@ -836,7 +845,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
         <AlertOctagon size={16} />
         <div style={{ flex: 1 }}>
           <div style={{ 'font-weight': '600' }}>{props.title} crashed</div>
-          <div style={{ opacity: '0.75', 'font-size': '11px' }}>
+          <div style={{ opacity: '0.75', 'font-size': tokens.fontSizeSm }}>
             {props.info.appID} — {summary()}
           </div>
         </div>
@@ -858,7 +867,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
             padding: '4px 8px',
             cursor: 'pointer',
             font: 'inherit',
-            'font-size': '12px',
+            'font-size': tokens.fontSizeMd,
           }}
         >
           <Copy size={12} />
@@ -874,13 +883,13 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
           flex: 1,
           margin: '0',
           padding: '10px 12px',
-          background: `color-mix(in srgb, ${tokens.bgDanger} 40%, #000)`,
+          background: `color-mix(in srgb, ${tokens.bgDanger} 40%, ${tokens.bgInset})`,
           color: tokens.fgDanger,
           border: 'none',
           outline: 'none',
           resize: 'none',
           'font-family': 'inherit',
-          'font-size': '12px',
+          'font-size': tokens.fontSizeMd,
           'line-height': '1.45',
           'white-space': 'pre',
           'overflow': 'auto',
@@ -894,7 +903,7 @@ function CrashPane(props: { info: CrashInfo; title: string }) {
 // left the glyphs a pixel or two off the titlebar's vertical centre.
 const titlebarBtnStyle = {
   background: 'transparent',
-  color: `var(--wash-titlebar-fg, ${tokens.fg})`,
+  color: 'inherit',
   border: 'none',
   cursor: 'pointer',
   padding: '0 8px',

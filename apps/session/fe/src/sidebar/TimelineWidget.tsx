@@ -92,12 +92,12 @@ export const TimelineWidget: Component<TimelineWidgetProps> = (props) => {
         }}
       />
       <Show when={props.off()}>
-        <div data-testid="timeline-off" style={{ opacity: 0.5, 'font-style': 'italic', 'text-align': 'center', padding: '12px 0', 'font-size': '11px' }}>
+        <div data-testid="timeline-off" style={{ opacity: 0.5, 'font-style': 'italic', 'text-align': 'center', padding: '12px 0', 'font-size': tokens.fontSizeSm }}>
           the activity journal is off
         </div>
       </Show>
       <Show when={!props.off() && rows().length === 0}>
-        <div data-testid="timeline-empty" style={{ opacity: 0.5, 'font-style': 'italic', 'text-align': 'center', padding: '12px 0', 'font-size': '11px' }}>
+        <div data-testid="timeline-empty" style={{ opacity: 0.5, 'font-style': 'italic', 'text-align': 'center', padding: '12px 0', 'font-size': tokens.fontSizeSm }}>
           {props.loading() ? 'loading…' : query() || family() !== 'all' ? 'nothing matches' : 'nothing yet'}
         </div>
       </Show>

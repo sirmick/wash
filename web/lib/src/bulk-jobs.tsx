@@ -51,7 +51,7 @@ export const BulkJobs: Component<BulkJobsProps> = (props) => {
             'font-style': 'italic',
             'text-align': 'center',
             padding: '12px 0',
-            'font-size': '11px',
+            'font-size': tokens.fontSizeSm,
           }}
         >
           queue is empty
@@ -93,7 +93,7 @@ const BulkRow: Component<{ job: BulkJob; onCancel: () => void }> = (props) => {
         display: 'flex',
         'flex-direction': 'column',
         gap: '4px',
-        'font-size': '11px',
+        'font-size': tokens.fontSizeSm,
       }}
     >
       <div

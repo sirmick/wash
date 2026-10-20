@@ -159,7 +159,7 @@ const HostEntry: Component<{
 export const RemoteWidget: Component<RemoteWidgetProps> = (props) => (
   <div
     data-testid="remote-widget"
-    style={{ display: 'flex', 'flex-direction': 'column', gap: '6px', 'font-size': '11px' }}
+    style={{ display: 'flex', 'flex-direction': 'column', gap: '6px', 'font-size': tokens.fontSizeSm }}
   >
     <Show
       when={props.hosts().length > 0}

@@ -129,7 +129,7 @@ const UnlockModal: Component<{
         >
           🛡 sudo password
         </div>
-        <div style={{ opacity: 0.75, 'font-size': '12px', 'margin-bottom': '12px' }}>
+        <div style={{ opacity: 0.75, 'font-size': tokens.fontSizeMd, 'margin-bottom': '12px' }}>
           wash-priv needs your sudo password to approve request
           <span
             style={{
@@ -167,7 +167,7 @@ const UnlockModal: Component<{
             data-testid="priv-unlock-error"
             style={{
               color: tokens.fgDanger,
-              'font-size': '11px',
+              'font-size': tokens.fontSizeSm,
               'margin-bottom': '8px',
             }}
           >

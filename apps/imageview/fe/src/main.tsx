@@ -219,7 +219,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         </div>
         <Show
           when={images().length > 0}
-          fallback={<div data-testid="iv-list" style={{ ...listStyle, padding: '16px', color: tokens.fgDim, 'font-size': '13px' }}>No images</div>}
+          fallback={<div data-testid="iv-list" style={{ ...listStyle, padding: '16px', color: tokens.fgDim, 'font-size': tokens.fontSizeBase }}>No images</div>}
         >
         {/* Windowed: a 2000-image folder renders ~a few dozen tiles. */}
         <VirtualGrid
@@ -374,7 +374,7 @@ const listHeaderStyle: JSX.CSSProperties = {
 };
 
 const listTitleStyle: JSX.CSSProperties = {
-  'font-size': '11px',
+  'font-size': tokens.fontSizeSm,
   color: tokens.fgMuted,
   'font-weight': 600,
   'text-transform': 'uppercase',
@@ -468,7 +468,7 @@ const captionStyle: JSX.CSSProperties = {
   top: '8px',
   left: '50%',
   transform: 'translateX(-50%)',
-  'font-size': '11px',
+  'font-size': tokens.fontSizeSm,
   color: tokens.fgMuted,
   background: tokens.bgMenu,
   padding: '2px 10px',

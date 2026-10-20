@@ -13,10 +13,9 @@
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Button, createAppBus, defineWashApp, Input, StatusBar, tokens } from '@wash/ui';
+import { Button, Chip, createAppBus, defineWashApp, Input, StatusBar, tokens } from '@wash/ui';
 import { serviceBadge, isActive as isActiveState, isFailed as isFailedState, type BadgeTone } from './service-status.ts';
 import {
-  Check,
   CircleAlert,
   CircleDashed,
   CirclePlay,
@@ -27,6 +26,8 @@ import {
   RefreshCcw,
   RotateCcw,
   Search,
+  ToggleLeft,
+  ToggleRight,
 } from 'lucide-solid';
 
 interface Service {
@@ -277,7 +278,7 @@ const ServiceRow: Component<{
               title="Start"
               disabled={isBusy() || masked()}
               onClick={() => props.onAction('start')}
-              style={iconBtnStyle(false)}
+              style={iconBtnStyle}
             >
               <Play size={14} />
             </Button>
@@ -289,7 +290,7 @@ const ServiceRow: Component<{
             title="Stop"
             disabled={isBusy()}
             onClick={() => props.onAction('stop')}
-            style={iconBtnStyle(false)}
+            style={iconBtnStyle}
           >
             <Pause size={14} />
           </Button>
@@ -300,7 +301,7 @@ const ServiceRow: Component<{
           title="Restart"
           disabled={isBusy() || masked()}
           onClick={() => props.onAction('restart')}
-          style={iconBtnStyle(false)}
+          style={iconBtnStyle}
         >
           <RotateCcw size={14} />
         </Button>
@@ -310,16 +311,20 @@ const ServiceRow: Component<{
           title={isEnabled() ? 'Disable' : 'Enable'}
           disabled={isBusy() || masked()}
           onClick={() => props.onAction(isEnabled() ? 'disable' : 'enable')}
-          style={iconBtnStyle(isEnabled())}
+          style={{ ...iconBtnStyle, color: isEnabled() ? tokens.fgSuccess : tokens.fgMuted }}
         >
-          <Check size={14} />
+          {/* A switch, not a check: the state reads from the knob's side and
+              color, and nothing looks "selected" on every enabled row. */}
+          <Show when={isEnabled()} fallback={<ToggleLeft size={16} />}>
+            <ToggleRight size={16} />
+          </Show>
         </Button>
         <Button
           variant="ghost"
           data-testid={`srv-logs-${s().name}`}
           title="View logs"
           onClick={props.onLogs}
-          style={iconBtnStyle(false)}
+          style={iconBtnStyle}
         >
           <FileText size={14} />
         </Button>
@@ -369,12 +374,14 @@ const EnabledChip: Component<{ enabled: string }> = (props) => {
   // boot), masked = red (can't run), and every other config state (disabled,
   // static, alias, linked, indirect, generated) is quiet neutral — no
   // arbitrary accent hue.
-  const map: Record<string, { bg: string; fg: string }> = {
-    enabled: { bg: tokens.bgSuccess, fg: tokens.fgSuccess },
-    masked:  { bg: tokens.bgDanger, fg: tokens.fgDanger },
-  };
-  const t = map[props.enabled] ?? { bg: tokens.bgNeutral, fg: tokens.fgMuted };
-  return <span style={{ ...chipStyle, background: t.bg, color: t.fg }}>{props.enabled}</span>;
+  const tone = props.enabled === 'enabled' ? 'success' : props.enabled === 'masked' ? 'danger' : 'neutral';
+  // Block + ellipsis so a long state (enabled-runtime) stays inside the
+  // fixed chip column; the title carries the full text.
+  return (
+    <Chip tone={tone} title={props.enabled} style={enabledChipStyle}>
+      {props.enabled}
+    </Chip>
+  );
 };
 
 // ---- helpers ----
@@ -509,13 +516,11 @@ const badgeStyle: JSX.CSSProperties = {
   'white-space': 'nowrap',
 };
 
-const chipStyle: JSX.CSSProperties = {
-  display: 'inline-flex',
-  'align-items': 'center',
-  'justify-content': 'center',
-  padding: '2px 6px',
-  'border-radius': `${tokens.radiusSm}`,
-  font: tokens.type.textSm,
+const enabledChipStyle: JSX.CSSProperties = {
+  display: 'block',
+  'text-align': 'center',
+  overflow: 'hidden',
+  'text-overflow': 'ellipsis',
 };
 
 const chipDimStyle: JSX.CSSProperties = {
@@ -529,21 +534,17 @@ const actionsStyle: JSX.CSSProperties = {
   gap: '4px',
 };
 
-// Footprint + active-fill override on top of <Button variant="ghost">
-// (the ghost base supplies the transparent bg, borderMenu outline, radius,
-// color and cursor; this carries the compact square footprint and the
-// selected-state background when the action is the current state).
-function iconBtnStyle(active: boolean): JSX.CSSProperties {
-  return {
-    display: 'inline-flex',
-    'align-items': 'center',
-    'justify-content': 'center',
-    width: '26px',
-    height: '24px',
-    padding: 0,
-    ...(active ? { background: tokens.bgRowSelected } : {}),
-  };
-}
+// Footprint override on top of <Button variant="ghost"> (the ghost base
+// supplies the transparent bg, borderMenu outline, radius, color and
+// cursor; this carries the compact square footprint).
+const iconBtnStyle: JSX.CSSProperties = {
+  display: 'inline-flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  width: '26px',
+  height: '24px',
+  padding: 0,
+};
 
 const busyTagStyle: JSX.CSSProperties = {
   font: tokens.type.textSm,
