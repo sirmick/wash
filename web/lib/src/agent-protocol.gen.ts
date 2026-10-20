@@ -1647,6 +1647,14 @@ export interface Workspace {
   repo_url?: string;
   orchestrator: string;
   state: string;
+  /**
+   * Phase is "" while the team fans out, "closing" once the milestone's
+   * tail is narrow enough for one agent: new members launch only as
+   * replacements (handoff_from), members without open work are asked
+   * to hand off, and the dossier (workspace_get view=dossier) is the
+   * handover. Set with workspace_configure phase.
+   */
+  phase?: string;
   revision: number;
   max_active: number;
   max_members: number;

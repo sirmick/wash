@@ -362,3 +362,14 @@ test('a Questions card cut short loads the whole thread when opened', async () =
  expect(screen.getByTestId('workspace-qa-answers-e2').textContent).toBe('↳ answers the above');
  expect(screen.getByTestId('workspace-qa-answers-e3').textContent).toBe('↳ probably answers the above');
 });
+
+test('a closing workspace wears a Closing chip on the Plan toolbar', async () => {
+ const f=frame(); f.workspace!.phase='closing';
+ render(() => <WorkspaceLayout frame={f} onAction={()=>{}}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-plan-link'));
+ expect(screen.getByTestId('workspace-plan-phase').textContent).toBe('Closing');
+ const open=frame();
+ cleanup(); render(() => <WorkspaceLayout frame={open} onAction={()=>{}}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-plan-link'));
+ expect(screen.queryByTestId('workspace-plan-phase')).toBeNull();
+});

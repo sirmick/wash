@@ -502,6 +502,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if live >= w.MaxMembers {
 					return fmt.Errorf("member %s: workspace member limit (%d) reached", key, w.MaxMembers)
 				}
+				// Closing folds the team back: a new member only carries a
+				// retiring one's context on, it does not widen the team.
+				if w.Phase == "closing" && spec.HandoffFrom == "" && spec.HandoffFile == "" {
+					return fmt.Errorf("member %s: the workspace is closing; new members launch only as replacements (handoff_from or handoff_file), or set phase:\"\" to fan out again", key)
+				}
 				explicit := swarm.AgentProfile{Capability: spec.Capability, Enforcement: spec.Enforcement, Approval: spec.Approval, Provider: spec.Provider, Effort: spec.Effort, Configs: spec.Configs, Subagents: spec.Subagents}
 				catalog, settings, err := memberSettingsFor(w, catalogs, badCatalogs, spec.Catalog, spec.Model, explicit)
 				if err != nil {
@@ -567,7 +572,7 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				}
 			}
 		}
-		out := map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "qa_dir": w.QADir, "plan_file": w.PlanFile, "legend": w.Legend, "max_active": w.MaxActive, "max_members": w.MaxMembers}}
+		out := map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "qa_dir": w.QADir, "plan_file": w.PlanFile, "legend": w.Legend, "max_active": w.MaxActive, "max_members": w.MaxMembers, "phase": w.Phase}}
 		if len(advisories) > 0 {
 			out["advisories"] = advisories
 		}

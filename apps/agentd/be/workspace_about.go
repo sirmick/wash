@@ -138,6 +138,9 @@ func openWorkspaceRow(w swarm.Workspace, caller string) map[string]any {
 	lead := workspaceLeadSession(w)
 	running := hostedBySession(lead) != nil
 	row := map[string]any{"id": w.ID, "name": w.Name, "state": w.State, "project_root": w.Root, "orchestrator_running": running}
+	if w.Phase != "" {
+		row["phase"] = w.Phase
+	}
 	switch {
 	case lead == caller:
 		row["lead"] = "this session"

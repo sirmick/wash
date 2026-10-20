@@ -126,6 +126,10 @@ export const WorkspacePlanGraph: Component<{
       </p>
     }>
       <div data-testid="workspace-plan-toolbar" style={{ display: 'flex', gap: `${tokens.spaceMd}px`, 'align-items': 'baseline', padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`, color: tokens.fgMuted, font: tokens.type.textSm, 'border-bottom': `1px solid ${tokens.borderMenu}` }}>
+        <Show when={w().phase === 'closing'}>
+          <span data-testid="workspace-plan-phase" title="The team is folding back to one agent: members without open work hand off, new members launch only as replacements, and workspace_get view=dossier is the handover."
+            style={{ font: tokens.type.textSm, color: tokens.accentAmber, border: `1px solid ${tokens.accentAmber}`, 'border-radius': tokens.radiusSm, padding: `0 ${tokens.spaceXs}px`, 'white-space': 'nowrap' }}>Closing</span>
+        </Show>
         <span data-testid="workspace-plan-legend" style={{ flex: 1, 'min-width': 0, overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }} title={w().legend ?? ''}>{w().legend ?? ''}</span>
         <span data-testid="workspace-plan-frontier" title="Nodes unblocked now, then what each wave of completions unblocks. One or two a wave for the rest of the way is a tail one agent closes faster than a team."
           style={{ 'white-space': 'nowrap', color: frontier().narrow ? tokens.accentAmber : tokens.fgMuted, 'font-weight': frontier().narrow ? 600 : undefined }}>

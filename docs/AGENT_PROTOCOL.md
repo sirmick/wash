@@ -1241,6 +1241,7 @@ UsageRow is one row's counters.
 | `repo_url?` | `string` | RepoURL is the project's web home (its git origin as https, no .git), filled in on the published view, not stored: the Plan tab links the commit hashes a node's body names to it. |
 | `orchestrator` | `string` |  |
 | `state` | `string` |  |
+| `phase?` | `string` | Phase is "" while the team fans out, "closing" once the milestone's tail is narrow enough for one agent: new members launch only as replacements (handoff_from), members without open work are asked to hand off, and the dossier (workspace_get view=dossier) is the handover. Set with workspace_configure phase. |
 | `revision` | `number` |  |
 | `max_active` | `number` |  |
 | `max_members` | `number` |  |
