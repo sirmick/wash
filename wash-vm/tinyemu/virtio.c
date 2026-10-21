@@ -1604,6 +1604,29 @@ static int virtio_console_mp_recv_request(VIRTIODevice *vs, int queue_idx,
     return 0;
 }
 
+/* How many host→guest bytes `port` can take right now: the size of the
+   guest's next RX buffer, or 0 if it has none posted. Check this before
+   taking bytes off an input FIFO so a full queue never drops them. */
+int virtio_console_mp_get_write_len(VIRTIODevice *vs, int port)
+{
+    VIRTIOConsoleMPDevice *s = (VIRTIOConsoleMPDevice *)vs;
+    int queue_idx, desc_idx, read_size, write_size;
+    QueueState *qs;
+    uint16_t avail_idx;
+
+    if (port < 0 || port >= s->nr_ports) return 0;
+    queue_idx = (port == 0) ? 0 : (port * 2 + 2);
+    qs = &vs->queue[queue_idx];
+    if (!qs->ready) return 0;
+    avail_idx = virtio_read16(vs, qs->avail_addr + 2);
+    if (qs->last_avail_idx == avail_idx) return 0;
+    desc_idx = virtio_read16(vs, qs->avail_addr + 4 +
+                             (qs->last_avail_idx & (qs->num - 1)) * 2);
+    if (get_desc_rw_size(vs, &read_size, &write_size, queue_idx, desc_idx))
+        return 0;
+    return write_size;
+}
+
 /* Push host→guest bytes for `port`. Returns 0 if no buffer was
    available (caller should buffer and retry). */
 int virtio_console_mp_write_data(VIRTIODevice *vs, int port,

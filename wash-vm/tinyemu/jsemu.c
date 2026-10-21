@@ -53,6 +53,15 @@ extern void fb_refresh(void *opaque, void *data,
                        int x, int y, int w, int h, int stride);
 extern void net_recv_packet(EthernetDevice *bs,
                             const uint8_t *buf, int len);
+/* wash patch: run-loop scheduling (lib.js). wash_run_soon yields to the
+   event loop via a MessageChannel, not setTimeout(0), which browsers clamp
+   to >= 4 ms once nested: that clamp left ~22% of a CPU-bound boot idle.
+   wash_run_later sleeps; wash_kick cuts the sleep short when input
+   arrives, so a keystroke reaches the guest at once instead of on the
+   next 10 ms tick. */
+extern void wash_run_soon(void (*fn)(void *), void *arg);
+extern void wash_run_later(void (*fn)(void *), void *arg, int ms);
+extern void wash_kick(void);
 
 static uint8_t console_fifo[1024];
 static int console_fifo_windex;
@@ -91,6 +100,7 @@ void console_queue_char(int c)
         if (++console_fifo_windex == sizeof(console_fifo))
             console_fifo_windex = 0;
         console_fifo_count++;
+        wash_kick();
     }
 }
 
@@ -211,7 +221,9 @@ static CharacterDevice *console_init(void)
  *             to window.washConsoles[ch].onOutput. */
 
 #define WASH_VC_MAX  4
-#define WASH_VC_FIFO 8192
+/* Input FIFO per channel. Bytes past a full FIFO are refused (the queue
+   functions return 0) and JS keeps them until the run loop drains room. */
+#define WASH_VC_FIFO 65536
 
 static uint8_t wash_vc_in_fifo[WASH_VC_MAX][WASH_VC_FIFO];
 static int wash_vc_in_windex[WASH_VC_MAX];
@@ -248,15 +260,17 @@ static int wash_vc_in_read(void *opaque, uint8_t *buf, int len)
     return out_len;
 }
 
-/* called from JS via cwrap: queue one byte for channel `ch`. */
-void virtio_console_in_queue_char(int ch, int c)
+/* called from JS via cwrap: queue one byte for channel `ch`. Returns 1,
+   or 0 if the FIFO is full (the caller keeps the byte and retries). */
+int virtio_console_in_queue_char(int ch, int c)
 {
-    if (ch < 0 || ch >= WASH_VC_MAX) return;
-    if (wash_vc_in_count[ch] < WASH_VC_FIFO) {
-        wash_vc_in_fifo[ch][wash_vc_in_windex[ch]] = c;
-        if (++wash_vc_in_windex[ch] == WASH_VC_FIFO) wash_vc_in_windex[ch] = 0;
-        wash_vc_in_count[ch]++;
-    }
+    if (ch < 0 || ch >= WASH_VC_MAX) return 1; /* no such channel: drop */
+    if (wash_vc_in_count[ch] >= WASH_VC_FIFO) return 0;
+    wash_vc_in_fifo[ch][wash_vc_in_windex[ch]] = c;
+    if (++wash_vc_in_windex[ch] == WASH_VC_FIFO) wash_vc_in_windex[ch] = 0;
+    wash_vc_in_count[ch]++;
+    wash_kick();
+    return 1;
 }
 
 /* Allocate a CharacterDevice for one wash virtio-console channel.
@@ -279,7 +293,7 @@ static CharacterDevice *virtio_console_dev_init(int ch)
    uses window.washVports[port].onOutput / .input — same shape as the
    existing washConsoles but routes through virtio_console_mp_*. */
 #define WASH_MP_PORTS 3
-#define WASH_MP_FIFO  8192
+#define WASH_MP_FIFO  65536 /* see WASH_VC_FIFO */
 static uint8_t wash_mp_in_fifo[WASH_MP_PORTS][WASH_MP_FIFO];
 static int wash_mp_in_windex[WASH_MP_PORTS];
 static int wash_mp_in_rindex[WASH_MP_PORTS];
@@ -308,15 +322,17 @@ static int wash_mp_in_read(void *opaque, uint8_t *buf, int len)
 }
 
 /* Called from JS to inject a byte into one of the multiport device's
-   per-port RX FIFOs. */
-void virtio_vport_in_queue_char(int port, int c)
+   per-port RX FIFOs. Returns 1, or 0 if the FIFO is full (the caller
+   keeps the byte and retries). */
+int virtio_vport_in_queue_char(int port, int c)
 {
-    if (port < 0 || port >= WASH_MP_PORTS) return;
-    if (wash_mp_in_count[port] < WASH_MP_FIFO) {
-        wash_mp_in_fifo[port][wash_mp_in_windex[port]] = c;
-        if (++wash_mp_in_windex[port] == WASH_MP_FIFO) wash_mp_in_windex[port] = 0;
-        wash_mp_in_count[port]++;
-    }
+    if (port < 0 || port >= WASH_MP_PORTS) return 1; /* no such port: drop */
+    if (wash_mp_in_count[port] >= WASH_MP_FIFO) return 0;
+    wash_mp_in_fifo[port][wash_mp_in_windex[port]] = c;
+    if (++wash_mp_in_windex[port] == WASH_MP_FIFO) wash_mp_in_windex[port] = 0;
+    wash_mp_in_count[port]++;
+    wash_kick();
+    return 1;
 }
 
 static CharacterDevice *virtio_vport_dev_init(int port)
@@ -494,14 +510,22 @@ static void init_vm(void *arg)
     }
     free(s);
     
-    emscripten_async_call(virt_machine_run, m, 0);
+    wash_run_soon(virt_machine_run, m);
 }
 
-/* need to be long enough to hide the non zero delay of setTimeout(_, 0) */
+/* Cycles per run-loop task (~15 ms of emulation at ~200 MIPS): long
+   enough to amortise the yield, short enough to keep the page responsive. */
 #define MAX_EXEC_TOTAL_CYCLE 3000000
 #define MAX_EXEC_CYCLE        200000
 
+/* Idle sleep. Fixed rather than the guest's next timer deadline, which
+   wakes the page far more often (idle CPU ~3% → ~11%); input does not wait
+   on it, since wash_kick ends the sleep as soon as a byte is queued. */
 #define MAX_SLEEP_TIME 10 /* in ms */
+
+/* Largest chunk handed to a guest RX buffer in one go (Linux posts
+   PAGE_SIZE buffers for virtio-console). */
+#define WASH_RX_CHUNK 4096
 
 extern void washtrace_heartbeat(void);
 void virt_machine_run(void *opaque)
@@ -530,30 +554,43 @@ void virt_machine_run(void *opaque)
 
     /* wash patch: drain each wash virtio-console channel's input
        fifo (bytes arriving from JS) into the matching VIRTIODevice's
-       recv queue. Mirrors the legacy single-device loop above. */
+       recv queue, filling every RX buffer the guest has posted (one
+       128-byte chunk per tick capped input at ~15 KiB/s). */
     for (int wi = 0; wi < wash_vc_count; wi++) {
-        if (!wash_vc_vdev[wi] || !wash_vc_chardev[wi]) continue;
-        if (!virtio_console_can_write_data(wash_vc_vdev[wi])) continue;
-        uint8_t wbuf[128];
+        static uint8_t wbuf[WASH_RX_CHUNK];
         int wret, wlen;
-        wlen = virtio_console_get_write_len(wash_vc_vdev[wi]);
-        wlen = min_int(wlen, sizeof(wbuf));
-        wret = wash_vc_chardev[wi]->read_data(wash_vc_chardev[wi]->opaque, wbuf, wlen);
-        if (wret > 0)
+        if (!wash_vc_vdev[wi] || !wash_vc_chardev[wi]) continue;
+        while (wash_vc_in_count[wi] > 0 &&
+               virtio_console_can_write_data(wash_vc_vdev[wi])) {
+            wlen = virtio_console_get_write_len(wash_vc_vdev[wi]);
+            wlen = min_int(wlen, sizeof(wbuf));
+            if (wlen <= 0)
+                break;
+            wret = wash_vc_chardev[wi]->read_data(wash_vc_chardev[wi]->opaque, wbuf, wlen);
+            if (wret <= 0)
+                break;
             virtio_console_write_data(wash_vc_vdev[wi], wbuf, wret);
+        }
     }
 
     /* wash multiport: drain per-port input FIFOs into the multiport
        device's per-port RX queues, and pump any pending control
-       messages. */
+       messages. Bytes leave a FIFO only once the guest has a buffer
+       for them: taking them first dropped them whenever the queue was
+       full, corrupting the wash stream. */
     if (wash_mp_vdev) {
         virtio_console_mp_poll(wash_mp_vdev);
         for (int p = 0; p < WASH_MP_PORTS; p++) {
-            if (wash_mp_in_count[p] == 0) continue;
-            uint8_t buf[128];
-            int len = wash_mp_in_read((void *)(intptr_t)p, buf, sizeof(buf));
-            if (len > 0)
+            static uint8_t buf[WASH_RX_CHUNK];
+            int len;
+            while (wash_mp_in_count[p] > 0) {
+                len = virtio_console_mp_get_write_len(wash_mp_vdev, p);
+                len = min_int(len, sizeof(buf));
+                if (len <= 0)
+                    break;
+                len = wash_mp_in_read((void *)(intptr_t)p, buf, len);
                 virtio_console_mp_write_data(wash_mp_vdev, p, buf, len);
+            }
         }
     }
 
@@ -574,9 +611,9 @@ void virt_machine_run(void *opaque)
     }
     
     if (delay == 0) {
-        emscripten_async_call(virt_machine_run, m, 0);
+        wash_run_soon(virt_machine_run, m);
     } else {
-        emscripten_async_call(virt_machine_run, m, MAX_SLEEP_TIME);
+        wash_run_later(virt_machine_run, m, MAX_SLEEP_TIME);
     }
 }
 

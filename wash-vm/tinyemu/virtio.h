@@ -124,6 +124,7 @@ void virtio_console_resize_event(VIRTIODevice *s, int width, int height);
 VIRTIODevice *virtio_console_multiport_init(VIRTIOBusDef *bus,
                                             CharacterDevice **ports,
                                             int nr_ports);
+int virtio_console_mp_get_write_len(VIRTIODevice *s, int port);
 int virtio_console_mp_write_data(VIRTIODevice *s, int port,
                                  const uint8_t *buf, int buf_len);
 void virtio_console_mp_poll(VIRTIODevice *s);

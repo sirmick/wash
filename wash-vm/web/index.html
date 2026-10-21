@@ -406,141 +406,90 @@
         };
       })();
 
-      // wash multi-channel virtio-console bridge.
-      //
-      // TinyEMU is patched to expose N virtio-console MMIO devices,
-      // one per wash channel. Linux sees them as /dev/hvc(N+1)
-      // (hvc0 is the SBI console). Channel index → role:
-      //   0 → /dev/hvc1   login / getty (future)
-      //   1 → /dev/hvc2   wash router data plane (wash protocol frames)
-      //   2 → /dev/hvc3   wash supervisor + router stdout log
-      //
-      // The C side calls window.washConsoles[ch].onOutput(Uint8Array)
-      // when the VM writes; reads bytes injected via
-      // window.washConsoles[ch].input(byte). Each channel has its own
-      // pending buffer so frames queued before WASM is ready aren't
-      // dropped.
       (function () {
-        var N = 4;
-        window.washConsoles = [];
-        for (var ch = 0; ch < N; ch++) {
-          (function (ix) {
-            var pendingIn = [];
-            var pendingOut = [];
-            var outputCb = null;
-            window.washConsoles[ix] = {
-              channel: ix,
-              input: function (byte) {
-                if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') {
-                  pendingIn.push(byte);
-                  return;
-                }
-                try {
-                  Module.ccall('virtio_console_in_queue_char', null, ['number','number'], [ix, byte]);
-                } catch (e) {
-                  console.error('[washConsoles['+ix+'].input]', e);
-                }
-              },
-              onOutput: function (bytes) {
-                if (typeof outputCb === 'function') {
-                  try { outputCb(bytes); } catch (e) { console.error(e); }
-                } else {
-                  pendingOut.push(bytes);
-                }
-              },
-              setOutputHandler: function (fn) {
-                outputCb = fn;
-                while (pendingOut.length) {
-                  try { fn(pendingOut.shift()); } catch (e) { console.error(e); }
-                }
-              },
-              _flushIn: function () {
-                while (pendingIn.length) {
-                  try { Module.ccall('virtio_console_in_queue_char', null, ['number','number'], [ix, pendingIn.shift()]); }
-                  catch (e) { console.error('[washConsoles['+ix+'].flush]', e); break; }
-                }
-              },
-            };
-          })(ch);
-        }
-
-        var flush = setInterval(function () {
-          if (typeof Module === 'undefined' || typeof Module.ccall !== 'function') return;
-          clearInterval(flush);
-          for (var i = 0; i < N; i++) window.washConsoles[i]._flushIn();
-        }, 50);
-      })();
-
-      // window.washVports — parallel array for the multiport
-      // virtio-console device. Same shape as washConsoles, but routes
-      // via virtio_vport_* (raw chardev /dev/vport0p{port}, no
-      // HVC/tty layer).
-      (function () {
-        var P = 3;
-        window.washVports = [];
-        // ccall is a JS function well before the wasm *exports* are populated,
-        // so calling virtio_vport_in_queue_char during the ~3s init window
-        // throws "wasmExports is undefined". Rather than call blindly and drop
-        // the byte (the old code logged + lost it), buffer input until a ccall
-        // actually succeeds (wasmLive) and replay it via flushVp — no console
-        // spam, no dropped handshake bytes.
-        var wasmLive = false;
-        function canCcall() { return typeof Module !== 'undefined' && typeof Module.ccall === 'function'; }
-        for (var p = 0; p < P; p++) {
-          (function (ix) {
-            var pendingIn = [];
-            var pendingOut = [];
-            var outputCb = null;
-            window.washVports[ix] = {
-              port: ix,
-              input: function (byte) {
-                if (wasmLive && canCcall()) {
-                  try {
-                    Module.ccall('virtio_vport_in_queue_char', null, ['number','number'], [ix, byte]);
-                    return;
-                  } catch (e) { wasmLive = false; } // exports went away? buffer + replay
-                }
-                pendingIn.push(byte);
-              },
-              onOutput: function (bytes) {
-                if (typeof outputCb === 'function') {
-                  try { outputCb(bytes); } catch (e) { console.error(e); }
-                } else {
-                  pendingOut.push(bytes);
-                }
-              },
-              setOutputHandler: function (fn) {
-                outputCb = fn;
-                while (pendingOut.length) {
-                  try { fn(pendingOut.shift()); } catch (e) { console.error(e); }
-                }
-              },
-              // Drain buffered input. Returns false (and keeps the rest) when a
-              // call throws — the wasm exports aren't live yet; retry next tick.
-              _flushIn: function () {
-                while (pendingIn.length) {
-                  try {
-                    Module.ccall('virtio_vport_in_queue_char', null, ['number','number'], [ix, pendingIn[0]]);
-                    pendingIn.shift();
-                    wasmLive = true;
-                  } catch (e) { return false; }
-                }
-                return true;
-              },
-            };
-          })(p);
-        }
-        var flushVp = setInterval(function () {
-          if (!canCcall()) return;
-          var ok = true;
-          for (var i = 0; i < P; i++) { if (!window.washVports[i]._flushIn()) ok = false; }
-          // Stop polling only once a real ccall has succeeded — i.e. the wasm
-          // exports are genuinely live (not merely "ccall is a function").
-          if (wasmLive && ok) {
-            window.__washBootMark('wasm exports live; vport input flushed');
-            clearInterval(flushVp);
+        // Host→guest input for one emulator FIFO, kept in order. The ccall
+        // throws until the wasm exports are live (the first ~0.5 s, longer on
+        // a slow network), and the C side refuses a byte (returns 0) while its
+        // 64 KiB FIFO is full. Either way the bytes wait here and a timer
+        // retries, so nothing is dropped (the C FIFOs used to discard
+        // whatever arrived past 8 KiB in flight).
+        function washInputQueue(fn, ix) {
+          var q = [], head = 0, timer = 0;
+          function flush() {
+            timer = 0;
+            while (head < q.length) {
+              var ok = 0, live = true;
+              try { ok = Module.ccall(fn, 'number', ['number', 'number'], [ix, q[head]]); }
+              catch (e) { live = false; }
+              if (!ok) {
+                timer = setTimeout(flush, live ? 2 : 20);
+                return;
+              }
+              head++;
+              if (!window.__washInputLive) {
+                window.__washInputLive = true;
+                window.__washBootMark('wasm exports live; input flowing');
+              }
+            }
+            q.length = 0;
+            head = 0;
           }
-        }, 50);
+          return function (byte) {
+            q.push(byte);
+            if (!timer) flush();
+          };
+        }
+
+        // Output from the VM, buffered until the bridge attaches a handler.
+        function washOutputSink(target) {
+          var pendingOut = [], outputCb = null;
+          target.onOutput = function (bytes) {
+            if (typeof outputCb === 'function') {
+              try { outputCb(bytes); } catch (e) { console.error(e); }
+            } else {
+              pendingOut.push(bytes);
+            }
+          };
+          target.setOutputHandler = function (fn) {
+            outputCb = fn;
+            while (pendingOut.length) {
+              try { fn(pendingOut.shift()); } catch (e) { console.error(e); }
+            }
+          };
+          return target;
+        }
+
+        // wash multi-channel virtio-console bridge.
+        //
+        // TinyEMU is patched to expose N virtio-console MMIO devices,
+        // one per wash channel. Linux sees them as /dev/hvc(N+1)
+        // (hvc0 is the SBI console). Channel index → role:
+        //   0 → /dev/hvc1   login / getty (future)
+        //   1 → /dev/hvc2   wash router data plane (wash protocol frames)
+        //   2 → /dev/hvc3   wash supervisor + router stdout log
+        //
+        // The C side calls window.washConsoles[ch].onOutput(Uint8Array)
+        // when the VM writes; reads bytes injected via
+        // window.washConsoles[ch].input(byte).
+        window.washConsoles = [];
+        for (var ch = 0; ch < 4; ch++) {
+          window.washConsoles[ch] = washOutputSink({
+            channel: ch,
+            input: washInputQueue('virtio_console_in_queue_char', ch),
+          });
+        }
+
+        // window.washVports — parallel array for the multiport
+        // virtio-console device. Same shape as washConsoles, but routes
+        // via virtio_vport_* (raw chardev /dev/vport0p{port}, no
+        // HVC/tty layer).
+        window.washVports = [];
+        for (var vp = 0; vp < 3; vp++) {
+          window.washVports[vp] = washOutputSink({
+            port: vp,
+            input: washInputQueue('virtio_vport_in_queue_char', vp),
+          });
+        }
       })();
 
       // Diagnostic buffer for TinyEMU's stdio. The wasm runs

@@ -6,7 +6,7 @@
 # 1. Toolchain runtime libs the bootlin prebuilt always copies even
 #    though nothing in our target links against them:
 #      libstdc++.so.*     — no C++ binaries (wash is Go, sudo/nano/
-#                           haveged are C, busybox is C). 1.9 MB.
+#                           are C, busybox is C). 1.9 MB.
 #      libgfortran.so.*   — no Fortran. 1.15 MB.
 #      libgomp.so.*       — no OpenMP. 200 KB.
 #    pkg-toolchain-external.mk copies these unconditionally when

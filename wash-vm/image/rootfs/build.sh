@@ -26,11 +26,14 @@ echo "==> cross-compiling wash multicall binary (linux/riscv64)"
 # (wash-vm/guest is present here; the distro packaging build omits it).
 # WASH_LITE_PACKS=1: the rootfs is a browser download, so embed only two theme
 # packs' wallpapers (Midnight + Copland) rather than all of them.
+# WASH_NO_ASSET_GZIP=1: the router's wire is an in-tab virtio-console, so
+# gzipping assets saves nothing and costs emulated CPU (assetgzip_off.go).
 make -C "$REPO_ROOT" \
     GOARCH=riscv64 \
     OUT="$work/washrv64" \
     WASH_VMLOGIN=1 \
     WASH_LITE_PACKS=1 \
+    WASH_NO_ASSET_GZIP=1 \
     multicall-bin \
     >/dev/null
 
@@ -105,8 +108,9 @@ install -m 0644 -D "$here/overlay/etc/profile.d/wash.sh" \
 
 # Boot-speed: stub out init.d entries we don't want for the wash
 # demo (no network → CONFIG_NET disabled in kernel; sysctl touches
-# nothing useful; seedrng is redundant with haveged + the kernel's
-# RANDOM_TRUST_BOOTLOADER). Overlay-shadowed with no-op scripts.
+# nothing useful; seedrng is redundant: the emulator seeds the CRNG through
+# the device tree's rng-seed, credited via random.trust_bootloader=1).
+# Overlay-shadowed with no-op scripts.
 #
 # Note: S01syslogd + S02klogd are NOT stubbed — busybox's own init
 # scripts wire syslogd → /var/log/messages and klogd → /dev/kmsg
