@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"mime"
 	"path"
+	"strings"
 	"time"
 )
 
@@ -42,14 +43,22 @@ const gzipMinSize = 512
 
 // gzipWinNumer/Denom: only keep the gzip copy if it's at least 8% smaller
 // than the identity bytes. Already-compressed assets (woff2, png, webp)
-// barely shrink, so this auto-selects identity for them without a
-// content-type allowlist.
+// barely shrink, so this auto-selects identity for any we don't know of.
 const gzipWinNumer, gzipWinDenom = 92, 100
+
+// compressedExts are formats that are compressed already. gzipIfSmaller
+// would reject them anyway, but only after a BestCompression pass over the
+// whole file (a multi-megabyte wallpaper), so skip them up front.
+var compressedExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".avif": true,
+	".gif": true, ".woff": true, ".woff2": true, ".gz": true, ".br": true,
+	".zip": true, ".mp3": true, ".mp4": true, ".webm": true, ".ogg": true,
+}
 
 // gzipIfSmaller returns a gzip encoding of raw if it's a worthwhile win,
 // else nil (meaning: send identity).
 func gzipIfSmaller(raw []byte) []byte {
-	if len(raw) < gzipMinSize {
+	if !assetGzip || len(raw) < gzipMinSize {
 		return nil
 	}
 	var buf bytes.Buffer
@@ -101,10 +110,15 @@ func (r *Router) loadAsset(clean string) (*assetEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	ext := strings.ToLower(path.Ext(clean))
+	var gz []byte
+	if !compressedExts[ext] {
+		gz = gzipIfSmaller(raw)
+	}
 	e := &assetEntry{
-		mime:    mime.TypeByExtension(path.Ext(clean)),
+		mime:    mime.TypeByExtension(ext),
 		raw:     raw,
-		gz:      gzipIfSmaller(raw),
+		gz:      gz,
 		size:    size,
 		modTime: mod,
 	}

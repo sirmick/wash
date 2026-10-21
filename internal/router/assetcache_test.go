@@ -24,6 +24,12 @@ func gunzipBytes(t *testing.T, gz []byte) []byte {
 }
 
 func TestGzipIfSmaller(t *testing.T) {
+	if !assetGzip {
+		if gzipIfSmaller([]byte(strings.Repeat("x", 4096))) != nil {
+			t.Fatalf("wash_no_asset_gzip build compressed an asset")
+		}
+		return
+	}
 	raw := []byte(strings.Repeat("wash wallpaper svg path data ", 500))
 	gz := gzipIfSmaller(raw)
 	if gz == nil {
@@ -49,6 +55,7 @@ func TestLoadAssetCachesAndCompresses(t *testing.T) {
 	body := []byte(strings.Repeat("<path d='M0 0 L1 1'/>", 400))
 	fsys := fstest.MapFS{
 		"wallpapers/test.svg": &fstest.MapFile{Data: body},
+		"wallpapers/test.PNG": &fstest.MapFile{Data: body},
 		"tiny.txt":            &fstest.MapFile{Data: []byte("hi")},
 	}
 	r := &Router{assets: http.FS(fsys)}
@@ -60,11 +67,25 @@ func TestLoadAssetCachesAndCompresses(t *testing.T) {
 	if !bytes.Equal(e.raw, body) {
 		t.Fatalf("raw bytes mismatch")
 	}
-	if e.gz == nil {
-		t.Fatalf("expected svg to be gzipped")
+	if assetGzip {
+		if e.gz == nil {
+			t.Fatalf("expected svg to be gzipped")
+		}
+		if !bytes.Equal(gunzipBytes(t, e.gz), body) {
+			t.Fatalf("cached gzip does not round-trip to raw")
+		}
+	} else if e.gz != nil {
+		t.Fatalf("wash_no_asset_gzip build gzipped the svg")
 	}
-	if !bytes.Equal(gunzipBytes(t, e.gz), body) {
-		t.Fatalf("cached gzip does not round-trip to raw")
+
+	// A compressed-media extension is never gzipped, however well its bytes
+	// would shrink (here the same compressible body as the svg).
+	pe, err := r.loadAsset("/wallpapers/test.PNG")
+	if err != nil {
+		t.Fatalf("png: %v", err)
+	}
+	if pe.gz != nil {
+		t.Fatalf("png should not be gzipped")
 	}
 
 	// Second call is a cache hit — same pointer, no rebuild.
