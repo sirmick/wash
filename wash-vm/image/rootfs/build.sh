@@ -21,6 +21,12 @@ here="$(cd -- "$(dirname "$0")" && pwd)"
 work=$(mktemp -d -t wash-rootfs-rv.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 
+# The apps the VM installs (their wash-<app> entries in /usr/lib/wash, where
+# the router's --apps-dir scan finds them). The multicall links only these
+# (WASH_ONLY_APPS): the rest of the roster is ~7 MB of a binary the browser
+# downloads and the VM never runs.
+vm_apps="session about fm bulk edit settings top priv journal syslogs term"
+
 echo "==> cross-compiling wash multicall binary (linux/riscv64)"
 # WASH_VMLOGIN=1: this is the VM image, so compile in the wash-vmlogin dispatch
 # (wash-vm/guest is present here; the distro packaging build omits it).
@@ -34,6 +40,7 @@ make -C "$REPO_ROOT" \
     WASH_VMLOGIN=1 \
     WASH_LITE_PACKS=1 \
     WASH_NO_ASSET_GZIP=1 \
+    WASH_ONLY_APPS="$vm_apps" \
     multicall-bin \
     >/dev/null
 
@@ -64,18 +71,17 @@ install -m 0755 "$work/washrv64/wash" "$ctx/overlay/usr/bin/wash"
 # launch (a CLI without a manifest) rejects with exit 2 → router
 # logs `disabled /usr/lib/wash/wash-launch`. Keep the user-facing
 # tool, skip the app-dir entry.
-for app in wash-router wash-vmlogin wash-session wash-about wash-fm wash-bulk \
-           wash-edit wash-settings wash-top wash-priv wash-journal \
-           wash-syslogs wash-launch wash-term; do
+for app in wash-router wash-vmlogin wash-launch; do
     ln -s wash "$ctx/overlay/usr/bin/$app"
+done
+for app in $vm_apps; do
+    ln -s wash "$ctx/overlay/usr/bin/wash-$app"
 done
 
 # /usr/lib/wash mirrors — wash-router's --apps-dir scans here.
 # wash-launch deliberately skipped (see comment above).
-for app in wash-session wash-about wash-fm wash-bulk wash-edit \
-           wash-settings wash-top wash-priv wash-journal \
-           wash-syslogs wash-term; do
-    ln -s ../../bin/wash "$ctx/overlay/usr/lib/wash/$app"
+for app in $vm_apps; do
+    ln -s ../../bin/wash "$ctx/overlay/usr/lib/wash/wash-$app"
 done
 
 # No S00mounts — buildroot's default /etc/inittab runs `mount -a`

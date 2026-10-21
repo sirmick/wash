@@ -136,11 +136,15 @@ top-level `https://<user>.github.io/`, no `--base` flag is needed.
   `prefetch`, so TinyEMU requests them all at once when the VM starts:
   the boot reads nearly all of them, and fetching each on demand cost
   the guest one round trip per chunk.
-* Total cold-boot transfer is **≈17 MiB**: the kernel (~3.7 MiB) plus
-  the rootfs (~13 MiB). It is bandwidth-bound: at 20 Mbit/s the desktop
-  is up in ~10 s, at localhost speeds in ~2.3 s.
+* Total cold-boot transfer is **≈13 MiB raw, ≈10.6 MiB gzipped**: the
+  kernel (~3.7 MiB, 2.2 gzipped) plus the rootfs (~9.5 MiB, 8.4
+  gzipped). GitHub Pages gzips everything, `.bin` included. Most of the
+  rootfs is the wash multicall, which `rootfs/build.sh` links with only
+  the apps the VM installs (`WASH_ONLY_APPS`). Boot is bandwidth-bound:
+  at localhost speeds the desktop is up in ~1.9 s.
 * Compression: gzip transfer-encoding gives a further ~50 % on the
-  text-y `.js` + the kernel; the rootfs chunks are LZ4 squashfs already.
+  text-y `.js` + the kernel; the rootfs chunks are LZ4 squashfs already,
+  so gzip only trims them ~12 %.
   Pre-`gzip` the artifacts and serve with `Content-Encoding: gzip`
   if your host supports it.
 

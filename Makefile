@@ -722,6 +722,20 @@ endif
 ifneq ($(WASH_NO_ASSET_GZIP),)
 MULTICALL_TAGS := $(MULTICALL_TAGS),wash_no_asset_gzip
 endif
+# WASH_ONLY_APPS="session fm ..." links only those roster apps into the
+# multicall: every other one gets its no_app_<app> tag. For the in-browser VM,
+# which installs 11 apps and downloads the binary (rootfs/build.sh passes the
+# apps it installs). Empty (the default) links the whole roster.
+ifneq ($(strip $(WASH_ONLY_APPS)),)
+ifneq ($(filter-out $(IMPORT_APPS),$(WASH_ONLY_APPS)),)
+$(error WASH_ONLY_APPS names apps not in the roster: $(filter-out $(IMPORT_APPS),$(WASH_ONLY_APPS)))
+endif
+NO_APP_TAGS := $(foreach app,$(filter-out $(WASH_ONLY_APPS),$(IMPORT_APPS)),no_app_$(subst -,_,$(app)))
+NO_APP_TAGS_EMPTY :=
+NO_APP_TAGS_SPACE := $(NO_APP_TAGS_EMPTY) $(NO_APP_TAGS_EMPTY)
+NO_APP_TAGS_COMMA := ,
+MULTICALL_TAGS := $(MULTICALL_TAGS),$(subst $(NO_APP_TAGS_SPACE),$(NO_APP_TAGS_COMMA),$(strip $(NO_APP_TAGS)))
+endif
 
 # .PHONY: the stamps key only on FE assets, so a Go-source change (router,
 # vmlogin, any app BE) would otherwise leave out/wash — and thus the baked VM
