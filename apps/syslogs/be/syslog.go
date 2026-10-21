@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io/fs"
 	"log"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -101,6 +103,16 @@ func (s *streamCtl) cancel() {
 func (s *streamCtl) runDirect(ctx context.Context) {
 	argv := tailArgv(s.req.Path)
 	log.Printf("wash-syslogs stream gen=%d path=%q as_root=false", s.gen, s.req.Path)
+
+	// `tail -F` retries a file it cannot open instead of exiting, so an
+	// unreadable one (auth.log, root:adm 0640) never reaches the exit
+	// path below: the stream sat at "running" with nothing to show. Ask
+	// the question up front and escalate the same way.
+	if !readable(s.req.Path) {
+		s.req.AsRoot = true
+		s.runPriv(context.Background())
+		return
+	}
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -364,6 +376,18 @@ func (s *streamCtl) sendState(status, errMsg string) {
 // surviving rotations and truncations; `-n N` pre-loads scrollback.
 func tailArgv(path string) []string {
 	return []string{"tail", "-n", strconv.Itoa(scrollback), "-F", path}
+}
+
+// readable reports whether this uid can open path for reading. Only a
+// permission error says no: a file that is missing or rotating away is
+// tail -F's to wait for.
+func readable(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return !errors.Is(err, fs.ErrPermission)
+	}
+	_ = f.Close()
+	return true
 }
 
 func looksLikePermDenied(stderr string) bool {

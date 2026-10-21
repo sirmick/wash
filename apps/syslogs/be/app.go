@@ -12,8 +12,8 @@
 //
 // Privilege: most /var/log/* files are root:adm 640. Users in `adm`
 // can read system logs unprivileged; everyone else gets transparent
-// escalation — runDirect detects "permission denied" from tail and
-// auto-retries through wash-priv (which prompts for sudo the first
+// escalation — runDirect finds the file unreadable (or tail says
+// "permission denied") and retries through wash-priv (which prompts for sudo the first
 // time per session, then caches). The FE's "Read with root" banner
 // remains as a fallback if priv itself rejects the request.
 //
