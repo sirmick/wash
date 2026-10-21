@@ -93,7 +93,28 @@ func (n *sftpNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return nil, errno
 	}
 	n.root.fillAttr(fi, &out.Attr)
+	// Keep inode identity across a rename. The inode number is hashed from
+	// the PATH, but a renamed node keeps its old number while sitting at the
+	// new name in the tree (go-fuse's Rename moves it). Minting a fresh inode
+	// from the new path here would make go-fuse replace the child and orphan
+	// the renamed node: fstat/ftruncate on an fd opened before the rename
+	// would then resolve to a "deleted" placeholder, and one file would show
+	// two inode numbers. So if the tree already holds a child of this name
+	// and type, that IS the file — hand it back.
+	if child := n.existingChild(name, fi); child != nil {
+		return child, 0
+	}
 	return n.newChild(ctx, p, fi), 0
+}
+
+// existingChild returns the live inode already attached under name when its
+// file type matches fi (a same-named path that changed type is a new object).
+func (n *sftpNode) existingChild(name string, fi os.FileInfo) *fs.Inode {
+	child := n.GetChild(name)
+	if child == nil || child.StableAttr().Mode != modeBits(fi.Mode())&syscall.S_IFMT {
+		return nil
+	}
+	return child
 }
 
 func (n *sftpNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -106,24 +127,32 @@ func (n *sftpNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	}
 	entries := make([]fuse.DirEntry, 0, len(infos))
 	for _, fi := range infos {
+		ino := idFromPath(path.Join(n.rpath(), fi.Name()))
+		if child := n.existingChild(fi.Name(), fi); child != nil {
+			ino = child.StableAttr().Ino // a renamed node keeps its number
+		}
 		entries = append(entries, fuse.DirEntry{
 			Name: fi.Name(),
 			Mode: modeBits(fi.Mode()) & syscall.S_IFMT,
-			Ino:  idFromPath(path.Join(n.rpath(), fi.Name())),
+			Ino:  ino,
 		})
 	}
 	return fs.NewListDirStream(entries), 0
 }
 
 func (n *sftpNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	var f *sftp.File
-	if errno := n.root.run(ctx, "open", func(cl *sftp.Client) (err error) {
-		f, err = cl.OpenFile(n.rpath(), int(flags))
-		return
+	var h *fileHandle
+	if errno := n.root.run(ctx, "open", func(cl *sftp.Client) error {
+		f, err := cl.OpenFile(n.rpath(), int(flags))
+		if err != nil {
+			return err
+		}
+		h = &fileHandle{f: f, owner: cl, flags: reopenFlags(int(flags))}
+		return nil
 	}); errno != 0 {
 		return nil, 0, errno
 	}
-	return &fileHandle{f: f}, 0, 0
+	return h, 0, 0
 }
 
 func (n *sftpNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
@@ -140,7 +169,11 @@ func (n *sftpNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off i
 	if errno := n.root.run(ctx, "read", func(cl *sftp.Client) error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		nn, err := h.f.ReadAt(buf, off)
+		f, err := h.get(cl, n.rpath())
+		if err != nil {
+			return err
+		}
+		nn, err := f.ReadAt(buf, off)
 		num = nn
 		// EOF is success, not an error — including a zero-byte read at/after
 		// EOF (POSIX returns 0). pkg/sftp returns the bare io.EOF sentinel
@@ -162,11 +195,15 @@ func (n *sftpNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off i
 func (n *sftpNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	h := f.(*fileHandle)
 	var num int
-	if errno := n.root.run(ctx, "write", func(cl *sftp.Client) (err error) {
+	if errno := n.root.run(ctx, "write", func(cl *sftp.Client) error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		num, err = h.f.WriteAt(data, off)
-		return
+		f, err := h.get(cl, n.rpath())
+		if err != nil {
+			return err
+		}
+		num, err = f.WriteAt(data, off)
+		return err
 	}); errno != 0 {
 		return 0, errno
 	}
@@ -181,7 +218,11 @@ func (n *sftpNode) Fsync(ctx context.Context, f fs.FileHandle, _ uint32) syscall
 	errno := n.root.run(ctx, "fsync", func(cl *sftp.Client) error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		return h.f.Sync()
+		f, err := h.get(cl, n.rpath())
+		if err != nil {
+			return err
+		}
+		return f.Sync()
 	})
 	// A server without the extension answers OP_UNSUPPORTED → ENOSYS; degrade
 	// to success (data is already sent) rather than failing fsync(2), which
@@ -201,6 +242,12 @@ func (n *sftpNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	return n.root.run(ctx, "close", func(cl *sftp.Client) error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		if h.owner != cl {
+			// Opened on a connection that has since died: the server-side
+			// handle went with it, and a Close on the dead client would only
+			// report connection-lost (and poison cl via markDead).
+			return nil
+		}
 		return h.f.Close()
 	})
 }
@@ -208,8 +255,12 @@ func (n *sftpNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno {
 func (n *sftpNode) Create(ctx context.Context, name string, flags, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	p := path.Join(n.rpath(), name)
 	var f *sftp.File
+	var h *fileHandle
 	if errno := n.root.run(ctx, "create", func(cl *sftp.Client) (err error) {
 		f, err = cl.OpenFile(p, int(flags)|os.O_CREATE)
+		if err == nil {
+			h = &fileHandle{f: f, owner: cl, flags: reopenFlags(int(flags))}
+		}
 		return
 	}); errno != 0 {
 		return nil, nil, 0, errno
@@ -238,7 +289,7 @@ func (n *sftpNode) Create(ctx context.Context, name string, flags, mode uint32, 
 		return nil, nil, 0, errno
 	}
 	n.root.fillAttr(fi, &out.Attr)
-	return n.newChild(ctx, p, fi), &fileHandle{f: f}, 0, 0
+	return n.newChild(ctx, p, fi), h, 0, 0
 }
 
 func (n *sftpNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {

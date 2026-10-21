@@ -1,11 +1,16 @@
 package washmount
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
@@ -50,6 +55,145 @@ func Unmount(server *fuse.Server, mountpoint string) error {
 	}
 	_, err := forceUnmount(mountpoint, false)
 	return err
+}
+
+// UnmountGraceful is the first rung only: a plain `fusermount3 -u`, which the
+// kernel refuses (EBUSY) while any process holds the mount — an open fd, a
+// cwd, an mmap, a parked request. It never escalates: a holder is almost
+// always a shell or editor using the tree, not a wedge (every handler is
+// bounded by the op timeout, so a parked request clears itself), and
+// aborting it would turn that program's next I/O into a hard error. Use
+// IsBusy to tell "in use" from a real failure, and Unmount to force.
+func UnmountGraceful(server *fuse.Server) error {
+	if server == nil {
+		return errors.New("washmount: no server")
+	}
+	return server.Unmount()
+}
+
+// IsBusy reports whether an unmount error means the mount is in use.
+// go-fuse surfaces fusermount's stderr ("Device or resource busy") in the
+// error text; a direct umount2 path yields EBUSY itself.
+func IsBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, unix.EBUSY) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "busy")
+}
+
+// Holder is one process keeping a mount busy, and how (cwd, root, exe, fd,
+// mmap).
+type Holder struct {
+	PID  int
+	Comm string
+	Via  string
+}
+
+// Holders lists the processes holding a reference under mountpoint, found by
+// walking /proc the way `fuser -m` does: cwd/root/exe links, open fds, and
+// mapped files. Only processes this uid may inspect are visible, which for a
+// single-uid mount is exactly the set that can hold it. Best-effort: a pid
+// that exits mid-walk is skipped. The calling process is excluded (it holds
+// /dev/fuse, not the tree).
+func Holders(mountpoint string) []Holder {
+	mp := filepath.Clean(mountpoint)
+	under := func(p string) bool {
+		p = strings.TrimSuffix(p, " (deleted)")
+		return p == mp || strings.HasPrefix(p, mp+"/")
+	}
+	self := os.Getpid()
+	ents, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var out []Holder
+	for _, ent := range ents {
+		pid, err := strconv.Atoi(ent.Name())
+		if err != nil || pid == self {
+			continue
+		}
+		dir := "/proc/" + ent.Name()
+		via := ""
+		for _, link := range []string{"cwd", "root", "exe"} {
+			if t, err := os.Readlink(dir + "/" + link); err == nil && under(t) {
+				via = link
+				break
+			}
+		}
+		if via == "" {
+			if fds, err := os.ReadDir(dir + "/fd"); err == nil {
+				for _, fd := range fds {
+					if t, err := os.Readlink(dir + "/fd/" + fd.Name()); err == nil && under(t) {
+						via = "fd"
+						break
+					}
+				}
+			}
+		}
+		if via == "" {
+			if f, err := os.Open(dir + "/maps"); err == nil {
+				sc := bufio.NewScanner(f)
+				for sc.Scan() {
+					fields := strings.Fields(sc.Text())
+					if len(fields) >= 6 && under(strings.Join(fields[5:], " ")) {
+						via = "mmap"
+						break
+					}
+				}
+				f.Close()
+			}
+		}
+		if via == "" {
+			continue
+		}
+		comm := ""
+		if b, err := os.ReadFile(dir + "/comm"); err == nil {
+			comm = strings.TrimSpace(string(b))
+		}
+		out = append(out, Holder{PID: pid, Comm: comm, Via: via})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
+	return out
+}
+
+// DescribeHolders renders Holders(mountpoint) for a status line, e.g.
+// "bash (pid 4120, cwd), code (pid 4388, fd)". Empty when nothing was found
+// (the holder may be another uid's process, or already gone).
+func DescribeHolders(mountpoint string) string {
+	hs := Holders(mountpoint)
+	const max = 4
+	parts := make([]string, 0, len(hs))
+	for i, h := range hs {
+		if i == max {
+			parts = append(parts, fmt.Sprintf("+%d more", len(hs)-max))
+			break
+		}
+		name := h.Comm
+		if name == "" {
+			name = "process"
+		}
+		parts = append(parts, fmt.Sprintf("%s (pid %d, %s)", name, h.PID, h.Via))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// ClearStale detaches a mountpoint left behind by a mounter that died
+// without unmounting (SIGKILL, OOM, a crash): the kernel keeps the FUSE
+// mount but has aborted its connection, so every op on it — even the stat
+// inside MkdirAll — fails ENOTCONN, and a fresh mount over it is refused.
+// Only such a dead mountpoint is touched; a live mount (ours or anyone
+// else's) is left alone. Reports whether a detach was performed.
+func ClearStale(mountpoint string) (bool, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(mountpoint, &st); !errors.Is(err, unix.ENOTCONN) {
+		return false, nil
+	}
+	log.Printf("washmount: %s is a dead fuse mount (ENOTCONN); detaching it", mountpoint)
+	_, err := forceUnmount(mountpoint, false)
+	return true, err
 }
 
 // forceUnmount runs the lazy→abort escalation. wantAbort forces the kernel

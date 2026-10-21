@@ -39,6 +39,7 @@ import (
 	"sync"
 
 	"github.com/sirmick/wash/internal/pty"
+	"github.com/sirmick/wash/internal/sshtarget"
 	"github.com/sirmick/wash/pkg/apps/registry"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
@@ -160,7 +161,7 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 			return nil
 		}
 		return conn.SendAppMsgTo(wire.Recipient{AppID: remoteAppID}, map[string]any{
-			"kind": "unmount", "mount_point": req.MountPoint,
+			"kind": "unmount", "mount_point": req.MountPoint, "force": req.Force,
 		})
 	})
 
@@ -230,6 +231,12 @@ var authState struct {
 
 func registerAuth(bus *sdk.Bus) {
 	sdk.HandleVoid(bus, "auth_begin", func(conn *sdk.Conn, _ string, req authBeginReq) error {
+		// The host is handed to ssh-copy-id (and so to ssh) as a positional
+		// target; it is typed or mDNS-announced, so refuse one that could be
+		// read as an option before it reaches a shell.
+		if err := sshtarget.Validate(req.Host); err != nil {
+			return conn.SendAppMsg(map[string]any{"kind": "auth_error", "host": req.Host, "msg": err.Error()})
+		}
 		// Supersede any prior session so a retried auth doesn't leak a pty.
 		authState.mu.Lock()
 		if authState.session != nil {
@@ -316,6 +323,7 @@ type mountReq struct {
 
 type unmountReq struct {
 	MountPoint string `json:"mount_point"`
+	Force      bool   `json:"force"` // escalate past a busy mount (holders' I/O fails)
 }
 
 // authBeginReq starts an ssh-copy-id session for Host (a name, so the user's

@@ -13,5 +13,5 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["fixtures", "tests", "types", "playwright.config.ts"]
+  "include": ["fixtures", "tests", "torture", "types", "playwright.config.ts", "playwright.torture.config.ts"]
 }

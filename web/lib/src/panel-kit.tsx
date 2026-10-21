@@ -42,11 +42,13 @@ export const Row: Component<{ label: string; children: JSX.Element }> = (props) 
 export const SmallBtn: Component<{
   onClick: () => void;
   'data-testid'?: string;
+  title?: string;
   children: JSX.Element;
 }> = (props) => (
   <Button
     size="sm"
     data-testid={props['data-testid']}
+    title={props.title}
     onClick={props.onClick}
     style={{ display: 'inline-flex', 'align-items': 'center', gap: '5px' }}
   >

@@ -186,6 +186,9 @@ type Client struct {
 	enc     *json.Encoder
 	watched map[string]int // active remote paths (refcount) — re-sent on reconnect
 	closed  bool
+	// attached: a transport has been attached before, so the next attach is
+	// a RECONNECT and must resync watchers (see attach).
+	attached bool
 }
 
 var _ fswatch.Source = (*Client)(nil)
@@ -314,11 +317,25 @@ func (c *Client) run() {
 // transparently restores the consumer's subscriptions on B.
 func (c *Client) attach(rw io.ReadWriteCloser) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.rw = rw
 	c.enc = json.NewEncoder(rw)
+	resync := c.attached
+	c.attached = true
+	var stale []string
 	for remote := range c.watched {
 		_ = c.enc.Encode(msg{Op: "watch", Path: remote})
+		if resync {
+			stale = append(stale, c.pm.ToLocal(remote))
+		}
+	}
+	c.mu.Unlock()
+	// Changes made on B while the channel was down were never observed here
+	// and there is no replay, so a watcher would show a stale tree until the
+	// next real change. Tell each one its path changed; consumers re-list on
+	// any event, which is exactly the cheap "re-stat" the Feed's drop policy
+	// already relies on.
+	for _, p := range stale {
+		c.feed.Emit(fswatch.Event{Op: fswatch.OpModified, Path: p})
 	}
 }
 

@@ -50,6 +50,12 @@ func TestBuildSSHArgs(t *testing.T) {
 		t.Errorf("host must come before the remote command: hostIdx=%d cmdIdx=%d args=%v", hostIdx, cmdIdx, args)
 	}
 
+	// "--" must sit immediately before the host so ssh can never read a
+	// user- or mDNS-supplied target as an option (internal/sshtarget).
+	if hostIdx < 1 || args[hostIdx-1] != "--" {
+		t.Errorf(`host must be preceded by "--": %v`, args)
+	}
+
 	// Default/zero port emits no -p; a non-default port is dialed with -p
 	// (ssh's positional target can't carry host:port).
 	if i := indexOf(args, "-p"); i >= 0 {

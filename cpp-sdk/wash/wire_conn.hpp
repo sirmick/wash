@@ -123,6 +123,12 @@ public:
     // on an already-open channel id.
     bool write_channel(uint32_t channelID, const uint8_t* data, size_t n);
 
+    // close_channel sends channel.close for a channel this app opened
+    // (fire-and-forget on CH_CONTROL). The router drops the binding and its
+    // ring buffer; without it a per-popup channel lived until the PARENT
+    // window died — 256 KiB of router heap per menu/tooltip ever opened.
+    void close_channel(uint32_t channelID);
+
     // send_app_msg emits an app_msg event carrying `data` for window
     // `win` (0 = instance level).
     bool send_app_msg(uint32_t win, const json& data);

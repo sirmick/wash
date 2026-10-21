@@ -37,6 +37,9 @@ interface MountState {
   mount_point: string;
   status: MountStatus;
   error?: string;
+  // busy: an unmount was refused because these processes hold the tree;
+  // the mount is still up and the row offers a forced detach.
+  busy?: string;
 }
 
 interface RemoteState {
@@ -56,6 +59,7 @@ function hostBadge(s: HostStatus): { tone: 'on' | 'off' | 'busy' | 'absent'; lab
 
 // mountBadge maps a mount status to a status pill.
 function mountBadge(mt: MountState): { tone: 'on' | 'off' | 'busy' | 'absent'; label: string } {
+  if (mt.busy) return { tone: 'busy', label: `in use: ${mt.busy}` };
   switch (mt.status) {
     case 'mounted': return { tone: 'on', label: 'mounted' };
     case 'mounting': return { tone: 'busy', label: 'mounting…' };
@@ -89,7 +93,7 @@ const Panel = (props: SettingsPanelProps) => {
   // runs the escalating FUSE unmount (unmount); both also drop the entry from
   // the published state, so the row vanishes on the next push.
   const disconnect = (host: string) => port.send({ kind: 'disconnect', host });
-  const unmount = (mountPoint: string) => port.send({ kind: 'unmount', mount_point: mountPoint });
+  const unmount = (mountPoint: string, force = false) => port.send({ kind: 'unmount', mount_point: mountPoint, force });
 
   return (
     <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
@@ -127,14 +131,23 @@ const Panel = (props: SettingsPanelProps) => {
               {(mt) => {
                 const b = () => mountBadge(mt);
                 return (
-                  <div style={rowStyle} data-testid="remote-mount" data-status={mt.status} data-mount={mt.mount_point}>
+                  <div style={rowStyle} data-testid="remote-mount" data-status={mt.status} data-mount={mt.mount_point} data-busy={mt.busy ? '1' : undefined}>
                     <span style={nameStyle} title={mt.mount_point}>
                       {mt.remote_root}
                       <span style={hostSuffixStyle}>{mt.host}</span>
                     </span>
                     <ServiceBadge tone={b().tone} label={b().label} />
+                    <Show when={mt.busy}>
+                      <SmallBtn
+                        onClick={() => unmount(mt.mount_point, true)}
+                        title="Detach now — the processes using it will get I/O errors"
+                        data-testid="remote-unmount-force"
+                      >
+                        Force
+                      </SmallBtn>
+                    </Show>
                     <SmallBtn onClick={() => unmount(mt.mount_point)} data-testid="remote-unmount">
-                      Unmount
+                      {mt.busy ? 'Retry' : 'Unmount'}
                     </SmallBtn>
                   </div>
                 );

@@ -542,9 +542,11 @@ $(WLROOTS_PC):
 ifeq ($(WLROOTS_VENDORED),1)
 WASH_DISPLAY_PREREQ := $(WLROOTS_PC)
 WASH_DISPLAY_PKGCFG := PKG_CONFIG_PATH="$(WLROOTS_PREFIX)/lib/pkgconfig:$$PKG_CONFIG_PATH"
-# $ORIGIN/lib second: an unpackaged out/wash-display finds the out/lib copy
-# (make run, the e2e/screenshot fixtures) without /usr/lib/wash existing.
-WASH_DISPLAY_RPATH  := '-DCMAKE_INSTALL_RPATH=$(WASH_LIBDIR);$$ORIGIN/lib' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+# The rpath also names this checkout's staged out/lib so the SAME binary runs
+# in-tree (make run, the e2e display tier, which copies it to a tmp apps dir
+# and probes it with a stripped env — no LD_LIBRARY_PATH reaches it). The
+# absolute dev path is inert in the package: /usr/lib/wash is searched first.
+WASH_DISPLAY_RPATH  := -DCMAKE_INSTALL_RPATH='$(WASH_LIBDIR):$(abspath $(OUT)/lib)' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
 endif
 
 # PANEL_PREBUILT=1 means wash-display/fe/dist/panel.js is already present
@@ -723,6 +725,20 @@ endif
 # in-tab virtio-console and whose CPU is emulated. Set by rootfs/build.sh.
 ifneq ($(WASH_NO_ASSET_GZIP),)
 MULTICALL_TAGS := $(MULTICALL_TAGS),wash_no_asset_gzip
+endif
+# WASH_ONLY_APPS="session fm ..." links only those roster apps into the
+# multicall: every other one gets its no_app_<app> tag. For the in-browser VM,
+# which installs 11 apps and downloads the binary (rootfs/build.sh passes the
+# apps it installs). Empty (the default) links the whole roster.
+ifneq ($(strip $(WASH_ONLY_APPS)),)
+ifneq ($(filter-out $(IMPORT_APPS),$(WASH_ONLY_APPS)),)
+$(error WASH_ONLY_APPS names apps not in the roster: $(filter-out $(IMPORT_APPS),$(WASH_ONLY_APPS)))
+endif
+NO_APP_TAGS := $(foreach app,$(filter-out $(WASH_ONLY_APPS),$(IMPORT_APPS)),no_app_$(subst -,_,$(app)))
+NO_APP_TAGS_EMPTY :=
+NO_APP_TAGS_SPACE := $(NO_APP_TAGS_EMPTY) $(NO_APP_TAGS_EMPTY)
+NO_APP_TAGS_COMMA := ,
+MULTICALL_TAGS := $(MULTICALL_TAGS),$(subst $(NO_APP_TAGS_SPACE),$(NO_APP_TAGS_COMMA),$(strip $(NO_APP_TAGS)))
 endif
 
 # .PHONY: the stamps key only on FE assets, so a Go-source change (router,
@@ -1235,6 +1251,25 @@ screenshots: test-app $(OUT)/e2e/codex-acp
 	cd e2e && $(PNPM) exec playwright install chromium
 	cd e2e && $(PNPM) exec playwright test -c playwright.screenshots.config.ts
 	@echo "screenshots: wrote → $(abspath docs/screenshots)/"
+
+# display-torture: soak the REAL wash-display compositor with real X11/Wayland
+# clients (e2e/torture/*.tort.ts — window churn, menu storms, resize storms,
+# focus thrash, clipboard volume, guest/Xwayland crashes, browser reloads,
+# Chromium on both backends). Needs out/wash-display (WLROOTS_VENDORED=1 on a
+# box without libwlroots-dev) + python3-tk + the x11-apps. Serial, minutes.
+# Evidence lands in tmp/torture/<timestamp>/ (report.md + per-scenario
+# .json/.log/.png + guests/*.log); tmp/torture/last points at the newest run.
+#   make display-torture                        # everything
+#   make display-torture TORTURE_ARGS='--grep menus'   # one scenario
+TORTURE_RUN  ?= $(shell date +%Y%m%d-%H%M%S)
+TORTURE_ARGS ?=
+.PHONY: display-torture
+display-torture: test-app $(OUT)/wash-display
+	cd e2e && $(PNPM) install --ignore-workspace --silent
+	cd e2e && $(PNPM) exec playwright install chromium
+	@mkdir -p tmp/torture/$(TORTURE_RUN)
+	cd e2e && WASH_TORTURE_DIR=$(abspath tmp/torture/$(TORTURE_RUN)) $(PNPM) exec playwright test -c playwright.torture.config.ts $(TORTURE_ARGS); \
+	  rc=$$?; echo "display-torture: report → $(abspath tmp/torture/$(TORTURE_RUN))/report.md"; exit $$rc
 	@ls -1 docs/screenshots/*.png 2>/dev/null | sed 's,^,  ,'
 
 # net-test: the kvm network tier — builds the openwrt + per-distro images, then
