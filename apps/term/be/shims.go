@@ -26,10 +26,15 @@
 package term
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // shimNames are the argv[0]s cmd/wash answers to that belong on a
@@ -40,10 +45,12 @@ var shimNames = []string{"xdg-open"}
 // "" if it could not be made. Never fatal: a terminal without shims is
 // the terminal wash shipped yesterday.
 //
-// The directory is per-user and per-router-process, so two wash sessions
-// (or two users) never race over the same symlink, and it is rebuilt on
-// every start rather than trusted — the binary it points at moves with
-// every upgrade.
+// The directory is per-user and per-binary (wash-shims-<uid>-<hash of
+// the binary's path>), so two sessions running different builds — the
+// packaged /usr/bin one and a dev tree, or parallel e2e routers — never
+// repoint each other's xdg-open, and it is rebuilt on every start rather
+// than trusted. Siblings whose binary is gone (an e2e run's apps dir, an
+// old dev tree) are removed on the way.
 func installShims() string {
 	self, err := os.Executable()
 	if err != nil {
@@ -54,7 +61,10 @@ func installShims() string {
 	if base == "" {
 		base = os.TempDir()
 	}
-	dir := filepath.Join(base, fmt.Sprintf("wash-shims-%d", os.Getuid()))
+	prefix := fmt.Sprintf("wash-shims-%d-", os.Getuid())
+	sum := sha256.Sum256([]byte(self))
+	dir := filepath.Join(base, prefix+hex.EncodeToString(sum[:6]))
+	pruneShims(base, prefix, dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		log.Printf("wash-term: shims %s: %v (skipped)", dir, err)
 		return ""
@@ -80,4 +90,28 @@ func installShims() string {
 	}
 	log.Printf("wash-term: shims dir=%s names=%v", dir, shimNames)
 	return dir
+}
+
+// pruneShims removes this user's other shim directories whose links lead
+// nowhere: the binary they named was deleted, so no terminal can use them.
+// A directory whose binary still exists belongs to a live (or reusable)
+// build and is left alone.
+func pruneShims(base, prefix, keep string) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		dir := filepath.Join(base, e.Name())
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || dir == keep {
+			continue
+		}
+		target, err := os.Readlink(filepath.Join(dir, shimNames[0]))
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(target); errors.Is(err, fs.ErrNotExist) {
+			_ = os.RemoveAll(dir)
+		}
+	}
 }

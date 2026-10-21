@@ -135,7 +135,7 @@ test.describe('wash open', () => {
     const host = await openTerminal(page, router.url);
     // The shim shadows any system xdg-open: it is first on PATH.
     await run(page, host, 'command -v xdg-open');
-    await expect.poll(() => bufferOf(host), { timeout: 10_000 }).toMatch(/wash-shims-\d+\/xdg-open/);
+    await expect.poll(() => bufferOf(host), { timeout: 10_000 }).toMatch(/wash-shims-\d+-[0-9a-f]+\/xdg-open/);
 
     await run(page, host, `xdg-open ${file}`);
     await expect.poll(() => bufferOf(host), { timeout: 10_000 }).toMatch(/wash open: .*shim\.md → wash-edit/);
