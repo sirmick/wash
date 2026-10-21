@@ -26,6 +26,8 @@ export interface PathHit {
   path: string;
   line?: number;
   col?: number;
+  /** A folder: it opens in the file manager, not the editor. */
+  dir?: boolean;
 }
 
 /** What a transcript's host supplies to make file references links. */
@@ -174,7 +176,7 @@ export function useHits(found: () => PathToken[]): () => Map<string, PathHit> {
 
 /** The title a link carries: where it goes, with the line when it has one. */
 export const hitTitle = (h: PathHit) =>
-  `Open ${h.path}${h.line ? `:${h.line}${h.col ? `:${h.col}` : ''}` : ''} in the editor`;
+  h.dir ? `Open ${h.path} in the file manager` : `Open ${h.path}${h.line ? `:${h.line}${h.col ? `:${h.col}` : ''}` : ''} in the editor`;
 
 const linkStyle: JSX.CSSProperties = {
   color: tokens.accentBlue,

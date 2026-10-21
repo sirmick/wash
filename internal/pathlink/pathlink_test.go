@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -53,7 +54,7 @@ func TestResolve(t *testing.T) {
 	ok := func(tok, path string, line, col int) {
 		t.Helper()
 		h, found := Resolve(base, tok)
-		want := Hit{Token: tok, Path: path, Line: line, Col: col}
+		want := Hit{Token: tok, Path: path, Line: line, Col: col, Dir: strings.HasSuffix(path, "src") || strings.HasSuffix(path, "proj")}
 		if !found || h != want {
 			t.Errorf("Resolve(%q) = %+v %v, want %+v", tok, h, found, want)
 		}
@@ -69,11 +70,13 @@ func TestResolve(t *testing.T) {
 	ok(filepath.Join(base, "src/app.ts")+":3:9", filepath.Join(base, "src/app.ts"), 3, 9)
 	ok("alias.go", filepath.Join(base, "alias.go"), 0, 0)
 	no("missing.go")
-	no("src")                             // a directory
-	no("../outside.txt")                  // above the folder
-	no(filepath.Join(top, "outside.txt")) // absolute, outside
-	no("escape.txt")                      // a link that leads out
-	no("src/../../outside.txt")           // lexical escape
+	ok("src", filepath.Join(base, "src"), 0, 0)                                    // a folder, for the file manager
+	ok(filepath.Join(top, "outside.txt"), filepath.Join(top, "outside.txt"), 0, 0) // absolute: explicit, anywhere it exists
+	ok(base, base, 0, 0)                                                           // the folder itself, absolute
+	no("../outside.txt")                                                           // relative, above the folder
+	no("escape.txt")                                                               // a relative link that leads out
+	no("src/../../outside.txt")                                                    // lexical escape
+	no(filepath.Join(top, "nowhere.txt"))                                          // absolute but missing
 	if _, found := Resolve("", "main.go"); found {
 		t.Error("an empty base resolved a token")
 	}

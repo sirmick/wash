@@ -257,20 +257,27 @@ const ToolRow: Component<{ e: agentproto.Event }> = (p) => {
   // the box is height-capped so even a big one costs a scroll, not a
   // transcript.
   const [open, setOpen] = createSignal(true);
+  // The row is one line, so a long command is cut short; the full view
+  // shows the whole title and what the tool said. A row that is a file
+  // link opens the file on click and folds out from its caret; any other
+  // row folds out on click.
+  const [full, setFull] = createSignal(false);
+  const hasFull = () => !!(p.e.title || p.e.text);
+  const act = () => { if (clickable()) openHit(); else if (hasFull()) setFull(!full()); };
   return (
     <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
     <div
       data-testid="agent-tool-row"
       data-path={p.e.path || undefined}
-      data-wash-hit={clickable() ? '' : undefined}
-      role={clickable() ? 'button' : undefined}
-      tabindex={clickable() ? 0 : undefined}
-      title={hit() ? hitTitle(hit()!) : p.e.path || undefined}
-      onClick={openHit}
+      data-wash-hit={clickable() || hasFull() ? '' : undefined}
+      role={clickable() || hasFull() ? 'button' : undefined}
+      tabindex={clickable() || hasFull() ? 0 : undefined}
+      title={hit() ? hitTitle(hit()!) : p.e.path || (hasFull() ? (full() ? 'Hide the full call' : 'Show the full call') : undefined)}
+      onClick={act}
       onKeyDown={(ev) => {
-        if (clickable() && (ev.key === 'Enter' || ev.key === ' ')) {
+        if ((clickable() || hasFull()) && (ev.key === 'Enter' || ev.key === ' ')) {
           ev.preventDefault();
-          openHit();
+          act();
         }
       }}
       style={{
@@ -283,7 +290,7 @@ const ToolRow: Component<{ e: agentproto.Event }> = (p) => {
         padding: `${tokens.spaceXs}px ${tokens.spaceMd}px`,
         font: tokens.type.monoMd,
         color: tokens.fgMuted,
-        cursor: clickable() ? 'pointer' : 'default',
+        cursor: clickable() || hasFull() ? 'pointer' : 'default',
       }}
     >
       <span
@@ -330,6 +337,30 @@ const ToolRow: Component<{ e: agentproto.Event }> = (p) => {
           {baseName(p.e.path!)}
         </span>
       </Show>
+      <Show when={hasFull()}>
+        <button
+          type="button"
+          data-testid="agent-tool-full-toggle"
+          data-wash-hit
+          title={full() ? 'Hide the full call' : 'Show the full call'}
+          onClick={(ev) => {
+            // The row may open a file; the caret only folds.
+            ev.stopPropagation();
+            setFull(!full());
+          }}
+          style={{
+            flex: 'none',
+            background: 'transparent',
+            border: 'none',
+            color: tokens.fgMuted,
+            font: tokens.type.monoSm,
+            cursor: 'pointer',
+            padding: '0 2px',
+          }}
+        >
+          {full() ? '▾' : '▸'} full
+        </button>
+      </Show>
       <Show when={p.e.diff}>
         <button
           type="button"
@@ -357,6 +388,28 @@ const ToolRow: Component<{ e: agentproto.Event }> = (p) => {
       <Dot color={dotColor(p.e.status)} />
     </div>
 
+    <Show when={full()}>
+      <pre
+        data-testid="agent-tool-full"
+        class={WASH_SCROLL_CLASS}
+        style={{
+          margin: 0,
+          background: tokens.bgInset,
+          border: `1px solid ${tokens.borderMenu}`,
+          'border-radius': tokens.radiusMd,
+          padding: `${tokens.spaceSm}px ${tokens.spaceMd}px`,
+          font: tokens.type.monoSm,
+          color: tokens.fg,
+          'max-height': 'min(320px, 45vh)',
+          overflow: 'auto',
+          'white-space': 'pre-wrap',
+          'overflow-wrap': 'anywhere',
+          'flex-shrink': 0,
+        }}
+      >
+        <LinkText text={[p.e.title, p.e.text].filter((t) => t && t.trim()).join('\n\n')} />
+      </pre>
+    </Show>
     <Show when={p.e.diff && open()}>
       <pre
         data-testid="agent-tool-diff"
