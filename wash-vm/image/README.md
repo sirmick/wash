@@ -6,7 +6,7 @@ Produces the four artifacts the browser-host page loads:
 |---|---|---|
 | `wash-kernel.bin`        | `kernel/Dockerfile`   | Linux 6.6.94 LTS for `ARCH=riscv` — tinyconfig + `kernel/config.fragment` |
 | `opensbi-fw_jump.bin`    | `firmware/Dockerfile` | OpenSBI 1.5 generic platform — `FW_OPTIONS=0x1` suppresses the banner |
-| `wash-rootfs.ext2`       | `rootfs/`             | Buildroot 2024.02 + musl + busybox + sudo + haveged + wash multicall |
+| `wash-rootfs.ext2`       | `rootfs/`             | Buildroot 2024.02 + musl + busybox + sudo + wash multicall |
 | `riscvemu64-wasm.{js,wasm}` | `wasm/Dockerfile`  | TinyEMU compiled with emscripten/emsdk:3.1.74; `tinyemu/js/lib.js` shim is the WASM↔JS bridge |
 
 Everything cross-compiles inside Docker. **No host toolchain needed

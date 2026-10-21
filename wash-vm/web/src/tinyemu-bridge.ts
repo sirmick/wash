@@ -675,10 +675,12 @@ const waitForModule = setInterval(() => {
     const orig = mod[key];
     if (orig !== undefined && typeof orig !== 'function') return;
     mod[key] = (...args: unknown[]) => {
-      const argStr = args.map(a => {
-        try { return typeof a === 'string' ? a : JSON.stringify(a); }
-        catch { return String(a); }
-      }).join(', ');
+      // Strings verbatim, anything else by type only. Emscripten calls
+      // preRun/postRun with Module itself, whose eight HEAP* views over the
+      // 64+ MB heap made JSON.stringify take ~13 s apiece: a ~27 s
+      // main-thread stall whenever this wrapper won the race against the
+      // wasm download (i.e. on any real network).
+      const argStr = args.map(a => (typeof a === 'string' ? a : typeof a)).join(', ');
       dbg.log('tinyemu', `Module.${key}(${argStr})`);
       // Stage progression from Emscripten lifecycle.
       if (key === 'preRun')                setStage('wasm preRun');

@@ -718,6 +718,12 @@ endif
 ifneq ($(WASH_LITE_PACKS),)
 MULTICALL_TAGS := $(MULTICALL_TAGS),wash_lite_packs
 endif
+# WASH_NO_ASSET_GZIP=1 stops the router gzipping shell assets and app bundles
+# (internal/router/assetgzip_off.go). For the in-browser VM, whose wire is an
+# in-tab virtio-console and whose CPU is emulated. Set by rootfs/build.sh.
+ifneq ($(WASH_NO_ASSET_GZIP),)
+MULTICALL_TAGS := $(MULTICALL_TAGS),wash_no_asset_gzip
+endif
 
 # .PHONY: the stamps key only on FE assets, so a Go-source change (router,
 # vmlogin, any app BE) would otherwise leave out/wash — and thus the baked VM

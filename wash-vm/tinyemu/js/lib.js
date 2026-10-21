@@ -22,6 +22,69 @@
  * THE SOFTWARE.
  */
 mergeInto(LibraryManager.library, {
+    /* wash patch: run-loop scheduler (see jsemu.c). One MessageChannel
+     * carries the zero-delay reschedules: unlike setTimeout(0) it is not
+     * clamped to 4 ms, and each message is still its own task, so input
+     * and rendering interleave with emulation. `sleeping` holds the
+     * callback while an idle sleep's timer is pending, for wash_kick. */
+    $washSched: { port: null, queue: [], timer: 0, sleeping: null, kicked: false },
+
+    wash_run_soon__deps: ['$washSched'],
+    wash_run_soon: function(fn, arg)
+    {
+        var S = washSched;
+        if (!S.port) {
+            var ch = new MessageChannel();
+            ch.port1.onmessage = function () {
+                var e = S.queue.shift();
+                {{{ makeDynCall('vp', 'e[0]') }}}(e[1]);
+            };
+            S.port = ch.port2;
+        }
+        S.queue.push([fn, arg]);
+        S.port.postMessage(0);
+    },
+
+    wash_run_later__deps: ['$washSched'],
+    wash_run_later: function(fn, arg, ms)
+    {
+        var S = washSched;
+        S.sleeping = [fn, arg];
+        S.timer = setTimeout(function () {
+            S.timer = 0;
+            S.sleeping = null;
+            {{{ makeDynCall('vp', 'fn') }}}(arg);
+        }, ms);
+    },
+
+    /* Input arrived: end an idle sleep now. Deferred to a microtask so a
+     * burst of queued bytes wakes the loop once. */
+    wash_kick__deps: ['$washSched', 'wash_run_soon'],
+    wash_kick: function()
+    {
+        var S = washSched;
+        if (!S.sleeping || S.kicked) return;
+        S.kicked = true;
+        queueMicrotask(function () {
+            S.kicked = false;
+            var e = S.sleeping;
+            if (!e) return;
+            clearTimeout(S.timer);
+            S.timer = 0;
+            S.sleeping = null;
+            _wash_run_soon(e[0], e[1]);
+        });
+    },
+
+    /* wash patch: host entropy for the device tree's rng-seed
+     * (riscv_machine.c). Returns 0 when there is no Web Crypto. */
+    wash_host_random: function(buf, len)
+    {
+        if (typeof crypto === 'undefined' || !crypto.getRandomValues) return 0;
+        crypto.getRandomValues(HEAPU8.subarray(buf, buf + len));
+        return 1;
+    },
+
     /* wash patch: batch console_write at the WASM↔JS boundary.
      * HTIF (riscv_machine.c:htif_handle_cmd) emits exactly 1 byte per
      * call, so the unpatched form did String.fromCharCode + term.write

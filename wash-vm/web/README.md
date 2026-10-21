@@ -131,15 +131,16 @@ top-level `https://<user>.github.io/`, no `--base` flag is needed.
   keeps working — logs just don't leave the tab. If you want it
   silenced, gate the `connect()` call in `src/dbg.ts` on
   `import.meta.env.DEV`.
-* The rootfs is **chunked** (10 × 2 MiB) and fetched on demand by
-  TinyEMU's virtio-blk path. Your host must honor HTTP `Range:`
-  reads — every static host worth using does, but check if you're
-  serving from S3 + an unusual CloudFront config.
-* Total cold-boot transfer is **≈4 MiB** (kernel + firmware + a few
-  rootfs chunks the kernel touches before `/sbin/init`). Subsequent
-  chunks lazy-load as the kernel reads them.
+* The rootfs is **chunked** into 512 KiB files (`wash-rootfs/blk*.bin`,
+  plain GETs, no `Range:` needed). `blk.txt` lists every chunk under
+  `prefetch`, so TinyEMU requests them all at once when the VM starts:
+  the boot reads nearly all of them, and fetching each on demand cost
+  the guest one round trip per chunk.
+* Total cold-boot transfer is **≈17 MiB**: the kernel (~3.7 MiB) plus
+  the rootfs (~13 MiB). It is bandwidth-bound: at 20 Mbit/s the desktop
+  is up in ~10 s, at localhost speeds in ~2.3 s.
 * Compression: gzip transfer-encoding gives a further ~50 % on the
-  text-y `.js` + the kernel; the ext2 chunks barely compress.
+  text-y `.js` + the kernel; the rootfs chunks are LZ4 squashfs already.
   Pre-`gzip` the artifacts and serve with `Content-Encoding: gzip`
   if your host supports it.
 

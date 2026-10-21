@@ -38,6 +38,9 @@
 #include "virtio.h"
 #include "machine.h"
 
+/* Host RNG: js/lib.js (WASM) or wash_native_stubs.c (native temu). */
+extern int wash_host_random(uint8_t *buf, int len);
+
 /* RISCV machine */
 
 typedef struct RISCVMachine {
@@ -795,7 +798,15 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
         fdt_prop_tab_u64(s, "linux,initrd-start", initrd_start);
         fdt_prop_tab_u64(s, "linux,initrd-end", initrd_start + initrd_size);
     }
-    
+    /* wash patch: seed the guest CRNG from the host. The emulated CPU has
+       no RNG and too little timing jitter for the kernel's own entropy, so
+       getrandom(2) would block for a minute; with random.trust_bootloader=1
+       the kernel credits this seed and the CRNG is ready at boot. */
+    {
+        uint8_t seed[64];
+        if (wash_host_random(seed, sizeof(seed)))
+            fdt_prop(s, "rng-seed", seed, sizeof(seed));
+    }
 
     fdt_end_node(s); /* chosen */
     

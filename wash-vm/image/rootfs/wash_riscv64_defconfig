@@ -35,18 +35,15 @@ BR2_PACKAGE_BUSYBOX=y
 BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="/input/busybox.fragment"
 BR2_PACKAGE_NANO=y
 
-# Userspace entropy daemon. TinyEMU/RISC-V has no hardware RNG and
-# the kernel's CRYPTO_JITTERENTROPY refuses to initialize on the
-# emulated CPU (insufficient timing variance). Without an entropy
-# source every crypto/rand consumer in Go (attach token mint, priv
-# handshake, anything calling getrandom(2)) blocks for 60+ seconds
-# on first use, which wedges the spawn pipeline before priv can
-# even reply to a PrepareSpawn. haveged installs an S20haveged
-# init script that starts before wash-router (S99), seeds the pool
-# via the HAVEGE algorithm (userspace CPU-flutter extraction —
-# works where kernel jitter entropy doesn't), and keeps it topped
-# up. All wash code paths then assume crypto/rand "just works."
-BR2_PACKAGE_HAVEGED=y
+# No entropy daemon. TinyEMU/RISC-V has no hardware RNG and the
+# kernel's CRYPTO_JITTERENTROPY refuses to initialize on the emulated
+# CPU, so without a seed every crypto/rand consumer in Go blocks in
+# getrandom(2) for 60+ seconds. haveged used to fill that gap, but it
+# burned ~16% of the guest CPU during boot and the CRNG still wasn't
+# ready until ~6 s. Instead the emulator puts 64 bytes from the host's
+# crypto.getRandomValues in the device tree's /chosen/rng-seed
+# (riscv_machine.c), and random.trust_bootloader=1 on the cmdline has
+# the kernel credit it: the CRNG is ready ~0.1 s into boot.
 
 # sudo — required by wash-priv for privilege escalation now that
 # wash-router runs as the unprivileged `wash` user (see the users

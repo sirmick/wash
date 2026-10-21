@@ -101,6 +101,10 @@ $(SPLITIMG):
 	cd $(REPO_ROOT)/wash-vm/tinyemu && \
 	  gcc -O2 -DCONFIG_VERSION='"2019-12-21"' -o $(SPLITIMG) splitimg.c cutils.c
 
+# blk.txt lists every chunk under `prefetch` (block_net.c starts them all at
+# once): the boot reads nearly all of them anyway, and fetching on demand
+# stalls the guest for one round trip per chunk. Order: the superblock
+# (chunk 0), the squashfs tables at the end, then the rest.
 install: $(SPLITIMG)
 	mkdir -p $(DEMO_PUB)
 	@if [ -f $(KERNEL) ]; then cp -v $(KERNEL) $(DEMO_PUB)/wash-kernel.bin; fi
@@ -113,7 +117,11 @@ install: $(SPLITIMG)
 	  rm -rf $(DEMO_PUB)/wash-rootfs && mkdir $(DEMO_PUB)/wash-rootfs; \
 	  $(SPLITIMG) $(DEMO_PUB)/wash-rootfs.squashfs $(DEMO_PUB)/wash-rootfs/ 512; \
 	  (cd $(DEMO_PUB)/wash-rootfs && ls blk*.bin > .preload); \
-	  echo "  wrote $$(ls $(DEMO_PUB)/wash-rootfs/blk*.bin | wc -l) chunks + .preload"; \
+	  n=$$(ls $(DEMO_PUB)/wash-rootfs/blk*.bin | wc -l); \
+	  order="0 $$((n - 1)) $$(seq -s ' ' 1 $$((n - 2)))"; \
+	  printf '{\n  block_size: 512,\n  n_block: %d,\n  prefetch: [%s],\n}\n' \
+	    $$n "$$(echo $$order | tr ' ' ',')" > $(DEMO_PUB)/wash-rootfs/blk.txt; \
+	  echo "  wrote $$n chunks + .preload (blk.txt prefetches all of them)"; \
 	fi
 	@echo "installed → $(DEMO_PUB)/{wash-kernel.bin,wash-rootfs/blk.txt,opensbi-fw_jump.bin,riscvemu64-wasm.{js,wasm}}"
 

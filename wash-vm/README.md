@@ -36,7 +36,7 @@ to the browser over a multiport virtio-console.
 │        │     │  wash-supervisor → wash-router (uid 100)│──────────┘            │
 │        │     └─────────────────────────────────────────┘                       │
 │        ▼                                                                       │
-│   /tinyemu/wash-rootfs/blk*.bin   ← 2 MiB chunks fetched lazily by virtio-blk  │
+│   /tinyemu/wash-rootfs/blk*.bin   ← 512 KiB chunks, all prefetched at boot     │
 │   /tinyemu/wash-kernel.bin         ← Linux Image (one shot at boot)            │
 │   /tinyemu/opensbi-fw_jump.bin     ← SBI firmware (one shot at boot)           │
 │                                                                                │
@@ -86,7 +86,7 @@ This produces and installs into `wash-vm/web/public/tinyemu/`:
 | `opensbi-fw_jump.bin`    | ~270 KiB | OpenSBI 1.5 generic, `FW_OPTIONS=0x1` (no banner) |
 | `riscvemu64-wasm.{js,wasm}` | ~200 KiB | TinyEMU compiled with emscripten/emsdk:3.1.74 |
 | `wash-rootfs.squashfs`   | ~7 MiB   | buildroot+musl, wash multicall + wash-vmlogin, wash shadow pw; split into 512 KiB chunks |
-| `wash-rootfs/blk*.bin`   | N × 512 KiB | TinyEMU drive0 chunked format, on-demand fetched by virtio-blk |
+| `wash-rootfs/blk*.bin`   | N × 512 KiB | TinyEMU drive0 chunked format; `blk.txt` prefetches them all at boot |
 
 Piecewise targets if you only want to rebuild one thing: `make rootfs
 | kernel | firmware | wasm | install`. See [`image/README.md`](image/README.md)
