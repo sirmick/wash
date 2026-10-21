@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.19.0
+Version:        0.20.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,21 @@ fi
 exit 0
 
 %changelog
+* Wed Oct 21 2026 sirmick <sirmick@gmail.com> - 0.20.0-1
+- Workspaces: phase:"closing" folds a team back to one agent, and
+  workspace_get view=dossier is the handover; workspace_end names
+  stale active nodes instead of asking to confirm them; about and the
+  configure preview say who leads an open workspace. Agent window: the
+  Plan tab reads at 300 nodes, Questions are cards with whole threads,
+  tool rows fold out, path links reach folders and absolute paths, and
+  shortcuts fire only in the focused window. http(s) addresses are
+  links everywhere. wash-display: X11 clipboard both ways, reload
+  repaint, no popup channel leak, CLOEXEC router socket, menu parents,
+  click stacking; make display-torture. In-browser VM boots 2.4x
+  faster, stops dropping input and ships a slimmer image. Remote and
+  mount hardening: validated ssh targets, handles that survive a
+  reconnect, non-blocking re-dials, stable inodes, graceful unmount.
+
 * Tue Oct 20 2026 sirmick <sirmick@gmail.com> - 0.19.0-1
 - Window layouts: any viewport tiles its windows into panels (r2,
   r[c2 c2], 25/50/25, ...), live, with dividers, drag-to-panel, Float
