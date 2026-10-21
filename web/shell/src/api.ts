@@ -312,6 +312,31 @@ export function closeRawSubscriber(origin: Origin, channelID: number): void {
   rawSubscribers.delete(key);
   pendingRaw.delete(key);
   pendingRawBytes.delete(key);
+  const onUnbind = unbindSubscribers.get(key);
+  if (onUnbind) {
+    unbindSubscribers.delete(key);
+    try {
+      onUnbind();
+    } catch (e) {
+      console.error('wash: unbind subscriber:', e);
+    }
+  }
+}
+
+// unbindSubscribers: origin-scoped channel key → callback run when the router
+// unbinds the channel (channel.unbind). A raw consumer whose teardown rides
+// in-band (a display popup overlay's {close:true} control frame, Bulk class
+// and credit-gated) can't rely on that frame arriving before — or at all
+// once — the channel is gone: the Interactive unbind overtakes the Bulk lane.
+// The unbind itself is the authoritative "this channel is over" signal.
+const unbindSubscribers = new Map<string, () => void>();
+
+export function subscribeUnbind(origin: Origin, channelID: number, cb: () => void): () => void {
+  const key = compoundChannelId(origin, channelID);
+  unbindSubscribers.set(key, cb);
+  return () => {
+    if (unbindSubscribers.get(key) === cb) unbindSubscribers.delete(key);
+  };
 }
 
 // resyncSubscribers maps an origin-scoped channel key → a callback that

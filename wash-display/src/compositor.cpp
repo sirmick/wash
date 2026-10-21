@@ -1080,6 +1080,7 @@ static void toplevel_teardown_popover(Toplevel* t) {
         g_popup_reg.erase(t->sink.popover_chan);
         std::string s = json{{"close", true}}.dump();
         t->server->conn->write_channel(t->sink.popover_chan, (const uint8_t*)s.data(), s.size());
+        t->server->conn->close_channel(t->sink.popover_chan); // after the FE's close frame
         t->sink.popover_chan = 0;
     }
     t->sink.popover = false;
@@ -1178,9 +1179,12 @@ void popup_unmap(struct wl_listener* listener, void* /*data*/) {
     pop_popup_grab(p->popup->base->surface);
     if (p->chan) {
         g_popup_reg.erase(p->chan);
-        // Tell the FE to drop the overlay (close control frame).
+        // Tell the FE to drop the overlay (close control frame), then release
+        // the channel on the wire — the router otherwise keeps it (and its
+        // 256 KiB ring) until the parent window dies: one per popup ever.
         std::string s = json{{"close", true}}.dump();
         p->server->conn->write_channel(p->chan, (const uint8_t*)s.data(), s.size());
+        p->server->conn->close_channel(p->chan);
         p->chan = 0;
     }
 }
@@ -1217,9 +1221,13 @@ void popup_commit(struct wl_listener* listener, void* /*data*/) {
 void popup_destroy(struct wl_listener* listener, void* /*data*/) {
     Popup* p = wl_container_of(listener, p, destroy);
     if (p->chan) {
+        // Destroyed while still mapped (no unmap first): same teardown, and
+        // drop any grab it still holds so no dangling surface survives.
+        pop_popup_grab(p->popup->base->surface);
         g_popup_reg.erase(p->chan);
         std::string s = json{{"close", true}}.dump();
         p->server->conn->write_channel(p->chan, (const uint8_t*)s.data(), s.size());
+        p->server->conn->close_channel(p->chan);
     }
     wl_list_remove(&p->map.link);
     wl_list_remove(&p->unmap.link);
@@ -1403,12 +1411,37 @@ static void xpopup_send_geometry(XSurface* x) {
 // Parent = transient-for if set+mapped, else the active toplevel; offset is
 // the menu's X-root position minus the parent's (X shares one root coord
 // space, so this is the offset within the parent window's content frame).
+// x_fallback_parent picks the parent for an override-redirect window with no
+// usable WM_TRANSIENT_FOR (Tk, Xaw, Motif menus): the X toplevel under the
+// pointer (the menu was almost certainly opened from it), else the most
+// recently mapped X toplevel, else ANY mapped X toplevel. The old rule used
+// only g_active_x_toplevel, which is cleared when that window unmaps and never
+// reassigned — so after "map A, map B, close B" every menu in A was dropped.
+static XSurface* x_fallback_parent() {
+    std::lock_guard<std::mutex> lk(g_reg_mu);
+    if (g_ptr_win) {
+        auto it = g_win_reg.find(g_ptr_win);
+        if (it != g_win_reg.end() && it->second.kind == WinRef::X11) {
+            auto* p = static_cast<XSurface*>(it->second.ptr);
+            if (p && !p->is_popup && p->sink.win) return p;
+        }
+    }
+    if (g_active_x_toplevel && g_active_x_toplevel->sink.win) return g_active_x_toplevel;
+    XSurface* best = nullptr;
+    for (auto& [win, ref] : g_win_reg) {
+        if (ref.kind != WinRef::X11) continue;
+        auto* p = static_cast<XSurface*>(ref.ptr);
+        if (p && !p->is_popup && p->sink.win) best = p; // highest win id = newest
+    }
+    return best;
+}
+
 static bool xpopup_map(XSurface* x) {
     XSurface* parent = nullptr;
     if (x->xsurf->parent && x->xsurf->parent->data)
         parent = static_cast<XSurface*>(x->xsurf->parent->data);
     if (!parent || parent->is_popup || !parent->sink.win)
-        parent = g_active_x_toplevel;
+        parent = x_fallback_parent();
     if (!parent || !parent->sink.win) {
         wlr_log(WLR_INFO, "wash-display: X11 override-redirect with no parent toplevel — dropping");
         return false;
@@ -1441,6 +1474,7 @@ static void xpopup_close(XSurface* x) {
     g_popup_reg.erase(x->popup_chan);
     std::string s = json{{"close", true}}.dump();
     x->server->conn->write_channel(x->popup_chan, (const uint8_t*)s.data(), s.size());
+    x->server->conn->close_channel(x->popup_chan); // release the router binding
     x->popup_chan = 0;
 }
 
@@ -1652,6 +1686,28 @@ static WindowSink* winref_sink(const WinRef& ref) {
 #endif
 }
 
+// x_raise_win puts an X11 window on top of Xwayland's stacking order. Called
+// when the pointer moves onto a different wash window: X delivers pointer
+// events by its own root-coordinate hit test, and all our X toplevels share
+// the same root position, so the window under the wash pointer must also be
+// the topmost X window or another guest receives the click. No-op for XDG.
+static void x_raise_win(uint32_t win) {
+#ifdef WASH_DISPLAY_XWAYLAND
+    WinRef ref;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        auto it = g_win_reg.find(win);
+        if (it == g_win_reg.end() || it->second.kind != WinRef::X11) return;
+        ref = it->second;
+    }
+    auto* x = static_cast<XSurface*>(ref.ptr);
+    if (x && x->xsurf && !x->is_popup)
+        wlr_xwayland_surface_restack(x->xsurf, nullptr, XCB_STACK_MODE_ABOVE);
+#else
+    (void)win;
+#endif
+}
+
 // resolve_win looks up a wash window id and returns its surface + server.
 static bool resolve_win(uint32_t win, struct wlr_surface** surf, Server** srv) {
     WinRef ref;
@@ -1772,6 +1828,7 @@ static void inject_input(const json& data) {
             coord_dy = -active_grab->off_y;
         } else {
             if (!resolve_win(win, &surface, &srv)) return;
+            if (g_ptr_win != win) x_raise_win(win); // X hit-testing follows X stacking
             g_ptr_win = win;
             // The capture is cropped to the xdg window geometry (M5c — drops the
             // CSD shadow margin), so the FE's canvas coords are relative to the
@@ -1808,7 +1865,12 @@ static void inject_input(const json& data) {
         double sx = 0, sy = 0;
         struct wlr_surface* child = wlr_surface_surface_at(surface, rx, ry, &sx, &sy);
         if (!child) { child = surface; sx = rx; sy = ry; } // over a margin / no input region
-        if (g_ptr_surface != child) {
+        // Compare against the seat's OWN focused surface, not a cached raw
+        // pointer: the seat clears its focus when a surface is destroyed,
+        // whereas a cached pointer that a NEW surface happens to be allocated
+        // at (a guest dying, the next one mapping) matched "already entered"
+        // and every event went to nobody until the pointer crossed surfaces.
+        if (seat->pointer_state.focused_surface != child) {
             wlr_seat_pointer_notify_enter(seat, child, sx, sy);
             g_ptr_surface = child;
         }
@@ -1855,6 +1917,8 @@ static void inject_input(const json& data) {
             double value = delta / 120.0 * 15.0;
             wlr_seat_pointer_notify_axis(seat, t, orient, value, notches * 120,
                                          WLR_AXIS_SOURCE_WHEEL);
+            wlr_log(WLR_INFO, "wash-display: inject win=%u axis %s delta=%.0f notches=%d @ %.0f,%.0f",
+                    log_tgt, ax.c_str(), delta, notches, cx, cy);
             ptr_touched = true;
         } else if (ev == "key") {
             uint32_t kc = code_to_keycode(e.value("code", std::string()));
@@ -1960,10 +2024,15 @@ void handle_set_selection(struct wl_listener* listener, void* /*data*/) {
     wlr_log(WLR_INFO, "wash-display: clipboard guest->wash mime=%s", chosen);
 
     int fds[2];
-    if (pipe(fds) != 0) return;
+    if (pipe2(fds, O_CLOEXEC) != 0) return;
     // Hand the write end to the owner; it fills it asynchronously.
+    // wlr_data_source_send TAKES OWNERSHIP of the fd (wlr_data_device.h): a
+    // Wayland client source dups it over the protocol and closes it, and
+    // wlroots' xwm (X11 owners) keeps the very fd and writes to it later from
+    // its selection transfer. Closing it here too broke every X11 guest→wash
+    // copy ("write error to target fd: Bad file descriptor") and, in the
+    // Wayland case, double-closed an fd number another thread may have reused.
     wlr_data_source_send(src, chosen, fds[1]);
-    close(fds[1]);
     int rfd = fds[0];
     WireConn* conn = s->conn;
     std::thread([conn, washmime, rfd] {
@@ -2043,11 +2112,30 @@ void wash_src_send(struct wlr_data_source* source, const char* /*mime*/, int32_t
         if (conn && conn->clipboard_get(mime, bytes)) {
             const uint8_t* p = bytes.data();
             size_t left = bytes.size();
+            // The consumer may hand us a NON-BLOCKING write end (wlroots' xwm
+            // does, for a paste into an X11 client): a plain write() loop then
+            // stops at the first EAGAIN — the 64 KiB pipe buffer — and the
+            // guest got exactly 65536 bytes of a 200 KB paste. Wait for POLLOUT
+            // between chunks, bounded per quiet period (like the guest→wash
+            // reader) so a consumer that stops reading can't leak this thread
+            // and its fd forever.
+            struct pollfd pfd{fd, POLLOUT, 0};
+            constexpr int kQuietMs = 5000;
             while (left) {
                 ssize_t n = write(fd, p, left);
-                if (n <= 0) break;
-                p += n;
-                left -= (size_t)n;
+                if (n > 0) {
+                    p += n;
+                    left -= (size_t)n;
+                    continue;
+                }
+                if (n < 0 && errno == EINTR) continue;
+                if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                    int pr = poll(&pfd, 1, kQuietMs);
+                    if (pr > 0 && (pfd.revents & POLLOUT)) continue;
+                    if (pr < 0 && errno == EINTR) continue;
+                    wlr_log(WLR_ERROR, "wash-display: clipboard write stalled — abandoning paste (%zu B left)", left);
+                }
+                break; // EPIPE / consumer gone / stalled
             }
         }
         close(fd);
@@ -2161,6 +2249,13 @@ static void apply_win_cmd(const WinCmd& c) {
             auto* x = static_cast<XSurface*>(ref.ptr);
             if (x && x->xsurf) {
                 wlr_xwayland_surface_activate(x->xsurf, active);
+                // Keep the focused X window on top of the X stacking order.
+                // Every X toplevel is configured at the same root coordinates
+                // (wash owns window placement), and Xwayland dispatches a
+                // pointer event by its OWN hit test in root space — so a click
+                // injected into window C landed in B whenever B was stacked
+                // above it, even with C focused and the pointer entered on C.
+                if (active) wlr_xwayland_surface_restack(x->xsurf, nullptr, XCB_STACK_MODE_ABOVE);
             }
         }
 #endif
@@ -2189,6 +2284,19 @@ static void apply_win_cmd(const WinCmd& c) {
         // full frame, repainting the FE canvas it cleared on channel.resync
         // (REVIEW-X11-WAYLAND #6). Works for both surface kinds.
         if (WindowSink* s = winref_sink(ref)) s->reset_delta();
+#ifdef WASH_DISPLAY_XWAYLAND
+        // An XDG toplevel is recaptured by the next output_frame (its tree
+        // signature was reset). An X11 surface is captured ONLY on commit, so
+        // an idle X client would stay blank until it happened to repaint —
+        // every browser reload left X windows empty. Capture it right now.
+        if (ref.kind == WinRef::X11) {
+            auto* x = static_cast<XSurface*>(ref.ptr);
+            if (x && x->xsurf && x->xsurf->surface && !x->is_popup) {
+                sink_frame(x->sink, x->server->conn, x->xsurf->surface, x->server->renderer,
+                           0, 0, 0, 0, /*force_full=*/true);
+            }
+        }
+#endif
         return;
     }
     if (ref.kind == WinRef::XDG) {

@@ -178,7 +178,12 @@ static int print_manifest() {
 
 // dial connects to the control socket named by $WASH_DISPLAY.
 static int dial(const char* path) {
-    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    // CLOEXEC: the compositor forks Xwayland (via wlroots, which does not
+    // close inherited fds before exec) and any $WASH_DISPLAY_EXEC guest. Without
+    // it every child held the router wire socket — the connection outlived a
+    // dead compositor for as long as Xwayland ran, and a child could write on
+    // wash's wire with the display app's capabilities.
+    int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
