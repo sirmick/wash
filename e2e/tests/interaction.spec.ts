@@ -148,11 +148,20 @@ test.describe('interaction layer', () => {
     await page.mouse.down();
     await page.waitForTimeout(150);
     await page.mouse.up();
-    await page.waitForTimeout(30);
 
+    // Read the overlay 30ms into the release, on the animation clock rather
+    // than the wall clock: a sleep of 30ms plus a slow runner's round trip
+    // left the 110ms fade mostly done (CI, 2026-10-21). The transitions are
+    // paused and sought to 30ms, so the sample is the same on any machine.
     const mid = await page.evaluate((sel) => {
-      const cs = getComputedStyle(document.querySelector(sel)!, '::after');
-      return { bg: cs.backgroundColor, opacity: Number(cs.opacity) };
+      const el = document.querySelector(sel)!;
+      const fades = document.getAnimations().filter((a) => {
+        const fx = a.effect as KeyframeEffect | null;
+        return fx?.target === el && fx.pseudoElement === '::after';
+      });
+      for (const a of fades) { a.pause(); a.currentTime = 30; }
+      const cs = getComputedStyle(el, '::after');
+      return { fades: fades.length, bg: cs.backgroundColor, opacity: Number(cs.opacity) };
     }, apps);
 
     const lum = (c: string) => {
@@ -161,6 +170,7 @@ test.describe('interaction layer', () => {
     };
     // Still on its way down, and the colour is still in transit — not yet
     // arrived at the hover tint.
+    expect(mid.fades).toBeGreaterThan(0);
     expect(mid.opacity).toBeGreaterThan(0.1);
     expect(lum(mid.bg)).toBeLessThan(200);
   });
