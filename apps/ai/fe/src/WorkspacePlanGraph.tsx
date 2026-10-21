@@ -138,12 +138,12 @@ export const WorkspacePlanGraph: Component<{
         <span data-testid="workspace-plan-hint" style={{ 'white-space': 'nowrap' }}>
           {picked() ? `${picked()}: ${own().filter((e) => e.to === picked()).length} needed · ${own().filter((e) => e.from === picked()).length} waiting on it${selected() ? '' : ' · click to pin'}` : 'Pick a node to see its needs'}
         </span>
-        <label style={{ display: 'flex', gap: `${tokens.spaceXs}px`, 'align-items': 'center', 'white-space': 'nowrap', cursor: 'pointer' }}>
+        <label data-wash-hit style={{ display: 'flex', gap: `${tokens.spaceXs}px`, 'align-items': 'center', 'white-space': 'nowrap', cursor: 'pointer' }}>
           <input type="checkbox" data-testid="workspace-plan-show-done" checked={showDone()} onChange={(e) => toggleDone(e.currentTarget.checked)} />
           Show done
         </label>
       </div>
-      <div ref={scroller} data-testid="workspace-plan-graph" style={{ flex: 1, 'min-height': 0, overflow: 'auto', position: 'relative' }} onClick={() => setSelected('')}>
+      <div ref={scroller} data-testid="workspace-plan-graph" data-wash-no-hit style={{ flex: 1, 'min-height': 0, overflow: 'auto', position: 'relative' }} onClick={() => setSelected('')}>
         <div style={{ position: 'relative', width: `${layout().width}px`, height: `${layout().height}px` }}>
           {/* The standing edges go under the boxes, which are nearly
               opaque: a line passing beneath a box shows as a faint ghost

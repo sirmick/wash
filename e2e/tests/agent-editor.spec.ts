@@ -75,9 +75,10 @@ test.describe('the Agent window and its editor', () => {
     await raise(win);
     await prompt(win, 'mentionfiles');
 
-    // The two files under the folder are links; /etc/hosts is not.
+    // The two files under the folder are links, and so is /etc/hosts: an
+    // absolute path names its place and resolves wherever it exists.
     const links = win.locator('[data-testid="agent-path-link"]');
-    await expect(links).toHaveText(['notes.md:2', 'src/app.go'], { timeout: 20_000 });
+    await expect(links).toHaveText(['notes.md:2', 'src/app.go', '/etc/hosts'], { timeout: 20_000 });
 
     // notes.md:2 opens in that editor — in source, a line being a place in
     // the source — with the caret on line 2.
@@ -116,7 +117,7 @@ test.describe('the Agent window and its editor', () => {
     await composer.press('Enter');
 
     const links = pane.locator('[data-testid="agent-path-link"]');
-    await expect(links).toHaveText(['notes.md:2', 'src/app.go'], { timeout: 30_000 });
+    await expect(links).toHaveText(['notes.md:2', 'src/app.go', '/etc/hosts'], { timeout: 30_000 });
     await links.first().click();
     await expect(edit.locator(`[data-testid="edit-tab-${join(dir, 'notes.md')}"]`)).toBeVisible();
     await expect(edit.locator('[data-testid="edit-status-cursor"]')).toHaveText(/Ln 2, Col 1/);
