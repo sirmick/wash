@@ -89,6 +89,24 @@ func TestClientReconnectsAndResubscribes(t *testing.T) {
 	mu.Unlock()
 	cc.Close()
 
+	// The reconnect must announce itself to the watcher: anything that
+	// changed on B during the gap was never seen here, so a synthetic
+	// "modified" for the watched path arrives WITHOUT any remote emit.
+	resyncDeadline := time.After(8 * time.Second)
+	for resynced := false; !resynced; {
+		select {
+		case got, ok := <-sub.Events():
+			if !ok {
+				t.Fatal("sub closed during reconnect")
+			}
+			if got.Path == "/mnt/host/dir" && got.Op == fswatch.OpModified {
+				resynced = true
+			}
+		case <-resyncDeadline:
+			t.Fatal("no resync event for the watched path after reconnect")
+		}
+	}
+
 	// After reconnect + re-subscribe, a new change still arrives.
 	waitForPath(t, remoteFeed, sub, fswatch.Event{Op: fswatch.OpModified, Path: "/srv/dir/y"}, "/mnt/host/dir/y")
 

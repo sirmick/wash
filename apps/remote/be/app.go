@@ -34,6 +34,7 @@ import (
 	"io/fs"
 	"log"
 
+	"github.com/sirmick/wash/internal/fswatchproto"
 	"github.com/sirmick/wash/internal/version"
 	"github.com/sirmick/wash/pkg/apps/registry"
 	"github.com/sirmick/wash/pkg/sdk"
@@ -180,7 +181,16 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 		if req.MountPoint == "" {
 			return nil
 		}
-		go mounts.unmount(req.MountPoint)
+		go mounts.unmount(req.MountPoint, req.Force)
+		return nil
+	})
+	// The watch service (re)started and lost its mount registrations: re-send
+	// one per live mount so mounted trees keep updating.
+	sdk.HandleFromVoid(bus, fswatchproto.KindResyncMounts, func(_ *sdk.Conn, _ string, _ struct{}, from wire.Sender) error {
+		if from.AppID != fswatchproto.AppID {
+			return nil
+		}
+		mounts.reregisterAll()
 		return nil
 	})
 }

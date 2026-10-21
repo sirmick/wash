@@ -199,7 +199,25 @@ FUSE; it fails at mount time, surfaced as a `MountState{status:"error"}`.
 - **Reconnect.** Both channels self-heal. The **data path** re-dials on the next
   op without unmounting (`washmount.MountWithDialer`; the supervisor re-execs
   `ssh -s sftp`, the `wash-mount` CLI re-dials in-process), with in-flight ops
-  bounded by a concurrency semaphore. The **watch path** re-dials `wash-fswatchd`
+  bounded by a concurrency semaphore. The re-dial itself is bounded by the op
+  timeout (an op whose dial is still pending at the deadline EIOs; the dial
+  carries on for the next op), concurrent ops share one dial, and a failed
+  dial backs off (1s doubling to 30s) so a down host costs one ssh fork per
+  window, not one per op. File handles opened before a drop are re-opened by
+  path on the reconnected client, so an editor holding a file open survives.
+  The **watch path** re-dials `wash-fswatchd`, re-subscribes the active
+  watches, and then emits a synthetic `modified` for each watched path so
+  consumers re-list (changes made on B during the gap were never observed
+  here). The watch service's registrations live only in its memory, so on
+  (re)start it sends `resync_mounts` to the supervisor, which re-registers
+  every live mount.
+- **Unclean exit.** If wash-remote dies without unmounting (SIGKILL, OOM) the
+  kernel keeps a dead FUSE mount at the mountpoint (every op ENOTCONN). The
+  next mount of that target detaches it first (`washmount.ClearStale`); a live
+  mount is never touched. Persisted mounts that fail at launch (host
+  off-network, agent locked) are retried with backoff (15 s doubling to 5 min)
+  until they mount or the user dismisses the error row (its Unmount button
+  also forgets the persisted entry). The **watch path** re-dials `wash-fswatchd`
   and re-subscribes the active watches (`remotewatch.NewReconnectingClient`).
   Both ssh sessions run keepalives (`ServerAliveInterval`, and the CLI an
   in-process ping) so a **silent** link death (NAT/conntrack drop, suspend, cable
@@ -214,7 +232,19 @@ FUSE; it fails at mount time, surfaced as a `MountState{status:"error"}`.
   `unwatch_all` leaks its watches in the service until process exit (no
   instance-gone signal exists for a background service).
 - **Cosmetic mountpoint.** Mounts land at `~/wash/remote/<host>/<base>`, which
-  renders as `…/wash/wash/remote/…`; the base path could be tidied.
+  renders as `…/wash/wash/remote/…`; the base path could be tidied. Two roots
+  with the same basename on one host (`~/project`, `/srv/project`) get the
+  second a short hash suffix rather than colliding.
+- **Unmount of a busy mount is refused, not forced.** The UI's Unmount is a
+  plain `fusermount3 -u`. If processes hold the tree (a shell cd'd in, an
+  editor with a file open) the kernel answers EBUSY, the mount stays up, and
+  the row reports who holds it (`busy`, from a `/proc` walk like `fuser -m`:
+  cwd/root/exe, open fds, mmaps) with a **Force** button. Force (or a mount
+  that never finished coming up, or service shutdown) runs the escalating
+  escape hatch — lazy detach then the kernel abort — whose cost is that the
+  holders' in-flight I/O fails. A wedged backend can't hide behind "busy":
+  every handler is bounded by the op timeout, so a parked request clears
+  itself and a later plain Unmount succeeds.
 - **No caching tuning.** Beyond the 3 s attr/entry timeout there's no VFS cache;
   random IO over a high-latency link relies on `pkg/sftp`'s pipelining.
 - **e2e harness flakiness.** `mount-vm` test 1 occasionally needs a retry due to

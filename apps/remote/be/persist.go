@@ -102,6 +102,16 @@ func addSavedMount(host, remoteRoot string) {
 	writeMountsLocked(append(ms, savedMount{Host: host, RemoteRoot: remoteRoot}))
 }
 
+// isSavedMount reports whether host:remoteRoot is still persisted.
+func isSavedMount(host, remoteRoot string) bool {
+	for _, m := range loadSavedMounts() {
+		if m.Host == host && m.RemoteRoot == remoteRoot {
+			return true
+		}
+	}
+	return false
+}
+
 // removeSavedMount forgets a persisted mount (called on unmount).
 func removeSavedMount(host, remoteRoot string) {
 	savedMountsMu.Lock()

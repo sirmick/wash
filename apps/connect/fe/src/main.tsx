@@ -47,6 +47,9 @@ interface MountState {
   mount_point: string;
   status: MountStatus;
   error?: string;
+  // busy: an unmount was refused because these processes hold the tree
+  // (status stays 'mounted'); the row offers a forced unmount.
+  busy?: string;
 }
 
 // Candidate is a host found on the network (mDNS today) that isn't yet
@@ -393,7 +396,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       onAddAutoMount={(p) => addAutoMount(h.host, p)}
       onRemoveAutoMount={(p) => removeAutoMount(h.host, p)}
       onMount={(root, persist) => send({ kind: 'mount', host: h.host, remote_root: root, persist })}
-      onUnmount={(mp) => send({ kind: 'unmount', mount_point: mp })}
+      onUnmount={(mp, force) => send({ kind: 'unmount', mount_point: mp, force: !!force })}
     />
   );
 
@@ -554,7 +557,7 @@ const HostRow: Component<{
   onAddAutoMount: (path: string) => void;
   onRemoveAutoMount: (path: string) => void;
   onMount: (remoteRoot: string, persist: boolean) => void;
-  onUnmount: (mountPoint: string) => void;
+  onUnmount: (mountPoint: string, force?: boolean) => void;
 }> = (props) => {
   const color = () => hostColor(props.host.origin);
   const up = () => props.host.status === 'up';
@@ -753,7 +756,7 @@ const HostDrawer: Component<{
 const MountsSection: Component<{
   mounts: MountState[];
   onMount: (remoteRoot: string, persist: boolean) => void;
-  onUnmount: (mountPoint: string) => void;
+  onUnmount: (mountPoint: string, force?: boolean) => void;
 }> = (props) => {
   const [path, setPath] = createSignal('');
   const submit = () => {
@@ -762,20 +765,34 @@ const MountsSection: Component<{
     props.onMount(p, false);
     setPath('');
   };
+  // A busy mount is still mounted; say who holds it so the user can finish
+  // there and retry, or force (which errors the holders' I/O).
   const statusText = (mt: MountState) =>
-    mt.status === 'mounted' ? '✓ mounted' : mt.status === 'mounting' ? 'mounting…' : (mt.error || 'mount failed');
+    mt.busy ? `in use: ${mt.busy}`
+      : mt.status === 'mounted' ? '✓ mounted' : mt.status === 'mounting' ? 'mounting…' : (mt.error || 'mount failed');
   return (
     <div style={mountsStyle} data-testid="connect-mounts">
       <For each={props.mounts}>
         {(mt) => (
-          <div style={mountRowStyle} data-testid="connect-mount" data-status={mt.status} data-mount={mt.mount_point}>
+          <div style={mountRowStyle} data-testid="connect-mount" data-status={mt.status} data-mount={mt.mount_point} data-busy={mt.busy ? '1' : undefined}>
             <span style={mountPathStyle} title={mt.mount_point}>{mt.remote_root}</span>
-            <span style={mountStatusStyle}>{statusText(mt)}</span>
+            <span style={mountStatusStyle} title={mt.busy || undefined}>{statusText(mt)}</span>
+            <Show when={mt.busy}>
+              <Button
+                variant="ghost"
+                onClick={() => props.onUnmount(mt.mount_point, true)}
+                style={{ 'white-space': 'nowrap', 'flex-shrink': 0, color: tokens.fgDanger }}
+                title="Detach now — the processes using it will get I/O errors"
+                data-testid="connect-unmount-force"
+              >
+                Force
+              </Button>
+            </Show>
             <Button
               variant="icon"
               onClick={() => props.onUnmount(mt.mount_point)}
               style={{ color: tokens.fgMuted }}
-              title="Unmount"
+              title={mt.busy ? 'Retry unmount' : 'Unmount'}
               data-testid="connect-unmount"
             >
               ✕

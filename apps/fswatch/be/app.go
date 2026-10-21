@@ -35,6 +35,7 @@ import (
 	"github.com/sirmick/wash/internal/fswatch"
 	"github.com/sirmick/wash/internal/fswatchproto"
 	"github.com/sirmick/wash/internal/remotewatch"
+	"github.com/sirmick/wash/internal/sshtarget"
 	"github.com/sirmick/wash/pkg/apps/registry"
 	"github.com/sirmick/wash/pkg/sdk"
 	"github.com/sirmick/wash/pkg/wire"
@@ -155,6 +156,12 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 		unregisterMount(req.MountPoint)
 		return nil
 	})
+
+	// Mount registrations live only in this process. Ask the supervisor to
+	// re-send one per live mount, so a service restart doesn't leave mounted
+	// trees silently un-watched. (Addressing by app id spawns com.wash.remote
+	// if it isn't up; it is autostart-at-boot, so normally it just answers.)
+	_ = c.SendAppMsgTo(wire.Recipient{AppID: fswatchproto.RemoteAppID}, map[string]any{"kind": fswatchproto.KindResyncMounts})
 }
 
 // openWatchChannel opens the wash watch stream to a remote host — by default
@@ -171,7 +178,9 @@ var openWatchChannel = func(host string) (io.ReadWriteCloser, error) {
 		// data path (dialSFTP) already sets these; the watch path omitted them.
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
-		host, "wash-fswatchd")
+		// "--": host arrived over the bus from another app; registerMount
+		// validates it, and this keeps ssh from reading it as an option.
+		"--", host, "wash-fswatchd")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -203,10 +212,18 @@ func registerMount(req mountReq) {
 	if req.MountPoint == "" || req.Host == "" {
 		return
 	}
+	// The host is exec'd as ssh's target by openWatchChannel; refuse one
+	// that could be parsed as an option (any local app can send this).
+	if err := sshtarget.Validate(req.Host); err != nil {
+		log.Printf("wash-fswatch: register mount %s refused: %v", req.MountPoint, err)
+		return
+	}
+	// Check-and-insert under one lock hold: a resync_mounts reply can race a
+	// fresh register_mount for the same mountpoint, and two clients for one
+	// mount would leave the first's ssh leaked behind the Router's replace.
 	mountsMu.Lock()
-	_, exists := mounts[req.MountPoint]
-	mountsMu.Unlock()
-	if exists {
+	defer mountsMu.Unlock()
+	if _, exists := mounts[req.MountPoint]; exists {
 		return
 	}
 	// Reconnecting watch client: dial re-opens `ssh <host> wash-fswatchd` after a
@@ -220,9 +237,7 @@ func registerMount(req mountReq) {
 		RemoteRoot: req.RemoteRoot,
 	})
 	router.Mount(req.MountPoint, client) // Router owns/closes the client
-	mountsMu.Lock()
 	mounts[req.MountPoint] = &mountReg{client: client}
-	mountsMu.Unlock()
 	log.Printf("wash-fswatch: registered mount %s -> %s:%s", req.MountPoint, req.Host, req.RemoteRoot)
 }
 

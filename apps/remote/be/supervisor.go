@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sirmick/wash/internal/sshtarget"
 	"github.com/sirmick/wash/pkg/sdk"
 )
 
@@ -46,6 +47,9 @@ type supervisor struct {
 	conn    peerRegistrar // A's router (nil in tests that don't care)
 	sshPath string        // injectable for tests
 	sockDir string        // dir holding per-host ssh -L unix sockets
+	// ownsSockDir: sockDir was minted by us (MkdirTemp), so shutdown may
+	// remove it. False for the os.TempDir() fallback and for tests' dirs.
+	ownsSockDir bool
 
 	// attempt runs one bring-up (runOnce); after is the backoff clock and
 	// now the health clock. Seams so the reconnect state machine is tested
@@ -99,14 +103,16 @@ func newSupervisor(svc *sdk.StateService[State], conn *sdk.Conn) *supervisor {
 	// Per-instance dir for the ssh -L unix sockets. Same user as A's
 	// router (this is its child), so the router can dial them.
 	dir, err := os.MkdirTemp("", "wash-remote-")
+	owns := err == nil
 	if err != nil {
 		dir = os.TempDir()
 	}
 	s := &supervisor{
-		svc:     svc,
-		sshPath: "ssh",
-		sockDir: dir,
-		procs:   map[string]*hostProc{},
+		svc:         svc,
+		sshPath:     "ssh",
+		sockDir:     dir,
+		ownsSockDir: owns,
+		procs:       map[string]*hostProc{},
 	}
 	if conn != nil { // a nil *sdk.Conn in the interface would read as non-nil
 		s.conn = conn
@@ -170,6 +176,10 @@ func buildSSHArgs(host, localSock, remoteSock, localIngressSock, remoteIngressSo
 		// actually true.
 		"-L", fmt.Sprintf("%s:%s", localSock, remoteSock),
 		"-L", fmt.Sprintf("%s:%s", localIngressSock, remoteIngressSock),
+		// "--" ends option parsing: the host came from the user or the LAN
+		// (mDNS), and sshtarget.Validate already rejects a leading "-", but
+		// ssh must never be able to read the target as an option either way.
+		"--",
 		host,
 		"wash-router",
 		"--listen-raw", "unix:"+remoteSock,
@@ -202,6 +212,19 @@ func (s *supervisor) connect(host, addr string, port int) {
 	}
 	if host == "" {
 		return
+	}
+	// Both strings end up as ssh's positional target (addr is the fallback
+	// dial), and neither is ours: host is typed or mDNS-announced, addr is
+	// mDNS-announced. Refuse anything ssh could read as an option, visibly.
+	if err := sshtarget.Validate(host); err != nil {
+		s.setHost(host, HostState{Host: host, Origin: host, Status: StatusDown, Error: err.Error()})
+		return
+	}
+	if addr != "" {
+		if err := sshtarget.Validate(addr); err != nil {
+			log.Printf("wash-remote: connect host=%s: ignoring fallback addr: %v", host, err)
+			addr = ""
+		}
 	}
 	s.mu.Lock()
 	if _, ok := s.procs[host]; ok {
@@ -250,6 +273,11 @@ func (s *supervisor) shutdown() {
 			return
 		}
 	}
+	if s.ownsSockDir {
+		// Every run's defer removed its sockets; drop the per-instance dir
+		// too, or one accumulates in /tmp per wash-remote start.
+		_ = os.RemoveAll(s.sockDir)
+	}
 }
 
 // run owns one host's connection for its whole lifetime, auto-reconnecting
@@ -289,6 +317,13 @@ func (s *supervisor) run(ctx context.Context, self *hostProc, host, addr string,
 		_ = os.Remove(ingressSock)
 		if s.conn != nil {
 			_ = s.conn.UnregisterPeer(host)
+		}
+		if ctx.Err() != nil {
+			// A deliberate disconnect: disconnect() already dropped the host
+			// for UI responsiveness, but a readiness publish that slipped in
+			// between would otherwise leave a ghost "up" row behind — drop it
+			// again now that no attempt can publish any more.
+			s.removeHost(host)
 		}
 	}()
 
@@ -415,13 +450,20 @@ func (s *supervisor) runOnce(ctx context.Context, a attemptSpec) (code, errMsg s
 		return "", msg
 	}
 
-	up := make(chan struct{}, 1)
 	// tail accumulates the last few stderr lines so an exit-with-error
 	// can be classified (auth refusal vs. anything else). Guarded — the
 	// two scan goroutines write it concurrently.
+	//
+	// live marks the attempt as still owning the host's published state.
+	// Readiness (peer registration + "up") is published under tailMu only
+	// while live, and the post-Wait path clears live under the same lock
+	// before returning — so a "listening on" that lands as the ssh dies, or
+	// as a disconnect cancels us, can never publish "up" (or register a
+	// peer) AFTER run() has published "reconnecting" or dropped the host.
+	// An async up-watcher goroutine had exactly that race.
 	var tailMu sync.Mutex
 	var tail []string
-	ready := false
+	ready, live := false, true
 	// The remote wash-router logs "listening on <addr>" once bound; ssh
 	// forwards that to our stdout/stderr. That line is our readiness
 	// signal — tunnel + router are live, the shell can attach.
@@ -432,12 +474,16 @@ func (s *supervisor) runOnce(ctx context.Context, a attemptSpec) (code, errMsg s
 			log.Printf("wash-remote: connect host=%s dial=%s %s: %s", host, dial, stream, line)
 			if strings.Contains(line, "listening on ") {
 				tailMu.Lock()
-				ready = true
-				tailMu.Unlock()
-				select {
-				case up <- struct{}{}:
-				default:
+				if live && !ready && ctx.Err() == nil {
+					ready = true
+					// Register the relay socket with A's router BEFORE
+					// reporting up, so the FE (which attaches on seeing "up")
+					// finds the registration when its peer.attach arrives
+					// (the state push that triggers attach is sent after
+					// this, on the same conn — causal order holds).
+					s.publishUp(host, sock, ingressSock)
 				}
+				tailMu.Unlock()
 				continue
 			}
 			tailMu.Lock()
@@ -460,48 +506,45 @@ func (s *supervisor) runOnce(ctx context.Context, a attemptSpec) (code, errMsg s
 	go scan("stdout", stdout)
 	go scan("stderr", stderr)
 
-	// The up-watcher must not outlive this attempt, or a late "up" from a
-	// dying connection could mark the host up after we've moved on.
-	upCtx, upCancel := context.WithCancel(ctx)
-	defer upCancel()
-	go func() {
-		select {
-		case <-up:
-			// Register the relay socket with A's router BEFORE reporting up,
-			// so the FE (which attaches on seeing "up") finds the
-			// registration when its peer.attach arrives (the state push that
-			// triggers attach is sent after this, on the same conn — causal
-			// order holds). The FE attaches via the relay; no ws endpoint.
-			if s.conn != nil {
-				if err := s.conn.RegisterPeer(host, "unix", sock, ingressSock); err != nil {
-					s.setHost(host, HostState{Host: host, Origin: host, Status: StatusDown, Error: "register peer: " + err.Error()})
-					return
-				}
-			}
-			s.setHost(host, HostState{Host: host, Origin: host, Status: StatusUp})
-		case <-upCtx.Done():
-		}
-	}()
-
 	err := cmd.Wait()
-	if ctx.Err() != nil {
-		return "", "" // user-initiated disconnect
-	}
+	// Close the attempt BEFORE the cancel check: a readiness publish in
+	// flight finishes under tailMu, and none can start after this.
 	tailMu.Lock()
+	live = false
 	stderrTail := strings.Join(tail, "\n")
 	wasReady := ready
 	tailCopy := append([]string(nil), tail...)
 	tailMu.Unlock()
+	if ctx.Err() != nil {
+		return "", "" // user-initiated disconnect
+	}
 	errMsg = formatSSHAttemptError(dial, port, err, tailCopy, wasReady)
 	// Classify auth refusal so wash-connect can offer the ssh-add widget
 	// (docs/REMOTE.md §6.1). BatchMode never prompts, so a missing/locked
 	// key surfaces as "Permission denied (publickey…)" and ssh exits 255.
-	if isAuthFailure(stderrTail) {
+	// Only a session that never became ready can be an auth refusal: once
+	// B's router was up, the tail is whatever the session logged since (in
+	// legacy mode that includes B's router/app log lines), and a stray
+	// "Permission denied" there would otherwise stop reconnection for good.
+	if !wasReady && isAuthFailure(stderrTail) {
 		log.Printf("wash-remote: connect host=%s dial=%s auth failure ready=%t err=%v detail=%q", host, dial, wasReady, err, errMsg)
 		return "auth", errMsg
 	}
 	log.Printf("wash-remote: connect host=%s dial=%s ended ready=%t err=%v detail=%q", host, dial, wasReady, err, errMsg)
 	return "", errMsg
+}
+
+// publishUp registers the host's relay socket with A's router and publishes
+// "up" — or "down" with the reason if the registration was refused. Called
+// from runOnce's readiness path under its attempt lock.
+func (s *supervisor) publishUp(host, sock, ingressSock string) {
+	if s.conn != nil {
+		if err := s.conn.RegisterPeer(host, "unix", sock, ingressSock); err != nil {
+			s.setHost(host, HostState{Host: host, Origin: host, Status: StatusDown, Error: "register peer: " + err.Error()})
+			return
+		}
+	}
+	s.setHost(host, HostState{Host: host, Origin: host, Status: StatusUp})
 }
 
 func formatSSHAttemptError(dial string, port int, err error, tail []string, ready bool) string {

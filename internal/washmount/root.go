@@ -41,6 +41,17 @@ type sftpRoot struct {
 
 	clientMu sync.Mutex
 	cur      *sftp.Client // current live client; nil before first dial / after a drop
+	// dialing is non-nil while one re-dial is in flight; it closes when that
+	// dial settles. Every op that finds cur == nil waits on the SAME dial (no
+	// thundering herd of ssh forks), bounded by its own op deadline.
+	dialing chan struct{}
+	// After a failed dial, further dials are refused until nextDial (with
+	// lastDialErr returned at once), the delay doubling per failure up to
+	// maxDialBackoff. Without this every FUSE op against a down host forks
+	// an ssh and waits its connect timeout — forever, serially.
+	nextDial    time.Time
+	dialBackoff time.Duration
+	lastDialErr error
 
 	// sem bounds in-flight SFTP ops so a burst can't swamp the single channel
 	// (head-of-line blocking). Buffered to the configured max.
@@ -60,21 +71,80 @@ type sftpRoot struct {
 	uid, gid uint32
 }
 
+const (
+	minDialBackoff = time.Second
+	maxDialBackoff = 30 * time.Second
+)
+
 // cli returns a live SFTP client, dialing one if none is current (the first op,
-// or the first op after a drop). A failed dial surfaces as EIO; the op after
-// retries the dial.
-func (r *sftpRoot) cli() (*sftp.Client, error) {
+// or the first op after a drop). The dial runs OFF the caller's goroutine and
+// outside clientMu, so it is bounded by ctx (the op deadline) rather than by
+// however long ssh takes to resolve, connect and authenticate — a FUSE handler
+// parked on an unbounded dial is exactly the kernel tarpit run() exists to
+// prevent, and under the mutex it would park every other op too. Concurrent
+// ops share one in-flight dial. A failed dial is remembered: ops arriving
+// before the backoff expires fail immediately with the same error instead of
+// forking another ssh each.
+func (r *sftpRoot) cli(ctx context.Context) (*sftp.Client, error) {
+	r.clientMu.Lock()
+	if r.cur != nil {
+		c := r.cur
+		r.clientMu.Unlock()
+		return c, nil
+	}
+	if r.dialing == nil {
+		if !r.nextDial.IsZero() && time.Now().Before(r.nextDial) {
+			err := r.lastDialErr
+			r.clientMu.Unlock()
+			return nil, err
+		}
+		done := make(chan struct{})
+		r.dialing = done
+		go r.dialOnce(done)
+	}
+	done := r.dialing
+	r.clientMu.Unlock()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		// The dial carries on in its goroutine; a later op finds its result.
+		return nil, ctx.Err()
+	}
 	r.clientMu.Lock()
 	defer r.clientMu.Unlock()
 	if r.cur != nil {
 		return r.cur, nil
 	}
+	return nil, r.lastDialErr
+}
+
+// dialOnce runs one dial and records its outcome under clientMu, closing done
+// so waiters in cli wake. Success resets the backoff; failure escalates it.
+func (r *sftpRoot) dialOnce(done chan struct{}) {
 	c, err := r.dial()
-	if err != nil {
-		return nil, err
+	r.clientMu.Lock()
+	if err == nil {
+		r.cur = c
+		r.dialBackoff = 0
+		r.nextDial = time.Time{}
+		r.lastDialErr = nil
+	} else {
+		if r.dialBackoff == 0 {
+			r.dialBackoff = minDialBackoff
+		} else if r.dialBackoff < maxDialBackoff {
+			r.dialBackoff *= 2
+			if r.dialBackoff > maxDialBackoff {
+				r.dialBackoff = maxDialBackoff
+			}
+		}
+		r.nextDial = time.Now().Add(r.dialBackoff)
+		r.lastDialErr = err
+		log.Printf("washmount: dial failed: %v (next attempt in %s)", err, r.dialBackoff)
 	}
-	r.cur = c
-	return c, nil
+	r.dialing = nil
+	r.clientMu.Unlock()
+	close(done)
 }
 
 // markDead drops c if it is the current client, so the next cli() re-dials. The
@@ -116,10 +186,14 @@ func (r *sftpRoot) run(ctx context.Context, what string, fn func(cl *sftp.Client
 		return syscall.EIO
 	}
 
-	cl, err := r.cli()
+	cl, err := r.cli(cctx)
 	if err != nil {
-		log.Printf("washmount: connect for op=%s: %v", what, err)
 		<-r.sem // nothing was spawned to release it
+		if cctx.Err() != nil {
+			log.Printf("washmount: dial still pending at op deadline op=%s timeout=%s: returning EIO", what, r.opTimeout)
+			return syscall.EIO
+		}
+		log.Printf("washmount: connect for op=%s: %v", what, err)
 		return toErrno(err)
 	}
 
@@ -265,7 +339,42 @@ func modeBits(m fs.FileMode) uint32 {
 
 // fileHandle wraps an open *sftp.File. SFTP file methods are not documented as
 // safe for concurrent use, so a mutex guards positioned reads and writes.
+//
+// owner is the client f was opened on. After a connection drop the mount
+// re-dials, but the kernel keeps handing back fds opened before it: an op on
+// such a handle must NOT be run against the dead f — pkg/sftp answers it with
+// a connection-lost error, which isConnError (rightly) classes as a transport
+// death, and run() would then markDead the NEW, healthy client it just handed
+// us. That tore the connection down once per op on every pre-drop fd (an
+// editor with a file open became a reconnect loop). Instead, get() re-opens
+// the file by path on the current client, transparently.
 type fileHandle struct {
-	mu sync.Mutex
-	f  *sftp.File
+	mu    sync.Mutex
+	f     *sftp.File
+	owner *sftp.Client
+	flags int // open flags, minus creation flags, for a re-open after a drop
+}
+
+// get returns the open file for use on cl, re-opening path on cl if f belongs
+// to a client that has since been dropped. Caller holds h.mu. An error here
+// comes from cl itself, so run()'s transport classification stays valid.
+func (h *fileHandle) get(cl *sftp.Client, path string) (*sftp.File, error) {
+	if h.owner == cl {
+		return h.f, nil
+	}
+	f, err := cl.OpenFile(path, h.flags)
+	if err != nil {
+		return nil, err
+	}
+	// The old server-side handle died with its connection; don't Close it
+	// (that would only produce another connection-lost error).
+	h.f, h.owner = f, cl
+	log.Printf("washmount: re-opened %s on the reconnected client", path)
+	return f, nil
+}
+
+// reopenFlags strips the creation-time flags from an open's flags so a re-open
+// after a drop neither truncates nor insists the file be new.
+func reopenFlags(flags int) int {
+	return flags &^ (os.O_CREATE | os.O_EXCL | os.O_TRUNC)
 }
