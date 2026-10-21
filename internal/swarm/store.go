@@ -223,12 +223,22 @@ type Workspace struct {
 	// member's `model` resolves against it): the orchestrator's own catalog
 	// at setup, changeable with workspace_configure.catalog for later
 	// launches.
-	Catalog    string `json:"catalog,omitempty"`
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Root       string `json:"project_root"`
-	Lead       string `json:"orchestrator"`
-	State      string `json:"state"`
+	Catalog string `json:"catalog,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Root    string `json:"project_root"`
+	// RepoURL is the project's web home (its git origin as https, no
+	// .git), filled in on the published view, not stored: the Plan tab
+	// links the commit hashes a node's body names to it.
+	RepoURL string `json:"repo_url,omitempty"`
+	Lead    string `json:"orchestrator"`
+	State   string `json:"state"`
+	// Phase is "" while the team fans out, "closing" once the milestone's
+	// tail is narrow enough for one agent: new members launch only as
+	// replacements (handoff_from), members without open work are asked
+	// to hand off, and the dossier (workspace_get view=dossier) is the
+	// handover. Set with workspace_configure phase.
+	Phase      string `json:"phase,omitempty"`
 	Revision   int64  `json:"revision"`
 	MaxActive  int    `json:"max_active"`
 	MaxMembers int    `json:"max_members"`

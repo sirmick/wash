@@ -1033,6 +1033,13 @@ export interface QAEvent {
   body: string;
   message_id?: string;
   created_at: number;
+  /**
+   * Answers is the event this one answers, set on a thread read in full
+   * (LinkAnswers), not stored; Inferred when it was found by position
+   * rather than by the answer's message replying to the question's.
+   */
+  answers?: string;
+  answers_inferred?: boolean;
 }
 
 export interface QAThread {
@@ -1632,8 +1639,22 @@ export interface Workspace {
   id: string;
   name: string;
   project_root: string;
+  /**
+   * RepoURL is the project's web home (its git origin as https, no
+   * .git), filled in on the published view, not stored: the Plan tab
+   * links the commit hashes a node's body names to it.
+   */
+  repo_url?: string;
   orchestrator: string;
   state: string;
+  /**
+   * Phase is "" while the team fans out, "closing" once the milestone's
+   * tail is narrow enough for one agent: new members launch only as
+   * replacements (handoff_from), members without open work are asked
+   * to hand off, and the dossier (workspace_get view=dossier) is the
+   * handover. Set with workspace_configure phase.
+   */
+  phase?: string;
   revision: number;
   max_active: number;
   max_members: number;
@@ -1682,7 +1703,7 @@ export interface WorkspaceAction {
   key: string;
   /**
    * Name is the operation: member_open | member_resume |
-   * member_message | member_inspect.
+   * member_message | member_inspect | qa_thread.
    */
   name: string;
   arguments: WorkspaceActionArgs;
@@ -1702,6 +1723,8 @@ export interface WorkspaceActionArgs {
   recipient?: string;
   /** Body is a member_message's text. */
   body?: string;
+  /** ThreadID names the QA thread qa_thread reads in full. */
+  thread_id?: string;
 }
 
 /** WorkspaceApproval is a member's question waiting for the human. */
@@ -1756,6 +1779,11 @@ export interface WorkspaceResult {
   error?: string;
   /** Transcript answers member_inspect. */
   transcript?: WorkspaceTranscript;
+  /**
+   * Thread answers qa_thread: the thread with every event, the archived
+   * ones read back from its file.
+   */
+  thread?: QAThread;
 }
 
 /**

@@ -572,11 +572,14 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
 
   // The menus advertise these, so they have to exist. A menu that shows a
   // shortcut it does not implement is worse than one that shows none.
+  // Bound on this window's host, not on window: every app shares the one
+  // document, and bound there Ctrl+S in the editor opened a Save
+  // transcript picker in every Agent window at once.
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       const k = e.key.toLowerCase();
-      if (k === 's' && !e.shiftKey && events().length > 0) {
+      if (k === 's' && !e.shiftKey && !e.altKey && events().length > 0) {
         e.preventDefault();
         setSaving(true);
       }
@@ -585,8 +588,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         void washCopyText(lastReply());
       }
     };
-    window.addEventListener('keydown', onKey);
-    onCleanup(() => window.removeEventListener('keydown', onKey));
+    props.host.addEventListener('keydown', onKey);
+    if (!props.host.hasAttribute('tabindex')) props.host.setAttribute('tabindex', '0');
+    onCleanup(() => props.host.removeEventListener('keydown', onKey));
   });
 
   const openPrompt = () => {

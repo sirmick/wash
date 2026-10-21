@@ -349,6 +349,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 	// Per member key: advisory settings this provider, or the adapter this
 	// host last ran, will not enforce. Part of the receipt, not a refusal.
 	advisories := map[string][]string{}
+	// Open workspaces at this root led by other sessions: a new one here
+	// does not reuse them, and the caller should know before committing
+	// (Redoubt, WASH-R43: a fresh session previewed a brand-new workspace
+	// with no word that a paused one of the same name and root was open).
+	var elsewhere []map[string]any
 	result, err := ws.store.Transaction(h.sessionID, "workspace_configure", p.Request, raw, p.Preview, func(s *swarm.Store) (any, error) {
 		current := s.View(h.sessionID)
 		if current == nil {
@@ -357,6 +362,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 			}
 			if p.Workspace == nil || p.Workspace.Name == "" {
 				return nil, errors.New("initial configuration requires workspace.name")
+			}
+			for _, w := range s.Snapshot().Workspaces {
+				if w.State != "ended" && w.Root == root {
+					elsewhere = append(elsewhere, openWorkspaceRow(w, h.sessionID))
+				}
 			}
 			if _, err := s.Setup(h.sessionID, h.agent, h.cwd, p.Workspace.Name, root); err != nil {
 				return nil, err
@@ -492,6 +502,11 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				if live >= w.MaxMembers {
 					return fmt.Errorf("member %s: workspace member limit (%d) reached", key, w.MaxMembers)
 				}
+				// Closing folds the team back: a new member only carries a
+				// retiring one's context on, it does not widen the team.
+				if w.Phase == "closing" && spec.HandoffFrom == "" && spec.HandoffFile == "" {
+					return fmt.Errorf("member %s: the workspace is closing; new members launch only as replacements (handoff_from or handoff_file), or set phase:\"\" to fan out again", key)
+				}
 				explicit := swarm.AgentProfile{Capability: spec.Capability, Enforcement: spec.Enforcement, Approval: spec.Approval, Provider: spec.Provider, Effort: spec.Effort, Configs: spec.Configs, Subagents: spec.Subagents}
 				catalog, settings, err := memberSettingsFor(w, catalogs, badCatalogs, spec.Catalog, spec.Model, explicit)
 				if err != nil {
@@ -557,12 +572,16 @@ func (ws *workspaceService) configureBulk(ctx context.Context, h *hosted, raw js
 				}
 			}
 		}
-		out := map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "qa_dir": w.QADir, "plan_file": w.PlanFile, "legend": w.Legend, "max_active": w.MaxActive, "max_members": w.MaxMembers}}
+		out := map[string]any{"workspace_id": workspaceID, "revision": w.Revision, "members": members, "preview": p.Preview, "configuration": map[string]any{"name": w.Name, "project_root": w.Root, "catalog": w.Catalog, "qa_dir": w.QADir, "plan_file": w.PlanFile, "legend": w.Legend, "max_active": w.MaxActive, "max_members": w.MaxMembers, "phase": w.Phase}}
 		if len(advisories) > 0 {
 			out["advisories"] = advisories
 		}
 		if resumed != nil {
 			out["qa_resumed"] = *resumed
+		}
+		if len(elsewhere) > 0 {
+			out["open_workspaces_at_this_root"] = elsewhere
+			out["open_workspaces_note"] = "this configuration makes a new workspace; it does not take those over. Only a workspace's orchestrator session leads it: continue in that session, or workspace_end {workspace_id} and then configure"
 		}
 		return out, nil
 	})

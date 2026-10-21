@@ -635,3 +635,66 @@ Four reviews were queued on one red. I could not see that in the team view (`und
 
 ## WASH-R30 (2026-10-08): a capability:"reviewer" member with a launch task never completes it
 steward3-red was launched with capability "reviewer" (advisory: "allowlist applied on claude-agent-acp 0.88.0, not among verified versions") and a task. It ran a turn (25k tokens), read its handoff, then went idle with the assignment open and no waiting set, three times, including after a checkpoint-priority instruction naming the exact member_update call. The supervisor nagged every 5 minutes. Likely the adapter's reviewer allowlist on the unverified version drops the Wash MCP tools (member_update, message_send), so the member can read but cannot report. Reviewers launched without capability:"reviewer" (prompt-only restrictions) work. Expected: either the allowlist keeps the Wash tools, or the launch receipt says the member cannot report (refuse with enforcement "adapter", or an advisory that names the missing tools).
+
+## WASH-R33 (2026-10-10) — A decision_request blocks the Architect's every other thread
+
+The Architect sent the owner a decision_request (handle generations, 23:59Z). From then on it shows `needs-input`, "Waiting for the owner", and two queued messages (an orchestrator question on an unrelated QA thread, SMP6-zeroing-billed-to-nobody, blocking an implementer; oldest queued 1,608 s). The owner was present but did not answer for an hour; the SMP6 ruling had to be taken by the orchestrator. Expected: a decision_request blocks the asker's *own* question, not the member; other threads' questions still reach it (or the request is non-blocking with the answer delivered as a message). Evidence: workspace_get team at ~00:50Z.
+
+## WASH-R34 (2026-10-10) — An ephemeral member's completion arrived two minutes after the member had retired
+
+b49-implementer (lifetime ephemeral, one task) committed its fix (wp-B49 80df38d36), wrote .wash/local/B49-report.md with full gate evidence, and retired; the orchestrator received its earlier FYI (`instruction` type, 01:24Z) but no `result` for the assignment, and a later message_send to it failed "recipient is not an active workspace member". The plan showed B49 `active`. Correction after the fact: the result did arrive (created 01:33:28Z, dispatched 01:35:24Z, in a batch with the reviewer's verdict on it), after the member had retired and after the orchestrator had already re-derived the state from the branch and the report and assigned the review. Delivery lagged the retirement by about two minutes. Expected: a result sent in the retiring turn is delivered before, or together with, the retirement; a message_send to a just-retired member says so ('retired at ...'), not 'not an active workspace member'.
+
+## WASH-R30 — capability:"reviewer" members cannot report: every Wash call is refused (2026-10-14)
+
+Status: open. Severity: blocks the review loop.
+
+Workspace 7bce76dc, orchestrator session in mode "default" (host_auto_approval true), two
+reviewers launched with `capability:"reviewer"` (applied enforcement "unverified" on
+claude-agent-acp 0.90.0). Both finished their reviews and then had `member_update`
+(assignment_results, waiting), `assignment_update complete` and `message_send progress` all
+answered "User refused permission to run tool" — four to six refusals each, no human at a prompt.
+Their turns ended with the verdicts only in their transcript text; the supervisor reported
+"idle with work" every 5 min; `member_control configure configs:{mode:"auto"}` is refused:
+"reviewer capability cannot override permission mode". The `about` text says reviewers "never
+inherit" the launcher's approval and cannot be `auto`, so in a non-interactive session there is
+no path by which a capability reviewer can file a result. Workaround used: the orchestrator read
+the verdicts from `~/.claude/projects/<proj>/<session_id>.jsonl`, filed them under `.wash/local`,
+ended the members, and relaunched the reviewers without the capability flag (approval auto,
+read-only by instruction). Expected: the scoped Wash coordination tools (member_update,
+message_send, assignment_update on own assignments) are always approved for a reviewer; they
+are the one write path the role needs.
+
+## 2026-10-19 (orchestrator session, trains 58-72)
+
+- WASH-R35: a member waiting on its own `decision_request` is sealed: queued instructions (16), `member_control interrupt` ("no turn running"), `resume` and `checkpoint` (its priority message) never reached architect-2 for ~20 h; the only exit was `end` + relaunch, losing the queue. A decision wait should still deliver the orchestrator's instructions and a checkpoint, or the orchestrator should be able to withdraw the request.
+- WASH-R36: after `member_control resume` of a stopped member (architect-5, launched as model fable), its settings showed model claude-opus-4-8; the resume did not keep the launch's model.
+- WASH-R37: `plan_accept` is refused while the implementer's own launch assignment is open, so an accept always waits for the implementer's completion even when the review is done and the orchestrator holds the verdict; a reviewed node with only the implementer's assignment open should be acceptable, or the error should name which assignment.
+- WASH-R38: an ephemeral implementer retires the moment its assignment completes, so every post-review fold (nine this session) fell to the orchestrator or needed a fixer launch; a short grace window after completion, or a "hold for review" flag on the launch, would keep the implementer for its own folds.
+- WASH-R39: a reviewer's "Merge verdict" message often arrives before its assignment completion (seconds to minutes), so the first `plan_accept` is refused and must be retried; delivering the completion first, or atomically with the message, would remove the retry.
+- WASH-R40: `workspace_configure` refuses a `task` on a member without a node ("a task is an assignment on a plan node"); a resident architect launched with a first task needs a bare launch plus an instruction message instead; the error could say so.
+
+## WASH-R41 (2026-10-19)
+`plan_set {"from": file}` is refused with "assignment … is open on node STEWARD9; a plan loads only with no work open" even when the file adds one new node unrelated to the open assignment. The `nodes` map upsert of the same node succeeds. Expected: a `from` file that only upserts (no deletions, no changes to nodes with open work) loads; or the error names the upsert form as the way. Note: `nodes` takes a map keyed by id, not an array (first attempt: "cannot unmarshal array").
+
+## WASH-R42 (2026-10-20)
+`plan_set {"nodes": {...}}` (the map upsert) accepts a title/body change on an ACTIVE node (WRITE1, WAKE1 with implementers on them) when the orchestrator calls it; the Architect's rule "never plan_set a started node" is a convention, not enforced. Expected: either enforce (refuse with the assignment id) or document that the orchestrator may correct an active node's prose. Used deliberately to retitle WRITE1/WAKE1 after their rulings corrected the premise.
+
+## WASH-R43 (2026-10-20): a new session cannot take over a paused workspace, and the tools do not say so
+
+Status: open.
+
+Wash 0.19.0 / API 4.2.0. The owner opened a fresh Claude Code session in the project and asked it to
+bring the workspace up. `about` listed the Redoubt workspace (`7bce76dc`, `state:"paused"`,
+`orchestrator_running:false`) and the caller as `role:"unattached"`; `workspace_get {}` answered "no
+workspace"; `workspace_configure {workspace:{name,project_root}, preview:true}` returned a brand-new
+configuration (`workspace_id:""`, no members, empty plan_file/qa_dir) with no hint that one of the same
+name and root is open. The source (`workspace.go: staleLead`) shows the design: only the lead session
+leads; another session may only `workspace_end` a stale workspace and rebuild. The project guide says
+"reuse a workspace that is already open", which this session could not do; the five paused members
+(architect, two reviewers, two implementers) would have gone with the workspace, none with a handoff.
+
+Asked: (1) `about` and the configure preview should say, for an open workspace at the caller's
+project_root, that it is led by another session and name the two routes (resume that session; or
+`workspace_end` + rebuild); (2) a lead-handover: let a paused workspace whose lead is not running be
+adopted by a new orchestrator session (`workspace_configure {adopt:"<id>"}` or a `member_control
+adopt`), keeping members and their sessions. The owner first chose to resume the old session, then had the new session end 7bce76dc and rebuild (8ac51843): five members with context lost, as predicted.

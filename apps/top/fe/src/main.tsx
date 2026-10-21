@@ -363,10 +363,12 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       if (netPopover()) setNetPopover(false);
       if (diskPopover()) setDiskPopover(false);
     };
-    window.addEventListener('keydown', onKey);
+    // On this window's host, not on window: apps share one document, and
+    // an Escape typed into another app is not ours.
+    props.host.addEventListener('keydown', onKey);
     onCleanup(() => {
       props.host.removeEventListener('pointerdown', onDocDown, true);
-      window.removeEventListener('keydown', onKey);
+      props.host.removeEventListener('keydown', onKey);
     });
   });
 

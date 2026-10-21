@@ -1,11 +1,12 @@
 import type { agentproto } from '@wash/ui';
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, untrack } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
-import { Splitter, Tab, Markdown, tokens } from '@wash/ui';
+import { Splitter, Tab, tokens } from '@wash/ui';
 import type { QuestionAnswers } from '@wash/ui';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { WorkspaceMemberPanel, type WorkspaceAction } from './WorkspacePanels';
 import { WorkspacePlanGraph } from './WorkspacePlanGraph';
+import { WorkspaceQA } from './WorkspaceQA';
 
 const MIN_SPLIT = 35;
 const MAX_SPLIT = 85;
@@ -34,15 +35,6 @@ export const WorkspaceLayout: Component<{
   const [active, setActive] = createSignal('conversation');
   const [qaFocus, setQaFocus] = createSignal('');
   const [planFocus, setPlanFocus] = createSignal('');
-  let qaPanel!: HTMLDivElement;
-  createEffect(() => {
-    const id=qaFocus(); props.frame.qa_markdown;
-    if (active()==='qa' && id) queueMicrotask(() => {
-      for (const heading of qaPanel?.querySelectorAll('h2') ?? []) {
-        if (heading.textContent?.includes(` · ${id} — `)) { heading.scrollIntoView?.({block:'start'}); break; }
-      }
-    });
-  });
   const [drafts, setDrafts] = createSignal<Record<string, string>>({});
   const workspace = () => props.frame.workspace;
   const ownMember = createMemo(() => (workspace()?.members ?? []).find((m) => m.session_id === props.currentSessionID)?.id);
@@ -142,12 +134,12 @@ export const WorkspaceLayout: Component<{
               draft={drafts()[active()] ?? ''} onDraft={(text) => setDrafts({ ...drafts(), [active()]: text })} onAction={props.onAction} onAnswer={props.onAnswer}
               onQuestionAnswer={props.onQuestionAnswer} onOpenNode={(id) => select(`plan:${id}`)} />
           }><WorkspacePlanGraph frame={props.frame} focus={planFocus()} onSelect={select} /></Show>
-          }><div ref={qaPanel} data-testid="workspace-qa" style={{height:'100%', overflow:'auto', padding:`${tokens.spaceMd}px`, 'box-sizing':'border-box'}}><Show when={workspace()?.qa_dir} fallback={<p style={{color:tokens.fgMuted}}>No QA directory configured.</p>}>
+          }><div data-testid="workspace-qa" style={{height:'100%', overflow:'auto', padding:`${tokens.spaceMd}px`, 'box-sizing':'border-box'}}><Show when={workspace()?.qa_dir} fallback={<p style={{color:tokens.fgMuted}}>No QA directory configured.</p>}>
               <p data-testid="workspace-qa-path" style={{color:tokens.fgMuted,'overflow-wrap':'anywhere'}}>{workspace()?.qa_dir}</p>
             </Show>
             <Show when={props.frame.qa_document_status?.state === 'error'}><p>QA records are saved, but the Markdown file could not be updated: {props.frame.qa_document_status?.error}</p></Show>
             <Show when={props.frame.qa_document_status?.state === 'saved'}><p style={{color:tokens.fgMuted}}>QA thread files saved.</p></Show>
-            <Markdown text={props.frame.qa_markdown ?? '# Workspace QA\n\nNo questions yet.'} /></div></Show>
+            <WorkspaceQA frame={props.frame} result={props.result} onAction={props.onAction} focus={active() === 'qa' ? qaFocus() : ''} /></div></Show>
         </div>
       </Show>
     </div>

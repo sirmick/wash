@@ -806,6 +806,10 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       setSelectedEntry(findEntry(path() || p));
       setSelectedPath(path() || p);
       expandPath(path() || p);
+      // The first folder shown fills the grid too: a window opened on a
+      // folder (wash open, a path link) listed it in the tree and showed
+      // its contents nowhere.
+      if (!gridDir() && p === (path() || p)) setGridDir(p);
     } else if (parentPath(path()) === p) {
       // Parent listing just arrived — refresh the selection's
       // entry metadata (info pane, etc.) which was stale while
@@ -4501,8 +4505,11 @@ const EXT_ICON: Record<string, (size: number) => JSX.Element> = {};
 const isThumbable = (entry: Entry): boolean =>
   entry.type === 'file' && isThumbableName(entry.name);
 
-const GRID_TILE = 100; // tile box min width px
-const GRID_TILE_H = 104; // fixed tile height px (thumb + name) for windowing
+// Packed tight: an icon, a name, and little else, so a folder of a few
+// hundred entries is a screen, not a scroll.
+const GRID_TILE = 78; // tile box min width px
+const GRID_TILE_H = 82; // fixed tile height px (thumb + name) for windowing
+const GRID_GAP = 4; // between tiles px
 const GRID_THUMB = 160; // requested thumbnail max edge px
 
 // FolderGrid renders a directory's entries as icon/thumbnail tiles in the
@@ -4566,7 +4573,7 @@ const FolderGrid: Component<{
       items={props.entries}
       tileWidth={GRID_TILE}
       tileHeight={GRID_TILE_H}
-      gap={6}
+      gap={GRID_GAP}
       style={paneStyle()}
       onDragOver={props.onPaneDragOver}
       onDragLeave={props.onPaneDragLeave}
@@ -4671,7 +4678,7 @@ const FolderTile: Component<{
       onDrop={isDir() ? (ev) => props.onDrop(ev, props.path) : undefined}
     >
       <div style={{ ...tileThumbStyle, color: entryTint(props.entry) ?? tileThumbStyle.color }}>
-        <Show when={thumb() && !failed()} fallback={<EntryIcon entry={props.entry} path={props.path} size={34} />}>
+        <Show when={thumb() && !failed()} fallback={<EntryIcon entry={props.entry} path={props.path} size={30} />}>
           <img src={thumb()!} alt="" style={tileImgStyle} draggable={false} />
         </Show>
       </div>
@@ -4689,7 +4696,7 @@ const FolderTile: Component<{
 const folderGridStyle: JSX.CSSProperties = {
   height: '100%',
   'min-height': 0,
-  padding: '8px',
+  padding: '6px',
   background: tokens.bgInset,
   'box-sizing': 'border-box',
 };
@@ -4698,8 +4705,8 @@ const tileStyle: JSX.CSSProperties = {
   display: 'flex',
   'flex-direction': 'column',
   'align-items': 'center',
-  gap: '4px',
-  padding: '6px 4px',
+  gap: '2px',
+  padding: '4px 2px',
   'border-radius': `${tokens.radiusMd}px`,
   cursor: 'pointer',
   'user-select': 'none',
@@ -4710,7 +4717,7 @@ const tileStyle: JSX.CSSProperties = {
 
 const tileThumbStyle: JSX.CSSProperties = {
   width: '100%',
-  height: '64px',
+  height: '50px',
   display: 'flex',
   'align-items': 'center',
   'justify-content': 'center',
@@ -4719,7 +4726,7 @@ const tileThumbStyle: JSX.CSSProperties = {
 
 const tileImgStyle: JSX.CSSProperties = {
   'max-width': '100%',
-  'max-height': '64px',
+  'max-height': '50px',
   'object-fit': 'contain',
   'border-radius': `${tokens.radiusSm}px`,
   background: tokens.bgInset,

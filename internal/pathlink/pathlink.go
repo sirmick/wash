@@ -7,8 +7,10 @@
 // FE's probes with it, and resolve a clicked token again with it rather
 // than trusting the path the FE sends back.
 //
-// Only regular files at or below the session folder resolve. A reference
-// outside it, a directory, or a symlink that leads out is not a link.
+// A relative token resolves at or below the session folder: one that
+// climbs out, or a symlink that leads out, is not a link. An absolute or
+// `~/` token names its place explicitly and resolves wherever it exists.
+// Folders are links too (Dir), for the file manager.
 package pathlink
 
 import (
@@ -30,6 +32,8 @@ type Hit struct {
 	Path  string `json:"path"`
 	Line  int    `json:"line,omitempty"`
 	Col   int    `json:"col,omitempty"`
+	// Dir marks a folder: it opens in the file manager, not the editor.
+	Dir bool `json:"dir,omitempty"`
 }
 
 // Split separates a trailing `:line` or `:line:col` from a token.
@@ -48,14 +52,15 @@ func Split(tok string) (path string, line, col int) {
 	return path, line, col
 }
 
-// Resolve turns tok into a Hit when it names a regular file at or below
-// base. Relative tokens are taken against base, `~/` against the home
-// folder. base must be absolute; empty resolves nothing.
+// Resolve turns tok into a Hit when it names a file or folder: relative
+// tokens against base and confined to it, `~/` against the home folder,
+// absolute ones as they are. base must be absolute; empty resolves nothing.
 func Resolve(base, tok string) (Hit, bool) {
 	if base == "" || !filepath.IsAbs(base) || tok == "" {
 		return Hit{}, false
 	}
 	p, line, col := Split(tok)
+	explicit := true
 	switch {
 	case p == "~" || strings.HasPrefix(p, "~/"):
 		home, err := os.UserHomeDir()
@@ -66,26 +71,30 @@ func Resolve(base, tok string) (Hit, bool) {
 	case filepath.IsAbs(p):
 		p = filepath.Clean(p)
 	default:
+		explicit = false
 		p = filepath.Join(base, p)
 	}
 	base = filepath.Clean(base)
-	if !within(base, p) {
+	if !explicit {
+		if !Inside(base, p) {
+			return Hit{}, false
+		}
+		// The same question again with links followed, so a symlink inside
+		// the folder cannot lead a click outside it.
+		realBase, err := filepath.EvalSymlinks(base)
+		if err != nil {
+			return Hit{}, false
+		}
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil || !Inside(realBase, real) {
+			return Hit{}, false
+		}
+	}
+	info, err := os.Stat(p)
+	if err != nil || !(info.Mode().IsRegular() || info.IsDir()) {
 		return Hit{}, false
 	}
-	// The same question again with links followed, so a symlink inside the
-	// folder cannot lead a click outside it.
-	realBase, err := filepath.EvalSymlinks(base)
-	if err != nil {
-		return Hit{}, false
-	}
-	real, err := filepath.EvalSymlinks(p)
-	if err != nil || !within(realBase, real) {
-		return Hit{}, false
-	}
-	if info, err := os.Stat(real); err != nil || !info.Mode().IsRegular() {
-		return Hit{}, false
-	}
-	return Hit{Token: tok, Path: p, Line: line, Col: col}, true
+	return Hit{Token: tok, Path: p, Line: line, Col: col, Dir: info.IsDir()}, true
 }
 
 // Probe resolves up to MaxProbe tokens and returns the ones that are files.
@@ -102,8 +111,8 @@ func Probe(base string, toks []string) []Hit {
 	return hits
 }
 
-// within reports whether p is base or below it; both are clean and absolute.
-func within(base, p string) bool {
+// Inside reports whether p is base or below it; both are clean and absolute.
+func Inside(base, p string) bool {
 	rel, err := filepath.Rel(base, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
