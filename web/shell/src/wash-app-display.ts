@@ -14,7 +14,7 @@
 // a 45-byte little-endian header followed by an image payload — WebP or
 // PNG, auto-detected by createImageBitmap from the magic bytes.
 
-import { registerDisplayWindow, subscribeRaw, subscribeResync, unregisterDisplayWindow } from './api';
+import { registerDisplayWindow, subscribeRaw, subscribeResync, subscribeUnbind, unregisterDisplayWindow } from './api';
 import { type Origin, LOCAL_ORIGIN } from './clients';
 import { moveLocal, resizeLocal, windowById, screenSize, VIEWPORTS_PER_AXIS } from './wm';
 
@@ -624,7 +624,17 @@ export class WashAppDisplay extends HTMLElement {
   // stream). Called by the display registry on channel.bind kind=video-popup.
   attachPopupChannel(channelID: number): void {
     if (this.popups.has(channelID)) return;
-    const unsub = subscribeRaw(this.origin, channelID, (bytes) => this.onPopupBytes(channelID, bytes));
+    const unsubRaw = subscribeRaw(this.origin, channelID, (bytes) => this.onPopupBytes(channelID, bytes));
+    // The compositor closes a popup's channel on the wire when the popup
+    // unmaps. Its in-band {close:true} frame is Bulk + credit-gated and can
+    // be overtaken by (or dropped before) the router's channel.unbind, so the
+    // unbind itself also removes the overlay — otherwise a dismissed menu
+    // stayed painted over the window.
+    const unsubUnbind = subscribeUnbind(this.origin, channelID, () => this.removePopup(channelID));
+    const unsub = () => {
+      unsubRaw();
+      unsubUnbind();
+    };
     // The overlay canvas is created lazily on the first pixel frame; record
     // the subscription now so close/teardown always works.
     const placeholder: PopupOverlay = {

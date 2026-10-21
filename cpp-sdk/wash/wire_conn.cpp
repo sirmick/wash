@@ -379,6 +379,16 @@ bool WireConn::write_channel(uint32_t channelID, const uint8_t* data, size_t n) 
     return write_raw_frame(fd_, flags_with_class(FLAG_END, cls), channelID, data, n);
 }
 
+void WireConn::close_channel(uint32_t channelID) {
+    if (!channelID) return;
+    {
+        std::lock_guard<std::mutex> lk(chan_mu_);
+        chan_class_.erase(channelID);
+    }
+    json m = {{"t", "channel.close"}, {"channel_id", channelID}};
+    write_json(CH_CONTROL, m);
+}
+
 bool WireConn::send_app_msg(uint32_t win, const json& data) {
     json m = {{"t", "app_msg"}, {"win", win}, {"data", data}};
     return write_json(CH_EVENT, m);
