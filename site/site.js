@@ -90,9 +90,10 @@
         status.textContent = 'Running in this tab. Click into the desktop to use it.';
       };
       // Stage the project the way a person would: open Terminal, cd into the
-      // sample project baked into the demo image, open the folder in Files
-      // from the prompt, then put the two side by side.
-      // Any step that doesn't show up in time just ends the staging early.
+      // sample project baked into the demo image, open main.go in the Editor
+      // and the folder in Files from the prompt, then arrange the three as
+      // overlapping floating windows. Any step that doesn't show up in time
+      // just ends the staging early.
       const stage = async () => {
         status.textContent = 'Opening a project…';
         (await waitFor('button[title="Apps"]', 1000))?.click();
@@ -105,29 +106,41 @@
         await new Promise((r) => setTimeout(r, 800));
         type('wash-fm .\n');
         if (!(await waitFor('wash-app-fm', 30000))) return;
-        tile();
+        type('wash-edit main.go\n');
+        await waitFor('wash-app-edit', 30000);
+        staged = true;
+        arrange();
       };
-      // Files on the left, Terminal on the right, both clear of the sidebar
-      // and the taskbar.
-      const tile = () => {
+      // A desk mid-task, not a grid: Files at the back on the left, the Editor
+      // over it, and the Terminal in front on the right, each offset so every
+      // title bar shows. All clear of the sidebar and the taskbar, in
+      // proportions that hold at any frame size.
+      let staged = false, touched = false;
+      frame.addEventListener('load', () => {
+        doc()?.addEventListener('pointerdown', () => { touched = true; }, { capture: true });
+      });
+      const arrange = () => {
         const wash = frame.contentWindow?.wash;
-        if (!wash) return;
+        if (!wash || !staged || touched) return;
         const find = (id) => wash.windows().find((w) => w.appID === id);
         const side = doc().querySelector('[data-testid^="sidebar-section-"]')?.getBoundingClientRect().left
           ?? frame.clientWidth * 0.75;
-        const g = 12, W = side - g, H = frame.clientHeight - 48;
-        const fw = Math.round(W * 0.42), rx = fw + 2 * g, rw = W - rx - g;
+        const g = 16, W = side - 2 * g, H = frame.clientHeight - 48 - 2 * g;
+        const bar = doc().querySelector('.wash-window [data-testid="window-close"]')?.parentElement?.getBoundingClientRect().height ?? 28;
         const place = (id, x, y, w, h) => {
           const win = find(id);
           if (!win) return;
-          wash.moveWindow(win.windowID, x, y, win.origin);
+          wash.moveWindow(win.windowID, Math.round(g + x * W), Math.round(g + y * H), win.origin);
           // resizeWindow sizes the content; the title bar sits on top of it.
-          const bar = doc().querySelector('.wash-window [data-testid="window-close"]')?.parentElement?.getBoundingClientRect().height ?? 28;
-          wash.resizeWindow(win.windowID, w, h - bar, win.origin);
+          wash.resizeWindow(win.windowID, Math.round(w * W), Math.round(h * H) - bar, win.origin);
+          wash.focusWindow(win.windowID, win.origin);
         };
-        place('com.wash.fm', g, g, fw, H - 2 * g);
-        place('com.wash.term', rx, g, rw, H - 2 * g);
+        // Back to front: the last placed is raised last.
+        place('com.wash.fm', 0, 0, 0.36, 0.66);
+        place('com.wash.edit', 0.22, 0.1, 0.5, 0.72);
+        place('com.wash.term', 0.5, 0.4, 0.5, 0.6);
       };
+      window.__washLiveArrange = arrange;
       const boot = setInterval(() => {
         if (doc()?.querySelector('button[title="Apps"]')) {
           clearInterval(boot);
@@ -137,6 +150,20 @@
         }
       }, 500);
     };
+    // Near the demo, widen it to the full viewport width. The desktop inside
+    // refits to the bigger frame; the staged windows are re-placed for it
+    // unless the visitor has already started using them.
+    if ('IntersectionObserver' in window) {
+      const nearIO = new IntersectionObserver((entries) => {
+        for (const e of entries) live.toggleAttribute('data-near', e.isIntersecting);
+      }, { rootMargin: '0px 0px -25% 0px', threshold: 0.15 });
+      nearIO.observe(live);
+    }
+    let settle = 0;
+    new ResizeObserver(() => {
+      clearTimeout(settle);
+      settle = setTimeout(() => window.__washLiveArrange?.(), 600);
+    }).observe(live.querySelector('[data-live-frame]'));
     let started = false;
     const later = () => setTimeout(() => (window.requestIdleCallback || setTimeout)(start, { timeout: 3000 }), 1500);
     const tryStart = () => {

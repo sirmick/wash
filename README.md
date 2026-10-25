@@ -8,11 +8,11 @@ home server, a Raspberry Pi, or a RISC-V emulator compiled to WASM.**
 >
 > 🖥️ **Try it now, no install:** **[sirmick.github.io/wash/demo](https://sirmick.github.io/wash/demo/)**
 > — a full wash desktop running on *real* Linux (Linux 6.6 LTS riscv64
-> + busybox userland) inside a WASM-compiled RISC-V emulator, booting
-> in ~3 seconds. The whole thing is ~24 MiB of static assets served
-> straight from GitHub Pages — no backend, no relay, no account.
+> + busybox userland) inside a WASM-compiled RISC-V emulator. About
+> 11 MiB downloads before the desktop is usable, all static files
+> served straight from GitHub Pages — no backend, no relay, no account.
 
-![A wash desktop: a Washamp audio player, a Terminal, the Files window and an Agent session open over the wallpaper, with the system sidebar (workspace pager + widgets) on the right and a taskbar along the bottom](docs/screenshots/desktop-montage.png)
+![A wash desktop tiled as an IDE: Files down the left, the Editor on cart.go and the Agent explaining a fix side by side, and a Terminal across the bottom where go test now passes](docs/screenshots/ide-tiled.png)
 
 wash is **not** pixel-streamed remote desktop (no VNC, no RDP, no video
 codec). Every surface is HTML the desktop owns and renders locally;
@@ -28,6 +28,7 @@ License: **AGPL-3.0**. Current version: **0.20.0**.
 
 ## Table of contents
 
+- [Tour](#tour)
 - [Why wash](#why-wash)
 - [Screenshots](#screenshots)
 - [Quickstart](#quickstart)
@@ -48,6 +49,37 @@ License: **AGPL-3.0**. Current version: **0.20.0**.
 - [Repository layout](#repository-layout)
 - [Documentation](#documentation)
 - [Building & testing each part](#building--testing-each-part)
+
+---
+
+## Tour
+
+The [project site](https://sirmick.github.io/wash/) walks through wash
+with one practical example per section. Each heading here links to it.
+
+### [One bug, four apps](https://sirmick.github.io/wash/#ide)
+
+A test fails in a small Go project and gets fixed without leaving the
+tab: the terminal finds it, Files hands the file to the agent, the
+editor reloads the fix, the terminal confirms it.
+
+| | |
+|---|---|
+| ![1. go test fails: Total = 1200, want 2100; wash-edit opens the file](docs/screenshots/ide-1-fail.png) | ![2. cart.go dragged from Files onto the agent's input box](docs/screenshots/ide-2-ask.png) |
+| ![3. the agent explains the off-by-one; the editor reloads the fix](docs/screenshots/ide-3-fix.png) | ![4. the same test passes](docs/screenshots/ide-4-pass.png) |
+
+### [The rest of the desktop](https://sirmick.github.io/wash/#desktop)
+
+Floating windows, nine themes, admin tools for the real machine, X11
+and Wayland apps, and apps from your other machines.
+
+| | |
+|---|---|
+| ![A floating wash desktop: Washamp, a Terminal, Files and an Agent](docs/screenshots/desktop-montage.png) | ![Files under the Moscow theme](docs/screenshots/theme-moscow.png) |
+| ![Restarting ssh.service: Services asks, the sudo prompt comes to the browser](docs/screenshots/admin-restart.png) | ![A dev server in a terminal, previewed in Chromium on the server](docs/screenshots/display.png) |
+| ![Apps from pi-garage, an arm64 host, on an x86_64 desktop](docs/screenshots/remote.png) | |
+
+### [How it works](https://sirmick.github.io/wash/#how) · [Install](https://sirmick.github.io/wash/#install) · [Try it](https://sirmick.github.io/wash/#live)
 
 ---
 
@@ -397,16 +429,19 @@ desktop won't fit.
 
 | Thing | Cost |
 |---|---|
-| Idle router (no shell connected) | **~25 MB RSS** |
-| A single app backend process | ~7–10 MB RSS |
-| Full desktop session (router + ~12 app processes) | **~100 MB RSS** total |
-| Router binary on disk (amd64, static, `-s -w`) | ~7.5 MB |
-| Multicall `wash` binary in the demo VM (riscv64) | **~11 MB** — *all* apps + router + login |
-| Whole browser demo (kernel + rootfs + emulator + UI) | **~24 MiB** static assets |
+| Idle router (no shell connected) | **~30 MB RSS** |
+| A single app backend process | 3–9 MB (proportional share; the apps share one binary) |
+| Full desktop session (router + 15 apps and services) | **~100 MB** PSS total |
+| Multicall `wash` binary (amd64, static, `-s -w`) | ~33 MB — every app + router |
+| Multicall `wash` binary in the demo VM (riscv64) | **~16 MB** — the VM's 11 apps + router + login |
+| Browser demo, downloaded before the desktop is usable | **~11 MiB** |
 | Emulated machine the demo's full Linux system runs in | 64 MB RAM |
 
 The wire carries events and file bytes, not video — bandwidth scales
-with what you actually do, not with screen size or frame rate.
+with what you actually do, not with screen size or frame rate. Running
+`go test` in a terminal, then editing and saving a file, moved about
+60 KB once the apps had loaded, the same at 2560×1600 as at 1280×800;
+an idle desktop uses about 1 KB/s (measured on 0.20.0).
 
 ---
 
