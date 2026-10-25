@@ -98,7 +98,7 @@
     <dl class="hero__specs">
       <div class="hero__spec"><dt class="label">Server</dt><dd>A single static Go binary</dd></div>
       <div class="hero__spec"><dt class="label">Connection</dt><dd>One WebSocket carrying events and file data, no video</dd></div>
-      <div class="hero__spec"><dt class="label">Footprint</dt><dd>~25&nbsp;MB idle, ~100&nbsp;MB for a full session</dd></div>
+      <div class="hero__spec"><dt class="label">Footprint</dt><dd>~30&nbsp;MB idle, ~100&nbsp;MB for a full session</dd></div>
       <div class="hero__spec"><dt class="label">Runs on</dt><dd>amd64 · arm64 · riscv64 · mips</dd></div>
       <div class="hero__spec"><dt class="label">License</dt><dd>AGPL-3.0</dd></div>
     </dl>
@@ -259,7 +259,7 @@
     <h2 id="how-title" class="manifesto" data-reveal>Your browser renders <em>every window</em></h2>
     <div class="manifesto__body">
       <p class="manifesto__lead" data-reveal>There's no video stream like VNC or RDP. Windows are HTML, so text stays sharp at any zoom and the desktop stays fast on slow links.</p>
-      <p class="manifesto__aside" data-reveal style="--reveal-delay: 100ms">On the server, a router starts app processes and relays their messages without reading them. Bandwidth follows what you do, not your screen size.</p>
+      <p class="manifesto__aside" data-reveal style="--reveal-delay: 100ms">Bandwidth follows what you do, not your screen size. Running <code>go test</code> in a terminal, then editing and saving a file, moved about 60&nbsp;KB once the apps had loaded, and the same bytes at 2560×1600 as at 1280×800. An idle desktop uses about 1&nbsp;KB/s.</p>
     </div>
 
     <ol class="principles" role="list">
@@ -284,14 +284,14 @@
       <li class="principle">
         <div class="principle__head" data-reveal><span class="principle__index">3.2</span><h3 class="principle__word">Each app is its own process</h3></div>
         <div class="principle__text" data-reveal style="--reveal-delay: 80ms">
-          <p>The router starts and supervises apps. They can't talk directly: messages go through the router, which vouches for the sender, and permissions are granted per app.</p>
+          <p>On the server, a router starts and supervises apps and relays their messages without reading them. Apps can't talk directly: messages go through the router, which vouches for the sender, and permissions are granted per app.</p>
           <p>For several users, <code>wash-login</code> uses the system login (PAM, LDAP, SSSD), starts a router per user under their account, and hands the connection over with <code>SCM_RIGHTS</code>.</p>
         </div>
         <dl class="facts" data-reveal>
-          <div><dt>~25 MB</dt><dd>resident for an idle router, no shell connected</dd></div>
-          <div><dt>7–10 MB</dt><dd>for a typical app backend process</dd></div>
-          <div><dt>~100 MB</dt><dd>for a full session: router plus a dozen apps</dd></div>
-          <div><dt>7.5 MB</dt><dd>router binary on disk (amd64, static, stripped)</dd></div>
+          <div><dt>~30 MB</dt><dd>resident for an idle router, no shell connected</dd></div>
+          <div><dt>3–9 MB</dt><dd>per app backend (its share: the apps run from one binary)</dd></div>
+          <div><dt>~100 MB</dt><dd>for a full session: router plus 15 apps and services</dd></div>
+          <div><dt>33 MB</dt><dd>one static binary with every app and the router (amd64, stripped)</dd></div>
         </dl>
       </li>
     </ol>
@@ -377,7 +377,7 @@ wash-login --cookie-secure</code></pre>
     <dl class="stats stats--row" data-reveal>
       <div><dt>~11<small>MiB</small></dt><dd>downloaded before the desktop is usable</dd></div>
       <div><dt>64<small>MB</small></dt><dd>of emulated RAM for Linux and the desktop</dd></div>
-      <div><dt>16<small>MB</small></dt><dd>binary with every app, the router and login</dd></div>
+      <div><dt>16<small>MB</small></dt><dd>binary: the router, login and the 11 apps this demo carries</dd></div>
       <div><dt>0</dt><dd>servers: static files, and the machine runs in your tab</dd></div>
     </dl>
     <div class="tryit" data-reveal>
