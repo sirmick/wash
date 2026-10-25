@@ -146,6 +146,40 @@ mkdirSync(ROOT, { recursive: true });
 seedShowcase(ROOT);
 const PICS = join(ROOT, 'Pictures');
 
+// The display shot's dev server: a tiny storefront a person might be
+// building, so the Chromium window previews something real.
+const WEBSHOP_MAIN = `package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+)
+
+const page = \`<!doctype html><title>webshop</title>
+<style>
+body{margin:0;font:16px system-ui;background:#f6f1e7;color:#2b2118}
+header{padding:20px 32px;background:#2b2118;color:#f6f1e7;font-weight:700;font-size:22px}
+main{padding:28px 32px;display:grid;gap:16px}
+.item{display:flex;justify-content:space-between;background:#fff;padding:16px 20px;border-radius:10px}
+.total{font-weight:700;font-size:20px;text-align:right}
+button{font:inherit;padding:10px 18px;border:0;border-radius:8px;background:#c2410c;color:#fff}
+</style>
+<header>webshop · dev</header>
+<main>
+<div class=item><span>Sencha tea × 2</span><span>$9.00</span></div>
+<div class=item><span>Stoneware cup × 1</span><span>$12.00</span></div>
+<div class=total>Total $21.00</div>
+<div style=text-align:right><button>Check out</button></div>
+</main>\`
+
+func main() {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page) })
+	log.Println("listening on :18080")
+	log.Fatal(http.ListenAndServe(":18080", nil))
+}
+`;
+
 // The Agent shots start a session from the real Agents manager
 // (com.wash.agents) and pose the com.wash.ai controller window agentd opens
 // for it, against the e2e fake ACP adapter (staged on PATH as codex-acp), with its replies posed via the
@@ -279,6 +313,20 @@ test.describe('screenshots', () => {
     await page.mouse.down();
     await page.mouse.move(x + grabDx, y + b.height / 2, { steps: 16 });
     await page.mouse.up();
+  }
+
+  async function hideDesktopBanner(page: Page): Promise<void> {
+    await page.evaluate(() => {
+      const hide = (root: Document | ShadowRoot) => {
+        root.querySelectorAll<HTMLElement>(
+          '[data-testid="desktop-banner"],[data-testid="desktop-banner-placeholder"]',
+        ).forEach((el) => { el.style.display = 'none'; });
+        root.querySelectorAll('*').forEach((el) => {
+          if ((el as HTMLElement).shadowRoot) hide((el as HTMLElement).shadowRoot!);
+        });
+      };
+      hide(document);
+    });
   }
 
   // --- the montage hero (multiple windows, naturally arranged) ---------------
@@ -522,6 +570,29 @@ test.describe('screenshots', () => {
     await w.screenshot({ path: join(SHOTS, 'imageview.png') });
   });
 
+  // The same Files window under three packs that change shape as well as
+  // colour, for the site's themes section (theme-<pack>.png).
+  for (const pack of ['moscow', 'lisbon', 'copland']) {
+    test(`theme-${pack}`, async ({ page, router }) => {
+      setPack(router.xdgConfigHome, pack);
+      await bootDesktop(page, router.url);
+      await openApp(page, 'com.wash.fm');
+      const w = win(page, 'wash-app-fm');
+      await expect(w).toBeVisible();
+      await w.locator('[data-testid="fm-entry-Projects"]').click().catch(() => {});
+      await moveWinTo(page, w, 120, 90);
+      await resizeWinTo(page, w, 900, 600);
+      const sidebar = page.locator('[data-testid="sidebar"]');
+      if (await sidebar.isVisible()) {
+        await page.locator('[data-testid="sidebar-toggle"]').click().catch(() => {});
+      }
+      await hideDesktopBanner(page);
+      await settle(page);
+      // Window, wallpaper and taskbar together: a pack is all three.
+      await page.screenshot({ path: join(SHOTS, `theme-${pack}.png`), clip: { x: 0, y: 40, width: 1180, height: 960 } });
+    });
+  }
+
   // Connect / Remote — the "On your network" mDNS discovery list, fed by the
   // deterministic WASH_DISCOVERY_STATIC seam set in routerOpts above.
   test('connect', async ({ page, router }) => {
@@ -535,9 +606,9 @@ test.describe('screenshots', () => {
     await w.screenshot({ path: join(SHOTS, 'connect.png') });
   });
 
-  // --- the display compositor: a FULL-DESKTOP shot with real X11 clients ------
-  // Chromium (a real browser) + xclock are launched from a wash terminal and
-  // composited into native wash windows by wash-display. Timing matters
+  // --- the display compositor: a FULL-DESKTOP shot with a real X11 client ------
+  // A dev server started from a wash terminal, and Chromium previewing it,
+  // composited into a native wash window by wash-display. Timing matters
   // (DISPLAY_ENV.md §5): the shell reads DISPLAY at spawn time, so we wait for
   // the autostarted compositor to bring up Xwayland AND publish its env BEFORE
   // launching the terminal. Captures the whole page, not one window.
@@ -545,7 +616,6 @@ test.describe('screenshots', () => {
     .find((p) => existsSync(p));
   test('display', async ({ page, router }) => {
     const reason = displaySkipReason()
-      ?? (existsSync('/usr/bin/xclock') ? null : '/usr/bin/xclock not installed')
       ?? (chromiumBin ? null : 'chromium not installed');
     test.skip(reason !== null, reason ?? '');
     test.setTimeout(160_000);
@@ -559,36 +629,42 @@ test.describe('screenshots', () => {
     await page.waitForSelector('wash-app-term .xterm-rows', { timeout: 10_000 });
     await moveWinTo(page, term, 40, 40); // terminal top-left, clear of the rest
 
-    // wash-display windows are chromeless (no wash titlebar) so they can't be
-    // dragged after spawn — we control the layout by SPAWN ORDER (last mapped
-    // sits on top) and chromium's --window-position. Launch BOTH from a SINGLE
-    // typed line so we never have to re-click the terminal once chromium covers
-    // it: chromium first, a short sleep, then xclock — so xclock maps last and
-    // stays visible on top.
-    const html =
-      'data:text/html,<title>wash: a real browser</title><body style=margin:0;height:100vh;background:%230b1020;color:%23e6edf3;' +
-      'font-family:system-ui;display:grid;place-items:center>' +
-      '<div style=text-align:center><div style=font-size:46px;font-weight:600>wash</div>' +
-      '<div style=font-size:17px;opacity:.55;margin-top:10px>a real browser, composited into a real window</div></div></body>';
-    // --no-sandbox: containers (Incus, docker) deny the user-namespace sandbox
-    // and chromium aborts at startup; it only renders the inline page above.
-    // --test-type hides the "unsupported flag" infobar --no-sandbox would draw.
-    const chrome =
-      `${chromiumBin} --ozone-platform=x11 --disable-gpu --no-first-run --no-sandbox --test-type ` +
-      `--no-default-browser-check --hide-crash-restore-bubble ` +
-      `--window-position=300,235 --window-size=940,600 ` +
-      `--user-data-dir=/tmp/wash-shot-chrome '${html}'`;
+    // The practical case: a web app's dev server running on this machine,
+    // previewed in a real Chromium in a wash window, no port forwarding.
+    const site = join(ROOT, 'Projects', 'webshop-web');
+    mkdirSync(site, { recursive: true });
+    writeFileSync(join(site, 'go.mod'), 'module example.com/webshop-web\n\ngo 1.24\n');
+    writeFileSync(join(site, 'main.go'), WEBSHOP_MAIN);
+    // The visible command is a plain `chromium <url>`; a shell function
+    // defined before the `clear` adds the flags a headless capture needs.
+    // --no-sandbox: containers (Incus, docker) deny the user-namespace
+    // sandbox and chromium aborts at startup; --test-type hides the
+    // "unsupported flag" infobar --no-sandbox would draw.
+    const chromeFlags =
+      '--ozone-platform=x11 --disable-gpu --no-first-run --no-sandbox --test-type ' +
+      '--no-default-browser-check --hide-crash-restore-bubble --disable-features=SigninInterception ' +
+      '--guest --user-data-dir=/tmp/wash-shot-chrome';
     await term.click();
-    // Fresh chromium profile (no "Restore pages?" bubble) → chromium → sleep →
-    // xclock on top, all in one line.
     await page.keyboard.type(
-      `rm -rf /tmp/wash-shot-chrome; ${chrome} >/dev/null 2>&1 & ` +
-      `sleep 4; xclock -geometry 190x190 &\n`);
+      `rm -rf /tmp/wash-shot-chrome; cd ${site} && chromium() { ${chromiumBin} ${chromeFlags} "$@" >/dev/null 2>&1; } && ` +
+      `PS1='webshop-web $ ' && PROMPT_COMMAND= && printf '\\033]0;webshop-web\\007' && clear\n`, { delay: 2 });
+    await settle(page, 300);
+    await page.keyboard.type('go run . &\n', { delay: 10 });
+    await expect(term).toContainText('listening on :18080', { timeout: 60_000 });
+    await page.keyboard.type('chromium http://localhost:18080/ &\n', { delay: 10 });
 
-    // Wait for both display windows (chromium + xclock), then let them paint.
+    // Wait for chromium's window, then let the page paint.
     await expect(async () => {
-      expect(await win(page, 'wash-app-display').count()).toBeGreaterThanOrEqual(2);
+      expect(await win(page, 'wash-app-display').count()).toBeGreaterThanOrEqual(1);
     }).toPass({ timeout: 100_000 });
+    // Terminal and browser side by side.
+    await page.evaluate(() => {
+      for (const el of ['wash-app-display', 'wash-app-term']) {
+        const w = window.wash.windows().find((x) => x.element === el);
+        if (w) window.wash.focusWindow(w.windowID, w.origin);
+      }
+      window.wash.setCellLayout(0, 0, 'r[1@38 1]');
+    });
     await settle(page, 5000);
 
     // Sidebar open + hide the host banner (privacy), like the montage.
@@ -617,12 +693,25 @@ test.describe('screenshots', () => {
   });
 });
 
-// --- editor, agent and terminal tiled as one IDE (docs/WM_LAYOUT.md) ---------
-// Its own router, confined to a small Go project, so the Editor opens on the
-// project and the agent works in it. The terminal runs the project's
-// real tests; only the agent's words are scripted.
+// --- one bug, four apps: the IDE story (docs/WM_LAYOUT.md) ------------------
+// Its own router, confined to a small Go project with a real off-by-one in
+// it. The terminal runs the project's real tests, the file reaches the agent
+// by a real drag from Files, and the editor reloads the fix from disk; only
+// the agent's words are scripted, and the capture writes the fix it
+// describes. One frame per step (ide-1..4) plus the whole tiled desktop at
+// the end (ide-tiled), which the site uses as its hero.
 test.describe('ide screenshot', () => {
-  const IDE_ROOT = join(tmpdir(), 'wash-shot-ide', 'webshop');
+  const IDE_ROOT = join(tmpdir(), 'webshop');
+  const CART = join(IDE_ROOT, 'store', 'cart.go');
+  const cartGo = (loop: string) =>
+    'package store\n\n// Cart holds line items, priced in cents.\ntype Cart struct {\n\titems []Item\n}\n\n' +
+    '// Item is one line in a cart.\ntype Item struct {\n\tSKU   string\n\tPrice int\n\tQty   int\n}\n\n' +
+    '// NewCart returns an empty cart.\nfunc NewCart() *Cart { return &Cart{} }\n\n' +
+    '// Add puts qty of a SKU in the cart at price cents each.\n' +
+    'func (c *Cart) Add(sku string, price, qty int) {\n\tc.items = append(c.items, Item{sku, price, qty})\n}\n\n' +
+    '// Total is the cart\'s value in cents.\nfunc (c *Cart) Total() int {\n\tt := 0\n' + loop + '\treturn t\n}\n';
+  const BUGGY = '\tfor i := 1; i < len(c.items); i++ {\n\t\tt += c.items[i].Price * c.items[i].Qty\n\t}\n';
+  const FIXED = '\tfor _, it := range c.items {\n\t\tt += it.Price * it.Qty\n\t}\n';
   rmSync(IDE_ROOT, { recursive: true, force: true });
   mkdirSync(join(IDE_ROOT, 'store'), { recursive: true });
   writeFileSync(join(IDE_ROOT, 'go.mod'), 'module example.com/webshop\n\ngo 1.24\n');
@@ -630,14 +719,7 @@ test.describe('ide screenshot', () => {
   writeFileSync(join(IDE_ROOT, 'main.go'),
     'package main\n\nimport (\n\t"fmt"\n\n\t"example.com/webshop/store"\n)\n\n' +
     'func main() {\n\tc := store.NewCart()\n\tc.Add("tea", 450, 2)\n\tfmt.Println(c.Total())\n}\n');
-  writeFileSync(join(IDE_ROOT, 'store', 'cart.go'),
-    'package store\n\n// Cart holds line items, priced in cents.\ntype Cart struct {\n\titems []Item\n}\n\n' +
-    '// Item is one line in a cart.\ntype Item struct {\n\tSKU   string\n\tPrice int\n\tQty   int\n}\n\n' +
-    '// NewCart returns an empty cart.\nfunc NewCart() *Cart { return &Cart{} }\n\n' +
-    '// Add puts qty of a SKU in the cart at price cents each.\n' +
-    'func (c *Cart) Add(sku string, price, qty int) {\n\tc.items = append(c.items, Item{sku, price, qty})\n}\n\n' +
-    '// Total is the cart\'s value in cents.\nfunc (c *Cart) Total() int {\n\tt := 0\n' +
-    '\tfor _, it := range c.items {\n\t\tt += it.Price * it.Qty\n\t}\n\treturn t\n}\n');
+  writeFileSync(CART, cartGo(BUGGY));
   writeFileSync(join(IDE_ROOT, 'store', 'cart_test.go'),
     'package store\n\nimport "testing"\n\n' +
     'func TestTotal(t *testing.T) {\n\tc := NewCart()\n\tc.Add("tea", 450, 2)\n\tc.Add("cup", 1200, 1)\n' +
@@ -646,10 +728,11 @@ test.describe('ide screenshot', () => {
     '\t\tt.Fatalf("Total = %d, want 0", got)\n\t}\n}\n');
   const IDE_SCRIPT = join(AGENT_SCRIPTS, 'ide.json');
   writeFileSync(IDE_SCRIPT, JSON.stringify([
-    'Added `TestEmptyCart` to `store/cart_test.go`:\n\n' +
-    '- an empty cart totals **0**\n' +
-    '- no change to `cart.go` was needed\n\n' +
-    'Both tests pass; the run is in your terminal.\n',
+    '`Total` starts counting at index **1**, so the first line in the cart is never added: ' +
+    'tea is 2 × 450 = 900, and 2100 − 900 is the 1200 the test saw.\n\n' +
+    'Fixed in `store/cart.go`: the loop now ranges over every item.\n\n' +
+    '```go\nfor _, it := range c.items {\n\tt += it.Price * it.Qty\n}\n```\n\n' +
+    'Re-run `go test ./store` and both tests pass.\n',
   ]));
 
   test.use({ routerOpts: {
@@ -662,13 +745,40 @@ test.describe('ide screenshot', () => {
   } });
 
   test('ide-tiled', async ({ page, router }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(150_000);
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
     const win = (el: string) => page.locator('.wash-window', { has: page.locator(el) });
     const open = async (appId: string) => {
       await page.locator('button[title="Apps"]').click();
       await page.locator(`[data-testid="start-menu-${appId}"]`).click();
+    };
+    const focus = (els: string[]) => page.evaluate((els) => {
+      for (const el of els) {
+        const w = window.wash.windows().find((x) => x.element === el);
+        if (w) window.wash.focusWindow(w.windowID, w.origin);
+      }
+    }, els);
+    // Hide the desktop banner: it prints the host's real name and addresses.
+    const hideBanner = () => page.evaluate(() => {
+      const hide = (root: Document | ShadowRoot) => {
+        root.querySelectorAll<HTMLElement>(
+          '[data-testid="desktop-banner"],[data-testid="desktop-banner-placeholder"]',
+        ).forEach((el) => { el.style.display = 'none'; });
+        root.querySelectorAll('*').forEach((el) => {
+          if ((el as HTMLElement).shadowRoot) hide((el as HTMLElement).shadowRoot!);
+        });
+      };
+      hide(document);
+    });
+    // A frame of the story: the union of some windows' boxes, page-clipped.
+    const frame = async (name: string, wins: Locator[], maxHeight = Infinity) => {
+      await hideBanner();
+      await page.waitForTimeout(400);
+      const boxes = (await Promise.all(wins.map((w) => w.boundingBox()))).filter((b) => b !== null);
+      const x = Math.min(...boxes.map((b) => b.x)), y = Math.min(...boxes.map((b) => b.y));
+      const r = Math.max(...boxes.map((b) => b.x + b.width)), btm = Math.max(...boxes.map((b) => b.y + b.height));
+      await page.screenshot({ path: join(SHOTS, name), clip: { x, y, width: r - x, height: Math.min(btm - y, maxHeight) } });
     };
 
     // Terminal first, while it is the only window, so typing lands in it.
@@ -679,34 +789,112 @@ test.describe('ide screenshot', () => {
     // host's name or checkout path.
     await page.keyboard.type(`cd ${IDE_ROOT} && PS1='webshop $ ' && PROMPT_COMMAND= && export GOFLAGS=-count=1 && printf '\\033]0;webshop\\007' && clear\n`, { delay: 5 });
     await page.waitForTimeout(300);
-    await page.keyboard.type('go test -v ./store\n', { delay: 10 });
+    await page.keyboard.type('go test ./store\n', { delay: 10 });
+    const term = win('wash-app-term');
+    await expect(term).toContainText('want 2100', { timeout: 30_000 });
+    // From the prompt, into the editor.
+    await page.keyboard.type('wash-edit store/cart.go\n', { delay: 10 });
+    const edit = win('wash-app-edit');
+    await expect(edit).toBeVisible({ timeout: 20_000 });
 
-    const aiApp = await startAgentSession(page, 'Add a test for an empty cart.');
+    await open('com.wash.fm');
+    const fm = win('wash-app-fm');
+    await expect(fm).toBeVisible();
+
+    // The agent, started in the project, with nothing asked yet.
+    const aiApp = await startAgentSession(page, undefined, { cwd: IDE_ROOT });
     const ai = windowOf(page, aiApp);
     const manager = await openAgents(page);
     await closeButtonOf(page, manager).click();
     await expect(manager).toHaveCount(0, { timeout: 10_000 });
-    await expect(ai.getByText(/Both tests pass/)).toBeVisible({ timeout: 20_000 });
-    await expect(ai.locator('[data-testid="agent-stop"]')).toHaveCount(0, { timeout: 20_000 });
 
-    await open('com.wash.edit');
-    const edit = win('wash-app-edit');
-    await expect(edit).toBeVisible();
-    await edit.locator('[data-testid="edit-entry-store"]').dblclick().catch(() => {});
-    await edit.locator('[data-testid="edit-entry-cart_test.go"]').dblclick().catch(() => {});
-
-    // Slots fill by most recent focus, in tree order: the editor (focused
-    // last) top left, the agent top right, the terminal across the bottom.
-    await page.evaluate(() => {
-      for (const el of ['wash-app-term', 'wash-app-ai', 'wash-app-edit']) {
-        const w = window.wash.windows().find((x) => x.element === el);
-        if (w) window.wash.focusWindow(w.windowID, w.origin);
-      }
-      window.wash.setCellLayout(0, 0, 'c[r2@64 1]');
-    });
+    // Tile all four: Files down the left, the editor and the agent side by
+    // side, the terminal across the bottom. Slots fill by most recent focus
+    // in tree order, so focus them last-slot first.
+    await focus(['wash-app-term', 'wash-app-ai', 'wash-app-edit', 'wash-app-fm']);
+    await page.evaluate(() => window.wash.setCellLayout(0, 0, 'r[1@19 c[r2@64 1]]'));
     await expect.poll(() => page.evaluate(() => window.wash.cellLayout(0, 0))).not.toBeNull();
     await page.waitForTimeout(1200);
 
+    // 1: the failing test, and the command that opened the editor.
+    await frame('ide-1-fail.png', [term], 210);
+
+    // 2: cart.go dragged from Files onto the agent's composer (fm's real
+    // drag payload, dispatched; a native drag can't be scripted), then the
+    // question typed after the @-reference the drop put at the caret.
+    await fm.locator('[data-testid="fm-entry-store"]').dblclick().catch(() => {});
+    await fm.locator('[data-testid="fm-entry-cart.go"]').click({ timeout: 5_000 }).catch(() => {});
+    await page.waitForTimeout(600);
+    const composer = aiApp.locator('textarea');
+    const dt = await page.evaluateHandle((path) => {
+      const d = new DataTransfer();
+      d.setData('application/x-wash-paths', JSON.stringify([path]));
+      d.setData('text/plain', path);
+      return d;
+    }, CART);
+    await composer.dispatchEvent('dragenter', { dataTransfer: dt });
+    await composer.dispatchEvent('dragover', { dataTransfer: dt });
+    await composer.dispatchEvent('drop', { dataTransfer: dt });
+    await expect(composer).toHaveValue(/cart\.go/, { timeout: 5_000 });
+    await composer.focus();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' TestTotal gets 1200, want 2100. Why?', { delay: 8 });
+    await frame('ide-2-ask.png', [fm, ai]);
+
+    // 3: the agent's answer, and its fix reloaded in the editor.
+    await composer.press('Enter');
+    await expect(ai.getByText(/ranges over every item/)).toBeVisible({ timeout: 20_000 });
+    await expect(ai.locator('[data-testid="agent-stop"]')).toHaveCount(0, { timeout: 20_000 });
+    writeFileSync(CART, cartGo(FIXED));
+    await expect(edit).toContainText('range c.items', { timeout: 15_000 });
+    await frame('ide-3-fix.png', [edit, ai]);
+
+    // 4: the same test, green.
+    await term.locator('.xterm-rows').click();
+    await page.keyboard.type('clear\n', { delay: 10 });
+    await page.waitForTimeout(300);
+    await page.keyboard.type('go test -v ./store\n', { delay: 10 });
+    await expect(term).toContainText(/ok\s+example\.com\/webshop\/store/, { timeout: 30_000 });
+    await frame('ide-4-pass.png', [term], 210);
+
+    await page.mouse.move(800, 980);
+    await hideBanner();
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: join(SHOTS, 'ide-tiled.png') });
+  });
+});
+
+// --- a root action, approved in the browser (docs/PRIV.md) --------------------
+// Services' Restart goes through wash-priv, which asks the browser for the
+// password: the prompt in this shot is the real one. The e2e sudo stub
+// (wash-priv-fakesudo) stands in for sudo and the capture stops at the
+// prompt, so nothing is restarted. The list is filtered to one unit, so
+// the shot shows nothing else of the capture host's services.
+test.describe('admin screenshot', () => {
+  test.use({ routerOpts: {
+    apps: ['session', 'about', 'notify', 'services', 'priv'],
+    fakesudo: true, xdgConfig: true,
+  } });
+
+  test('admin-restart', async ({ page, router }) => {
+    test.setTimeout(60_000);
+    mkdirSync(join(router.xdgConfigHome, 'wash'), { recursive: true });
+    writeFileSync(join(router.xdgConfigHome, 'wash', 'desktop.json'), JSON.stringify({ pack: 'lisbon' }));
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    await page.locator('button[title="Apps"]').click();
+    await page.locator('[data-testid="start-menu-com.wash.services"]').click();
+    const w = page.locator('.wash-window', { has: page.locator('wash-app-services') });
+    await expect(w).toBeVisible();
+    await w.locator('[data-testid="srv-list"]').waitFor({ timeout: 10_000 });
+    await w.locator('[data-testid="srv-search"]').fill('ssh');
+    const unit = w.locator('[data-testid^="srv-row-ssh"]').first();
+    await expect(unit).toBeVisible({ timeout: 10_000 });
+    const name = (await unit.getAttribute('data-testid'))!.slice('srv-row-'.length);
+    await w.locator(`[data-testid="srv-restart-${name}"]`).click();
+    const modal = page.locator('[data-testid="priv-unlock-modal"]');
+    await expect(modal).toBeVisible({ timeout: 15_000 });
+    await page.locator('[data-testid="priv-unlock-input"]').pressSequentially('correct horse', { delay: 20 });
     // Hide the desktop banner: it prints the host's real name and addresses.
     await page.evaluate(() => {
       const hide = (root: Document | ShadowRoot) => {
@@ -719,7 +907,12 @@ test.describe('ide screenshot', () => {
       };
       hide(document);
     });
-    await page.screenshot({ path: join(SHOTS, 'ide-tiled.png') });
+    await page.waitForTimeout(500);
+    // The window and the prompt over it, one frame.
+    const a = (await w.boundingBox())!, b = (await modal.boundingBox())!;
+    const x = Math.min(a.x, b.x) - 24, y = Math.min(a.y, b.y) - 24;
+    const r = Math.max(a.x + a.width, b.x + b.width) + 24, btm = Math.max(a.y + a.height, b.y + b.height) + 24;
+    await page.screenshot({ path: join(SHOTS, 'admin-restart.png'), clip: { x, y, width: r - x, height: btm - y } });
   });
 });
 
