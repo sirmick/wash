@@ -1,0 +1,285 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Harbor Night</title><style>html,body{margin:0;height:100%;background:#000}</style></head><body><script>var HN=(()=>{var ie=Object.defineProperty;var Le=Object.getOwnPropertyDescriptor;var Be=Object.getOwnPropertyNames;var Se=Object.prototype.hasOwnProperty;var ke=(p,e)=>{for(var r in e)ie(p,r,{get:e[r],enumerable:!0})},Me=(p,e,r,n)=>{if(e&&typeof e=="object"||typeof e=="function")for(let s of Be(e))!Se.call(p,s)&&s!==r&&ie(p,s,{get:()=>e[s],enumerable:!(n=Le(e,s))||n.enumerable});return p};var Fe=p=>Me(ie({},"__esModule",{value:!0}),p);var We={};ke(We,{BRIDGE_TYPES:()=>Pe,HarborNight:()=>ee,defineHarborNight:()=>Ue});var Pe=["cable","suspension","arch","none"];var C=`#version 300 es
+precision highp float;
+precision highp int;
+uint pcg(uint v){ uint s=v*747796405u+2891336453u; uint w=((s>>((s>>28u)+4u))^s)*277803737u; return (w>>22u)^w; }
+float h1(uint v){ return float(pcg(v))*(1.0/4294967295.0); }
+float h2(uvec2 v){ return h1(v.x*1597334673u ^ pcg(v.y)); }
+`,xe=`
+uniform float u_hz;
+uniform float u_cityX;
+vec3 skyBase(vec2 p){
+  float h = max(p.y - u_hz, 0.0);
+  float t = clamp(h / (1.0 - u_hz), 0.0, 1.0);
+  vec3 zen = vec3(0.0004, 0.0006, 0.0020);
+  vec3 mid = vec3(0.0020, 0.0030, 0.0075);
+  vec3 hor = vec3(0.0100, 0.0095, 0.0175);
+  vec3 c = mix(hor, mid, smoothstep(0.0, 0.33, t));
+  c = mix(c, zen, smoothstep(0.25, 1.0, t));
+  // light dome over downtown: modern LED city \u2014 neutral-violet with a warm core
+  float dx = (p.x - u_cityX) / 0.55;
+  float dome = exp(-h * 8.0) * (0.35 + exp(-dx*dx));
+  c += mix(vec3(0.010,0.008,0.016), vec3(0.020,0.012,0.009), exp(-h*20.0)) * dome;
+  return c;
+}
+`,me=`${C}
+void main(){
+  vec2 v = vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2));
+  gl_Position = vec4(v*2.0-1.0, 0.0, 1.0);
+}`,He=`${C}${xe}
+uniform vec2 u_res; uniform float u_time; uniform float u_dpr;
+uniform vec3 u_moon; // x, y, r in scene units
+uniform float u_cloud; // cover 0..1
+out vec4 o;
+float vnoise(vec2 p){
+  vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  uvec2 u=uvec2(ivec2(i)+32768);
+  float a=h2(u), b=h2(u+uvec2(1,0)), c=h2(u+uvec2(0,1)), d=h2(u+uvec2(1,1));
+  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+}
+float fbm(vec2 p){ float s=0.0,a=0.5; for(int i=0;i<5;i++){ s+=a*vnoise(p); p=p*2.03+vec2(17.1,9.3); a*=0.5; } return s; }
+void main(){
+  vec2 p = gl_FragCoord.xy / u_res.y;
+  float h = p.y - u_hz;
+  vec3 c = skyBase(p);
+  float t = u_time;
+
+  // clouds (computed first: they occlude stars + moon)
+  vec2 q = vec2(p.x*1.1 + t*0.0045, p.y*3.4);
+  q += 0.35*vec2(fbm(q*0.7 + t*0.002), fbm(q*0.7 + 4.0));
+  float cl = fbm(q);
+  float lo = mix(0.78, 0.26, u_cloud);
+  float dens = smoothstep(lo, lo + 0.34, cl) * smoothstep(0.02, 0.18, h) * mix(0.5, 1.0, u_cloud);
+
+  // stars: one candidate per ~3 css px cell, heavy-tailed brightness,
+  // washed out near the horizon by light pollution
+  float cell = 3.0*u_dpr;
+  vec2 ci = floor(gl_FragCoord.xy / cell);
+  uvec2 cu = uvec2(ci + 4096.0);
+  float r = h2(cu);
+  float star = 0.0;
+  if (r > 0.9962) {
+    vec2 sc = (ci + 0.5 + (vec2(h2(cu+7u), h2(cu+13u))-0.5)*0.7) * cell;
+    float d = length(gl_FragCoord.xy - sc) / u_dpr;
+    float b = pow(h2(cu+29u), 6.0) * 1.3 + 0.03;
+    float tw = 0.75 + 0.25*sin(t*(0.7+2.3*h2(cu+3u)) + r*600.0);
+    star = b * tw * exp(-d*d*1.4);
+  }
+  float md = length(p - u_moon.xy);
+  star *= smoothstep(0.10, 0.45, h) * (1.0 - smoothstep(0.0, 0.4, dens*2.2)) * smoothstep(0.05, 0.25, md);
+  c += vec3(0.85, 0.9, 1.0) * star;
+
+  // moon: waxing gibbous, faint maria, halo
+  vec2 mq = (p - u_moon.xy) / u_moon.z;
+  float mr = length(mq);
+  if (mr < 1.0) {
+    vec3 n = vec3(mq, sqrt(1.0 - mr*mr));
+    float lit = smoothstep(-0.12, 0.18, dot(n, normalize(vec3(-0.75, 0.2, 0.55))));
+    float mar = 0.62 + 0.38*smoothstep(0.35, 0.65, fbm(mq*1.8 + 3.0));
+    float limb = 0.75 + 0.25*n.z;
+    float edge = 1.0 - smoothstep(0.96, 1.0, mr);
+    c = mix(c, vec3(1.0, 0.96, 0.88) * 0.95 * mar * limb * lit + c*0.6, edge);
+  }
+  float mh = max(mr - 1.0, 0.0) * u_moon.z;
+  c += vec3(0.55, 0.6, 0.75) * (0.06*exp(-mh*40.0) + 0.015*exp(-mh*6.0));
+
+  // cloud colour: underside lit by the city dome, edges silvered near the moon
+  float dx = (p.x - u_cityX) / 0.6;
+  vec3 cc = vec3(0.011, 0.011, 0.016) * (0.8 + 0.9 * u_cloud) * (1.0 + 2.2*exp(-h*6.0)*(0.4+exp(-dx*dx)));
+  cc += vec3(0.12, 0.13, 0.17) * exp(-md*7.0) * (0.4 + 0.6*smoothstep(0.5, 0.75, cl));
+  c = mix(c, cc, dens);
+  o = vec4(c, 1.0);
+}`,De=`${C}
+layout(location=0) in vec4 a_r;   // xL xR ybotL ytopL (scene units) \u2014 vertical-edged trapezoid
+layout(location=1) in vec4 a_s;   // ybotR ytopR darkness base-glow
+uniform vec2 u_res;
+out vec2 v_p; out vec4 v_s;
+const vec2 C[6] = vec2[6](vec2(0,0),vec2(1,0),vec2(0,1),vec2(0,1),vec2(1,0),vec2(1,1));
+void main(){
+  vec2 c = C[gl_VertexID];
+  float yb = mix(a_r.z, a_s.x, c.x), yt = mix(a_r.w, a_s.y, c.x);
+  vec2 p = vec2(mix(a_r.x, a_r.y, c.x), mix(yb, yt, c.y));
+  v_p = p; v_s = vec4(a_s.z, a_s.w, 0.0, 0.0);
+  gl_Position = vec4(p * u_res.y / u_res * 2.0 - 1.0, 0.0, 1.0);
+}`,Ie=`${C}${xe}
+in vec2 v_p; in vec4 v_s; out vec4 o;
+void main(){
+  vec3 c = skyBase(vec2(v_p.x, u_hz + 0.03)) * v_s.x;
+  float yb = v_p.y - u_hz;
+  c += vec3(0.012, 0.009, 0.007) * exp(-yb * 70.0) * v_s.y; // street glow on the base
+  o = vec4(c, 1.0);
+}`,Ne=`${C}
+layout(location=0) in vec4 a_rect; // cx cy w h (scene units)
+layout(location=1) in vec4 a_p;    // seed kind intensity extra
+layout(location=2) in vec4 a_col;  // rgb pOn
+uniform vec2 u_res; uniform float u_time; uniform float u_dpr;
+out vec2 v_l; out vec2 v_hs; out float v_gr; out float v_ga; out vec3 v_c;
+const vec2 C[6] = vec2[6](vec2(-1,-1),vec2(1,-1),vec2(-1,1),vec2(-1,1),vec2(1,-1),vec2(1,1));
+// on/off with a short cross-fade between consecutive hashed states
+float toggle(uint s, float period, float pOn){
+  float t = u_time / period + h1(s ^ 0x5bd1e995u) * 97.0;
+  float k = floor(t), f = fract(t);
+  float a = step(h1(s*31u + uint(k)), pOn);
+  float b = step(h1(s*31u + uint(k) - 1u), pOn);
+  return mix(b, a, smoothstep(0.0, 0.012, f));
+}
+vec3 hsv(float h, float s, float v){ vec3 k=clamp(abs(fract(h+vec3(0,2,1)/3.0)*6.0-3.0)-1.0,0.0,1.0); return v*mix(vec3(1),k,s); }
+void main(){
+  uint seed = uint(a_p.x); int kind = int(a_p.y + 0.5);
+  float I = a_p.z, ex = a_p.w, pOn = a_col.a, t = u_time;
+  vec3 col = a_col.rgb;
+  float s = 1.0, ga = 0.07, gm = 2.0;
+  if (kind == 0) {                       // residential, warm, independent
+    s = toggle(seed, 35.0 + 70.0*h1(seed*7u), pOn);
+  } else if (kind == 1) {                // office: whole floors + stragglers
+    float fl = toggle(uint(ex), 110.0, 0.18) * step(h1(seed ^ 0x9e3779b9u), 0.88);
+    s = max(fl, toggle(seed, 75.0, pOn * 0.5));
+  } else if (kind == 2) {                // TV flicker
+    float n = sin(t*7.1 + ex*40.0)*0.5 + sin(t*3.3 + ex*13.0)*0.3 + sin(t*13.7)*0.2;
+    s = toggle(seed, 60.0, 0.65) * (0.6 + 0.4*n);
+    col = mix(col, vec3(0.55, 0.72, 1.0), 0.65);
+  } else if (kind == 3) {                // steady
+    s = 1.0;
+  } else if (kind == 4) {                // LED crown / edge strip, slow hue drift + chase
+    col = hsv(fract(t*0.012 + ex), 0.65, 1.0);
+    s = 0.55 + 0.45*sin(t*0.9 - a_rect.y*400.0 - a_rect.x*120.0);
+    ga = 0.22; gm = 3.0;
+  } else if (kind == 5) {                // red aviation beacon
+    float ph = fract(t/2.2 + ex);
+    s = smoothstep(0.0, 0.08, ph) * (1.0 - smoothstep(0.30, 0.55, ph));
+    ga = 0.30; gm = 3.5;
+  } else if (kind == 6) {                // white strobe
+    s = step(fract(t/1.7 + ex), 0.035);
+    ga = 0.7; gm = 7.0;
+  } else if (kind == 7) {                // CPU-driven (planes, traffic): extra = glow mult
+    ga = 0.35; gm = ex;
+  } else if (kind == 8) {                // bridge cable LEDs, travelling wave
+    s = 0.30 + 0.70*pow(0.5 + 0.5*sin(a_rect.x*70.0 - a_rect.y*90.0 - t*0.55 + ex), 3.0);
+    ga = 0.18;
+  }
+  float e = s * I;
+  vec2 hs = max(a_rect.zw * u_res.y * 0.5, vec2(0.45 * u_dpr));
+  float gr = max(hs.x, hs.y) * gm + 1.2 * u_dpr;
+  vec2 lp = C[gl_VertexID] * (hs + 2.2 * gr);
+  v_l = lp; v_hs = hs; v_gr = gr; v_ga = ga; v_c = col * e;
+  vec2 pos = a_rect.xy * u_res.y + lp;
+  gl_Position = e < 0.003 ? vec4(2.0, 2.0, 2.0, 1.0) : vec4(pos / u_res * 2.0 - 1.0, 0.0, 1.0);
+}`,Oe=`${C}
+in vec2 v_l; in vec2 v_hs; in float v_gr; in float v_ga; in vec3 v_c; out vec4 o;
+void main(){
+  float d = length(max(abs(v_l) - v_hs, 0.0));
+  float core = 1.0 - smoothstep(0.0, 1.0, d);
+  float g = exp(-d*d / (v_gr*v_gr));
+  o = vec4(v_c * (core + v_ga * g), 1.0);
+}`,Ge=`${C}
+uniform sampler2D u_scene;
+uniform vec2 u_res; uniform float u_time; uniform float u_hz; uniform float u_exposure; uniform float u_fog;
+out vec4 o;
+// gradient of a sum of dispersive directional waves on the water plane,
+// each term faded out once it would alias at this screen row
+vec2 waveGrad(vec2 w, float t, float pxPhase){
+  vec2 g = vec2(0.0); float norm = 0.0;
+  for (int i = 0; i < 7; i++) {
+    float fi = float(i);
+    float a = fi * 2.39996 + 0.6;
+    float ang = 1.5708 + sin(a) * 0.9;
+    vec2 D = vec2(cos(ang) * 1.4, sin(ang));
+    float f = 4.5 * pow(1.42, fi);
+    float sp = sqrt(f) * 0.9;
+    float lod = 1.0 - smoothstep(0.7, 2.2, f * pxPhase);
+    float ph = dot(D, w) * f + t * sp + fi * 1.7;
+    g += D * cos(ph) * lod;
+    norm += lod;
+  }
+  return g / max(sqrt(norm) * 1.4, 1.0);
+}
+void main(){
+  vec2 uv = gl_FragCoord.xy / u_res;
+  float aspect = u_res.x / u_res.y;
+  vec3 c;
+  if (uv.y >= u_hz) {
+    c = textureLod(u_scene, uv, 0.0).rgb;
+  } else {
+    float d0 = u_hz - uv.y;
+    vec3 acc = vec3(0.0);
+    const int N = 6;
+    for (int k = 0; k < N; k++) {
+      float jit = (float(k) + 0.5) / float(N) - 0.5;
+      float d = max(d0 + jit * 1.3 / u_res.y, 1e-4);
+      float z = 1.0 / (d + 0.015);
+      vec2 w = vec2((uv.x - 0.5) * aspect * z, z) * 0.9;
+      float pxPhase = 0.9 / ((d + 0.015) * (d + 0.015) * u_res.y); // phase/px per unit freq
+      vec2 g = waveGrad(w, u_time * 0.9, pxPhase);
+      float ax = 0.0006 + d * 0.010;
+      float ay = 0.004 + d * 0.11;
+      vec2 r = vec2(uv.x + g.x * ax, u_hz + d + g.y * ay);
+      r.y = max(r.y, u_hz + 0.6 / u_res.y);
+      acc += textureLod(u_scene, r, 0.0).rgb;
+    }
+    vec3 refl = acc / float(N);
+    float fres = mix(0.62, 0.24, smoothstep(0.0, 0.22, d0));
+    c = refl * fres + vec3(0.0002, 0.0005, 0.0009);
+    // sparkle: brief glints riding the bright reflection columns
+    float lum = dot(refl, vec3(0.3, 0.5, 0.2));
+    uvec2 gc = uvec2(gl_FragCoord.xy / 2.0) + uvec2(0u, uint(u_time * 9.0) * 7919u);
+    c += refl * step(0.992, h2(gc)) * 2.5 * smoothstep(0.02, 0.15, lum) * smoothstep(0.01, 0.12, d0);
+  }
+  if (u_fog > 0.001) {
+    // haze hugs the waterline; lights bloom into it (blurred scene from the mip chain)
+    float dy = abs(uv.y - u_hz);
+    float band = exp(-dy * mix(22.0, 4.5, u_fog));
+    float f = clamp(u_fog * (0.18 + 0.82 * band), 0.0, 0.92);
+    float n = 0.85 + 0.3 * sin(uv.x * 9.0 + u_time * 0.05) * sin(uv.x * 23.0 - u_time * 0.031 + uv.y * 30.0);
+    vec2 su = vec2(uv.x, uv.y < u_hz ? 2.0 * u_hz - uv.y : uv.y);
+    vec3 scat = textureLod(u_scene, su, 4.0).rgb * 0.6 + textureLod(u_scene, su, 6.0).rgb * 0.8;
+    vec3 fogc = vec3(0.010, 0.009, 0.013) + scat * 0.9;
+    c = mix(c, fogc, f * n);
+  }
+  c = 1.0 - exp(-c * u_exposure);                    // tonemap
+  vec2 vq = uv - 0.5;
+  c *= 1.0 - 0.55 * dot(vq, vq) * 1.6;               // vignette
+  c = pow(c, vec3(1.0 / 2.2));
+  c += (h2(uvec2(gl_FragCoord.xy) + uint(u_time * 60.0) * 3u) - 0.5) / 255.0; // dither + grain
+  o = vec4(c, 1.0);
+}`;function ae(p){return()=>{p|=0,p=p+1831565813|0;let e=Math.imul(p^p>>>15,1|p);return e=e+Math.imul(e^e>>>7,61|e)^e,((e^e>>>14)>>>0)/4294967296}}var M=12,Y=8,Z=[1,.7,.4],G=[1,.86,.66],be=[.78,.88,1];function Ce(p,e,r="auto",n="auto"){let s=ae(e),o=ae(e^5369127),c=r!=="auto"?r:o()<.08?"none":["cable","suspension","arch"][Math.floor(o()*3)],g=n!=="auto"?n:o()<.5?"left":"right",u=(t,a)=>t+(a-t)*s(),_=()=>{let t=0;for(let a=0;a<4;a++)t+=s();return(t-2)/.577},R=[],S=[],U=[],w=1,A=null,P=()=>{A={r0:R.length/Y,rn:0,l0:S.length/M,ln:0}},I=()=>{let t=A;t.rn=R.length/Y-t.r0,t.ln=S.length/M-t.l0,(t.rn||t.ln)&&U.push(t),A=null},k=(t,a,h,f,d,i=1)=>R.push(t,h,a,f,a,f,d,i),ce=(t,a,h,f,d,i,l,m=1)=>R.push(t,a,h,f,d,i,l,m),x=(t,a,h,f,d,i,l,m=1,v=0,b=w++)=>S.push(t,a,h,f,b,d,i,v,l[0],l[1],l[2],m),ue=(t,a)=>[t[0]*(1+u(-a,a)),t[1]*(1+u(-a,a)),t[2]*(1+u(-a,a))],W=p*.56,te=p*.8,z=c==="none"?-.01:p*{cable:.22,suspension:.27,arch:.21}[c],ye=c==="suspension"?.03:c==="arch"?.016:.024,H=t=>{let a=1-ze(.8,1,t),h=c==="arch"?.0015:.004;return .36+.004+ye*a+h*Math.sin(Math.PI*Math.min(t/.8,1))*a},re=(t,a,h,f,d)=>{let i=Math.floor((f-h-d.fh*.6)/d.fh),l=Math.max(1,Math.floor((a-t)/d.cs)-1),m=(a-t)/(l+1),v=d.type===1?be:d.type===0&&s()<.7?Z:G,b=w*7+1;for(let E=0;E<i;E++){let T=h+d.fh*(E+.75);for(let L=0;L<l;L++){let D=t+m*(L+1),y=d.type===1?1:0;d.type===0&&s()<.035&&(y=2),x(D,T,m*.42,d.fh*.4,y,d.I*u(.6,1.25),ue(v,.08),d.dens*u(.6,1.3),y===1?b+E:s()*10)}}},N=p*.4,X=.32,q=t=>X/(X+t),ne=(t,a,h)=>[N+(t-N)*q(h),.36+(a-.36)*q(h)],le=(t,a,h,f,d,i,l=1)=>{let m=(t+a)/2<N?a:t,[v,b]=ne(m,h,d),[,E]=ne(m,f,d);if(Math.abs(v-m)>2e-4){let T=m===a?i*.82:i*.62;v>m?ce(m,v,h,f,b,E,T,l):ce(v,m,b,E,h,f,T,l)}k(t,h,a,f,i,l)},he=(t,a,h,f,d,i)=>{let l=(t+a)/2<N?a:t,m=Math.abs(l-N);if(m*(1-q(d))<.0018)return;let v=Math.floor((f-h-i.fh*.6)/i.fh),b=Math.max(1,Math.floor(d/i.cs)-1),E=i.type===1?be:s()<.7?Z:G,T=w*7+3;for(let L=0;L<b;L++){let D=d*(L+1)/(b+1),y=q(D),F=m*X/(X+D)**2*(d/(b+1))*.45;for(let O=0;O<v;O++){let[Q,Te]=ne(l,h+i.fh*(O+.75),D),pe=i.type===1?1:0;x(Q,Te,F,i.fh*.4*y,pe,i.I*.8*u(.6,1.2),ue(E,.08),i.dens*u(.6,1.3),pe===1?T+O:s()*10)}}};P();for(let t=-.01;t<p+.01;){let a=u(.008,.026),h=Math.exp(-(((t-W)/(p*.16))**2)),f=Math.exp(-(((t-te)/(p*.07))**2)),d=.006+.022*s()+.07*h*s()+.035*f*s();k(t,.36,t+a,.36+d,.8,.6),re(t,t+a,.36,.36+d,{fh:.0026,cs:.0022,I:.22,type:s()<.4?1:0,dens:u(.08,.28)}),t+=a+(s()<.15?u(.002,.01):0)}I();let $=[],_e=Math.round(34*p/1.78);for(let t=0;t<_e;t++){let a=s()<.72,h=a?W+_()*p*.13:te+_()*p*.06;if(h<z+.04||h>p-.02){t--;continue}let f=Math.exp(-(((h-(a?W:te))/(p*(a?.12:.06)))**2)),d=.035+(a?.27:.13)*f*Math.pow(s(),.8)+u(0,.025);$.push({x:h,w:u(.012,.032)*(d>.15?1.15:1),h:d})}$.sort((t,a)=>a.h-t.h+(s()-.5)*.04);let V=[...$].sort((t,a)=>a.h-t.h),we=new Set(V.slice(1,5).filter(()=>s()<.8)),Ee=new Set(V.slice(3,10).filter(()=>s()<.4)),Re=new Set(V.slice(0,10));for(let t of $){P();let a=t.x-t.w/2,h=t.x+t.w/2,f=.36+t.h,d=s()<.6?1:0,i=u(.0036,.005),l=i*u(.75,1.15),m=s()<.15?.02:u(.07,.3),v=t.h>.16&&s()<.55?3:t.h>.1&&s()<.4?2:1,b=.36,E=t.w,T=a,L=h;for(let y=0;y<v;y++){let F=y===v-1?f:.36+t.h*(v===2?.7:y===0?.6:.85);T=t.x-E/2,L=t.x+E/2;let O=E*u(.7,1.2),Q={fh:i,cs:l,I:.55,type:d,dens:m};le(T,L,b,F,O,.48),re(T,L,b+(y===0?i*1.4:0),F,Q),he(T,L,b+(y===0?i*1.4:0),F,O,Q),b=F,E*=u(.62,.8)}x(t.x,.36+i*.6,t.w*.7,i*.5,3,.35,G);let D=L-T;if(we.has(t)){let y=Math.max(3,Math.floor(D/.0018));for(let F=0;F<=y;F++)x(T+D*F/y,f-.0012,.001,.001,4,.6,[1,1,1],1,t.x*3.7%1)}if(Ee.has(t))for(let y=.36+.004;y<f-.002;y+=.0032)x(a+6e-4,y,8e-4,.0016,4,.35,[1,1,1],1,.5),x(h-6e-4,y,8e-4,.0016,4,.35,[1,1,1],1,.5);if(Re.has(t))if(t===V[0]||t===V[1]&&s()<.6){let y=u(.02,.04);k(t.x-6e-4,f,t.x+6e-4,f+y,.48),x(t.x,f+y,.0011,.0011,5,1.5,[1,.08,.04],1,0),x(t.x,f+y*.5,9e-4,9e-4,5,.9,[1,.08,.04],1,0),t===V[0]&&x(t.x,f+.001,.0014,.0014,6,5,[.9,.95,1],1,.37)}else x(T+.001,f+8e-4,9e-4,9e-4,5,1.1,[1,.08,.04],1,0),x(L-.001,f+8e-4,9e-4,9e-4,5,1.1,[1,.08,.04],1,0);I()}let Ae=U.length,se=[];for(let t=z+.012;t<p;){let a=u(.018,.07);if(s()<.25){t+=a*.6;continue}se.push([t,a,u(.008,.045)]),t+=a+u(.003,.02)}se.sort((t,a)=>Math.abs(a[0]+a[1]/2-N)-Math.abs(t[0]+t[1]/2-N));for(let[t,a,h]of se){P();let f=u(.02,.05),d={fh:.0062,cs:.0068,I:.6,type:s()<.25?1:0,dens:u(.1,.35)};le(t,t+a,.36,.36+h,f,.3,1.5),re(t,t+a,.36+.0045,.36+h,d),he(t,t+a,.36+.0045,.36+h,f,d),I()}P(),k(-.01,.36-.001,p+.01,.36+.004,.2,2);for(let t=z+.006;t<p+.01;t+=u(.008,.016)){if(s()<.18){t+=u(.01,.05);continue}x(t,.36+.0048,9e-4,9e-4,3,u(.35,.7),s()<.6?G:Z)}I();let oe=-.04,B=t=>oe+t*(z-oe),j=[1,.08,.04],K=(t,a,h,f,d)=>{let[i,l]=t(a),m=f,v=0,b=400;for(let E=1;E<=b;E++){let[T,L]=t(a+(h-a)*E/b);m+=Math.hypot(T-i,L-l),i=T,l=L,m>=f&&(m=0,d(T,L,v++))}};if(c!=="none"){if(P(),c==="cable")for(let a of[.3,.66]){let h=B(a);k(h-.0015,.36,h+.0015,.485,.45),x(h,.485+8e-4,.001,.001,5,1.3,j,1,.5);for(let f=1;f<=8;f++)for(let d of[-1,1]){let i=a+d*f*.034;if(i<0||i>.98)continue;let l=B(i),m=H(i)+.002,v=.485-.004-f*.0035;K(b=>[h+(l-h)*b,v+(m-v)*b],0,1,.0045,(b,E)=>x(b,E,6e-4,6e-4,8,.22,[.75,.9,1],1,f*.4))}}else if(c==="suspension"){let d=i=>{let l=H(i)+.004;if(i<.24){let v=i/.24;return l+(.51-l)*(.25+.75*v*v)}if(i<=.7){let b=(i-.47)/.22999999999999998;return l+(.51-l)*b*b}let m=Math.max(0,1-(i-.7)/(.93-.7));return l+(.51-l)*m*m};for(let i of[.24,.7]){let l=B(i);k(l-.0021,.36,l+.0021,.51+.004,.75),k(l-.003,.51-.012,l+.003,.51-.009,.75);for(let m=.36+.006;m<.51;m+=.012)x(l,m,.0026,.0018,3,.1,Z);x(l,.51+.0048,.0011,.0011,5,1.3,j,1,.2),x(l,.51-.03,9e-4,9e-4,5,.8,j,1,.2)}K(i=>[B(i),d(i)],0,.93,.0042,(i,l)=>x(i,l,8e-4,8e-4,3,.55,G));for(let i=.012;i<.93;i+=.018){let l=B(i),m=H(i)+.003,v=d(i);for(let b=m+.004;b<v-.002;b+=.004)x(l,b,4e-4,4e-4,3,.06,[.8,.85,1])}}else{let f=(i,l)=>{let m=(i-.1)/.74;return H(i)-.006+(.085+l)*Math.pow(Math.max(Math.sin(Math.PI*m),0),.85)};for(let i of[.1,.84])k(B(i)-.006,.36,B(i)+.006,H(i)-.001,.5);K(i=>[B(i),f(i,0)],.1,.84,.0034,(i,l)=>x(i,l,8e-4,8e-4,8,.45,[.85,.92,1],1,0)),K(i=>[B(i),f(i,-.009)],.1+.02,.84-.02,.004,(i,l)=>x(i,l,6e-4,6e-4,8,.25,[.85,.92,1],1,1.3));for(let i=.1+.04;i<.84-.03;i+=.028){let l=B(i),m=H(i)+.003,v=f(i,-.009);for(let b=m+.004;b<v-.002;b+=.0045)x(l,b,4e-4,4e-4,3,.07,[.8,.85,1])}let d=B((.1+.84)/2);x(d,f((.1+.84)/2,0)+.002,.001,.001,5,1.1,j,1,.7)}for(let t=0;t<=1;t+=.0145){let a=B(t),h=H(t);x(a,h+.0016,9e-4,9e-4,3,.9,G),x(a,h-4e-4,8e-4,8e-4,3,.5,Z)}I()}let J=g==="right";if(J){for(let t=0;t<R.length;t+=Y){let[a,h,f,d,i,l]=R.slice(t,t+6);R[t]=p-h,R[t+1]=p-a,R[t+2]=i,R[t+3]=l,R[t+4]=f,R[t+5]=d}for(let t=0;t<S.length;t+=M)S[t]=p-S[t]}let fe=Math.max(z,0)-.01,de=p+.01;return{rects:new Float32Array(R),lights:new Float32Array(S),groups:U,roadGroup:Ae,cityX:J?p-W:W,moon:[p*(.62+.3*s()),.72+.16*s(),.026],bridge:{x0:oe,x1:z,deckY:H,mirror:J,type:c,side:g},shore:J?[p-de,p-fe]:[fe,de]}}function ze(p,e,r){let n=Math.min(Math.max((r-p)/(e-p),0),1);return n*n*(3-2*n)}var ge=.36+.0066,ee=class{constructor(e,r={}){this.canvas=e;let n=Object.fromEntries(Object.entries(r).filter(([,o])=>o!==void 0&&!(typeof o=="number"&&Number.isNaN(o))));this.opts={speed:1,seed:7,dprCap:1.5,fps:0,brightness:.5,clouds:.4,fog:0,bridge:"auto",bridgeSide:"auto",...n};let s=e.getContext("webgl2",{antialias:!1,alpha:!1,depth:!1,powerPreference:"low-power"});if(!s)throw new Error("harbor-night: WebGL2 unavailable");this.gl=s,this.hdr=!!s.getExtension("EXT_color_buffer_float"),this.init(),this.ro=new ResizeObserver(()=>this.resize()),this.ro.observe(e);for(let o=0;o<12;o++)this.cars.push({u:this.rng(),v:.045+this.rng()*.03,lane:o%2});this.spawnPlane(.15+this.rng()*.5)}canvas;gl;opts;progs;U=new Map;emptyVao;rectVao;rectBuf;lightVao;lightBuf;dynVao;dynBuf;dyn=new Float32Array(M*512);fbo=null;tex=null;hdr=!1;city=null;w=0;h=0;dpr=1;raf=0;running=!1;t=0;last=0;lastDraw=0;planes=[];nextPlane=2;cars=[];road=[];nPlane=0;nRoad=0;rng=ae(12345);ro;onVis=()=>{document.hidden?this.pause():this.running&&this.resume()};start(){if(!this.running)return this.running=!0,document.addEventListener("visibilitychange",this.onVis),this.resize(),this.resume(),this}stop(){this.running=!1,this.pause(),document.removeEventListener("visibilitychange",this.onVis)}destroy(){this.stop(),this.ro.disconnect(),this.gl.getExtension("WEBGL_lose_context")?.loseContext()}pause(){cancelAnimationFrame(this.raf),this.raf=0}resume(){if(this.raf)return;this.last=performance.now();let e=r=>{this.raf=requestAnimationFrame(e);let n=this.opts.fps>0?1e3/this.opts.fps-1:0;if(r-this.lastDraw<n)return;this.lastDraw=r;let s=Math.min((r-this.last)/1e3,.1)*this.opts.speed;this.last=r,this.t+=s,this.step(s),this.draw()};this.raf=requestAnimationFrame(e)}compile(e,r){let n=this.gl,s=(c,g)=>{let u=n.createShader(c);if(n.shaderSource(u,g),n.compileShader(u),!n.getShaderParameter(u,n.COMPILE_STATUS))throw new Error("harbor-night shader: "+n.getShaderInfoLog(u));return u},o=n.createProgram();if(n.attachShader(o,s(n.VERTEX_SHADER,e)),n.attachShader(o,s(n.FRAGMENT_SHADER,r)),n.linkProgram(o),!n.getProgramParameter(o,n.LINK_STATUS))throw new Error("harbor-night link: "+n.getProgramInfoLog(o));return this.U.set(o,new Map),o}u(e,r){let n=this.U.get(e);return n.has(r)||n.set(r,this.gl.getUniformLocation(e,r)),n.get(r)}init(){let e=this.gl;this.progs={sky:this.compile(me,He),rect:this.compile(De,Ie),light:this.compile(Ne,Oe),comp:this.compile(me,Ge)},this.emptyVao=e.createVertexArray();let r=(n,s,o)=>{let c=e.createVertexArray();e.bindVertexArray(c),e.bindBuffer(e.ARRAY_BUFFER,n);let g=0;return o.forEach((u,_)=>{e.enableVertexAttribArray(_),e.vertexAttribPointer(_,u,e.FLOAT,!1,s*4,g*4),e.vertexAttribDivisor(_,1),g+=u}),e.bindVertexArray(null),c};this.rectBuf=e.createBuffer(),this.rectVao=r(this.rectBuf,Y,[4,4]),this.lightBuf=e.createBuffer(),this.lightVao=r(this.lightBuf,M,[4,4,4]),this.dynBuf=e.createBuffer(),this.dynVao=r(this.dynBuf,M,[4,4,4]),e.bindBuffer(e.ARRAY_BUFFER,this.dynBuf),e.bufferData(e.ARRAY_BUFFER,this.dyn.byteLength,e.DYNAMIC_DRAW)}resize(){let e=this.gl;this.dpr=Math.min(window.devicePixelRatio||1,this.opts.dprCap);let r=Math.max(1,Math.round(this.canvas.clientWidth*this.dpr)),n=Math.max(1,Math.round(this.canvas.clientHeight*this.dpr));if(r===this.w&&n===this.h&&this.city)return;let s=!this.city||Math.abs(r/n-this.w/this.h)>.001;this.w=r,this.h=n,this.canvas.width=r,this.canvas.height=n,this.tex&&e.deleteTexture(this.tex),this.fbo&&e.deleteFramebuffer(this.fbo),this.tex=e.createTexture(),e.bindTexture(e.TEXTURE_2D,this.tex),this.hdr?e.texImage2D(e.TEXTURE_2D,0,e.RGBA16F,r,n,0,e.RGBA,e.HALF_FLOAT,null):e.texImage2D(e.TEXTURE_2D,0,e.RGBA8,r,n,0,e.RGBA,e.UNSIGNED_BYTE,null),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MIN_FILTER,e.LINEAR_MIPMAP_LINEAR),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_MAG_FILTER,e.LINEAR),e.generateMipmap(e.TEXTURE_2D),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_S,e.CLAMP_TO_EDGE),e.texParameteri(e.TEXTURE_2D,e.TEXTURE_WRAP_T,e.CLAMP_TO_EDGE),this.fbo=e.createFramebuffer(),e.bindFramebuffer(e.FRAMEBUFFER,this.fbo),e.framebufferTexture2D(e.FRAMEBUFFER,e.COLOR_ATTACHMENT0,e.TEXTURE_2D,this.tex,0),e.bindFramebuffer(e.FRAMEBUFFER,null),s&&this.regen(),this.running||this.draw()}regen(){let e=this.gl;this.city=Ce(this.w/this.h,this.opts.seed,this.opts.bridge,this.opts.bridgeSide),this.spawnRoad(),e.bindBuffer(e.ARRAY_BUFFER,this.rectBuf),e.bufferData(e.ARRAY_BUFFER,this.city.rects,e.STATIC_DRAW),e.bindBuffer(e.ARRAY_BUFFER,this.lightBuf),e.bufferData(e.ARRAY_BUFFER,this.city.lights,e.STATIC_DRAW)}get settings(){let e=this.opts;return{brightness:e.brightness,clouds:e.clouds,fog:e.fog,seed:e.seed,bridge:e.bridge,bridgeSide:e.bridgeSide}}setBridge(e=this.opts.bridge,r=this.opts.bridgeSide){this.opts.bridge=e,this.opts.bridgeSide=r,this.w&&this.regen(),this.running||this.draw()}set(e){for(let[r,n]of Object.entries(e))typeof n=="number"&&Number.isFinite(n)&&(this.opts[r]=n);this.running||this.draw()}randomize(e=Math.random()*2**31|0){return this.opts.seed=e,this.w&&this.regen(),this.planes=[],this.nextPlane=3,this.running||this.draw(),e}spawnRoad(){let e=this.rng,[r,n]=this.city.shore,s=Math.round(30*(n-r)/1.4);this.road=[];for(let o=0;o<s;o++){let c=o%2?1:-1;this.road.push({x:r+e()*(n-r),v:c*(.006+e()*.008),I:.7+e()*.6})}}spawnPlane(e){let r=this.rng,n=this.w&&this.h?this.w/this.h:1.78,s=r()<.4,o=s||r()<.5?1:-1,c=s?.0035+r()*.0015:.0022+r()*.0015,g=s?.01+r()*.006:.012+r()*.012,u=s?.36+.2+r()*.16:.36+.28+r()*.32,_=e!==void 0?e*n:o>0?-.05:n+.05;this.planes.push({x:_,y:u,vx:o*g,vy:s?-.0011-r()*8e-4:(r()-.5)*6e-4,span:c,land:s,ph:r()})}step(e){let r=this.w/this.h;this.nextPlane-=e,this.nextPlane<=0&&this.planes.length<2&&(this.spawnPlane(),this.nextPlane=20+this.rng()*40);for(let n of this.planes)n.x+=n.vx*e,n.y+=n.vy*e;this.planes=this.planes.filter(n=>n.x>-.08&&n.x<r+.08&&n.y>.36+.05);for(let n of this.cars)n.u+=(n.lane?-1:1)*n.v*e*.25,n.u=(n.u%1+1)%1;if(this.city){let[n,s]=this.city.shore,o=s-n;for(let c of this.road)c.x+=c.v*e,c.x>s?c.x-=o:c.x<n&&(c.x+=o)}}buildDynamic(){let e=this.dyn,r=0,n=this.t,s=(o,c,g,u,_,R)=>{r>=512||u<=0||e.set([o,c,g,g,0,7,u,R,_[0],_[1],_[2],1],r++*M)};for(let o of this.planes){let c=Math.sign(o.vx),g=o.span/2,u=(n/1.25+o.ph)%1,_=u<.03||u>.1&&u<.13?1:0,R=Math.max(0,Math.sin((n+o.ph*3)%1.1/1.1*Math.PI))**6;s(o.x-g,o.y,5e-4,.22,[1,.12,.08],1.2),s(o.x+g,o.y,5e-4,.22,[.15,1,.35],1.2),s(o.x-c*g*.85,o.y+4e-4,5e-4,.14,[1,1,1],1),s(o.x,o.y+5e-4,5e-4,.45*R,[1,.1,.06],1.6),s(o.x-g,o.y,6e-4,1.1*_,[.92,.96,1],2),s(o.x+g,o.y,6e-4,1.1*_,[.92,.96,1],2),o.land&&s(o.x+c*g*.5,o.y-3e-4,6e-4,.5,[1,.95,.85],2)}if(this.city){let o=this.city.bridge;for(let c of this.cars){if(c.u>.985)continue;if(o.type==="none")break;let g=o.x0+c.u*(o.x1-o.x0),u=o.mirror?this.w/this.h-g:g,_=o.deckY(c.u)+7e-4+c.lane*5e-4;s(u,_,8e-4,c.lane?.9:1.3,c.lane?[1,.12,.06]:[1,.9,.7],3)}}this.nPlane=r;for(let o of this.road){let c=Math.sign(o.v);s(o.x+c*.0024,ge,7e-4,.3*o.I,[1,.92,.8],3.5),s(o.x-c*.0024,ge-1e-4,6e-4,.22*o.I,[1,.1,.05],3)}this.nRoad=r-this.nPlane}draw(){let e=this.gl,r=this.progs,n=this.city;if(!n||!this.fbo)return;let s=[this.w,this.h];e.bindFramebuffer(e.FRAMEBUFFER,this.fbo),e.viewport(0,0,this.w,this.h),e.disable(e.BLEND),e.useProgram(r.sky),e.uniform2f(this.u(r.sky,"u_res"),...s),e.uniform1f(this.u(r.sky,"u_time"),this.t),e.uniform1f(this.u(r.sky,"u_dpr"),this.dpr),e.uniform1f(this.u(r.sky,"u_hz"),.36),e.uniform1f(this.u(r.sky,"u_cityX"),n.cityX),e.uniform3f(this.u(r.sky,"u_moon"),...n.moon),e.uniform1f(this.u(r.sky,"u_cloud"),this.opts.clouds),e.bindVertexArray(this.emptyVao),e.drawArrays(e.TRIANGLES,0,3),e.useProgram(r.light),e.uniform2f(this.u(r.light,"u_res"),...s),e.uniform1f(this.u(r.light,"u_time"),this.t),e.uniform1f(this.u(r.light,"u_dpr"),this.dpr),e.useProgram(r.rect),e.uniform2f(this.u(r.rect,"u_res"),...s),e.uniform1f(this.u(r.rect,"u_hz"),.36),e.uniform1f(this.u(r.rect,"u_cityX"),n.cityX),this.buildDynamic(),e.useProgram(r.light),e.enable(e.BLEND),e.blendFunc(e.ONE,e.ONE),e.bindBuffer(e.ARRAY_BUFFER,this.dynBuf),e.bufferSubData(e.ARRAY_BUFFER,0,this.dyn,0,(this.nPlane+this.nRoad)*M),e.bindVertexArray(this.dynVao),this.rebase(this.dynVao,this.dynBuf,M,[4,4,4],0),this.nPlane&&e.drawArraysInstanced(e.TRIANGLES,0,6,this.nPlane),n.groups.forEach((o,c)=>{c===n.roadGroup&&this.nRoad&&(e.enable(e.BLEND),e.useProgram(r.light),e.bindVertexArray(this.dynVao),this.rebase(this.dynVao,this.dynBuf,M,[4,4,4],this.nPlane),e.drawArraysInstanced(e.TRIANGLES,0,6,this.nRoad)),o.rn&&(e.disable(e.BLEND),e.useProgram(r.rect),e.bindVertexArray(this.rectVao),this.rebase(this.rectVao,this.rectBuf,Y,[4,4],o.r0),e.drawArraysInstanced(e.TRIANGLES,0,6,o.rn)),o.ln&&(e.enable(e.BLEND),e.useProgram(r.light),e.bindVertexArray(this.lightVao),this.rebase(this.lightVao,this.lightBuf,M,[4,4,4],o.l0),e.drawArraysInstanced(e.TRIANGLES,0,6,o.ln))}),e.disable(e.BLEND),e.bindFramebuffer(e.FRAMEBUFFER,null),e.useProgram(r.comp),e.activeTexture(e.TEXTURE0),e.bindTexture(e.TEXTURE_2D,this.tex),this.opts.fog>.001&&e.generateMipmap(e.TEXTURE_2D),e.uniform1i(this.u(r.comp,"u_scene"),0),e.uniform2f(this.u(r.comp,"u_res"),...s),e.uniform1f(this.u(r.comp,"u_time"),this.t),e.uniform1f(this.u(r.comp,"u_hz"),.36),e.uniform1f(this.u(r.comp,"u_exposure"),.72*Math.pow(4,this.opts.brightness-.5)),e.uniform1f(this.u(r.comp,"u_fog"),this.opts.fog),e.bindVertexArray(this.emptyVao),e.drawArrays(e.TRIANGLES,0,3)}rebase(e,r,n,s,o){let c=this.gl;c.bindBuffer(c.ARRAY_BUFFER,r);let g=0;s.forEach((u,_)=>{c.vertexAttribPointer(_,u,c.FLOAT,!1,n*4,(o*n+g)*4),g+=u})}},Ve=`
+  :host{display:block;position:fixed;inset:0;z-index:2147483000;background:#02030a;cursor:none}
+  :host([inline]){position:relative;inset:auto;z-index:auto;cursor:auto}
+  :host(.ui){cursor:auto}
+  canvas{display:block;width:100%;height:100%}
+  .fallback{position:absolute;inset:0;background:linear-gradient(#02030a 55%,#0b0c18 64%,#020308)}
+  .panel{position:absolute;left:20px;bottom:20px;width:240px;padding:14px 16px 12px;border-radius:12px;
+    background:rgba(10,12,22,.55);backdrop-filter:blur(14px) saturate(1.2);-webkit-backdrop-filter:blur(14px);
+    border:1px solid rgba(255,255,255,.08);box-shadow:0 8px 40px rgba(0,0,0,.5);
+    font:12px/1.2 ui-sans-serif,system-ui,-apple-system,sans-serif;color:rgba(220,226,240,.82);
+    opacity:0;transform:translateY(8px);pointer-events:none;transition:opacity .25s,transform .25s}
+  :host(.ui) .panel{opacity:1;transform:none;pointer-events:auto}
+  .row{display:grid;grid-template-columns:72px 1fr 30px;align-items:center;gap:8px;margin:7px 0}
+  .row span:last-child{text-align:right;font-variant-numeric:tabular-nums;opacity:.6}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:16px;background:transparent;margin:0}
+  input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:rgba(255,255,255,.18)}
+  input[type=range]::-moz-range-track{height:3px;border-radius:2px;background:rgba(255,255,255,.18)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;margin-top:-4.5px;border-radius:50%;background:#e8ecf6;border:0}
+  input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#e8ecf6;border:0}
+  select{width:100%;padding:3px 4px;border-radius:6px;border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.06);color:inherit;font:inherit;cursor:pointer}
+  select option{background:#11131d;color:#dde2ee}
+  button{margin-top:6px;width:100%;padding:7px 0;border-radius:7px;border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.06);color:inherit;font:inherit;cursor:pointer;letter-spacing:.02em}
+  button:hover{background:rgba(255,255,255,.12)}
+  .hint{margin-top:9px;text-align:center;opacity:.4;font-size:11px}
+  .toast{position:absolute;left:50%;bottom:24px;transform:translateX(-50%);font:12px system-ui,sans-serif;
+    color:rgba(220,226,240,.5);letter-spacing:.04em;transition:opacity 1.2s;pointer-events:none}
+`,ve="wash.screensaver.harbor";function Ue(p="wash-screensaver-harbor"){customElements.get(p)||customElements.define(p,class extends HTMLElement{sn=null;onKey=e=>{if(e.code!=="Space"||e.repeat)return;let r=e.composedPath()[0];r&&r.tagName==="INPUT"&&r.type==="text"||(e.preventDefault(),this.classList.toggle("ui"))};connectedCallback(){let e=this.shadowRoot??this.attachShadow({mode:"open"}),r=[["brightness","Brightness"],["clouds","Clouds"],["fog","Fog"]];e.innerHTML=`<style>${Ve}</style><canvas></canvas>
+        <div class="panel">
+          ${r.map(([w,A])=>`<label class="row"><span>${A}</span><input type="range" min="0" max="100" data-k="${w}"><span data-v="${w}"></span></label>`).join("")}
+          <label class="row"><span>Bridge</span><select data-s="bridge">
+            <option value="auto">Random</option><option value="cable">Cable-stayed</option>
+            <option value="suspension">Suspension</option><option value="arch">Arch</option><option value="none">None</option>
+          </select><span></span></label>
+          <label class="row"><span>Side</span><select data-s="bridgeSide">
+            <option value="auto">Random</option><option value="left">Left</option><option value="right">Right</option>
+          </select><span></span></label>
+          <button type="button">Re-randomize city</button>
+          <div class="hint">space to hide</div>
+        </div>
+        <div class="toast">press space for controls</div>`;let n=e.querySelector("canvas"),s=w=>{let A=this.getAttribute(w);return A==null?void 0:Number(A)},o={};try{o=JSON.parse(localStorage.getItem(ve)||"{}")}catch{}try{this.sn=new ee(n,{speed:s("speed"),fps:s("fps"),seed:s("seed")??o.seed,brightness:s("brightness")??o.brightness,clouds:s("clouds")??o.clouds,fog:s("fog")??o.fog,bridge:this.getAttribute("bridge")??o.bridge,bridgeSide:this.getAttribute("bridge-side")??o.bridgeSide}),this.sn.start()}catch(w){console.warn(w),e.append(Object.assign(document.createElement("div"),{className:"fallback"}));return}let c=this.sn,g=()=>{try{localStorage.setItem(ve,JSON.stringify(c.settings))}catch{}};for(let[w]of r){let A=e.querySelector(`input[data-k="${w}"]`),P=e.querySelector(`[data-v="${w}"]`),I=c.settings[w];A.value=String(Math.round(I*100)),P.textContent=A.value,A.addEventListener("input",()=>{P.textContent=A.value,c.set({[w]:Number(A.value)/100}),g()}),A.addEventListener("keydown",k=>{k.code==="Space"&&k.preventDefault()})}let u=e.querySelector('select[data-s="bridge"]'),_=e.querySelector('select[data-s="bridgeSide"]');u.value=c.settings.bridge,_.value=c.settings.bridgeSide;let R=()=>{c.setBridge(u.value,_.value),g()};for(let w of[u,_])w.addEventListener("change",R),w.addEventListener("keydown",A=>{A.code==="Space"&&A.preventDefault()});let S=e.querySelector("button");S.addEventListener("click",()=>{c.randomize(),g(),S.blur()}),S.addEventListener("keydown",w=>{w.code==="Space"&&w.preventDefault()}),window.addEventListener("keydown",this.onKey,!0);let U=e.querySelector(".toast");setTimeout(()=>{U.style.opacity="0"},2500)}disconnectedCallback(){window.removeEventListener("keydown",this.onKey,!0),this.sn?.destroy(),this.sn=null}})}return Fe(We);})();
+</script><script>HN.defineHarborNight();document.body.append(document.createElement("wash-screensaver-harbor"));</script></body></html>
