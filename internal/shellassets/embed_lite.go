@@ -7,11 +7,13 @@ import "embed"
 // The bundle minus the wallpapers of the packs the VM does not ship. One
 // line per top-level entry of web/shell/dist; embed_test.go fails if a new
 // one appears that is not listed here, so the VM never silently loses an
-// asset. Wallpapers are named one by one: only Packs' own.
+// asset. Wallpapers are named one by one: only Packs' own, with their
+// Settings thumbnails.
 //
 //go:embed all:assets/assets all:assets/fonts all:assets/vendor
 //go:embed assets/icons.svg assets/index.html assets/shell.js assets/wash-logo.svg
 //go:embed assets/wallpapers/midnight.svg assets/wallpapers/copland.svg
+//go:embed assets/wallpapers/thumbs/midnight.jpg assets/wallpapers/thumbs/copland.jpg
 var FS embed.FS
 
 // Packs is what the VM ships: Midnight (the dark default) and Copland, the

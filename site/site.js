@@ -52,11 +52,12 @@
   // the page settles, so by the time you reach the closing section the
   // desktop is already up and simply fades in over the poster. Only on wide
   // screens and when the visitor hasn't asked to save data — it downloads
-  // ~13 MiB and keeps an emulator busy in this tab.
+  // ~11 MiB and keeps an emulator busy in this tab. A window that widens
+  // past the breakpoint later starts it then.
   const live = document.querySelector('[data-live]');
   const conn = navigator.connection;
+  const wide = window.matchMedia('(min-width: 64rem)');
   const eligible = live &&
-    window.matchMedia('(min-width: 64rem)').matches &&
     !(conn && conn.saveData) &&
     !window.matchMedia('(prefers-reduced-data: reduce)').matches;
   if (eligible) {
@@ -88,9 +89,9 @@
         live.dataset.ready = '';
         status.textContent = 'Running in this tab. Click into the desktop to use it.';
       };
-      // Stage the IDE the way a person would: open Terminal, cd into the
-      // sample project baked into the demo image, open main.go in the editor
-      // and the folder in Files from the prompt, then tile the three windows.
+      // Stage the project the way a person would: open Terminal, cd into the
+      // sample project baked into the demo image, open the folder in Files
+      // from the prompt, then put the two side by side.
       // Any step that doesn't show up in time just ends the staging early.
       const stage = async () => {
         status.textContent = 'Opening a project…';
@@ -102,14 +103,12 @@
         const type = (text) => host.__washTerm?.paste(text);
         type('cd ~/project && ls\n');
         await new Promise((r) => setTimeout(r, 800));
-        type('wash-edit main.go\n');
-        if (!(await waitFor('wash-app-edit', 30000))) return;
         type('wash-fm .\n');
         if (!(await waitFor('wash-app-fm', 30000))) return;
         tile();
       };
-      // Files down the left, Editor top right, Terminal under it, all clear
-      // of the sidebar and the taskbar.
+      // Files on the left, Terminal on the right, both clear of the sidebar
+      // and the taskbar.
       const tile = () => {
         const wash = frame.contentWindow?.wash;
         if (!wash) return;
@@ -117,8 +116,7 @@
         const side = doc().querySelector('[data-testid^="sidebar-section-"]')?.getBoundingClientRect().left
           ?? frame.clientWidth * 0.75;
         const g = 12, W = side - g, H = frame.clientHeight - 48;
-        const fw = Math.round(W * 0.34), rx = fw + 2 * g, rw = W - rx - g;
-        const eh = Math.round((H - 3 * g) * 0.6);
+        const fw = Math.round(W * 0.42), rx = fw + 2 * g, rw = W - rx - g;
         const place = (id, x, y, w, h) => {
           const win = find(id);
           if (!win) return;
@@ -128,8 +126,7 @@
           wash.resizeWindow(win.windowID, w, h - bar, win.origin);
         };
         place('com.wash.fm', g, g, fw, H - 2 * g);
-        place('com.wash.edit', rx, g, rw, eh);
-        place('com.wash.term', rx, eh + 2 * g, rw, H - eh - 3 * g);
+        place('com.wash.term', rx, g, rw, H - 2 * g);
       };
       const boot = setInterval(() => {
         if (doc()?.querySelector('button[title="Apps"]')) {
@@ -140,7 +137,14 @@
         }
       }, 500);
     };
+    let started = false;
     const later = () => setTimeout(() => (window.requestIdleCallback || setTimeout)(start, { timeout: 3000 }), 1500);
-    if (document.readyState === 'complete') later(); else window.addEventListener('load', later, { once: true });
+    const tryStart = () => {
+      if (started || !wide.matches) return;
+      started = true;
+      if (document.readyState === 'complete') later(); else window.addEventListener('load', later, { once: true });
+    };
+    tryStart();
+    wide.addEventListener('change', tryStart);
   }
 })();

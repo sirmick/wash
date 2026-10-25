@@ -611,6 +611,7 @@ const lisbon: Pack = {
     '--wash-radius-xl': '6px',
   },
   wallpaper: 'wallpapers/lisbon.svg',
+  thumbnail: 'wallpapers/thumbs/lisbon.jpg',
 };
 
 // Isfahan — the Si-o-se-pol bridge at dusk. A DARK pack: lapis-night chrome,
@@ -685,6 +686,7 @@ const isfahan: Pack = {
     '--wash-radius-xl': '12px',
   },
   wallpaper: 'wallpapers/isfahan.webp',
+  thumbnail: 'wallpapers/thumbs/isfahan.jpg',
 };
 
 // Moscow — Constructivist poster. A LIGHT pack: warm poster-paper cream,
@@ -765,6 +767,7 @@ const moscow: Pack = {
     '--wash-radius-xl': '0',
   },
   wallpaper: 'wallpapers/moscow.webp',
+  thumbnail: 'wallpapers/thumbs/moscow.jpg',
 };
 
 /** All built-in packs, in gallery order. Midnight is first / default. */

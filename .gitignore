@@ -91,3 +91,4 @@ __pycache__/
 # a hard failure a long way from its cause.
 /.claude/settings.local.json
 /.claude/settings.local.json.*
+/out-arm64/

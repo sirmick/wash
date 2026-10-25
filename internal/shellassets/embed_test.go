@@ -73,5 +73,9 @@ func TestLiteEmbedCoversTheBundle(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("pack %q: %s is not in the staged bundle", id, path)
 		}
+		thumb := "assets/wallpapers/thumbs/" + id + ".jpg"
+		if strings.Contains(string(packsTS), "thumbnail: 'wallpapers/thumbs/"+id+".jpg'") && !patterns[thumb] {
+			t.Errorf("pack %q ships but its thumbnail %s is not embedded", id, thumb)
+		}
 	}
 }

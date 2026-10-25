@@ -1,6 +1,23 @@
-# wash site: copy for review
+# wash site: copy for review (respin for 0.19)
 
-Every user-visible string on `site/index.html`, in page order (regenerated from the page). Edit freely and I'll carry the changes back into the HTML.
+Every user-visible string on `site/index.html`, in page order. Edit freely and I'll carry the changes back into the HTML.
+
+**What this respin changes** (marked **✎** in the copy below; unmarked lines are unchanged from the first draft):
+
+1. **Window layouts.** The hero line mentions them, and section 01 gets a new block, *Tile them into one IDE*, with a new figure. Tiling is what makes "four apps as one IDE" literally true, so it goes in the IDE section and not under the desktop.
+2. **Nine themes, up from six.** Lisbon, Isfahan and Moscow join. The themes paragraph no longer says every wallpaper is vector art, because Isfahan and Moscow ship as WebP paintings. It also now gives examples of themes changing shape and not just colour.
+3. **Screenshot captions follow the reshoot.** Files and Services are now shot under Lisbon, Top and Radio under Isfahan, and Music under Moscow.
+4. **The live demo** says that it carries only two of the themes.
+5. **Remote apps** shows a real cross-machine session (`remote.png`) instead of the Connect dialog, which moves to the gallery.
+
+> **Reviewer notes** (not copy):
+> - **Done:** `ide-tiled.png` is a new capture (`make screenshots`, scene `ide-tiled`). It's Editor, Agent and Terminal on a seeded Go project, tiled `c[r2@64 1]` with the real `setCellLayout`. Thumbnails were regenerated for all nine packs, so Copland's is current.
+> - **`remote.png`** is a real capture (`make screenshots`, scene `remote`). `pi-garage` is an arm64 Debian container (`e2e/capture/remote-host/`, run under qemu-user) with sshd and the arm64 wash build. Connect reaches it over real SSH, through a throwaway key and config. The scene needs docker and `make OUT=out-arm64 GOARCH=arm64 multicall-bin`, and skips without them.
+> - **Option, not drafted:** make the tiled IDE the hero figure (Fig. 01) and move the floating montage down to section 02.
+> - **Demo numbers re-measured** on the 0.19 VM build: ~11 MiB (kernel 2.1 MiB and rootfs 8.0 MiB gzipped, plus the page and wasm; every rootfs chunk is prefetched at boot) and a 16 MB riscv64 multicall binary that links only the 11 apps the VM installs.
+> - **Privacy:** `top.png`, from the theme-pack reshoot on `main`, shows real processes from the capture box, including paths under `/home/mick`. That needs a reshoot with a cleaner process list, or a filter, before going public.
+
+---
 
 - IDE
 
@@ -20,7 +37,7 @@ Every user-visible string on `site/index.html`, in page order (regenerated from 
 
 # Terminal, editor, files and agent, as one IDE in your browser
 
-wash is a Linux desktop in your browser. Its four core apps share folders, links and a clipboard. It runs from one Go binary on a laptop, a home server or a Raspberry Pi.
+**✎** wash is a Linux desktop in your browser. Its four core apps share folders, links and a clipboard, and tile side by side like an IDE. It runs from one Go binary on a laptop, a home server or a Raspberry Pi.
 
 [button] Try it live ↓
 
@@ -68,7 +85,7 @@ Previews and live updates. Double-click a file to edit it, or drag it into an ag
 
 Terminal
 
-Real shells with tabs and splits. `wash-edit main.go` or `xdg-open` opens a file in the editor; links and copies reach the desktop.
+**✎** Real shells with tabs and splits. `wash-edit main.go` or `xdg-open` opens a file in the editor; links, copies and notifications reach the desktop.
 
 [image: edit.png] Editor: CodeMirror with a file tree, editing hello.go.
 
@@ -84,17 +101,29 @@ Claude Code, Codex, OpenCode or Gemini over ACP. It stays inside the project fol
 
 Agent sessions keep running when you close the window and stay on the sidebar. The Agents manager starts new ones or resumes old ones from history.
 
+**✎ [label] Layouts**
+
+**✎ ### Tile them into one IDE**
+
+**✎** Pick a layout from the Layout menu, such as halves, thirds, 2×2 or main + stack, and the windows on that desktop snap into panels. Drag a divider to resize panels, drop a window on a panel to swap it in, or press Ctrl+Alt+arrows to move between panels. Desktops without a layout stay floating.
+
+**✎** Layouts update live. Closing a window leaves its panel empty for the next one, and opening the sidebar or resizing the browser refits the panels. The layout is saved on the server, so when you press **Use here** on your laptop, the panels refit to the laptop's screen.
+
+**✎ [image: ide-tiled.png]** Editor, Agent and Terminal tiled on one desktop: the editor top left, the agent top right and the terminal across the bottom, with the sidebar's pager showing the layout in miniature.
+
+**✎ [caption]** Fig. 02 The editor and agent side by side, a terminal across the bottom. The sidebar's pager draws the layout in miniature.
+
 [label] 02The desktop
 
 ## The rest of the desktop
 
-A taskbar, launcher, resizable windows, workspaces and a status sidebar. The window manager runs in the browser; each app is a small program the server starts and supervises.
+**✎** A taskbar, launcher, floating or tiled windows, workspaces and a status sidebar. The window manager runs in the browser; each app is a small program the server starts and supervises.
 
 [label] Themes
 
 ### Everything is themeable
 
-The look is all CSS and SVG: colours are CSS variables, and wallpapers, icons and the start button are vector art that stays crisp at any zoom. Switching theme in Settings restyles every open window at once. Six themes are included.
+**✎** The look is CSS and art: colours are CSS variables; icons and the start button are vector art that stays crisp at any zoom; wallpapers are SVG, or paintings wide enough for an ultrawide. A theme can change shape as well as colour. Moscow has square corners and hard poster shadows, Lisbon has cut-tile corners, and Copland has a raised Platinum bevel. Switching theme in Settings restyles every open window at once. Nine themes are included, five dark and four light.
 
 - Midnight
 
@@ -107,6 +136,12 @@ The look is all CSS and SVG: colours are CSS variables, and wallpapers, icons an
 - Oslo
 
 - Dreamtime
+
+- **✎** Lisbon
+
+- **✎** Isfahan
+
+- **✎** Moscow
 
 [image: top.png] System Monitor: live CPU, memory and disk meters above a process table.
 
@@ -134,7 +169,7 @@ Partitions, RAID, LVM, btrfs, ZFS, SMART. Network changes are verified and roll 
 
 [image: services.png] Services: a list of systemd units with start, restart and enable controls.
 
-[caption] Services, Seoul theme.
+**✎** [caption] Services, Lisbon theme.
 
 [label] Display
 
@@ -144,13 +179,15 @@ Launch a graphical program from a wash terminal and the bundled `wash-display` c
 
 [image: display.png] Chromium and xclock, launched from a wash terminal, shown as native wash windows on the desktop.
 
-[image: connect.png] Connect: an SSH target field and a list of hosts discovered on the network.
-
 [label] Remote apps
 
 ### Apps from your other machines
 
-Type `user@host` into Connect to open that machine's apps next to your local ones, tinted by host. It runs over SSH only, inside the connection your browser already has, with one taskbar and clipboard across all of them.
+**✎** Type `user@host` into Connect to open that machine's apps next to your local ones, striped and labelled by host. It runs over SSH only, inside the connection your browser already has, with one taskbar and clipboard across all of them. The other machine needs nothing but wash and an SSH login.
+
+**✎ [image: remote.png]** A wash desktop on an x86_64 machine with four tiled windows: a local terminal, and a terminal, Editor and Files from pi-garage, an arm64 machine, each striped and labelled @pi-garage.
+
+**✎ [caption]** Fig. 03 Top left is this machine (`x86_64`). The other three windows are apps running on `pi-garage`, an arm64 host reached over SSH. Running `wash-edit` in its terminal opened its Editor here.
 
 [label] 03How it works
 
@@ -214,11 +251,11 @@ Washamp Webamp with the classic skins Midnight
 
 [image: music.png] Music, a native player
 
-Music one folder, recursive list Seoul
+**✎** Music one folder, recursive list Moscow
 
 [image: radio.png] Radio, internet radio stations
 
-Radio SomaFM, Radio Browser, ICY metadata Tokyo
+**✎** Radio SomaFM, Radio Browser, ICY metadata Isfahan
 
 [image: imageview.png] Image Viewer with a thumbnail list
 
@@ -239,6 +276,10 @@ Disks md, LVM, btrfs, ZFS, SMART Oslo
 [image: net.png] Network, with interfaces and a VLAN switch matrix
 
 Network VLAN switch, firewall, rollback Oslo
+
+**✎ [image: connect.png]** Connect: an SSH target field and a list of hosts discovered on the network
+
+**✎** Connect SSH targets, hosts found on the network Copland
 
 [image: about.png] About wash, with build facts and a process table
 
@@ -272,11 +313,11 @@ Native deb, rpm and apk packages, router flags and the trust model are in the RE
 
 ## Try it here
 
-While you read, this page booted Linux 6.6 on a RISC-V emulator compiled to WebAssembly, running wash. It's all static files: no backend, no account. Click into the desktop below.
+**✎** While you read, this page booted Linux 6.6 on a RISC-V emulator compiled to WebAssembly, running wash. It's all static files: no backend, no account. Click into the desktop below. To keep the download small it carries two of the nine themes, Midnight and Copland.
 
 [button] Launch the demo →
 
-- **~13MiB**
+- **~11MiB**
 
   downloaded before the desktop is usable
 
@@ -284,7 +325,7 @@ While you read, this page booted Linux 6.6 on a RISC-V emulator compiled to WebA
 
   of emulated RAM for Linux and the desktop
 
-- **11MB**
+- **16MB**
 
   binary with every app, the router and login
 

@@ -59,7 +59,7 @@
     </p>
     <h1 id="hero-title" class="hero__title">Terminal, editor, files and agent, as one IDE in your browser</h1>
     <div class="hero__aside">
-      <p class="hero__lede">wash is a Linux desktop in your browser. Its four core apps share folders, links and a clipboard. It runs from one Go binary on a laptop, a home server or a Raspberry&nbsp;Pi.</p>
+      <p class="hero__lede">wash is a Linux desktop in your browser. Its four core apps share folders, links and a clipboard, and tile side by side like an IDE. It runs from one Go binary on a laptop, a home server or a Raspberry&nbsp;Pi.</p>
       <div class="hero__actions">
         <a class="button button--primary" href="#live">Try it live <span class="arrow" aria-hidden="true">↓</span></a>
         <a class="button" href="#ide">How it fits together <span class="arrow" aria-hidden="true">↓</span></a>
@@ -126,7 +126,7 @@
     <li data-reveal style="--reveal-delay: 90ms">
       <button type="button" class="shot" data-full="img/term.png"><img src="img/term.png" width="1604" height="1020" loading="lazy" alt="Terminal: a tabbed shell session."></button>
       <p class="four__name">Terminal</p>
-      <p class="four__desc">Real shells with tabs and splits. <code>wash-edit main.go</code> or <code>xdg-open</code> opens a file in the editor; links and copies reach the desktop.</p>
+      <p class="four__desc">Real shells with tabs and splits. <code>wash-edit main.go</code> or <code>xdg-open</code> opens a file in the editor; links, copies and notifications reach the desktop.</p>
     </li>
     <li data-reveal style="--reveal-delay: 180ms">
       <button type="button" class="shot" data-full="img/edit.png"><img src="img/edit.png" width="1804" height="1260" loading="lazy" alt="Editor: CodeMirror with a file tree, editing hello.go."></button>
@@ -143,6 +143,20 @@
   <div class="ide__more wide" data-reveal>
     <p>Agent sessions keep running when you close the window and stay on the sidebar. The <a class="link" href="#gallery">Agents manager</a> starts new ones or resumes old ones from history.</p>
   </div>
+
+  <!-- Layouts: the four apps tiled into panels -->
+  <article class="feature display layouts wide" aria-labelledby="layouts-title">
+    <div class="display__text" data-reveal>
+      <p class="label label--accent">Layouts</p>
+      <h3 id="layouts-title" class="feature-title">Tile them into one IDE</h3>
+      <p>Pick a layout from the Layout menu, such as halves, thirds, 2×2 or main&nbsp;+&nbsp;stack, and the windows on that desktop snap into panels. Drag a divider to resize panels, drop a window on a panel to swap it in, or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+arrows to move between panels. Desktops without a layout stay floating.</p>
+      <p>Layouts update live. Closing a window leaves its panel empty for the next one, and opening the sidebar or resizing the browser refits the panels. The layout is saved on the server, so when you press <strong>Use here</strong> on your laptop, the panels refit to the laptop's screen.</p>
+    </div>
+    <figure class="display__main" data-reveal="focus">
+      <div class="shot"><img src="img/ide-tiled.png" width="3200" height="2000" loading="lazy" alt="Editor, Agent and Terminal tiled on one desktop: the editor top left, the agent top right and the terminal across the bottom, with the sidebar's pager showing the layout in miniature."></div>
+      <figcaption class="caption"><strong>Fig. 02</strong> The editor and agent side by side, a terminal across the bottom. The sidebar's pager draws the layout in miniature.</figcaption>
+    </figure>
+  </article>
 </section>
 
 <!-- ─── 02 The rest of the desktop ──────────────────────────────────── -->
@@ -150,7 +164,7 @@
   <header class="desktop__intro wide">
     <p class="section-label"><span class="section-label__number">02</span><span class="section-label__rule" aria-hidden="true"></span><span class="section-label__text">The desktop</span></p>
     <h2 id="desktop-title" class="section-title" data-reveal>The rest of the desktop</h2>
-    <p class="desktop__lede" data-reveal style="--reveal-delay: 80ms">A taskbar, launcher, resizable windows, workspaces and a status sidebar. The window manager runs in the browser; each app is a small program the server starts and supervises.</p>
+    <p class="desktop__lede" data-reveal style="--reveal-delay: 80ms">A taskbar, launcher, floating or tiled windows, workspaces and a status sidebar. The window manager runs in the browser; each app is a small program the server starts and supervises.</p>
   </header>
 
   <!-- C. Themes -->
@@ -160,7 +174,7 @@
         <p class="label label--accent">Themes</p>
         <h3 id="themes-title" class="feature-title">Everything is themeable</h3>
       </div>
-      <p class="themes__text" data-reveal style="--reveal-delay: 80ms">The look is all CSS and SVG: colours are CSS variables, and wallpapers, icons and the start button are vector art that stays crisp at any zoom. Switching theme in Settings restyles every open window at once. Six themes are included.</p>
+      <p class="themes__text" data-reveal style="--reveal-delay: 80ms">The look is CSS and art: colours are CSS variables; icons and the start button are vector art that stays crisp at any zoom; wallpapers are SVG, or paintings wide enough for an ultrawide. A theme can change shape as well as colour. Moscow has square corners and hard poster shadows, Lisbon has cut-tile corners, and Copland has a raised Platinum bevel. Switching theme in Settings restyles every open window at once. Nine themes are included, five dark and four light.</p>
     </div>
     <ul class="themes__grid" role="list" data-reveal="focus">
       <li style="--i:0"><img src="img/thumbs/midnight.jpg" width="320" height="180" loading="lazy" alt=""><span>Midnight</span></li>
@@ -169,6 +183,9 @@
       <li style="--i:3"><img src="img/thumbs/copland.jpg" width="320" height="180" loading="lazy" alt=""><span>Copland</span></li>
       <li style="--i:4"><img src="img/thumbs/oslo.jpg" width="320" height="180" loading="lazy" alt=""><span>Oslo</span></li>
       <li style="--i:5"><img src="img/thumbs/dreamtime.jpg" width="320" height="180" loading="lazy" alt=""><span>Dreamtime</span></li>
+      <li style="--i:6"><img src="img/thumbs/lisbon.jpg" width="320" height="180" loading="lazy" alt=""><span>Lisbon</span></li>
+      <li style="--i:7"><img src="img/thumbs/isfahan.jpg" width="320" height="180" loading="lazy" alt=""><span>Isfahan</span></li>
+      <li style="--i:8"><img src="img/thumbs/moscow.jpg" width="320" height="180" loading="lazy" alt=""><span>Moscow</span></li>
     </ul>
   </article>
 
@@ -191,7 +208,7 @@
       </ol>
       <figure class="machine__side" data-reveal>
         <div class="shot"><img src="img/services.png" width="1644" height="1260" loading="lazy" alt="Services: a list of systemd units with start, restart and enable controls."></div>
-        <figcaption class="caption"><strong>Services</strong>, Seoul theme.</figcaption>
+        <figcaption class="caption"><strong>Services</strong>, Lisbon theme.</figcaption>
       </figure>
     </div>
   </article>
@@ -209,15 +226,16 @@
   </article>
 
   <!-- F. Remote -->
-  <article class="feature feature--split feature--flip wide" aria-labelledby="remote-title">
-    <figure class="feature__main" data-reveal="focus">
-      <div class="shot"><img src="img/connect.png" width="1084" height="1380" loading="lazy" alt="Connect: an SSH target field and a list of hosts discovered on the network."></div>
-    </figure>
-    <div class="feature__text" data-reveal>
+  <article class="feature display remote wide" aria-labelledby="remote-title">
+    <div class="display__text" data-reveal>
       <p class="label label--accent">Remote apps</p>
       <h3 id="remote-title" class="feature-title">Apps from your other machines</h3>
-      <p>Type <code>user@host</code> into Connect to open that machine's apps next to your local ones, tinted by host. It runs over SSH only, inside the connection your browser already has, with one taskbar and clipboard across all of them.</p>
+      <p>Type <code>user@host</code> into Connect to open that machine's apps next to your local ones, striped and labelled by host. It runs over SSH only, inside the connection your browser already has, with one taskbar and clipboard across all of them. The other machine needs nothing but wash and an SSH login.</p>
     </div>
+    <figure class="display__main" data-reveal="focus">
+      <div class="shot"><img src="img/remote.png" width="3200" height="2000" loading="lazy" alt="A wash desktop on an x86_64 machine with four tiled windows: a local terminal, and a terminal, Editor and Files from pi-garage, an arm64 machine, each striped and labelled @pi-garage."></div>
+      <figcaption class="caption"><strong>Fig. 03</strong> Top left is this machine (<code>x86_64</code>). The other three windows are apps running on <code>pi-garage</code>, an arm64 host reached over SSH. Running <code>wash-edit</code> in its terminal opened its Editor here.</figcaption>
+    </figure>
   </article>
 </section>
 
@@ -276,13 +294,14 @@
     <ul class="gallery__grid" role="list" data-gallery>
       <li data-reveal><button type="button" data-full="img/agents.png"><img src="img/agents.png" width="1524" height="1260" loading="lazy" alt="The Agents manager: start a session from a catalog and model, with Running and History lists"></button><p><strong>Agents</strong> start from a catalog, resume from history <span class="pack">Midnight</span></p></li>
       <li data-reveal><button type="button" data-full="img/washamp.png"><img src="img/washamp.png" width="550" height="232" loading="lazy" alt="Washamp, a Winamp-skinned audio player"></button><p><strong>Washamp</strong> Webamp with the classic skins <span class="pack">Midnight</span></p></li>
-      <li data-reveal><button type="button" data-full="img/music.png"><img src="img/music.png" width="764" height="1100" loading="lazy" alt="Music, a native player"></button><p><strong>Music</strong> one folder, recursive list <span class="pack">Seoul</span></p></li>
-      <li data-reveal><button type="button" data-full="img/radio.png"><img src="img/radio.png" width="764" height="1100" loading="lazy" alt="Radio, internet radio stations"></button><p><strong>Radio</strong> SomaFM, Radio Browser, ICY metadata <span class="pack">Tokyo</span></p></li>
+      <li data-reveal><button type="button" data-full="img/music.png"><img src="img/music.png" width="764" height="1100" loading="lazy" alt="Music, a native player"></button><p><strong>Music</strong> one folder, recursive list <span class="pack">Moscow</span></p></li>
+      <li data-reveal><button type="button" data-full="img/radio.png"><img src="img/radio.png" width="764" height="1100" loading="lazy" alt="Radio, internet radio stations"></button><p><strong>Radio</strong> SomaFM, Radio Browser, ICY metadata <span class="pack">Isfahan</span></p></li>
       <li data-reveal><button type="button" data-full="img/imageview.png"><img src="img/imageview.png" width="1804" height="1340" loading="lazy" alt="Image Viewer with a thumbnail list"></button><p><strong>Image Viewer</strong> bytes over the wire, zoom and pan <span class="pack">Seoul</span></p></li>
       <li data-reveal><button type="button" data-full="img/settings.png"><img src="img/settings.png" width="1524" height="1100" loading="lazy" alt="Settings with the theme gallery"></button><p><strong>Settings</strong> themes, wallpaper, clock, taskbar <span class="pack">Seoul</span></p></li>
       <li data-reveal><button type="button" data-full="img/packages.png"><img src="img/packages.png" width="1764" height="1260" loading="lazy" alt="Packages, a package manager front end"></button><p><strong>Packages</strong> apt, dnf, apk <span class="pack">Copland</span></p></li>
       <li data-reveal><button type="button" data-full="img/disks.png"><img src="img/disks.png" width="1804" height="1220" loading="lazy" alt="Disks, a storage manager"></button><p><strong>Disks</strong> md, LVM, btrfs, ZFS, SMART <span class="pack">Oslo</span></p></li>
       <li data-reveal><button type="button" data-full="img/net.png"><img src="img/net.png" width="1844" height="1300" loading="lazy" alt="Network, with interfaces and a VLAN switch matrix"></button><p><strong>Network</strong> VLAN switch, firewall, rollback <span class="pack">Oslo</span></p></li>
+      <li data-reveal><button type="button" data-full="img/connect.png"><img src="img/connect.png" width="1084" height="1380" loading="lazy" alt="Connect: an SSH target field and a list of hosts discovered on the network"></button><p><strong>Connect</strong> SSH targets, hosts found on the network <span class="pack">Copland</span></p></li>
       <li data-reveal><button type="button" data-full="img/about.png"><img src="img/about.png" width="1524" height="1340" loading="lazy" alt="About wash, with build facts and a process table"></button><p><strong>About</strong> build, host, live process table <span class="pack">Tokyo</span></p></li>
     </ul>
   </div>
@@ -328,7 +347,7 @@ wash-login --cookie-secure</code></pre>
   <div class="wide closing__inner">
     <p class="section-label"><span class="section-label__number">06</span><span class="section-label__rule" aria-hidden="true"></span><span class="section-label__text">Try it</span></p>
     <h2 id="closing-title" class="closing__title" data-reveal>Try it here</h2>
-    <p class="closing__lede" data-reveal style="--reveal-delay: 80ms">While you read, this page booted Linux 6.6 on a RISC-V emulator compiled to WebAssembly, running wash. It's all static files: no backend, no account. Click into the desktop below.</p>
+    <p class="closing__lede" data-reveal style="--reveal-delay: 80ms">While you read, this page booted Linux 6.6 on a RISC-V emulator compiled to WebAssembly, running wash. It's all static files: no backend, no account. Click into the desktop below. To keep the download small it carries two of the nine themes, Midnight and Copland.</p>
     <!-- Live panel: site.js boots the demo in a hidden iframe while you read,
          then swaps it in here over the poster once the desktop is up. -->
     <figure class="live" data-live>
@@ -343,9 +362,9 @@ wash-login --cookie-secure</code></pre>
       </div>
     </figure>
     <dl class="stats stats--row" data-reveal>
-      <div><dt>~13<small>MiB</small></dt><dd>downloaded before the desktop is usable</dd></div>
+      <div><dt>~11<small>MiB</small></dt><dd>downloaded before the desktop is usable</dd></div>
       <div><dt>64<small>MB</small></dt><dd>of emulated RAM for Linux and the desktop</dd></div>
-      <div><dt>11<small>MB</small></dt><dd>binary with every app, the router and login</dd></div>
+      <div><dt>16<small>MB</small></dt><dd>binary with every app, the router and login</dd></div>
       <div><dt>0</dt><dd>servers: static files, and the machine runs in your tab</dd></div>
     </dl>
     <div class="closing__actions" data-reveal>

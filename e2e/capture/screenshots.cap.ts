@@ -18,6 +18,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { deflateSync } from 'node:zlib';
+import { execSync } from 'node:child_process';
 
 const SHOTS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'screenshots');
 mkdirSync(SHOTS, { recursive: true });
@@ -613,6 +614,258 @@ test.describe('screenshots', () => {
     // No in-test cleanup: router teardown kills wash-term, whose PTY hangup
     // takes the backgrounded chromium with it. The next run's `rm -rf` +
     // --hide-crash-restore-bubble handle any dirty-profile leftover.
+  });
+});
+
+// --- editor, agent and terminal tiled as one IDE (docs/WM_LAYOUT.md) ---------
+// Its own router, confined to a small Go project, so the Editor opens on the
+// project and the agent works in it. The terminal runs the project's
+// real tests; only the agent's words are scripted.
+test.describe('ide screenshot', () => {
+  const IDE_ROOT = join(tmpdir(), 'wash-shot-ide', 'webshop');
+  rmSync(IDE_ROOT, { recursive: true, force: true });
+  mkdirSync(join(IDE_ROOT, 'store'), { recursive: true });
+  writeFileSync(join(IDE_ROOT, 'go.mod'), 'module example.com/webshop\n\ngo 1.24\n');
+  writeFileSync(join(IDE_ROOT, 'README.md'), '# webshop\n\nA small shop backend.\n');
+  writeFileSync(join(IDE_ROOT, 'main.go'),
+    'package main\n\nimport (\n\t"fmt"\n\n\t"example.com/webshop/store"\n)\n\n' +
+    'func main() {\n\tc := store.NewCart()\n\tc.Add("tea", 450, 2)\n\tfmt.Println(c.Total())\n}\n');
+  writeFileSync(join(IDE_ROOT, 'store', 'cart.go'),
+    'package store\n\n// Cart holds line items, priced in cents.\ntype Cart struct {\n\titems []Item\n}\n\n' +
+    '// Item is one line in a cart.\ntype Item struct {\n\tSKU   string\n\tPrice int\n\tQty   int\n}\n\n' +
+    '// NewCart returns an empty cart.\nfunc NewCart() *Cart { return &Cart{} }\n\n' +
+    '// Add puts qty of a SKU in the cart at price cents each.\n' +
+    'func (c *Cart) Add(sku string, price, qty int) {\n\tc.items = append(c.items, Item{sku, price, qty})\n}\n\n' +
+    '// Total is the cart\'s value in cents.\nfunc (c *Cart) Total() int {\n\tt := 0\n' +
+    '\tfor _, it := range c.items {\n\t\tt += it.Price * it.Qty\n\t}\n\treturn t\n}\n');
+  writeFileSync(join(IDE_ROOT, 'store', 'cart_test.go'),
+    'package store\n\nimport "testing"\n\n' +
+    'func TestTotal(t *testing.T) {\n\tc := NewCart()\n\tc.Add("tea", 450, 2)\n\tc.Add("cup", 1200, 1)\n' +
+    '\tif got := c.Total(); got != 2100 {\n\t\tt.Fatalf("Total = %d, want 2100", got)\n\t}\n}\n\n' +
+    'func TestEmptyCart(t *testing.T) {\n\tif got := NewCart().Total(); got != 0 {\n' +
+    '\t\tt.Fatalf("Total = %d, want 0", got)\n\t}\n}\n');
+  const IDE_SCRIPT = join(AGENT_SCRIPTS, 'ide.json');
+  writeFileSync(IDE_SCRIPT, JSON.stringify([
+    'Added `TestEmptyCart` to `store/cart_test.go`:\n\n' +
+    '- an empty cart totals **0**\n' +
+    '- no change to `cart.go` was needed\n\n' +
+    'Both tests pass; the run is in your terminal.\n',
+  ]));
+
+  test.use({ routerOpts: {
+    apps: ['session', 'about', 'notify', 'fm', 'term', 'edit', 'agents', 'ai', 'agentd'],
+    extraEnv: {
+      WASH_FM_ROOT: IDE_ROOT,
+      PATH: `${FAKE_DIR}:${process.env.PATH ?? ''}`,
+      ACP_FAKE_SCRIPT: IDE_SCRIPT,
+    },
+  } });
+
+  test('ide-tiled', async ({ page, router }) => {
+    test.setTimeout(90_000);
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    const win = (el: string) => page.locator('.wash-window', { has: page.locator(el) });
+    const open = async (appId: string) => {
+      await page.locator('button[title="Apps"]').click();
+      await page.locator(`[data-testid="start-menu-${appId}"]`).click();
+    };
+
+    // Terminal first, while it is the only window, so typing lands in it.
+    await open('com.wash.term');
+    await page.waitForSelector('wash-app-term .xterm-rows', { timeout: 10_000 });
+    await page.locator('wash-app-term').click();
+    // A short prompt and an explicit title, so neither shows the capture
+    // host's name or checkout path.
+    await page.keyboard.type(`cd ${IDE_ROOT} && PS1='webshop $ ' && PROMPT_COMMAND= && export GOFLAGS=-count=1 && printf '\\033]0;webshop\\007' && clear\n`, { delay: 5 });
+    await page.waitForTimeout(300);
+    await page.keyboard.type('go test -v ./store\n', { delay: 10 });
+
+    const aiApp = await startAgentSession(page, 'Add a test for an empty cart.');
+    const ai = windowOf(page, aiApp);
+    const manager = await openAgents(page);
+    await closeButtonOf(page, manager).click();
+    await expect(manager).toHaveCount(0, { timeout: 10_000 });
+    await expect(ai.getByText(/Both tests pass/)).toBeVisible({ timeout: 20_000 });
+    await expect(ai.locator('[data-testid="agent-stop"]')).toHaveCount(0, { timeout: 20_000 });
+
+    await open('com.wash.edit');
+    const edit = win('wash-app-edit');
+    await expect(edit).toBeVisible();
+    await edit.locator('[data-testid="edit-entry-store"]').dblclick().catch(() => {});
+    await edit.locator('[data-testid="edit-entry-cart_test.go"]').dblclick().catch(() => {});
+
+    // Slots fill by most recent focus, in tree order: the editor (focused
+    // last) top left, the agent top right, the terminal across the bottom.
+    await page.evaluate(() => {
+      for (const el of ['wash-app-term', 'wash-app-ai', 'wash-app-edit']) {
+        const w = window.wash.windows().find((x) => x.element === el);
+        if (w) window.wash.focusWindow(w.windowID, w.origin);
+      }
+      window.wash.setCellLayout(0, 0, 'c[r2@64 1]');
+    });
+    await expect.poll(() => page.evaluate(() => window.wash.cellLayout(0, 0))).not.toBeNull();
+    await page.waitForTimeout(1200);
+
+    // Hide the desktop banner: it prints the host's real name and addresses.
+    await page.evaluate(() => {
+      const hide = (root: Document | ShadowRoot) => {
+        root.querySelectorAll<HTMLElement>(
+          '[data-testid="desktop-banner"],[data-testid="desktop-banner-placeholder"]',
+        ).forEach((el) => { el.style.display = 'none'; });
+        root.querySelectorAll('*').forEach((el) => {
+          if ((el as HTMLElement).shadowRoot) hide((el as HTMLElement).shadowRoot!);
+        });
+      };
+      hide(document);
+    });
+    await page.screenshot({ path: join(SHOTS, 'ide-tiled.png') });
+  });
+});
+
+// --- apps from another machine, over real ssh (docs/REMOTE.md) ---------------
+// The remote host is an arm64 Debian container (e2e/capture/remote-host/, run
+// under qemu-user) with sshd and the arm64 wash build, named pi-garage. The
+// desktop's Connect dials it with plain `ssh`; a wrapper first on PATH points
+// that ssh at a throwaway config, key and known_hosts, so the capture never
+// reads or writes ~/.ssh. Needs docker and `make OUT=out-arm64 GOARCH=arm64
+// multicall-bin`; skips without them.
+test.describe('remote screenshot', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const ARM64_WASH = join(HERE, '..', '..', 'out-arm64', 'wash');
+  const DIR = join(tmpdir(), 'wash-shot-remote');
+  const BIN = join(DIR, 'bin');
+  const CONTAINER = 'wash-shot-pi';
+  const TARGET = 'pi@pi-garage';
+  let skip: string | null = null;
+
+  test.beforeAll(() => {
+    test.setTimeout(600_000);
+    try { execSync('docker version', { stdio: 'ignore' }); } catch { skip = 'docker not available'; return; }
+    if (!existsSync(ARM64_WASH)) { skip = 'no out-arm64/wash (make OUT=out-arm64 GOARCH=arm64 multicall-bin)'; return; }
+    const ctx = join(HERE, 'remote-host');
+    copyFileSync(ARM64_WASH, join(ctx, 'wash'));
+    execSync(`docker build -q -t ${CONTAINER} .`, { cwd: ctx, stdio: 'ignore' });
+    rmSync(DIR, { recursive: true, force: true });
+    mkdirSync(BIN, { recursive: true });
+    execSync(`ssh-keygen -q -t ed25519 -N '' -f ${join(DIR, 'id')}`);
+    execSync(`docker rm -f ${CONTAINER}`, { stdio: 'ignore' });
+    execSync(`docker run -d --name ${CONTAINER} --hostname pi-garage --platform linux/arm64 ` +
+      `-e AUTHORIZED_KEY="$(cat ${join(DIR, 'id.pub')})" ${CONTAINER}`, { stdio: 'ignore' });
+    const ip = execSync(`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${CONTAINER}`)
+      .toString().trim();
+    writeFileSync(join(DIR, 'ssh_config'),
+      `Host pi-garage\n  HostName ${ip}\n  IdentityFile ${join(DIR, 'id')}\n  IdentitiesOnly yes\n` +
+      `  UserKnownHostsFile ${join(DIR, 'known_hosts')}\n`);
+    writeFileSync(join(BIN, 'ssh'), `#!/bin/sh\nexec /usr/bin/ssh -F ${join(DIR, 'ssh_config')} "$@"\n`, { mode: 0o755 });
+  });
+  test.afterAll(() => {
+    if (!skip) execSync(`docker rm -f ${CONTAINER}`, { stdio: 'ignore' });
+  });
+
+  test.use({ routerOpts: {
+    apps: ['session', 'about', 'notify', 'term', 'connect', 'remote'],
+    extraEnv: {
+      PATH: `${BIN}:${process.env.PATH ?? ''}`,
+      // Keep the capture host's real LAN out of Connect's discovery list.
+      WASH_DISCOVERY_STATIC: 'pi-garage=10.42.0.23',
+      WASH_DISCOVERY_NO_MDNS: '1',
+      WASH_DISCOVERY_NO_ADVERTISE: '1',
+    },
+  } });
+
+  test('remote', async ({ page, router }) => {
+    test.skip(skip !== null, skip ?? '');
+    test.setTimeout(240_000);
+    await page.goto(router.url);
+    await expect(page.locator('wash-app-session')).toBeVisible();
+    const open = async (appId: string) => {
+      await page.locator('button[title="Apps"]').click();
+      await page.locator(`[data-testid="start-menu-${appId}"]`).click();
+    };
+
+    // A local terminal first, while it is the only window.
+    await open('com.wash.term');
+    await page.waitForSelector('wash-app-term .xterm-rows', { timeout: 10_000 });
+    await page.locator('wash-app-term').click();
+    await page.keyboard.type('cd ~ && clear\n', { delay: 5 });
+    await page.waitForTimeout(300);
+    await page.keyboard.type('uname -nm\n', { delay: 10 });
+
+    // Connect to the Pi and open three of its apps.
+    await open('com.wash.connect');
+    const connect = page.locator('wash-app-connect');
+    await expect(connect).toBeVisible({ timeout: 30_000 });
+    await connect.locator('[data-testid="connect-host-input"]').fill(TARGET);
+    await connect.locator('[data-testid="connect-submit"]').click();
+    await expect(connect.locator('[data-testid="connect-host-status"]'))
+      .toHaveAttribute('data-status', 'up', { timeout: 120_000 });
+    const launch = async (appId: string) => {
+      // Raise Connect: the last remote window opened over it.
+      await page.evaluate(() => {
+        const c = window.wash.windows().find((w) => w.element === 'wash-app-connect');
+        if (c) window.wash.focusWindow(c.windowID, c.origin);
+      });
+      const item = connect.locator(`[data-testid="connect-launch-${appId}"]`);
+      for (let i = 0; i < 3 && !(await item.isVisible().catch(() => false)); i++) {
+        await connect.locator('[data-testid="connect-launch"]').click();
+      }
+      await expect(item).toBeVisible({ timeout: 30_000 });
+      await item.click();
+    };
+    const remoteWins = () => page.evaluate(() =>
+      window.wash.windows().filter((w) => w.origin && w.origin !== 'local').length);
+    await launch('com.wash.fm');
+    await expect.poll(remoteWins, { timeout: 60_000 }).toBe(1);
+    await launch('com.wash.term');
+    await expect.poll(remoteWins, { timeout: 60_000 }).toBe(2);
+
+    // The Pi's terminal.
+    const remoteTerm = page.locator('.wash-window', { has: page.locator('[data-testid="wash-host-stripe"]') })
+      .filter({ has: page.locator('.xterm-rows') });
+    await expect(remoteTerm).toBeVisible({ timeout: 60_000 });
+    await remoteTerm.locator('.xterm-rows').click();
+    await page.keyboard.type('cd ~ && clear\n', { delay: 5 });
+    await page.waitForTimeout(500);
+    await page.keyboard.type('uname -nm; tail -3 garage/readings.csv\n', { delay: 10 });
+    await expect(remoteTerm).toContainText('aarch64', { timeout: 20_000 });
+    // The Pi's own wash-edit opens the file in the Pi's Editor, on this desktop.
+    await page.keyboard.type('wash-edit garage/door.py\n', { delay: 10 });
+    await expect.poll(remoteWins, { timeout: 60_000 }).toBe(3);
+
+    await page.evaluate(() => {
+      const c = window.wash.windows().find((w) => w.element === 'wash-app-connect');
+      if (c) window.wash.focusWindow(c.windowID, c.origin);
+    });
+    await page.locator('.wash-window', { has: connect }).getByRole('button', { name: 'Close window' }).click();
+    await expect(connect).toHaveCount(0);
+
+    // Two terminals in a short top row (local, then the Pi's), the Pi's
+    // Editor and Files below; slots fill by most recent focus in tree order.
+    await page.evaluate(() => {
+      const ws = window.wash.windows();
+      const local = ws.find((w) => (!w.origin || w.origin === 'local') && w.element === 'wash-app-term');
+      const remote = (el: string) => ws.find((w) => w.origin && w.origin !== 'local' && w.element.startsWith(el));
+      for (const w of [remote('wash-app-fm'), remote('wash-app-edit'), remote('wash-app-term'), local]) {
+        if (w) window.wash.focusWindow(w.windowID, w.origin);
+      }
+      window.wash.setCellLayout(0, 0, 'c[r2@32 r2]');
+    });
+    await expect.poll(() => page.evaluate(() => window.wash.cellLayout(0, 0))).not.toBeNull();
+    await page.waitForTimeout(2500);
+
+    await page.evaluate(() => {
+      const hide = (root: Document | ShadowRoot) => {
+        root.querySelectorAll<HTMLElement>(
+          '[data-testid="desktop-banner"],[data-testid="desktop-banner-placeholder"]',
+        ).forEach((el) => { el.style.display = 'none'; });
+        root.querySelectorAll('*').forEach((el) => {
+          if ((el as HTMLElement).shadowRoot) hide((el as HTMLElement).shadowRoot!);
+        });
+      };
+      hide(document);
+    });
+    await page.screenshot({ path: join(SHOTS, 'remote.png') });
   });
 });
 
