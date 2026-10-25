@@ -105,6 +105,12 @@ install -m 0755 "$here/overlay/etc/init.d/S98wash-diag" \
 install -m 0440 -D "$here/overlay/etc/sudoers.d/wash-nopasswd" \
                    "$ctx/overlay/etc/sudoers.d/wash-nopasswd"
 
+# A small sample project, copied into /home/wash/project at boot by
+# S99wash-router, so Files / Editor / Terminal open on something real
+# (and the project site's live panel has a folder to show).
+mkdir -p "$ctx/overlay/usr/share/wash"
+cp -R "$here/overlay/usr/share/wash/demo-project" "$ctx/overlay/usr/share/wash/demo-project"
+
 # /etc/profile.d/wash.sh — auto-discovers the running wash-router's
 # control socket and exports WASH_CONTROL_SOCKET so a shell user can
 # run `wash-launch <app-id>` without arg-fiddling. Buildroot's

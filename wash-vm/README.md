@@ -1,6 +1,6 @@
 # wash-vm — wash inside a browser-tab RISC-V Linux VM
 
-> **Live demo:** [sirmick.github.io/wash](https://sirmick.github.io/wash/)
+> **Live demo:** [sirmick.github.io/wash/demo](https://sirmick.github.io/wash/demo/)
 > — auto-built from this directory by [`.github/workflows/demo.yml`](../.github/workflows/demo.yml)
 > on every push to `main`.
 

@@ -24,6 +24,26 @@
          services the WASM XHR from a preloaded blob). -->
 
     <link href="style.css" rel="stylesheet" type="text/css" />
+    <script>
+      // ?embed: the project site boots this page in an iframe while you read
+      // (site/site.js). Focus inside a same-origin iframe scrolls the PARENT
+      // to it, so the login autofocus / desktop focus on mount would yank the
+      // site to its last section mid-read, and keystrokes meant for the site
+      // would land in the desktop. Embedded, autofocus is dropped and focus()
+      // is a no-op until the visitor clicks into the desktop (document has
+      // focus); after that it works as normal, minus scrolling the host page.
+      if (new URLSearchParams(location.search).has('embed')) {
+        document.documentElement.dataset.embed = '';
+        const focus = HTMLElement.prototype.focus;
+        HTMLElement.prototype.focus = function (opts) {
+          if (!document.hasFocus()) return;
+          return focus.call(this, { ...opts, preventScroll: true });
+        };
+        document.addEventListener('DOMContentLoaded', () => {
+          for (const el of document.querySelectorAll('[autofocus]')) el.removeAttribute('autofocus');
+        });
+      }
+    </script>
     <style>
       html, body {
         margin: 0;
@@ -38,6 +58,11 @@
         flex-direction: column;
         height: 100vh;
       }
+
+      /* ?embed (the project site's live panel, site/site.js): just the
+         desktop — no VM titlebar. The flag is set by the inline script in
+         <head> before first paint. */
+      html[data-embed] #titlebar { display: none; }
 
       /* Title bar: persistent VM-spec strip + view toggle. */
       #titlebar {

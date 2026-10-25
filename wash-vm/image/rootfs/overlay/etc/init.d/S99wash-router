@@ -82,6 +82,13 @@ start() {
         # cfg.ControlSocket move to /run/wash/ doesn't silently fail
         # the bind on first boot.
         install -d -m 0755 -o wash -g wash /home/wash 2>/dev/null || true
+        # Seed the sample project (build.sh) into the desktop user's home,
+        # owned by them so it's editable. Home is tmpfs-backed, so this runs
+        # on every boot; skip if a previous launch already copied it.
+        if [ -d /usr/share/wash/demo-project ] && [ ! -e /home/wash/project ]; then
+            cp -R /usr/share/wash/demo-project /home/wash/project &&
+                chown -R wash:wash /home/wash/project
+        fi
 
         n=0
         while :; do

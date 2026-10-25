@@ -110,6 +110,27 @@ Two rules learned the hard way:
 mDNS peers, and `WASH_DISCOVERY_NO_ADVERTISE=1` stops headless runs from
 broadcasting. (Same seam as `e2e/tests/discovery.spec.ts`.)
 
+`WASH_DISCOVERY_NO_MDNS=1` turns real mDNS browsing off, so the list is the
+static seeds only. Without it the capture host's actual LAN neighbours
+(hostnames and addresses) land in a public screenshot — the committed
+`connect.png` did exactly that once.
+
+### Host-dependent shots
+
+`disks`, `net`, `top`, `services` and `imageview` show the capture machine
+itself (its disks, NICs, processes, units, and `~/Pictures`). Shoot them on a
+real desktop host: from a container or dev box they leak infrastructure
+(container mounts, cluster daemons) or fall back to synthetic images. Revert
+those PNGs if a run from elsewhere touched them.
+
+### The display shot
+
+It needs `out/wash-display`, `/usr/bin/xclock` (apt `x11-apps`) and chromium.
+A `WLROOTS_VENDORED=1` compositor finds its `out/lib/libwlroots.so` through a
+`$ORIGIN/lib` rpath; the fixture symlinks `out/lib` next to the staged copy.
+Chromium runs with `--no-sandbox --test-type`, because containers deny its
+user-namespace sandbox and it aborts at startup otherwise.
+
 ### The PNGs are committed past a broad .gitignore
 
 `.gitignore` ignores `screenshots/` (runtime capture output from

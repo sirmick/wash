@@ -13,7 +13,7 @@
 
 import type { Component } from 'solid-js';
 import { For, Show, createSignal } from 'solid-js';
-import { tokens } from '@wash/ui';
+import { tokens, washAssetUrl } from '@wash/ui';
 import { hostHue } from './host-hue';
 
 export interface RemoteHost {
@@ -55,7 +55,7 @@ const SpriteIcon: Component<{ name: string; size: number }> = (props) => (
     stroke-linejoin="round"
     style={{ display: 'block' }}
   >
-    <use href={`/icons.svg#${props.name}`} />
+    <use href={washAssetUrl(`icons.svg#${props.name}`)} />
   </svg>
 );
 

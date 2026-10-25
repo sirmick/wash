@@ -583,17 +583,18 @@ const Thumbnail: Component<{ color: string }> = (props) => (
   />
 );
 
-// PackCard previews one theme: its wallpaper (pulled over the asset.read
-// channel via window.wash.fetchAsset — same path the desktop uses, so
-// the preview is exactly what you'll get) plus a strip of accent swatches
-// from the pack's scheme. Clicking selects it; the active pack is ringed.
+// PackCard previews one theme: its wallpaper thumbnail (or the full
+// wallpaper if the pack ships none), pulled over the asset.read channel via
+// window.wash.fetchAsset — the same path the desktop uses — plus a strip of
+// accent swatches from the pack's scheme. Clicking selects it; the active
+// pack is ringed.
 const PackCard: Component<{ pack: Pack; active: boolean; onSelect: () => void }> = (props) => {
   const [url, setUrl] = createSignal<string>('');
   onMount(() => {
     let objURL = '';
     let cancelled = false;
     window.wash
-      .fetchAsset(props.pack.wallpaper)
+      .fetchAsset(props.pack.thumbnail ?? props.pack.wallpaper)
       .then((a) => {
         if (cancelled) return;
         objURL = URL.createObjectURL(new Blob([a.bytes], { type: a.mime || 'image/svg+xml' }));

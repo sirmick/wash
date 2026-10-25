@@ -333,10 +333,11 @@ function setSpec(id: string, text: string): void {
 }
 async function head(url: string): Promise<number | null> {
   try {
-    // url is relative to the cfg's URL — resolve against /tinyemu/.
+    // url is relative to the cfg's URL — resolve against <base>/tinyemu/
+    // (BASE_URL is '/wash/' on GitHub Pages, not the origin root).
     const resolved = url.startsWith('/') || url.startsWith('http')
       ? url
-      : `/tinyemu/${url}`;
+      : `${import.meta.env.BASE_URL}tinyemu/${url}`;
     const r = await fetch(resolved, { method: 'HEAD' });
     if (!r.ok) return null;
     const cl = r.headers.get('content-length');
