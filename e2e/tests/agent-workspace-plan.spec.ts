@@ -73,8 +73,13 @@ test('the plan, its questions and its signals, step by step', async ({ page, rou
     C: { title: 'gamma.txt', parent: 'M2', needs: ['A', 'B'] },
   } });
   await planTab().click();
-  await expect(app.getByTestId('workspace-plan-edge-A-C')).toHaveCount(1);
-  await expect(app.getByTestId('workspace-plan-edge-B-C')).toHaveCount(1);
+  // Inside Build, one arrow runs from A and B's level to C's; C's own
+  // needs are drawn when it is pointed at.
+  await expect(app.getByTestId('workspace-plan-edge-M2/0-M2/1')).toHaveCount(1);
+  await app.getByTestId('workspace-plan-node-C').hover();
+  await expect(app.getByTestId('workspace-plan-need-A-C')).toHaveCount(1);
+  await expect(app.getByTestId('workspace-plan-need-B-C')).toHaveCount(1);
+  await app.getByTestId('workspace-plan-toolbar').hover();
   expect(readFileSync(join(project, '.wash', 'plan.toml'), 'utf8')).toContain('parent = "M2"');
 
   // 3. Members on their nodes; A's task is written at once, B asks A's
@@ -151,10 +156,10 @@ test('the plan, its questions and its signals, step by step', async ({ page, rou
   expect(plan.nodes).toEqual(expect.arrayContaining(['M3 · active · Ship [milestone]', 'M2 · done · Build [milestone]']));
   expect(plan.nodes.some((l: string) => l.startsWith('  A · done · alpha.txt · on: Implementer'))).toBe(true);
 
-  // 11. Ending with Ship active is a decision; a new workspace resumes the
-  // plan and QA from the project's files.
-  expect(await tool('workspace_end', {}, true)).toContain('M3');
-  await tool('workspace_end', { confirm: true });
+  // 11. Ship is active with nobody on it, so ending needs no confirm and
+  // names it as stale; a new workspace resumes the plan and QA from the
+  // project's files.
+  expect(await tool('workspace_end')).toMatchObject({ ended: true, stale_nodes: ['M3'] });
   await expect(sidebar).toHaveCount(0);
   await tool('workspace_configure', { from: '.wash/workspace.toml' });
   await expect.poll(() => state().plan.length).toBe(6);

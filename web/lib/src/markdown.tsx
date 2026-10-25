@@ -193,12 +193,34 @@ type Span =
   | { t: 'code'; s: string }
   | { t: 'strong'; s: string }
   | { t: 'em'; s: string }
-  | { t: 'link'; s: string; href: string };
+  | { t: 'link'; s: string; href: string }
+  | { t: 'url'; s: string };
 
 // Inline scanner. Code spans win over emphasis, because `*` inside
 // backticks is a literal asterisk and getting that backwards mangles
-// every shell glob an agent prints.
-const INLINE_RE = /(`[^`]+`)|(\[[^\]]+\]\([^)\s]+\))|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(_[^_]+_)/;
+// every shell glob an agent prints. A bare URL is a token of its own, so
+// the `_` and `*` inside one are never emphasis.
+const INLINE_RE = /(`[^`]+`)|(\[[^\]]+\]\([^)\s]+\))|(https?:\/\/[^\s<>"'`]+)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(_[^_]+_)/;
+
+/** isWebURL says whether an href is one a click may open: http(s) only. */
+export function isWebURL(href: string): boolean {
+  return /^https?:\/\/\S+$/i.test(href.trim());
+}
+
+/**
+ * trimURL takes the prose punctuation off the end of a URL found in text:
+ * the full stop of a sentence, a comma, and a closing bracket the URL did
+ * not open — "(see https://x.y/z)" names https://x.y/z.
+ */
+export function trimURL(url: string): string {
+  for (;;) {
+    const last = url[url.length - 1];
+    if ('.,;:!?'.includes(last)) { url = url.slice(0, -1); continue; }
+    if (last === ')' && (url.match(/\(/g)?.length ?? 0) < (url.match(/\)/g)?.length ?? 0)) { url = url.slice(0, -1); continue; }
+    if (last === ']' && (url.match(/\[/g)?.length ?? 0) < (url.match(/]/g)?.length ?? 0)) { url = url.slice(0, -1); continue; }
+    return url;
+  }
+}
 
 export function parseInline(src: string): Span[] {
   const out: Span[] = [];
@@ -207,12 +229,15 @@ export function parseInline(src: string): Span[] {
     const m = INLINE_RE.exec(rest);
     if (!m || m.index === undefined) break;
     if (m.index > 0) out.push({ t: 'text', s: rest.slice(0, m.index) });
-    const tok = m[0];
+    let tok = m[0];
     if (tok.startsWith('`')) {
       out.push({ t: 'code', s: tok.slice(1, -1) });
     } else if (tok.startsWith('[')) {
       const close = tok.indexOf(']');
       out.push({ t: 'link', s: tok.slice(1, close), href: tok.slice(close + 2, -1) });
+    } else if (tok.startsWith('http')) {
+      tok = trimURL(tok);
+      out.push({ t: 'url', s: tok });
     } else if (tok.startsWith('**')) {
       out.push({ t: 'strong', s: tok.slice(2, -2) });
     } else {
@@ -325,10 +350,22 @@ const codeStyle: JSX.CSSProperties = {
   padding: '1px 4px',
 };
 
-// A Markdown link. Rendered as text plus its target rather than an anchor:
-// the href comes from model output, and a transcript is not a place to hand
-// it a click — unless the target is a file the host vouches for (see
-// path-links.tsx), in which case the label opens that file.
+// A web link: a real anchor, opened in a new tab with no opener and no
+// referrer. Only http(s) gets here (isWebURL), so a javascript: or data:
+// href from model output is never something a click runs. The target is
+// on the title, so a label that says one thing and points at another can
+// be checked before the click.
+const WebLink: Component<{ href: string; label?: string }> = (p) => (
+  <a data-wash-hit href={p.href} title={p.href} target="_blank" rel="noopener noreferrer"
+    style={{ color: tokens.accentBlue, 'overflow-wrap': 'anywhere' }}>
+    {p.label ?? p.href}
+  </a>
+);
+
+// A Markdown link. A web target is an anchor; a file the host vouches for
+// (path-links.tsx) opens that file; anything else — a relative path the
+// host cannot resolve, an unknown scheme — is text plus its target, so
+// nothing is lost and nothing runs.
 const LinkSpan: Component<{ label: string; href: string }> = (p) => {
   const linked = !!usePathLinks();
   const hits = useHits(() => (linked ? codeToken(p.href) : []));
@@ -337,19 +374,41 @@ const LinkSpan: Component<{ label: string; href: string }> = (p) => {
     <Show
       when={hit()}
       fallback={
-        <>
-          <span style={{ color: tokens.accentBlue }}>{p.label}</span>
-          <span style={{ color: tokens.fgDim, font: tokens.type.monoSm }}>
-            {' '}
-            ({p.href})
-          </span>
-        </>
+        <Show
+          when={isWebURL(p.href)}
+          fallback={
+            <>
+              <span style={{ color: tokens.accentBlue }}>{p.label}</span>
+              <span style={{ color: tokens.fgDim, font: tokens.type.monoSm }}>
+                {' '}
+                ({p.href})
+              </span>
+            </>
+          }
+        >
+          <WebLink href={p.href.trim()} label={p.label} />
+        </Show>
       }
     >
       <PathLink hit={hit()!}>{p.label}</PathLink>
     </Show>
   );
 };
+
+/**
+ * Plain text with every URL in it a link, for the places that show text
+ * as typed rather than as Markdown (a person's own message). Anything that
+ * looks like a web address is clickable everywhere in wash.
+ */
+export const LinkText: Component<{ text: string }> = (p) => (
+  <For each={parseInline(p.text)}>
+    {(s) => (
+      <Show when={s.t === 'url'} fallback={<>{s.t === 'text' ? s.s : s.t === 'code' ? `\`${s.s}\`` : s.t === 'strong' ? `**${s.s}**` : s.t === 'em' ? `_${s.s}_` : `[${s.s}](${(s as { href: string }).href})`}</>}>
+        <WebLink href={s.s} />
+      </Show>
+    )}
+  </For>
+);
 
 // Every span's text goes through PathText, so a file named in prose, in
 // bold or in backticks is a link when the host can open it.
@@ -368,6 +427,9 @@ const Inline: Component<{ text: string }> = (p) => (
         </Show>
         <Show when={s.t === 'link'}>
           <LinkSpan label={s.s} href={(s as { href: string }).href} />
+        </Show>
+        <Show when={s.t === 'url'}>
+          <WebLink href={s.s} />
         </Show>
       </Show>
     )}

@@ -55,7 +55,17 @@ func showEditor(c *sdk.Conn, token string) {
 	if token != "" {
 		hit, ok := pathlink.Resolve(session.cwd, token)
 		if !ok {
-			log.Printf("wash-ai: editor: %q is not a file under %s", token, session.cwd)
+			log.Printf("wash-ai: editor: %q is not a file or folder", token)
+			return
+		}
+		// A folder opens in the file manager; a file outside the session's
+		// folder goes the way `wash open` would, to the app that handles
+		// it, since the group's editor is confined to the session folder.
+		if hit.Dir || !pathlink.Inside(session.cwd, hit.Path) {
+			if err := c.OpenPath(hit.Path); err != nil {
+				log.Printf("wash-ai: open %s: %v", hit.Path, err)
+				_ = c.Fail("Could not open "+hit.Path, err)
+			}
 			return
 		}
 		path, line, col = hit.Path, hit.Line, hit.Col

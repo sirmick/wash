@@ -904,6 +904,8 @@ QADocumentStatus is where a file (or directory) Wash writes for the workspace st
 | `body` | `string` |  |
 | `message_id?` | `string` |  |
 | `created_at` | `number` |  |
+| `answers?` | `string` | Answers is the event this one answers, set on a thread read in full (LinkAnswers), not stored; Inferred when it was found by position rather than by the answer's message replying to the question's. |
+| `answers_inferred?` | `boolean` |  |
 
 #### QAThread
 
@@ -1236,8 +1238,10 @@ UsageRow is one row's counters.
 | `id` | `string` |  |
 | `name` | `string` |  |
 | `project_root` | `string` |  |
+| `repo_url?` | `string` | RepoURL is the project's web home (its git origin as https, no .git), filled in on the published view, not stored: the Plan tab links the commit hashes a node's body names to it. |
 | `orchestrator` | `string` |  |
 | `state` | `string` |  |
+| `phase?` | `string` | Phase is "" while the team fans out, "closing" once the milestone's tail is narrow enough for one agent: new members launch only as replacements (handoff_from), members without open work are asked to hand off, and the dossier (workspace_get view=dossier) is the handover. Set with workspace_configure phase. |
 | `revision` | `number` |  |
 | `max_active` | `number` |  |
 | `max_members` | `number` |  |
@@ -1262,7 +1266,7 @@ WorkspaceAction is a human's action in the workspace sidebar.
 | Field | Type | |
 |---|---|---|
 | `key` | `string` |  |
-| `name` | `string` | Name is the operation: member_open \| member_resume \| member_message \| member_inspect. |
+| `name` | `string` | Name is the operation: member_open \| member_resume \| member_message \| member_inspect \| qa_thread. |
 | `arguments` | `WorkspaceActionArgs` |  |
 
 #### WorkspaceActionArgs
@@ -1274,6 +1278,7 @@ WorkspaceActionArgs are an action's arguments; each operation reads its own.
 | `member_id?` | `string` | MemberID names the member for member_open, member_resume and member_inspect. |
 | `recipient?` | `string` | Recipient is the member a member_message goes to. |
 | `body?` | `string` | Body is a member_message's text. |
+| `thread_id?` | `string` | ThreadID names the QA thread qa_thread reads in full. |
 
 #### WorkspaceApproval
 
@@ -1328,6 +1333,7 @@ WorkspaceResult answers a WorkspaceAction.
 | `operation` | `string` |  |
 | `error?` | `string` |  |
 | `transcript?` | `WorkspaceTranscript` | Transcript answers member_inspect. |
+| `thread?` | `QAThread` | Thread answers qa_thread: the thread with every event, the archived ones read back from its file. |
 
 #### WorkspaceState
 

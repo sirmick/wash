@@ -43,11 +43,23 @@ func TestPlanFileIsWrittenLoadedAndGuarded(t *testing.T) {
 	if len(lines) != 3 || lines[0] != "M1 · active · Plan [milestone]" || !strings.HasPrefix(lines[2], "  A · todo · alpha.txt · needs M1 (active)") {
 		t.Fatalf("plan_get lines: %q", lines)
 	}
-	if _, err := qaFileCall(t, ws, h, "workspace_end", map[string]any{}); err == nil || !strings.Contains(err.Error(), "M1") {
-		t.Fatalf("ended with M1 active: %v", err)
-	}
-	if _, err := qaFileCall(t, ws, h, "workspace_end", map[string]any{"confirm": true}); err != nil {
+	// Reported work nobody accepted blocks the end; a node marked active
+	// with nobody on it is stale bookkeeping, and the end reports it.
+	if _, err := qaFileCall(t, ws, h, "plan_set", map[string]any{"nodes": map[string]any{"M1": map[string]any{"state": "reported"}}}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := qaFileCall(t, ws, h, "workspace_end", map[string]any{}); err == nil || !strings.Contains(err.Error(), "reported and not yet accepted: M1") {
+		t.Fatalf("ended with M1 reported: %v", err)
+	}
+	if _, err := qaFileCall(t, ws, h, "plan_set", map[string]any{"nodes": map[string]any{"M1": map[string]any{"state": "active"}}}); err != nil {
+		t.Fatal(err)
+	}
+	ended, err := qaFileCall(t, ws, h, "workspace_end", map[string]any{})
+	if err != nil {
+		t.Fatalf("ended with M1 stale: %v", err)
+	}
+	if stale, _ := ended.(map[string]any)["stale_nodes"].([]string); len(stale) != 1 || stale[0] != "M1" {
+		t.Fatalf("stale_nodes: %v", ended)
 	}
 	// A new workspace on the same file resumes the plan and takes it over.
 	h2 := &hosted{sessionID: "next", agent: "codex", cwd: dir}

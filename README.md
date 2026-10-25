@@ -22,7 +22,7 @@ windows, a workspace pager, a system sidebar — where the window
 manager runs *in the browser* and each application is an independent,
 one-file program that a transport-only **router** supervises.
 
-License: **AGPL-3.0**. Current version: **0.19.0**.
+License: **AGPL-3.0**. Current version: **0.20.0**.
 
 ---
 
@@ -194,7 +194,7 @@ wash-connect     # https://<this-host>:10000/?token=…  — paste it into any b
 if they are missing, builds, links `wash-install` and `wash-connect` into
 `~/bin`, and runs `out/wash-router` as a `systemd --user` service
 (log: `~/.local/state/wash/router.log`). Re-running it is the update:
-`wash-install` (main), `wash-install v0.19.0`, `wash-install release`,
+`wash-install` (main), `wash-install v0.20.0`, `wash-install release`,
 `wash-install my-branch`, `wash-install origin/their-branch` — all built
 from source. A local branch ahead of origin builds your commits and says
 so. `--repo`, `--bindir` and `--listen` (or `WASH_REPO`, `WASH_BINDIR`,
@@ -497,7 +497,7 @@ sudo apk add --allow-untrusted ./wash-alpine-3.21-amd64.apk
 These are **stable filenames** (no version) that always resolve to the
 newest release — the page at
 <https://github.com/sirmick/wash/releases/latest> has the same files (plus
-the native versioned names, e.g. `wash_0.19.0-1_amd64.deb`) if you'd rather
+the native versioned names, e.g. `wash_0.20.0-1_amd64.deb`) if you'd rather
 click. CI builds **amd64** for all four, plus **Debian 13 arm64**
 (`wash-debian-13-arm64.deb`); other arm64/riscv64 rows and OpenWRT build
 from source (below). Once installed, start a single-user session with

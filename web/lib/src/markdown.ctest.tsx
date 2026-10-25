@@ -107,3 +107,21 @@ test('a decision event renders as a distinct approved or refused row', async () 
   expect(no.getByTestId('agent-decision').textContent).toContain('✕ Not approved');
   expect(no.getByTestId('agent-decision').textContent).toContain('nobody answered in time');
 });
+
+// Anything that looks like a web address is clickable, with or without
+// link markup; only http(s) is, and prose punctuation stays prose.
+test('web addresses are anchors: bare, in link markup, and never for other schemes', () => {
+  const { container } = render(() => (
+    <Markdown text={'I created Standup — Tue (https://docs.google.com/document/d/1Ranb_5TY/edit). See [the doc](https://example.com/a_b) and [run](javascript:alert(1)), or https://x.y/z.'} />
+  ));
+  const anchors = Array.from(container.querySelectorAll('a'));
+  expect(anchors.map((a) => a.getAttribute('href'))).toEqual(['https://docs.google.com/document/d/1Ranb_5TY/edit', 'https://example.com/a_b', 'https://x.y/z']);
+  expect(anchors[1].textContent).toBe('the doc');
+  for (const a of anchors) {
+    expect(a.getAttribute('target')).toBe('_blank');
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer');
+  }
+  expect(container.textContent).toContain('(https://docs.google.com/document/d/1Ranb_5TY/edit).');
+  expect(container.textContent).toContain('run (javascript:alert(1))');
+  expect(container.querySelector('em')).toBeNull();
+});

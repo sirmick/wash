@@ -11,12 +11,17 @@
 
 import { test, expect } from '../fixtures/router';
 import type { Page } from '@playwright/test';
-import { readdirSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, statSync, existsSync, accessSync, constants } from 'node:fs';
 import { join } from 'node:path';
 
 // We need at least one readable file under /var/log for the
 // streaming test. Most distros have /var/log/dpkg.log, syslog, or
-// auth.log world- or adm-readable; check at runtime.
+// auth.log world- or adm-readable; check at runtime. Readable means
+// open-for-read, not stat: a root:adm 0640 auth.log stats fine.
+function canRead(p: string): boolean {
+  try { accessSync(p, constants.R_OK); return true; } catch { return false; }
+}
+
 function readableLogExists(): boolean {
   if (!existsSync('/var/log')) return false;
   try {
@@ -25,7 +30,7 @@ function readableLogExists(): boolean {
       const p = join('/var/log', e);
       try {
         const s = statSync(p);
-        if (s.isFile() && s.size > 0) return true;
+        if (s.isFile() && s.size > 0 && canRead(p)) return true;
       } catch {
         /* ignore unreadable */
       }
@@ -85,12 +90,14 @@ test.describe('syslogs app', () => {
       { timeout: 5_000 },
     ).toBeGreaterThan(0);
 
-    // Pick whichever file looks biggest (most likely to have content
-    // we can read back). Use the first row — sidebar is sorted by
-    // mtime desc, so the most recently written file is top.
-    const firstRow = page.locator('[data-testid="syslogs-file-row"]').first();
-    const path = await firstRow.getAttribute('data-file-path');
-    expect(path).toBeTruthy();
+    // Pick the newest file this uid can read (the sidebar is sorted by
+    // mtime desc). An unreadable one escalates to wash-priv and waits
+    // for an approval no test gives (runDirect, apps/syslogs/be).
+    const rows = page.locator('[data-testid="syslogs-file-row"]');
+    const paths = await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-file-path') ?? ''));
+    const pick = paths.findIndex((p) => p && canRead(p));
+    expect(pick, `no readable row among ${paths.join(', ')}`).toBeGreaterThanOrEqual(0);
+    const firstRow = rows.nth(pick);
     await firstRow.click();
 
     await router.waitForLog(

@@ -271,7 +271,24 @@ function stageDisplayLibs(dir: string, binaries: string[]): void {
   }
 }
 
+// freePort hands back a port it has already let go of, so another process
+// can take it before the router binds: under a full parallel suite the
+// kernel reuses an ephemeral port for some outgoing connection often
+// enough to fail a test now and then ("bind: address already in use",
+// 2026-10-21). A start that fails exactly that way, on a port we picked,
+// is retried whole on a fresh one; anything else throws as before.
 export async function startRouter(opts: RouterOptions = {}): Promise<RouterHandle> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await startRouterOnce(opts);
+    } catch (err) {
+      const lost = opts.port === undefined && /bind: address already in use/.test(String((err as Error)?.message));
+      if (!lost || attempt >= 3) throw err;
+    }
+  }
+}
+
+async function startRouterOnce(opts: RouterOptions): Promise<RouterHandle> {
   for (const name of REQUIRED) {
     const p = binPath(name);
     if (!existsSync(p)) {

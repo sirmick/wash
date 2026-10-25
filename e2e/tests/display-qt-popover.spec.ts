@@ -29,6 +29,14 @@ function buildGuest(): string | { skip: string } {
   } catch {
     return { skip: 'Qt6 Widgets dev (g++ + pkg-config Qt6Widgets) not available' };
   }
+  // The guest runs with QT_QPA_PLATFORM=wayland, which aborts at start
+  // without Qt's wayland platform plugin (qt6-wayland): no window, and a
+  // 25 s timeout that reads like a compositor bug.
+  try {
+    execSync('ls "$(qtpaths6 --plugin-dir 2>/dev/null || qmake6 -query QT_INSTALL_PLUGINS)"/platforms/libqwayland*.so', { stdio: 'ignore', shell: '/bin/bash' });
+  } catch {
+    return { skip: "Qt6 wayland platform plugin (qt6-wayland) not installed" };
+  }
   const out = join(mkdtempSync(join(tmpdir(), 'qtpopover-')), 'qtpopover');
   try {
     execSync(

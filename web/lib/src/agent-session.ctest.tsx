@@ -273,9 +273,11 @@ test('a tool row whose path the host cannot open is not a link', async () => {
   const { container } = render(() => <AgentSession events={() => events} links={links} />);
   await settle();
   const row = container.querySelector('[data-testid="agent-tool-row"]') as HTMLElement;
-  expect(row.getAttribute('role')).toBeNull();
+  expect(row.getAttribute('title')).not.toContain('Open ');
+  // Not a file link: the click folds the call out instead of opening anything.
   row.click();
   expect(opened).toEqual([]);
+  expect(container.querySelector('[data-testid="agent-tool-full"]')?.textContent).toContain('Read');
 });
 
 test("files named in the agent's prose are links, with their line", async () => {
@@ -682,4 +684,25 @@ test('a single inbox message keeps its label header and a human body stays liter
   expect(rows[0].textContent).toContain('Alice (m1) · question');
   expect(container.querySelector('strong')?.textContent).toBe('option');
   expect(rows[1].textContent).toContain('use **A**');
+});
+
+// An Execute row is one line, so a long command is cut short; clicking it
+// shows the whole call and what the tool said, with the file-link rows
+// keeping their click for the file.
+test('a tool row with no file link folds out to the full call on click', async () => {
+  const cmd = 'cd /home/me/wash && go test ./internal/swarm/ ./apps/agentd/be/ 2>&1 | grep -E "^(ok|FAIL|---)" | head -20';
+  const events: agentproto.Event[] = [{
+    seq: 1, kind: 'tool', tool_kind: 'execute', title: cmd, text: 'ok  \tgithub.com/sirmick/wash/internal/swarm\t0.03s', status: 'completed', at_ms: 0,
+  }];
+  const { container } = render(() => <AgentSession events={() => events} />);
+  await settle();
+  const row = container.querySelector('[data-testid="agent-tool-row"]') as HTMLElement;
+  expect(row.getAttribute('role')).toBe('button');
+  expect(container.querySelector('[data-testid="agent-tool-full"]')).toBeNull();
+  row.click();
+  const full = container.querySelector('[data-testid="agent-tool-full"]');
+  expect(full?.textContent).toContain(cmd);
+  expect(full?.textContent).toContain('internal/swarm');
+  (container.querySelector('[data-testid="agent-tool-full-toggle"]') as HTMLButtonElement).click();
+  expect(container.querySelector('[data-testid="agent-tool-full"]')).toBeNull();
 });

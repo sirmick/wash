@@ -116,7 +116,8 @@ test.describe('agent handoff', () => {
         if (target === 'file-manager') {
           const files = page.locator('wash-app-fm');
           await expect(files.getByTestId('fm-path')).toHaveValue(dir);
-          await expect(files.getByText('project-note.txt', { exact: true })).toBeVisible();
+          await expect(files.getByTestId('fm-entry-project-note.txt')).toBeVisible();
+          await expect(files.getByTestId('fm-tile-project-note.txt')).toBeVisible();
         } else {
           const editor = page.locator('wash-app-edit');
           await expect(editor.getByTestId('edit-sidebar')).toContainText(dir);

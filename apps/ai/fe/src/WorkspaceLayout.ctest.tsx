@@ -51,7 +51,11 @@ test('the plan updates live while selection and a human draft survive', async ()
  setValue({...value(),workspace:{...value().workspace!,revision:2,plan:value().workspace!.plan!.map((n)=>n.id==='timer'?{...n,state:'done',revision:2}:n)}});
  expect((screen.getByLabelText('Message Architect') as HTMLTextAreaElement).value).toBe('Unsaved feedback');
  await fireEvent.click(screen.getByRole('tab', {name:'Plan'}));
+ // Done, the node folds into its level's chip until done work is shown.
+ expect(screen.getByTestId('workspace-plan-done-M1/0/done').textContent).toContain('1 done');
+ await fireEvent.click(screen.getByTestId('workspace-plan-show-done'));
  expect(screen.getByTestId('workspace-plan-state-timer').textContent).toBe('done');
+ localStorage.removeItem('wash.agent.plan.showDone');
  await fireEvent.click(screen.getByRole('tab', {name:/Architect/}));
  expect((screen.getByLabelText('Message Architect') as HTMLTextAreaElement).value).toBe('Unsaved feedback');
 });
@@ -267,4 +271,105 @@ test('a decision asked on a QA thread needs the owner once, not twice', () => {
  expect(screen.getAllByTestId(/^workspace-question-for-/)).toHaveLength(1);
  expect(screen.queryByText(/Owner question: Clock source/)).toBeNull();
  expect(screen.getByText(/Owner question: Tick rate/)).toBeTruthy();
+});
+
+// Inside a milestone, nodes sit in boxes by dependency depth, with one arrow
+// from each depth to the next instead of a line per need; a node's detail
+// links the commits its body names into the project's repo.
+test('the plan draws dependency levels inside a milestone and links a finished node\'s commits', async () => {
+ const f=frame(); f.workspace!.repo_url='https://github.com/sirmick/redoubt';
+ f.workspace!.plan!.push({id:'alarm',title:'Alarm',parent:'M1',needs:['timer'],state:'done',revision:1,body:'Built in cf445aa0c, merged 20261007 as c25fdbaa6; see cf445aa0c.'});
+ localStorage.setItem('wash.agent.plan.showDone','1'); // alarm is done; see it in full
+ render(() => <WorkspaceLayout frame={f} onAction={()=>{}}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-plan-link'));
+ expect(screen.getByTestId('workspace-plan-level-M1/0').textContent).toContain('No dependencies · 1');
+ expect(screen.getByTestId('workspace-plan-level-M1/1').textContent).toContain('Depth 1');
+ expect(screen.getByTestId('workspace-plan-edge-M1/0-M1/1')).toBeTruthy();
+ expect(screen.queryByTestId('workspace-plan-edge-timer-alarm')).toBeNull();
+ await fireEvent.click(screen.getByTestId('workspace-plan-node-alarm'));
+ expect(screen.getByTestId('workspace-plan-commits').querySelectorAll('a').length).toBe(2);
+ expect(screen.getByTestId('workspace-plan-commit-cf445aa0c').getAttribute('href')).toBe('https://github.com/sirmick/redoubt/commit/cf445aa0c');
+ expect(screen.queryByTestId('workspace-plan-commit-20261007')).toBeNull();
+ localStorage.removeItem('wash.agent.plan.showDone');
+});
+
+test('the Questions tab is a card per thread, open ones expanded and resolved ones closed', async () => {
+ const f=frame();
+ f.workspace!.qa=[thread({id:'q1',node:'K5',title:'Wakeup bound',assignee:'lead',state:'open',blocking:true}),thread({id:'q2',node:'K6',title:'Settled',assignee:'lead',state:'resolved'})];
+ f.qa_markdown='# Workspace QA\n\nQuestions.\n\n## K5 · q1 — Wakeup bound\n\nStatus: **open**\n\n### Architect · Question\n\n> How long?\n\n## K6 · q2 — Settled\n\nStatus: **resolved**\n';
+ render(() => <WorkspaceLayout frame={f} onAction={()=>{}}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-question-q1'));
+ const q1=screen.getByTestId('workspace-qa-thread-q1') as HTMLDetailsElement, q2=screen.getByTestId('workspace-qa-thread-q2') as HTMLDetailsElement;
+ expect(q1.open).toBe(true); expect(q2.open).toBe(false);
+ expect(q1.querySelector('summary')!.textContent).toContain('open');
+ expect(q1.querySelector('summary')!.textContent).toContain('K5 · q1');
+ expect(q1.querySelector('summary')!.textContent).toContain('Architect');
+ expect(q1.textContent).toContain('How long?');
+ expect(screen.getByTestId('workspace-qa-threads').textContent).toContain('Questions.');
+});
+
+// Done work folds into a chip until asked for; picking a node draws its own
+// needs over the standing level arrows and says how many each way.
+test('the plan folds done nodes, unfolds on request, and draws a picked node\'s needs', async () => {
+ localStorage.removeItem('wash.agent.plan.showDone');
+ const f=frame();
+ f.workspace!.plan!.push({id:'old',title:'Old work',parent:'M1',state:'done',revision:1},{id:'next',title:'Next',parent:'M1',needs:['timer'],state:'todo',revision:1});
+ render(() => <WorkspaceLayout frame={f} onAction={()=>{}}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-plan-link'));
+ expect(screen.getByTestId('workspace-plan-done-M1/0/done').textContent).toContain('1 done');
+ expect(screen.queryByTestId('workspace-plan-node-old')).toBeNull();
+ expect(screen.queryByTestId('workspace-plan-need-timer-next')).toBeNull();
+ await fireEvent.click(screen.getByTestId('workspace-plan-node-timer'));
+ expect(screen.getByTestId('workspace-plan-need-timer-next')).toBeTruthy();
+ expect(screen.getByTestId('workspace-plan-hint').textContent).toBe('timer: 0 needed · 1 waiting on it');
+ expect(screen.getByTestId('workspace-plan-frontier').textContent).toBe('ahead: 1 → 1 (2 left) · narrow: one agent could close this');
+ await fireEvent.click(screen.getByTestId('workspace-plan-done-M1/0/done'));
+ expect(screen.getByTestId('workspace-plan-node-old')).toBeTruthy();
+ expect(screen.queryByTestId('workspace-plan-done-M1/0/done')).toBeNull();
+ expect((screen.getByTestId('workspace-plan-show-done') as HTMLInputElement).checked).toBe(true);
+ localStorage.removeItem('wash.agent.plan.showDone');
+});
+
+// The frame's QA document is bounded; a card cut short asks for the whole
+// thread when it opens and then shows every event, kinds marked.
+test('a Questions card cut short loads the whole thread when opened', async () => {
+ const f=frame();
+ f.workspace!.qa=[thread({id:'q1',node:'K5',title:'Open one',assignee:'lead',state:'open'}),thread({id:'q2',node:'K6',title:'Settled',assignee:'lead',state:'resolved',archived:true})];
+ f.qa_markdown='# Workspace QA\n\n## K5 · q1 — Open one\n\nStatus: **open**\n\n## K6 · q2 — Settled\n\nStatus: **resolved**\n\nEvents are in the thread\'s file; read them with workspace_get view=qa and thread_id.\n';
+ const [value,setValue]=createSignal<{frame:agentproto.WorkspaceState;result?:agentproto.WorkspaceResult}>({frame:f});
+ const onAction=vi.fn();
+ render(() => <WorkspaceLayout frame={value().frame} result={value().result} onAction={onAction}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-question-q1'));
+ expect((screen.getByTestId('workspace-qa-thread-q1') as HTMLDetailsElement).open).toBe(true);
+ const card=screen.getByTestId('workspace-qa-thread-q2') as HTMLDetailsElement;
+ expect(card.open).toBe(false);
+ expect(onAction).not.toHaveBeenCalledWith('qa_thread',expect.anything());
+ card.open=true; await fireEvent(card,new Event('toggle'));
+ expect(onAction).toHaveBeenCalledWith('qa_thread',{thread_id:'q2'});
+ expect(screen.getByTestId('workspace-qa-cut-q2').textContent).toContain('loading');
+ const full=thread({id:'q2',node:'K6',title:'Settled',assignee:'lead',state:'resolved',events:[
+  {id:'e1',author:'lead',kind:'question',body:'Why?',created_at:0},{id:'e2',author:'human',kind:'answer',body:'Because.',created_at:1,answers:'e1'},
+  {id:'e3',author:'human',kind:'answer',body:'Also this.',created_at:2,answers:'e1',answers_inferred:true}]});
+ setValue({frame:f,result:{kind:'workspace_result',key:'acp:1',operation:'qa_thread',thread:full}});
+ const events=screen.getByTestId('workspace-qa-events-q2');
+ expect(events.textContent).toContain('Why?');
+ expect(events.textContent).toContain('Because.');
+ expect(screen.getByTestId('workspace-qa-event-e2').getAttribute('data-kind')).toBe('answer');
+ expect(events.textContent).toContain('Owner');
+ // Answers sit under the question they answer, an inferred one saying so.
+ const replies=screen.getByTestId('workspace-qa-replies-e1');
+ expect(replies.contains(screen.getByTestId('workspace-qa-event-e2'))).toBe(true);
+ expect(screen.getByTestId('workspace-qa-answers-e2').textContent).toBe('↳ answers the above');
+ expect(screen.getByTestId('workspace-qa-answers-e3').textContent).toBe('↳ probably answers the above');
+});
+
+test('a closing workspace wears a Closing chip on the Plan toolbar', async () => {
+ const f=frame(); f.workspace!.phase='closing';
+ render(() => <WorkspaceLayout frame={f} onAction={()=>{}}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-plan-link'));
+ expect(screen.getByTestId('workspace-plan-phase').textContent).toBe('Closing');
+ const open=frame();
+ cleanup(); render(() => <WorkspaceLayout frame={open} onAction={()=>{}}>Conversation</WorkspaceLayout>);
+ await fireEvent.click(screen.getByTestId('workspace-plan-link'));
+ expect(screen.queryByTestId('workspace-plan-phase')).toBeNull();
 });

@@ -16,6 +16,11 @@ type QAEvent struct {
 	Body    string `json:"body"`
 	Message string `json:"message_id,omitempty"`
 	Created int64  `json:"created_at"`
+	// Answers is the event this one answers, set on a thread read in full
+	// (LinkAnswers), not stored; Inferred when it was found by position
+	// rather than by the answer's message replying to the question's.
+	Answers  string `json:"answers,omitempty"`
+	Inferred bool   `json:"answers_inferred,omitempty"`
 }
 type QAThread struct {
 	ID string `json:"id"`

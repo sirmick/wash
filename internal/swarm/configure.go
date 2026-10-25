@@ -28,8 +28,54 @@ type ConfigurePatch struct {
 	Supervisor *Supervisor `json:"supervisor"`
 	// Digest is how long the orchestrator's routine mail (progress, notes,
 	// lifecycle) is held for one turn, e.g. "5m"; "" delivers as it comes.
-	Digest   *string `json:"digest"`
+	Digest *string `json:"digest"`
+	// Phase is "" (fanning out) or "closing" (folding back to one agent):
+	// see Workspace.Phase.
+	Phase    *string `json:"phase"`
 	Expected *int64  `json:"expected_revision"`
+}
+
+// closingNotice is what a member without open work hears when the
+// workspace starts closing.
+const closingNotice = "The workspace is closing: the milestone's remaining work is narrow enough for one agent, and the team is folding back. You have no open assignment. Write or update your handoff now (member_update with handoff: what you did, what is unfinished, where the files are), then set waiting and end your turn. You will be ended once your handoff is in; do not start new work."
+
+// beginClosing asks every member without open work to hand off, and tells
+// the lead who was asked and who still has work. Returns the members
+// asked, for the caller's report.
+func beginClosing(w *Workspace) []string {
+	var asked, busy []string
+	for i := range w.Members {
+		m := &w.Members[i]
+		if m.ID == w.Lead || m.State == "ended" {
+			continue
+		}
+		open := false
+		for _, a := range w.Assignments {
+			if a.Member == m.ID && a.Open() {
+				open = true
+				break
+			}
+		}
+		if open {
+			busy = append(busy, m.Name)
+			continue
+		}
+		if _, err := AddMessage(w, w.Lead, m.ID, "instruction", closingNotice, "", "", ""); err == nil {
+			asked = append(asked, m.Name)
+		}
+	}
+	text := "Closing: "
+	if len(asked) > 0 {
+		text += fmt.Sprintf("%s asked to hand off and wait; end each once its handoff is in. ", strings.Join(asked, ", "))
+	} else {
+		text += "no idle members to ask. "
+	}
+	if len(busy) > 0 {
+		text += fmt.Sprintf("%s still have open work; ask them to hand off when it is reported. ", strings.Join(busy, ", "))
+	}
+	text += "New members launch only as replacements (handoff_from). workspace_get view=dossier is the handover for whoever closes the milestone."
+	_, _ = AddMessage(w, w.Lead, w.Lead, "lifecycle", text, "", "", "")
+	return asked
 }
 
 // Supervisor tunes the watchdog that tells the orchestrator when work has
@@ -197,6 +243,15 @@ func (s *Store) Configure(session string, p ConfigurePatch) (int64, error) {
 		}
 		if p.Catalog != nil {
 			w.Catalog = *p.Catalog
+		}
+		if p.Phase != nil {
+			if *p.Phase != "" && *p.Phase != "closing" {
+				return errors.New(`phase must be "" (fanning out) or "closing"`)
+			}
+			if *p.Phase == "closing" && w.Phase != "closing" {
+				beginClosing(w)
+			}
+			w.Phase = *p.Phase
 		}
 		if p.Supervisor != nil {
 			if err := p.Supervisor.Validate(); err != nil {

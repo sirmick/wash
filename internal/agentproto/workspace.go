@@ -19,7 +19,7 @@ type WorkspaceRefresh struct {
 type WorkspaceAction struct {
 	Key string `json:"key"`
 	// Name is the operation: member_open | member_resume |
-	// member_message | member_inspect.
+	// member_message | member_inspect | qa_thread.
 	Name      string              `json:"name"`
 	Arguments WorkspaceActionArgs `json:"arguments"`
 }
@@ -34,6 +34,8 @@ type WorkspaceActionArgs struct {
 	Recipient string `json:"recipient,omitempty"`
 	// Body is a member_message's text.
 	Body string `json:"body,omitempty"`
+	// ThreadID names the QA thread qa_thread reads in full.
+	ThreadID string `json:"thread_id,omitempty"`
 }
 
 // WorkspaceState is the whole sidebar frame for an orchestrator's (or a
@@ -132,6 +134,9 @@ type WorkspaceResult struct {
 	Error     string `json:"error,omitempty"`
 	// Transcript answers member_inspect.
 	Transcript *WorkspaceTranscript `json:"transcript,omitempty"`
+	// Thread answers qa_thread: the thread with every event, the archived
+	// ones read back from its file.
+	Thread *swarm.QAThread `json:"thread,omitempty"`
 }
 
 func init() {

@@ -1,3 +1,51 @@
+wash (0.20.0-1) unstable; urgency=low
+
+  * Workspaces: phase:"closing" folds a team back to one agent at a
+    milestone's tail (idle members hand off and wait, new members launch
+    only as replacements), and workspace_get view=dossier is the
+    handover: remaining work and what blocks it, reported work, open
+    threads with answers under their questions, decisions, commits per
+    done node, members and handoffs. workspace_end no longer asks to
+    confirm nodes marked active with nobody on them, and names them.
+    about says who leads each open workspace and the routes another
+    session has; a configure preview names open workspaces at the same
+    root (WASH-R43).
+  * Agent window: the Plan tab reads at 300 nodes (level boxes by
+    dependency depth, done work folded, a click pins a node's own needs,
+    the toolbar reads the frontier and the Closing phase); the Questions
+    tab is a card per thread, loading the whole thread with answers
+    nested under their questions. Tool rows fold out in full. Path links
+    reach folders (opened in the file manager) and absolute or ~/ paths
+    wherever they exist; relative ones stay confined to the session
+    folder. Ctrl+S and Ctrl+Shift+C fire only in the focused window.
+  * Links: anything that looks like an http(s) address is a link, in
+    Markdown and in typed text; other schemes stay inert text.
+  * Files: a window opened on a folder shows its contents; tiles are
+    packed tighter (about 1.6x more a screen).
+  * wash-display: the X11 clipboard works both ways (and past 64 KiB),
+    a browser reload repaints idle X11 windows, popups no longer leak a
+    channel each, the router socket is no longer inherited by guests,
+    override-redirect menus find a parent, and clicks reach the X window
+    under the pointer. A torture harness (make display-torture) drives
+    real X11/Wayland clients; the vendored wlroots build runs in-tree.
+  * In-browser VM: boots 2.4x faster (MessageChannel run loop, a
+    bootloader RNG seed instead of haveged, chunk prefetch), input no
+    longer drops bytes and echoes in 0.5 ms, the bridge no longer
+    stringifies Module (a ~27 s stall on real networks), and the image
+    carries only the apps and two theme packs it installs (rootfs
+    13.4 -> 9.5 MB).
+  * Router: no runtime asset gzip in the VM build; compressed media is
+    never re-compressed.
+  * Remote and mount: ssh targets are validated and argv-terminated;
+    file handles survive a reconnect, re-dials no longer block FUSE,
+    inodes survive rename, stale mountpoints are cleared, a busy unmount
+    names its holders with a Force option, and watched mounts re-sync
+    after a watch restart.
+  * Packaging: verify-packages installs wash then wash-login, checks
+    what each package owns, and pins the amd64 base images.
+
+ -- Michael <sirmick@gmail.com>  Wed, 21 Oct 2026 12:55:49 +0000
+
 wash (0.19.0-1) unstable; urgency=low
 
   * Window layouts: any viewport cell can be given a layout and its
