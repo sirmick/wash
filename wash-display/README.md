@@ -33,8 +33,10 @@ The compositor shares the router's log, so the plumbing is observable there:
 `inject … button`, `popup mapped` / `X11 popup mapped`, `clipboard guest->wash`,
 `cursor … shape=`. The faked-BE contract e2e (`e2e/tests/display.spec.ts`)
 runs in CI without a compositor; the real-client checks
-(`display-input-smoke.spec.ts`, `display-guest.spec.ts`) are gated out of the
-default `make e2e`.
+(`display-input-smoke.spec.ts`, `display-guest.spec.ts`, `display-x11-probe.spec.ts`)
+are gated out of the default `make e2e`. They all pass under
+`WLR_RENDERER=pixman` (no GPU needed — docs/DISPLAY_E2E.md §2.1). The
+2026-09-23 correctness review and its fixes: `docs/Review-findings-display.md`.
 
 ## Build
 

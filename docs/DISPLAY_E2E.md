@@ -21,7 +21,7 @@ Three tiers exist:
 | Tier | What | Where it runs |
 |---|---|---|
 | Contract | `e2e/tests/display.spec.ts` (7 specs) against the **fake** display in `apps/test` — window lifecycle, canned-frame decode, input batching, popup overlay, cursor, clipboard | CI, every PR |
-| Real compositor | `display-cpp`, `display-term-xclock`, `display-input-smoke`, `display-guest` (GTK3, both backends), `display-qt-popover`, settings Display panel (3) | dev box only — skipped in CI via `displaySkipReason()` |
+| Real compositor | `display-cpp`, `display-term-xclock`, `display-input-smoke`, `display-guest` (GTK3, both backends, byte-level clipboard readback), `display-qt-popover`, `display-x11-probe` (xcb: untyped/typed override-redirect grabs, `_NET_WM_STATE_FULLSCREEN`), settings Display panel (3) | dev box only — skipped in CI via `displaySkipReason()` |
 | Manual | `e2e/capture/display-probe.cap.ts` (13 probes, `canvasStats`, `fpsFromLog`), `tmp/smoke.sh`, `wash-display/tools/xscale.c` | by hand |
 
 Three structural holes dominate:
@@ -50,7 +50,16 @@ that is pure CPU. The CI clients are all shm (xclock, the GTK3 guest, the
 testcard of §3) — no dmabuf anywhere, so Ubuntu 24.04's wlroots 0.17.1 lacking
 dmabuf read-back is irrelevant here.
 
-### 2.1 Spike (do first, half a day)
+### 2.1 Spike (do first, half a day) — **DONE 2026-09-23: pixman works**
+
+Verdict: with stock Ubuntu 24.04 wlroots 0.17.1 and `WLR_RENDERER=pixman`,
+the compositor logs "Creating pixman renderer", Xwayland starts (glamor falls
+back to software), xclock streams a full 166×166 first frame with a sane dirty
+rect, and the browser canvas reads 99% non-blank. All real-tier specs pass in
+under a second each on the dev box. No vendored-wlroots fallback needed for
+CI. (Recorded in docs/Review-findings-display.md; the rest of P0 — make
+targets, freshness guard, CI job — is still to do.)
+
 
 Run `wash-display` under `WLR_RENDERER=pixman` with no DRM device and confirm:
 compositor starts, Xwayland comes up, `xclock` maps, `frame seq=` lines carry a

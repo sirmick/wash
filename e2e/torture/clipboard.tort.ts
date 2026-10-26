@@ -36,7 +36,7 @@ test('clipboard: guest→wash 100 KB, 20× small, wash→guest 200 KB, thread hy
   from = router.logCursor();
   for (let i = 0; i < 20; i++) await g.cmd(`clip set ${100 + i}`);
   await sleep(1500);
-  const n = (router.log().slice(from).match(/clipboard guest->wash/g) ?? []).length;
+  const n = (router.log().slice(from).match(/clipboard guest->wash mime=/g) ?? []).length;
   ev.metric('smallCopiesBridged', n);
   ev.check('all 20 small copies bridged', n === 20, `${n}/20`);
   const lastText = await page.evaluate(() => (window as any).wash.clipboardGetText() as string | Promise<string>);
