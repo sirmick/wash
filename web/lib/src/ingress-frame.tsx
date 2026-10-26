@@ -2,7 +2,8 @@ import { createMemo, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 import { washAssetUrl } from './assets';
 import { installIngressClipboardBridge } from './ingress-clipboard';
-import { installIngressFocusBridge } from './ingress-focus';
+import { installIngressActivityBridge, installIngressFocusBridge } from './ingress-focus';
+import { noteUserActivity } from './screensaver';
 import { createIngressHeal, type IngressHeal } from './ingress-heal';
 
 // IngressFrame embeds a web app published through the router's
@@ -61,6 +62,7 @@ export const IngressFrame: Component<IngressFrameProps> = (props) => {
   // Detach the focus bridge from the previous document before the iframe
   // navigates (each load is a fresh document with its own listeners).
   let detachFocus: (() => void) | undefined;
+  let detachActivity: (() => void) | undefined;
 
   // raiseWindow makes an interaction inside the (event-swallowing) iframe
   // behave as if the user clicked the window frame: synthesize a bubbling
@@ -78,7 +80,10 @@ export const IngressFrame: Component<IngressFrameProps> = (props) => {
   let heal: IngressHeal | undefined;
 
   onMount(() => {
-    onCleanup(() => detachFocus?.());
+    onCleanup(() => {
+      detachFocus?.();
+      detachActivity?.();
+    });
     if (props.onDead) {
       heal = createIngressHeal({
         base: () => props.path,
@@ -123,6 +128,10 @@ export const IngressFrame: Component<IngressFrameProps> = (props) => {
         // load: each navigation is a new document.
         detachFocus?.();
         detachFocus = installIngressFocusBridge(frame?.contentWindow, raiseWindow);
+        // And report typing/mouse inside it as activity, or the screensaver
+        // starts while the user is working in the embed.
+        detachActivity?.();
+        detachActivity = installIngressActivityBridge(frame?.contentWindow, noteUserActivity);
         // The load event fires for an error page too — the iframe can't
         // see its status, so ask the route directly.
         heal?.check();

@@ -10,7 +10,7 @@ import "embed"
 // asset. Wallpapers are named one by one: only Packs' own, with their
 // Settings thumbnails.
 //
-//go:embed all:assets/assets all:assets/fonts all:assets/vendor
+//go:embed all:assets/assets all:assets/fonts all:assets/screensavers all:assets/vendor
 //go:embed assets/icons.svg assets/index.html assets/shell.js assets/wash-logo.svg
 //go:embed assets/wallpapers/midnight.svg assets/wallpapers/copland.svg
 //go:embed assets/wallpapers/thumbs/midnight.jpg assets/wallpapers/thumbs/copland.jpg

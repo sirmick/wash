@@ -15,6 +15,7 @@ apps/*/be/assets/
 # from one package) is staged here by $(SHELL_STAMP); build artifact.
 internal/shellassets/assets/
 web/shell/public/vendor/
+web/shell/public/screensavers/
 e2e/test-results/
 e2e/playwright-report/
 # Stray dev binaries: `go build ./cmd/wash` without -o lands the

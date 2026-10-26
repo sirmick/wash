@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { installIngressFocusBridge } from './ingress-focus.ts';
+import { ACTIVITY_THROTTLE_MS, installIngressActivityBridge, installIngressFocusBridge } from './ingress-focus.ts';
 
 // A minimal stand-in for the embedded window's document: records
 // add/removeEventListener calls and can fire a registered listener.
@@ -74,4 +74,25 @@ test('is a safe no-op for a null or cross-origin window', () => {
   assert.doesNotThrow(() =>
     installIngressFocusBridge(crossOrigin as unknown as Window, () => {})(),
   );
+});
+
+test('activity bridge reports input inside the embed, throttled, until detached', () => {
+  const { win, doc } = fakeEmbed();
+  let t = 0;
+  let reports = 0;
+  const detach = installIngressActivityBridge(win, () => reports++, () => t);
+  doc.fire('keydown');
+  assert.equal(reports, 1, 'typing inside the embed is activity');
+  doc.fire('pointermove');
+  doc.fire('wheel');
+  assert.equal(reports, 1, 'throttled within the window');
+  t += ACTIVITY_THROTTLE_MS;
+  doc.fire('pointermove');
+  assert.equal(reports, 2);
+  detach();
+  assert.equal(doc.count('keydown'), 0, 'keydown listener removed');
+  t += ACTIVITY_THROTTLE_MS;
+  doc.fire('keydown');
+  assert.equal(reports, 2, 'a detached bridge must not forward');
+  assert.doesNotThrow(() => installIngressActivityBridge(null, () => {})());
 });

@@ -59,3 +59,43 @@ export function installIngressFocusBridge(
     return noop;
   }
 }
+
+// The inputs that mean "the user is still here" for the screensaver's idle
+// timer. They never cross the frame boundary either, so a user typing all
+// afternoon in an embedded editor looked idle to the host page.
+const ACTIVITY_EVENTS = ['keydown', 'pointerdown', 'pointermove', 'wheel'] as const;
+
+// ACTIVITY_THROTTLE_MS: idle timeouts are minutes, so one report a second
+// is plenty and keeps a mouse drag from dispatching hundreds of events.
+export const ACTIVITY_THROTTLE_MS = 1000;
+
+// installIngressActivityBridge is installIngressFocusBridge for activity:
+// it calls `forward` (at most once per ACTIVITY_THROTTLE_MS) when the user
+// gives input inside the embed. The host wires it to noteUserActivity.
+// Same safety rules: observe only, capture phase, no-op when cross-origin.
+export function installIngressActivityBridge(
+  win: Window | null | undefined,
+  forward: ForwardFn,
+  now: () => number = Date.now,
+): () => void {
+  const noop = () => {};
+  if (!win) return noop;
+  try {
+    const doc = win.document;
+    if (!doc) return noop;
+    let last = -Infinity;
+    const onInput = () => {
+      const t = now();
+      if (t - last < ACTIVITY_THROTTLE_MS) return;
+      last = t;
+      forward();
+    };
+    const opts = { capture: true, passive: true } as const;
+    for (const type of ACTIVITY_EVENTS) doc.addEventListener(type, onInput, opts);
+    return () => {
+      for (const type of ACTIVITY_EVENTS) doc.removeEventListener(type, onInput, opts);
+    };
+  } catch {
+    return noop;
+  }
+}

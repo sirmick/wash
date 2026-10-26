@@ -1087,7 +1087,7 @@ clean:
 	rm -rf $(OUT)
 	rm -rf web/*/dist apps/*/fe/dist wash-display/fe/dist
 	rm -rf apps/*/be/assets cmd/*/assets internal/apps/*/assets internal/runner/*/assets internal/login/assets/shell internal/shellassets/assets
-	rm -rf web/shell/public/vendor
+	rm -rf web/shell/public/vendor web/shell/public/screensavers
 	rm -rf dist packaging/build-ctx
 	rm -rf wash-display/build wash-display/third_party/wlroots/build wash-display/.wlroots
 	rm -f  wash-display/*.deb

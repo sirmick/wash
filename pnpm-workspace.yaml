@@ -2,6 +2,7 @@ packages:
   - "web/shell"
   - "web/lib"
   - "web/fs-client"
+  - "web/screensavers"
   - "web/demo"
   - "apps/*/fe"
   - "wash-display/fe"

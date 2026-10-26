@@ -4,9 +4,9 @@
   "version": "0.9.4",
   "type": "module",
   "scripts": {
-    "build": "node build-vendor.mjs && pnpm --filter @wash/ui run build && vite build && node build-icons.mjs",
+    "build": "node build-vendor.mjs && pnpm --filter @wash/ui run build && pnpm --filter @wash/screensavers run build && vite build && node build-icons.mjs",
     "build-vendor": "node build-vendor.mjs && pnpm --filter @wash/ui run build",
-    "dev": "node build-vendor.mjs && pnpm --filter @wash/ui run build && vite"
+    "dev": "node build-vendor.mjs && pnpm --filter @wash/ui run build && pnpm --filter @wash/screensavers run build && vite"
   },
   "dependencies": {
     "@wash/ui": "workspace:*",

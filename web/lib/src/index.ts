@@ -129,3 +129,18 @@ export { createIngressHeal, ingressBase } from './ingress-heal';
 export type { IngressHeal, IngressHealOptions } from './ingress-heal';
 export { installIngressClipboardBridge } from './ingress-clipboard';
 export { installIngressFocusBridge } from './ingress-focus';
+export {
+  SCREENSAVERS,
+  RANDOM_SAVER,
+  SCREENSAVER_DEFAULTS,
+  getSaver,
+  saverThumbnailPath,
+  loadSaver,
+  normalizeScreensaver,
+  resolveSaver,
+  optionValues,
+  showScreensaver,
+  startScreensaverHost,
+  noteUserActivity,
+} from './screensaver';
+export type { SaverOption, SaverModule, SaverHandle, SaverDesc, ScreensaverConfig, ScreensaverHost, ScreensaverView } from './screensaver';

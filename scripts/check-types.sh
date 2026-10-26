@@ -45,7 +45,7 @@ fi
 
 hits=""
 checked=0
-for d in apps/*/fe web/shell web/lib wash-display/fe; do
+for d in apps/*/fe web/shell web/lib web/screensavers wash-display/fe; do
   [ -f "$d/tsconfig.json" ] || continue
   checked=$((checked + 1))
   out=$("$TSC" --noEmit -p "$d/tsconfig.json" 2>&1 | grep -E 'error TS' || true)
