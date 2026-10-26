@@ -290,6 +290,12 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Apps / UX
 
+- [ ] **Screensaver v2: let apps hold it off.** v1 (2026-10-26,
+  web/screensavers/README.md) starts after N minutes with no input in the
+  tab. Nothing stops it during a video in a window or a long agent run being
+  watched. Reuse the `idle.inhibit` idea (today it only keeps the router
+  alive): an app asks, the session's screensaver host respects it.
+
 - [ ] **Apps sweep follow-ups (docs/Review-findings.md, 2026-09-08).** P0 and
   P1 shipped in 0.14.4. The P2 "missing everyday workflows" list was
   re-verified 2026-10-11 and most of it had landed; what remains is listed

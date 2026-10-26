@@ -1,5 +1,6 @@
 // wash-app-settings: singleton settings UI. One built-in pane — Desktop
-// (round-trips ~/.config/wash/desktop.json via settings.read/write) —
+// (theme, wallpaper, clock, taskbar, screensaver; round-trips
+// ~/.config/wash/desktop.json via settings.read/write) —
 // plus a section per app-supplied settings panel discovered through
 // window.wash.settingsPanels(). The panels (Developer/vscode,
 // Network/netd, Display/compositor) live in their owning apps and are
@@ -27,11 +28,13 @@ import {
   defineWashApp,
   getPack,
   availablePacks,
+  normalizeScreensaver,
   tokens,
 } from '@wash/ui';
-import type { Pack, SettingsPanelPort } from '@wash/ui';
+import type { Pack, ScreensaverConfig, SettingsPanelPort } from '@wash/ui';
 import { Image as ImageIcon } from 'lucide-solid';
 import { AgentsPane } from './AgentsPane';
+import { ScreensaverSection } from './ScreensaverSection';
 import type { AgentPolicy } from './AgentsPane';
 
 // DesktopConfig mirrors cmd/wash-session/config.go schema. Optional
@@ -51,6 +54,7 @@ interface DesktopConfig {
   taskbar?: {
     position?: 'top' | 'bottom';
   };
+  screensaver?: ScreensaverConfig;
 }
 
 const DEFAULTS: Required<{
@@ -90,6 +94,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   const [format, setFormat] = createSignal<'12h' | '24h'>(DEFAULTS.format);
   const [showSeconds, setShowSeconds] = createSignal<boolean>(DEFAULTS.showSeconds);
   const [position, setPosition] = createSignal<'top' | 'bottom'>(DEFAULTS.position);
+  const [screensaver, setScreensaver] = createSignal<ScreensaverConfig>(normalizeScreensaver(undefined));
 
   const [pickerOpen, setPickerOpen] = createSignal(false);
   const [pickerStart, setPickerStart] = createSignal('/');
@@ -186,6 +191,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
         setFormat(v.clock?.format ?? DEFAULTS.format);
         setShowSeconds(v.clock?.show_seconds ?? DEFAULTS.showSeconds);
         setPosition(v.taskbar?.position ?? DEFAULTS.position);
+        setScreensaver(normalizeScreensaver(v.screensaver));
         hydrated = true;
         return;
       }
@@ -256,6 +262,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       },
       clock: { format: format(), show_seconds: showSeconds() },
       taskbar: { position: position() },
+      screensaver: screensaver(),
     };
     send({ kind: 'settings.write', domain: 'desktop', value });
     setStatus('saving…');
@@ -263,7 +270,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // Auto-save on any desktop signal change.
   createEffect(() => {
-    pack(); path(); mode(); fallback(); format(); showSeconds(); position();
+    pack(); path(); mode(); fallback(); format(); showSeconds(); position(); screensaver();
     scheduleSave();
   });
 
@@ -361,6 +368,8 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               onFormatChange={setFormat}
               onShowSecondsChange={setShowSeconds}
               onPositionChange={setPosition}
+              screensaver={screensaver()}
+              onScreensaverChange={setScreensaver}
             />
           </Show>
           <Show when={section() === 'agents'}>
@@ -476,6 +485,8 @@ const DesktopPane: Component<{
   onFormatChange: (v: '12h' | '24h') => void;
   onShowSecondsChange: (v: boolean) => void;
   onPositionChange: (v: 'top' | 'bottom') => void;
+  screensaver: ScreensaverConfig;
+  onScreensaverChange: (v: ScreensaverConfig) => void;
 }> = (props) => {
   return (
     <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
@@ -566,6 +577,8 @@ const DesktopPane: Component<{
           onChange={(v) => props.onPositionChange(v as 'top' | 'bottom')}
         />
       </Row>
+
+      <ScreensaverSection value={props.screensaver} onChange={props.onScreensaverChange} />
     </div>
   );
 };

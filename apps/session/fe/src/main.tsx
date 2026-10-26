@@ -20,6 +20,7 @@ import {
   applyScheme,
   defineWashApp,
   getPack,
+  startScreensaverHost,
   tokens,
   washAssetUrl,
 } from '@wash/ui';
@@ -155,6 +156,9 @@ interface DesktopConfigMsg {
   taskbar: {
     position?: 'top' | 'bottom' | '';
   };
+  // desktop.json's `screensaver` block, untouched by the BE; null when unset.
+  // normalizeScreensaver (@wash/ui) owns its shape and defaults.
+  screensaver?: unknown;
 }
 
 // SystemInfoMsg mirrors the BE's system.info app_msg. Sent once on
@@ -832,6 +836,11 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
 
   // ---- desktop config ----
 
+  // The screensaver's idle timer runs here, per browser tab: every tab has
+  // its own desktop, and each goes idle on its own.
+  const screensaver = startScreensaverHost();
+  onCleanup(() => screensaver.dispose());
+
   // applyDesktopConfig applies the active pack (scheme vars on the root
   // + start icon + default wallpaper), then layers the wallpaper bytes /
   // mode / fallback color onto the host element's inline style and
@@ -851,6 +860,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
     setShowSeconds(!!cfg.clock?.show_seconds);
     setTaskbarPosition(cfg.taskbar?.position === 'top' ? 'top' : 'bottom');
     setClock(formatClock(clockFormat(), showSeconds()));
+    screensaver.configure(cfg.screensaver);
   };
 
   // applyWallpaper paints the desktop background. The bytes come from

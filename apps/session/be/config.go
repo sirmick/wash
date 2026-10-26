@@ -40,6 +40,12 @@ type desktopConfig struct {
 	Wallpaper wallpaperPref `json:"wallpaper"`
 	Clock     clockPref     `json:"clock"`
 	Taskbar   taskbarPref   `json:"taskbar"`
+	// Screensaver is passed to the FE as decoded, untyped: its shape (and
+	// each saver's options) is owned by web/lib/src/screensaver.ts
+	// normalizeScreensaver, so a new saver option needs no BE change. A map,
+	// not json.RawMessage: the wire is CBOR, where raw bytes would arrive in
+	// the FE as a base64 string.
+	Screensaver map[string]any `json:"screensaver,omitempty"`
 }
 
 type wallpaperPref struct {
@@ -174,6 +180,7 @@ func sendDesktopConfig(c *sdk.Conn) {
 		"taskbar": map[string]any{
 			"position": cfg.Taskbar.Position,
 		},
+		"screensaver": cfg.Screensaver, // nil ⇒ null ⇒ FE defaults
 	}
 	if err := c.SendAppMsg(msg); err != nil {
 		log.Printf("wash-session: send desktop.config: %v", err)
