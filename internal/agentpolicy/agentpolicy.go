@@ -1,13 +1,12 @@
-// Package agentpolicy owns the on-disk shape of the coding-agent approval
-// policy (docs/AGENT_TERM.md §6) and the rule text that describes one
-// permission.
+// Package agentpolicy owns agents.json: the coding-agent approval policy
+// (docs/AGENT_APP.md), the catalogs, connections and launch defaults stored
+// beside it, and the rule text that describes one permission.
 //
-// It exists because the file has three parties now and they must agree:
-// the Agents settings pane writes it, every wash-term reads it to answer a
-// request, and com.wash.agentd appends to it when a human clicks "always
-// allow" (§12). The MATCHER — what a rule means — deliberately stays in
-// wash-term with its tests; this package is the schema, the file I/O, and
-// the rule-suggestion text, i.e. exactly what more than one process needs.
+// com.wash.agentd reads it on every permission request a hosted (ACP)
+// session makes and is its only writer: the Agents window's Permissions and
+// Catalog tabs, the launcher's remembered defaults, and "always allow" in the
+// sidebar (§12) all write through agentd. The Agents app also reads it to
+// probe adapters. An agent run by hand in a terminal is not covered.
 package agentpolicy
 
 import (
@@ -18,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // Decisions. "ask" is also the universal fallback: everything unknown,
@@ -28,14 +28,13 @@ const (
 	DecisionAsk   = "ask"
 )
 
-// Domain is the settings domain (and therefore the file basename) the
-// Agents pane writes through the settings host.
+// Domain is the file's basename under ~/.config/wash.
 const Domain = "agents"
 
 // Policy is ~/.config/wash/agents.json.
 type Policy struct {
 	// Enabled is the kill switch. False — the zero value, and the state
-	// of a box that has never opened the Agents pane — means wash answers
+	// of a box whose policy was never turned on — means wash answers
 	// "ask" to everything.
 	Enabled bool `json:"enabled"`
 	// Default is the decision for a request no rule matched. Anything
@@ -157,6 +156,8 @@ func Append(path, match, decision, cwd string) error {
 	if match == "" {
 		return nil
 	}
+	writeMu.Lock()
+	defer writeMu.Unlock()
 	p := Load(path)
 	for _, r := range p.Rules {
 		if r.Match == match && r.Decision == decision && r.Cwd == cwd {
@@ -169,11 +170,18 @@ func Append(path, match, decision, cwd string) error {
 	return Save(path, p)
 }
 
+// writeMu serializes the read-modify-writes in this process. agentd is the
+// file's only writer (its handlers, "always allow", the Permissions tab), so
+// an in-process lock is enough to keep one save from reverting another.
+var writeMu sync.Mutex
+
 // Update changes the policy file in place: read, change, write. Unlike
 // Load, a file that exists but does not parse is an error here rather than
 // a zero policy — a read-modify-write on a zero policy would replace the
 // whole file, rules and all, with only what fn set.
 func Update(path string, fn func(*Policy) error) error {
+	writeMu.Lock()
+	defer writeMu.Unlock()
 	var p Policy
 	data, err := os.ReadFile(path)
 	switch {

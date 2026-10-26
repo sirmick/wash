@@ -186,7 +186,7 @@ func TestUnmappedKindCannotBeAllowedByAnExistingRule(t *testing.T) {
 
 // wash records consent in its own agents.json, so it must never also pick
 // the agent's durable option — that would put the same consent in two
-// places that can disagree, only one of which the Agents pane shows.
+// places that can disagree, only one of which the Permissions tab shows.
 func TestPickPrefersTheOneShotOption(t *testing.T) {
 	got := pick(stdOptions, acp.OptionAllowOnce, acp.OptionAllowAlways)
 	if got.Outcome.OptionID != "once" {

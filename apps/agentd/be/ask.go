@@ -277,6 +277,8 @@ func registerAskHandlers(bus *sdk.Bus, c *sdk.Conn) {
 					log.Printf("agentd: remember rule=%q cwd=%q: %v", rule, scope, err)
 				} else {
 					log.Printf("agentd: remembered rule=%q decision=%s cwd=%q", rule, decision, scope)
+					// Show it in the Permissions tab now, not at the next sweep.
+					mutateState(func(s *agentproto.State) { refreshLaunchers(s) })
 				}
 			}
 		}

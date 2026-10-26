@@ -107,6 +107,13 @@ One tab for the machine's agent configuration
 
 ### Permissions, auto-approve and questions
 
+- The policy (on/off, the default for an unmatched request, whether to ask
+  on the desktop, and the ordered rules) is edited in the Agents window's
+  **Permissions** tab and saved through agentd (`agent_set_policy`), which
+  changes only those fields of `~/.config/wash/agents.json`. It covers
+  sessions wash hosts; an agent run by hand in a terminal is not asked
+  about. (It used to be a Settings pane that wrote the whole file and could
+  revert agentd's own writes; moved 2026-10-26.)
 - A tool call with no matching rule asks. The ask shows inline, in the
   Running list and in the rail; answering anywhere answers everywhere.
   "Always allow" writes a rule to `~/.config/wash/agents.json`

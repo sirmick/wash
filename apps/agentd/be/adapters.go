@@ -183,19 +183,23 @@ func Probe(pol agentpolicy.Policy) []agentproto.Adapter {
 	return out
 }
 
-// refreshLaunchers republishes what the launcher offers when it changed:
-// adapters installed or removed, agents.json edited, a key set or cleared.
+// refreshLaunchers republishes what the launcher offers, and the approval
+// policy, when they changed: adapters installed or removed, agents.json
+// edited, a key set or cleared.
 // Re-read on every sweep, like the default prompt, because each of those
 // can happen outside wash. Reports whether anything changed.
 func refreshLaunchers(s *agentproto.State) bool {
 	pol, keys := hostedPolicy(), keyStore()
 	adapters, catalogs, keyViews := Probe(pol), publishCatalogs(pol, keys), publishKeys(pol, keys)
 	launch, options, conns := publishLaunch(pol), publishAdapterOptions(), publishConnections(pol)
+	policy := publishPolicy(pol)
 	if reflect.DeepEqual(adapters, s.Adapters) && reflect.DeepEqual(catalogs, s.Catalogs) && reflect.DeepEqual(keyViews, s.Keys) &&
-		reflect.DeepEqual(launch, s.Launch) && reflect.DeepEqual(options, s.AdapterOptions) && reflect.DeepEqual(conns, s.Connections) {
+		reflect.DeepEqual(launch, s.Launch) && reflect.DeepEqual(options, s.AdapterOptions) && reflect.DeepEqual(conns, s.Connections) &&
+		reflect.DeepEqual(policy, s.Policy) {
 		return false
 	}
 	s.Adapters, s.Catalogs, s.Keys, s.Launch, s.AdapterOptions, s.Connections = adapters, catalogs, keyViews, launch, options, conns
+	s.Policy = policy
 	for _, a := range adapters {
 		log.Printf("agentd: adapter %s available=%v %s", a.ID, a.Available, a.Note)
 	}

@@ -11,6 +11,7 @@ import { defaultCatalog, defaultCwd } from './default-catalog.ts';
 import { Launcher, startMessage, emptyForm, labelStyle, type LaunchForm } from './Launcher.tsx';
 import { CatalogPane, type CatalogResult } from './CatalogPane.tsx';
 import { Connections, type KeyResult } from './Connections.tsx';
+import { Permissions, type PolicyResult } from './Permissions.tsx';
 import { isStaleTranscript } from './transcript-guard.ts';
 import { applyUsagePatch } from './usage-patch.ts';
 import { isManagerElement } from './role.ts';
@@ -88,11 +89,12 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const setKeyResult = (id: string, r: KeyResult) => setKeyResults((all) => ({ ...all, [id]: r }));
   const [catalogResults, setCatalogResults] = createSignal<Record<string, CatalogResult>>({});
   const setCatalogResult = (id: string, r: CatalogResult) => setCatalogResults((all) => ({ ...all, [id]: r }));
+  const [policyResult, setPolicyResult] = createSignal<PolicyResult>({});
   // The manager's left column: the launcher and history, the catalogs, or
   // the keys. Machine configuration is a different job from starting a
   // session, and lived at the bottom of the launcher until the launcher
   // was too tall for its pane.
-  const [managerTab, setManagerTab] = createSignal<'new' | 'setup'>('new');
+  const [managerTab, setManagerTab] = createSignal<'new' | 'setup' | 'permissions'>('new');
   const cwd = () => form().cwd;
   const [starting, setStarting] = createSignal(false);
   const [picking, setPicking] = createSignal(false);
@@ -375,6 +377,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         break;
       case 'catalog_saved':
         setCatalogResult(m.id, m.error ? { ok: false, detail: m.error } : { ok: true, detail: 'Saved.' });
+        break;
+      case 'policy_saved':
+        setPolicyResult(m.error ? { ok: false, detail: m.error } : { ok: true });
         break;
 
       case 'usage_patch':
@@ -1203,15 +1208,23 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
             <div role="tablist" data-testid="agents-tabs" style={{ display: 'flex', 'align-items': 'flex-end', padding: `${tokens.spaceSm}px ${tokens.spaceMd}px 0`, 'border-bottom': `1px solid ${tokens.borderMenu}`, 'flex-shrink': 0 }}>
               <Tab role="tab" active={managerTab() === 'new'} aria-selected={managerTab() === 'new'} data-testid="agents-tab-new" onClick={() => setManagerTab('new')}>New session</Tab>
               <Tab role="tab" active={managerTab() === 'setup'} aria-selected={managerTab() === 'setup'} data-testid="agents-tab-setup" onClick={() => setManagerTab('setup')}>Setup</Tab>
+              <Tab role="tab" active={managerTab() === 'permissions'} aria-selected={managerTab() === 'permissions'} data-testid="agents-tab-permissions" onClick={() => setManagerTab('permissions')}>Permissions</Tab>
             </div>
-            <Show
-              when={managerTab() === 'new'}
-              fallback={
-                <section data-testid="agents-setup-pane" style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
-                  {setupPane}
-                </section>
-              }
-            >
+            <Show when={managerTab() === 'setup'}>
+              <section data-testid="agents-setup-pane" style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
+                {setupPane}
+              </section>
+            </Show>
+            <Show when={managerTab() === 'permissions'}>
+              <section data-testid="agents-permissions-pane" style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
+                <Permissions
+                  policy={roster().policy}
+                  result={policyResult()}
+                  onSave={(policy) => { setPolicyResult({}); sendAgentd({ kind: 'agent_set_policy', policy }); }}
+                />
+              </section>
+            </Show>
+            <Show when={managerTab() === 'new'}>
               {/* The New session pane is one scroller holding the launcher
                   and History: shorter than the launcher alone, it scrolls
                   as a whole rather than clipping the Start button, and the

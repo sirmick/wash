@@ -52,6 +52,10 @@ type State struct {
 	// Launch is the remembered permission default the launcher starts a
 	// session with (agents.json `launch`).
 	Launch LaunchPrefs `json:"launch"`
+	// Policy is the approval policy hosted sessions are answered from
+	// (policy.go). Re-read from agents.json on every tick, so a rule added
+	// by "always allow" or by hand shows without a reload.
+	Policy PolicyView `json:"policy"`
 	// HasDefaultPrompt says whether a stored default prompt exists, so the
 	// launcher can say that a new session will not start empty. Only the
 	// FLAG rides the state push — the text itself is fetched on demand

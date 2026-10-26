@@ -110,6 +110,7 @@ edit by hand.
 | `agent_prune` | [`AgentPrune`](#agentprune) | any frontend | history_pruned | Delete stored sessions older than an age. |
 | `agent_set_key` | [`AgentSetKey`](#agentsetkey) | a manager (manager_subscribe) | key_saved | Store or clear a connection key. |
 | `agent_test_key` | [`AgentTestKey`](#agenttestkey) | a manager (manager_subscribe) | key_test | Check a key with its provider. |
+| `agent_set_policy` | [`AgentSetPolicy`](#agentsetpolicy) | a manager (manager_subscribe) | policy_saved | Store the approval policy (enabled, default, ask_desktop, rules) in agents.json, leaving the rest of the file alone. |
 | `subscribe` | [`Subscribe`](#subscribe) | any app (the session gateway, hostgw) | state, now and on every change | Subscribe to the whole roster. |
 | `unsubscribe` | [`Unsubscribe`](#unsubscribe) | a subscriber |  | Stop receiving state. |
 | `agent_start` | [`AgentStart`](#agentstart) | a launcher (the Agents manager, an Agent window, wash-edit, wash ai --agent) | agent_started | Start a session from a catalog and model, or an adapter on its defaults. |
@@ -148,6 +149,7 @@ edit by hand.
 | `key_test` | [`KeyTest`](#keytest) | the asker | interactive | What the provider said about a key. |
 | `usage_patch` | [`UsagePatch`](#usagepatch) | roster subscribers, managers, and each row's controller | bulk | New context counters for some rows. |
 | `preview_patch` | [`PreviewPatch`](#previewpatch) | managers | bulk | New transcript previews for some rows. |
+| `policy_saved` | [`PolicySaved`](#policysaved) | the asker | interactive | The outcome of storing the approval policy. |
 | `state` | [`RosterState`](#rosterstate) | every subscriber | interactive | The whole roster. Sent by the SDK StateService, which owns this message's encoding. |
 | `manager_state` | [`ManagerState`](#managerstate) | every manager (manager_subscribe) | interactive | The manager's roster view, sent on subscribe and whenever it changes. |
 | `session_state` | [`SessionState`](#sessionstate) | a session's controller | interactive, keyed | One session's row and questions, sent on claim and whenever they change. |
@@ -395,6 +397,14 @@ AgentSetMode switches the agent's approval preset (Row.Modes).
 |---|---|---|
 | `key` | `string` |  |
 | `mode` | `string` |  |
+
+#### AgentSetPolicy
+
+AgentSetPolicy replaces the policy, whole: those four fields of agents.json and nothing else in the file.
+
+| Field | Type | |
+|---|---|---|
+| `policy` | `PolicyView` |  |
 
 #### AgentSetThinking
 
@@ -854,6 +864,35 @@ PendingQuestion is a question set waiting for the human, shown pinned above the 
 | `member_id?` | `string` |  |
 | `age_ms` | `number` | AgeMS is how long it has been waiting, as of the push. |
 
+#### PolicyRule
+
+PolicyRule is one row: `Tool` or `Tool(glob)`, allow \| deny \| ask, and an optional directory it is scoped to.
+
+| Field | Type | |
+|---|---|---|
+| `match` | `string` |  |
+| `decision` | `string` |  |
+| `cwd?` | `string` |  |
+
+#### PolicySaved
+
+PolicySaved answers AgentSetPolicy.
+
+| Field | Type | |
+|---|---|---|
+| `error?` | `string` |  |
+
+#### PolicyView
+
+PolicyView is the policy as stored, with the defaults applied: Default is "ask" or "deny" (never "allow"), and an unset AskDesktop reads true.
+
+| Field | Type | |
+|---|---|---|
+| `enabled` | `boolean` | Enabled is the kill switch: off, every request goes to a human. |
+| `default` | `string` | Default answers a request no rule matched: ask \| deny. |
+| `ask_desktop` | `boolean` | AskDesktop brings an unmatched request to the desktop sidebar (with "always allow") before the agent's own prompt. |
+| `rules?` | `PolicyRule[]` | Rules are evaluated in order; first match wins. |
+
 #### PreviewPatch
 
 PreviewPatch updates rows' transcript previews (Row.Preview) in the manager's view.
@@ -1147,6 +1186,7 @@ SlotView is one slot of a curated catalog: a model on an adapter, with its effor
 | `connections?` | `ConnectionView[]` | Connections are the named ways to reach an adapter (built in, and agents.json's), which a tier may name instead of the adapter direct. |
 | `adapter_options?` | `AdapterOptions[]` | AdapterOptions is what each adapter last reported when a session of it started: its version, approval presets and settings (models, efforts). The Stacks tab and the launcher's Advanced and Permissions controls offer these instead of free text; an adapter that has never run here has no entry, and its fields are typed. |
 | `launch` | `LaunchPrefs` | Launch is the remembered permission default the launcher starts a session with (agents.json `launch`). |
+| `policy` | `PolicyView` | Policy is the approval policy hosted sessions are answered from (policy.go). Re-read from agents.json on every tick, so a rule added by "always allow" or by hand shows without a reload. |
 | `has_default_prompt?` | `boolean` | HasDefaultPrompt says whether a stored default prompt exists, so the launcher can say that a new session will not start empty. Only the FLAG rides the state push — the text itself is fetched on demand (agent_default prompt), because a page of prose on every roster push would reach every subscriber several times a second during a turn. |
 
 #### Subscribe

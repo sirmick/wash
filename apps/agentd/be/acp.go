@@ -1297,7 +1297,7 @@ func (h *hosted) narrateUnanswered(why, tool, subject string) {
 // recorded on OUR side, as a rule in agents.json written by the answer
 // handler. Selecting the agent's durable option too would put the same
 // consent in two places that can then disagree — and only one of them is
-// visible in the Agents pane.
+// visible in the Agents window's Permissions tab.
 //
 // An agent that offered neither kind gets `cancelled`, which is honest:
 // we could not express the answer in the options it gave us.

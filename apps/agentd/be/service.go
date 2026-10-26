@@ -99,6 +99,7 @@ func onReady(c *sdk.Conn, instanceID string, windowID uint32) {
 	registerACPHandlers(bus, c)
 	registerKeyHandlers(bus)
 	registerCatalogHandlers(bus)
+	registerPolicyHandlers(bus)
 	registerSessionAdminHandlers(bus)
 	registerTranscriptHandlers(bus)
 	registerControllerHandlers(bus)

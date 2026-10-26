@@ -297,6 +297,15 @@ export interface AgentSetMode {
 }
 
 /**
+ * AgentSetPolicy replaces the policy, whole: those four fields of
+ * agents.json and nothing else in the file.
+ */
+export interface AgentSetPolicy {
+  kind: 'agent_set_policy';
+  policy: PolicyView;
+}
+
+/**
  * AgentSetThinking opens or collapses the agent's thinking in the
  * transcript by default, for one session (Row.ShowThinking).
  */
@@ -983,6 +992,41 @@ export interface PendingQuestion {
 }
 
 /**
+ * PolicyRule is one row: `Tool` or `Tool(glob)`, allow | deny | ask, and an
+ * optional directory it is scoped to.
+ */
+export interface PolicyRule {
+  match: string;
+  decision: string;
+  cwd?: string;
+}
+
+/** PolicySaved answers AgentSetPolicy. */
+export interface PolicySaved {
+  kind: 'policy_saved';
+  error?: string;
+}
+
+/**
+ * PolicyView is the policy as stored, with the defaults applied: Default
+ * is "ask" or "deny" (never "allow"), and an unset AskDesktop reads true. It
+ * only takes effect while Enabled.
+ */
+export interface PolicyView {
+  /** Enabled is the kill switch: off, every request goes to a human. */
+  enabled: boolean;
+  /** Default answers a request no rule matched: ask | deny. */
+  default: string;
+  /**
+   * AskDesktop brings an unmatched request to the desktop sidebar (with
+   * "always allow") before the agent's own prompt.
+   */
+  ask_desktop: boolean;
+  /** Rules are evaluated in order; first match wins. */
+  rules?: PolicyRule[];
+}
+
+/**
  * PreviewPatch updates rows' transcript previews (Row.Preview) in the
  * manager's view.
  */
@@ -1501,6 +1545,12 @@ export interface State {
    */
   launch: LaunchPrefs;
   /**
+   * Policy is the approval policy hosted sessions are answered from
+   * (policy.go). Re-read from agents.json on every tick, so a rule added
+   * by "always allow" or by hand shows without a reload.
+   */
+  policy: PolicyView;
+  /**
    * HasDefaultPrompt says whether a stored default prompt exists, so the
    * launcher can say that a new session will not start empty. Only the
    * FLAG rides the state push — the text itself is fetched on demand
@@ -1860,6 +1910,7 @@ export type AgentdRequest =
   | AgentPrune
   | AgentSetKey
   | AgentTestKey
+  | AgentSetPolicy
   | Subscribe
   | Unsubscribe
   | AgentStart
@@ -1897,6 +1948,7 @@ export type AgentdPush =
   | KeyTest
   | UsagePatch
   | PreviewPatch
+  | PolicySaved
   | RosterState
   | ManagerState
   | SessionState
