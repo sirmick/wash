@@ -4,7 +4,7 @@ The screensaver effects. Each one is built into a standalone ES module in the
 shell assets (`screensavers/<id>.js`, with a `<id>.jpg` thumbnail), and the
 shell loads it only when it starts. Idle detection, the overlay, the config
 shape and the registry live in `web/lib/src/screensaver.ts`; the settings
-are in the Desktop pane of Settings, saved to `desktop.json` as `screensaver`.
+are in the Screensaver pane of Settings, saved to `desktop.json` as `screensaver`.
 
 | id | Effect | Source |
 |---|---|---|

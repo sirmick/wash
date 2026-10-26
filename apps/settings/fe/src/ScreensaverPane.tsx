@@ -1,5 +1,5 @@
-// The Screensaver part of the Desktop pane: on/off + timeout, a gallery of
-// the savers (plus Random), the chosen saver's own options, and Preview.
+// The Screensaver pane of Settings: on/off + timeout, a gallery of the
+// savers (plus Random) with Preview, and the chosen saver's own options.
 //
 // Saves into desktop.json's `screensaver` block (see @wash/ui screensaver.ts
 // for the shape). A saver's options are not known here: they come from its
@@ -29,7 +29,7 @@ import { Play, Shuffle } from 'lucide-solid';
 
 const TIMEOUTS_MIN = [1, 2, 3, 5, 10, 15, 20, 30, 45, 60];
 
-export const ScreensaverSection: Component<{
+export const ScreensaverPane: Component<{
   value: ScreensaverConfig;
   onChange: (v: ScreensaverConfig) => void;
 }> = (props) => {
@@ -58,10 +58,12 @@ export const ScreensaverSection: Component<{
     showScreensaver(id, props.value.options[id]);
   };
 
+  const optionsTitle = () => `${getSaver(props.value.saver)?.name ?? ''} options`;
+
   return (
-    <Section title="Screensaver">
-      <div style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
-        <Row label="Start after">
+    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
+      <Section title="Start">
+        <Row label="After">
           <div style={{ display: 'flex', gap: '12px', 'align-items': 'center' }}>
             <Checkbox
               checked={props.value.enabled}
@@ -79,22 +81,33 @@ export const ScreensaverSection: Component<{
             <span style={{ color: tokens.fgDim, font: tokens.type.textSm }}>of no input in this tab</span>
           </div>
         </Row>
+      </Section>
 
-        <div style={galleryStyle}>
-          <SaverCard
-            id={RANDOM_SAVER}
-            name="Random"
-            active={props.value.saver === RANDOM_SAVER}
-            onSelect={() => set({ saver: RANDOM_SAVER })}
-          />
-          <For each={SCREENSAVERS}>
-            {(s) => (
-              <SaverCard id={s.id} name={s.name} thumb={s.module} active={props.value.saver === s.id} onSelect={() => set({ saver: s.id })} />
-            )}
-          </For>
+      <Section title="Screensaver">
+        <div style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
+          <div style={galleryStyle}>
+            <SaverCard
+              id={RANDOM_SAVER}
+              name="Random"
+              active={props.value.saver === RANDOM_SAVER}
+              onSelect={() => set({ saver: RANDOM_SAVER })}
+            />
+            <For each={SCREENSAVERS}>
+              {(s) => (
+                <SaverCard id={s.id} name={s.name} thumb={s.module} active={props.value.saver === s.id} onSelect={() => set({ saver: s.id })} />
+              )}
+            </For>
+          </div>
+          <div>
+            <SmallBtn onClick={preview} data-testid="screensaver-preview">
+              <Play size={14} /> Preview
+            </SmallBtn>
+          </div>
         </div>
+      </Section>
 
-        <Show when={(specs() ?? []).length > 0}>
+      <Show when={(specs() ?? []).length > 0}>
+        <Section title={optionsTitle()}>
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '8px' }} data-testid="screensaver-options">
             <For each={specs()}>
               {(o) => {
@@ -108,18 +121,12 @@ export const ScreensaverSection: Component<{
               }}
             </For>
           </div>
-        </Show>
-        <Show when={specs.error}>
-          <span style={{ color: tokens.fgDim, font: tokens.type.textSm }}>could not load this screensaver's options</span>
-        </Show>
-
-        <div>
-          <SmallBtn onClick={preview} data-testid="screensaver-preview">
-            <Play size={14} /> Preview
-          </SmallBtn>
-        </div>
-      </div>
-    </Section>
+        </Section>
+      </Show>
+      <Show when={specs.error}>
+        <span style={{ color: tokens.fgDim, font: tokens.type.textSm }}>could not load this screensaver's options</span>
+      </Show>
+    </div>
   );
 };
 

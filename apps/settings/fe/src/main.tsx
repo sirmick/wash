@@ -1,6 +1,6 @@
-// wash-app-settings: singleton settings UI. One built-in pane — Desktop
-// (theme, wallpaper, clock, taskbar, screensaver; round-trips
-// ~/.config/wash/desktop.json via settings.read/write) —
+// wash-app-settings: singleton settings UI. Built-in panes — Desktop
+// (theme, wallpaper, clock, taskbar) and Screensaver, which both round-trip
+// ~/.config/wash/desktop.json via settings.read/write, and Agents —
 // plus a section per app-supplied settings panel discovered through
 // window.wash.settingsPanels(). The panels (Developer/vscode,
 // Network/netd, Display/compositor) live in their owning apps and are
@@ -34,7 +34,7 @@ import {
 import type { Pack, ScreensaverConfig, SettingsPanelPort } from '@wash/ui';
 import { Image as ImageIcon } from 'lucide-solid';
 import { AgentsPane } from './AgentsPane';
-import { ScreensaverSection } from './ScreensaverSection';
+import { ScreensaverPane } from './ScreensaverPane';
 import type { AgentPolicy } from './AgentsPane';
 
 // DesktopConfig mirrors cmd/wash-session/config.go schema. Optional
@@ -113,7 +113,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
   let pendingRestore: string | null = null;
 
   const sectionExists = (id: string) =>
-    id === 'desktop' || id === 'agents' || panels().some((p) => p.app_id === id);
+    id === 'desktop' || id === 'screensaver' || id === 'agents' || panels().some((p) => p.app_id === id);
 
   // applyRestore selects the persisted section if its panel still exists.
   // 'desktop' always exists. A section whose panel is gone is dropped.
@@ -339,6 +339,7 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
       <div style={layoutStyle}>
         <div style={railStyle}>
           <RailItem label="Desktop" active={section() === 'desktop'} onClick={() => navigate('desktop')} />
+          <RailItem label="Screensaver" active={section() === 'screensaver'} onClick={() => navigate('screensaver')} />
           <RailItem label="Agents" active={section() === 'agents'} onClick={() => navigate('agents')} />
           <For each={panels()}>
             {(p) => (
@@ -368,9 +369,10 @@ const App: Component<{ instance: string; host: HTMLElement }> = (props) => {
               onFormatChange={setFormat}
               onShowSecondsChange={setShowSeconds}
               onPositionChange={setPosition}
-              screensaver={screensaver()}
-              onScreensaverChange={setScreensaver}
             />
+          </Show>
+          <Show when={section() === 'screensaver'}>
+            <ScreensaverPane value={screensaver()} onChange={setScreensaver} />
           </Show>
           <Show when={section() === 'agents'}>
             <AgentsPane policy={agentPolicy()} onChange={saveAgents} />
@@ -485,8 +487,6 @@ const DesktopPane: Component<{
   onFormatChange: (v: '12h' | '24h') => void;
   onShowSecondsChange: (v: boolean) => void;
   onPositionChange: (v: 'top' | 'bottom') => void;
-  screensaver: ScreensaverConfig;
-  onScreensaverChange: (v: ScreensaverConfig) => void;
 }> = (props) => {
   return (
     <div style={{ display: 'flex', 'flex-direction': 'column', gap: '20px', padding: '4px 4px' }}>
@@ -577,8 +577,6 @@ const DesktopPane: Component<{
           onChange={(v) => props.onPositionChange(v as 'top' | 'bottom')}
         />
       </Row>
-
-      <ScreensaverSection value={props.screensaver} onChange={props.onScreensaverChange} />
     </div>
   );
 };

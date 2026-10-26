@@ -6,8 +6,9 @@
 //   2. Every animated saver loads over the asset channel and draws: the
 //      overlay holds its canvas and the canvas is not black. The waking
 //      click tears it down.
-//   3. Settings' Screensaver section writes the block to desktop.json, shows
-//      the chosen saver's own options, and Preview shows the saver.
+//   3. Settings' Screensaver pane (its own rail section) writes the block to
+//      desktop.json, shows the chosen saver's own options, and Preview shows
+//      the saver.
 //
 // Short timeouts are real waits rather than a faked clock: page.clock would
 // also fake the shell's heartbeat and reconnect timers.
@@ -113,6 +114,9 @@ test.describe('screensaver', () => {
     await router.controlRequest({ t: 'launch', app_id: 'com.wash.settings' });
     const app = page.locator('wash-app-settings');
     await expect(app).toBeVisible();
+    // Its own section in the rail, not part of Desktop.
+    await expect(app.locator('[data-testid="screensaver-enabled"]')).toHaveCount(0);
+    await app.getByRole('button', { name: 'Screensaver', exact: true }).click();
 
     await app.locator('[data-testid="screensaver-enabled"]').check();
     await app.locator('[data-testid="screensaver-card-harbor"]').click();
