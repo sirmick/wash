@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.20.0
+Version:        0.21.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,22 @@ fi
 exit 0
 
 %changelog
+* Mon Oct 26 2026 sirmick <sirmick@gmail.com> - 0.21.0-1
+- Screensaver: LogoWriter 3D, Harbor Night, Moiré Interference, Moiré
+  Glow, Blank or Random after an idle time per tab; the waking input
+  never reaches the page. Its own Settings pane with a gallery, Preview
+  and per-effect options. Off by default; effects load on demand.
+- Agents: the approval policy is a Permissions tab in the Agents window,
+  saved through agentd field by field; the Settings pane that could
+  revert agentd's writes to agents.json is gone.
+- wash-display: X11 fullscreen/maximize/minimize, overlay geometry,
+  window types after an Xwayland restart, untyped helpers no longer grab,
+  menu parenting, size hints, popups kept on screen and repainting,
+  frames in wire order, late video channels, cursor-shape gating; it
+  reports the release version instead of 0.9.3.
+- wash-term xdg-open shims per binary; wash-syslogs asks for root on an
+  unreadable log; project site at the Pages root, demo under /demo/.
+
 * Wed Oct 21 2026 sirmick <sirmick@gmail.com> - 0.20.0-1
 - Workspaces: phase:"closing" folds a team back to one agent, and
   workspace_get view=dossier is the handover; workspace_end names

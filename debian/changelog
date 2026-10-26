@@ -1,3 +1,41 @@
+wash (0.21.0-1) unstable; urgency=low
+
+  * Screensaver: after a chosen idle time in a browser tab, a full-screen
+    screensaver starts: LogoWriter 3D (16 Logo programs, shuffled),
+    Harbor Night, Moiré Interference, Moiré Glow, Blank, or Random. Any
+    key, click, scroll or real mouse move ends it, and that input never
+    reaches the window underneath; typing in an embedded app (VS Code)
+    counts as activity. Its own Settings pane: on/off and timeout, a
+    thumbnail gallery with Preview, and each screensaver's own options.
+    Off by default; each effect loads only when it starts, the VM too.
+  * Agents: the approval policy moves from Settings to a Permissions tab
+    in the Agents window, saved through agentd, which changes only the
+    policy fields of agents.json. The Settings pane wrote the whole file
+    from a copy read when it opened, and could revert agentd's catalogs,
+    connections, launch defaults and "always allow" rules; Settings can
+    no longer write agents.json. A rule added by "always allow" shows in
+    the tab at once, rule fields keep focus while typing, and the copy
+    says the rules cover sessions started from the Agents window, not
+    agents run by hand in a terminal.
+  * wash-display: the reference-compositor review fixes. X11 fullscreen,
+    maximize and minimize requests are honoured; overlays follow
+    set_geometry; window types are re-read after a lazy Xwayland restart;
+    untyped override-redirect helpers no longer freeze the parent's
+    input; menus are parented through transient-for and the same client;
+    ICCCM min/max size hints; popups stay inside the browser viewport and
+    keep repainting off-output; frames draw in wire order; wheel and
+    right-click work on popups; a window mapped with no shell attached
+    starts streaming when one attaches; cursor shapes only from the
+    focused client. It now reports the release version (stamped from
+    VERSION at build time); it had said 0.9.3 since 0.9.3.
+  * wash-term: one xdg-open shim directory per binary, not per user.
+  * wash-syslogs: an unreadable log asks for root instead of waiting
+    forever.
+  * Site and demo: the project site at the Pages root with the demo under
+    /demo/, base-path fixes, an embed mode, refreshed screenshots.
+
+ -- Michael <sirmick@gmail.com>  Mon, 26 Oct 2026 06:25:00 +0000
+
 wash (0.20.0-1) unstable; urgency=low
 
   * Workspaces: phase:"closing" folds a team back to one agent at a

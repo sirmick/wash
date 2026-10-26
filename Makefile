@@ -241,7 +241,8 @@ check-agent-protocol:
 # of silently shipping a mismatched / unbuildable package (the drift that
 # stranded rpm/apk at 0.9.1 while deb/binaries moved on). FE package.json
 # versions and the README are cosmetic and intentionally not guarded. Wired into
-# unit-test beside check-pkg-binaries / check-imports.
+# unit-test beside check-pkg-binaries / check-imports. The whole bump, step by
+# step, is docs/RELEASING.md.
 .PHONY: check-versions
 check-versions:
 	@v=`cat VERSION`; rc=0; \
@@ -559,8 +560,10 @@ else
 WASH_DISPLAY_WEB := web-display
 endif
 
-$(OUT)/wash-display: $(WASH_DISPLAY_WEB) $(WASH_DISPLAY_PREREQ) $(wildcard wash-display/src/*) $(wildcard wash-display/fe/dist/*) wash-display/CMakeLists.txt | $(OUT)
-	$(WASH_DISPLAY_PKGCFG) cmake -S wash-display -B wash-display/build -DCMAKE_BUILD_TYPE=Release $(WASH_DISPLAY_RPATH) >/dev/null
+# VERSION is a prerequisite and -DWASH_VERSION stamps it, as -ldflags -X does
+# for the Go binaries: a bump rebuilds the compositor with the new version.
+$(OUT)/wash-display: $(WASH_DISPLAY_WEB) $(WASH_DISPLAY_PREREQ) $(wildcard wash-display/src/*) $(wildcard wash-display/fe/dist/*) wash-display/CMakeLists.txt VERSION | $(OUT)
+	$(WASH_DISPLAY_PKGCFG) cmake -S wash-display -B wash-display/build -DCMAKE_BUILD_TYPE=Release -DWASH_VERSION=$(VERSION) $(WASH_DISPLAY_RPATH) >/dev/null
 	cmake --build wash-display/build
 	cp wash-display/build/wash-display $@ && chmod 0755 $@
 ifeq ($(WLROOTS_VENDORED),1)

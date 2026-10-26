@@ -24,6 +24,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 add_compile_options(-Wall -Wextra -O2)
 
+# The release version the manifest and the startup log report. The Makefile
+# passes the root VERSION file; a bare cmake build says "dev".
+set(WASH_VERSION "dev" CACHE STRING "wash release version (the Makefile passes the root VERSION)")
+
 find_package(PkgConfig REQUIRED)
 
 # cpp-sdk: the reusable wash C++ client (wire protocol + framed probe),
@@ -67,6 +71,7 @@ add_executable(wash-display
     src/encode.cpp                  # SurfaceEncoder: capture buf -> framed msg
     ${PANEL_GEN}                    # settings panel bundle (raw bytes)
 )
+target_compile_definitions(wash-display PRIVATE WASH_VERSION="${WASH_VERSION}")
 target_include_directories(wash-display PRIVATE
     src
     ${CPP_SDK}                      # <wash/wire.hpp>, <wash/wire_conn.hpp>, <wash/probe.hpp>

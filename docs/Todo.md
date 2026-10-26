@@ -27,6 +27,11 @@ bug list — all fully landed; see `git log` if you need their content.)
 
 ## Repo conventions (working-rules gaps)
 
+- [ ] **Frontend package.json versions to 0.0.0.** About 35 private
+  packages say 0.9.4, 0.9.0 or 0.1.0, which looks like a version that is
+  maintained but isn't. Nothing reads them (docs/RELEASING.md). Set them all
+  to 0.0.0 so nobody bumps them or trusts them.
+
 - [ ] Doc filenames are `UPPER_CASE.md` (50 files in `docs/`), referenced
   from ~433 files including Go and TS comments. Rename to normal case with
   a link check in the same change — `docs/ARCHITECTURE.md:1` and friends.

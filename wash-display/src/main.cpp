@@ -33,7 +33,12 @@
 #include <unistd.h>
 
 static const char* kAppID = "com.wash.display";
-static const char* kVersion = "0.9.3";
+// The release version, stamped from the root VERSION file by the Makefile
+// (CMake -DWASH_VERSION). A bare cmake build reports "dev".
+#ifndef WASH_VERSION
+#define WASH_VERSION "dev"
+#endif
+static const char* kVersion = WASH_VERSION;
 static const int kProto = 1;
 static const int kDefaultDpi = 96;
 static const int kDefaultScreenW = 1920;
