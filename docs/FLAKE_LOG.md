@@ -16,6 +16,24 @@ known) · verdict · where the fix lives.
 
 ---
 
+## 2026-10-26 — `internal/washmount` TestRenameKeepsInodeIdentity: EIO from stat under full-suite load
+
+**Seen during:** `make unit-test` on main (`119a9c0f`, a Settings FE-only
+change), 1 failure: `rename_test.go:61: stat …/002/b.txt: input/output error`.
+The log just before it shows the neighbouring reconnect tests' noise (`op
+timed out op=lstat timeout=5s: returning EIO`), so the test's mount was
+probably still unwinding a previous test's dead client.
+
+**Not the change.** No Go was touched. The test passed 5/5 alone, and the
+package passed `go test -count=20` (13 s) on the same tree.
+
+**Mechanism:** unknown; one sighting, full-suite load only. The EIO is the
+mount's "unmapped backend error / op timed out" path, not a rename bug.
+
+**Verdict:** flake, logged. Watch for a second sighting before digging.
+
+---
+
 ## 2026-10-14 — `internal/loopback` TestSpine (#8): the harness was hiding a real scheduler bug (FIXED)
 
 **Seen during:** a re-investigation of issue #8, still open after the
