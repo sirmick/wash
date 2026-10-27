@@ -29,7 +29,7 @@ import {
 import { ModalLayer, registerModal, summonModal, hasModal, forgetModalsFor } from './modal';
 import { beginBundle, finishBundle, pushBundleBytes } from './assets';
 import { RelayChannelSocket } from './relay-socket';
-import { ensureHitStyles, tokens } from '@wash/ui';
+import { ensureHitStyles, markSystemSeen, tokens } from '@wash/ui';
 
 const __washLoadT0 = performance.now();
 import { washFetch, handleAssetReadOK, handleAssetReadErr, pushAssetBytes, finishAsset } from './wash-fetch';
@@ -131,6 +131,7 @@ import {
 } from './hostgw';
 import { pickWindow } from './focus-or-launch';
 import { TextMenuLayer } from './text-menu.tsx';
+import { installClipboardGestures } from './clipboard-gestures.ts';
 
 interface ShellCatalog {
   t: 'catalog';
@@ -299,17 +300,33 @@ interface ShellPanelReadErr {
 
 // clipboard.data is the reply to a clipboard.get round-trip (req_id
 // echoed); clipboard.changed broadcasts the router-held clipboard.
-interface ShellClipboardData {
+export interface ShellClipboardData {
   t: 'clipboard.data';
   req_id: number;
+  slot?: string;
   mime: string;
   text: string;
+  data?: string; // base64, non-text content
+  source?: string;
+  at?: number;
 }
 
 interface ShellClipboardChanged {
   t: 'clipboard.changed';
+  slot?: string;
   mime: string;
   text: string;
+  size?: number;
+  source?: string;
+  at?: number;
+}
+
+// clipboard.saved answers clipboard.save_image (docs/CLIPBOARD.md, Images).
+interface ShellClipboardSaved {
+  t: 'clipboard.saved';
+  req_id: number;
+  path?: string;
+  error?: string;
 }
 
 // Remote-apps relay attach failed (docs/REMOTE.md): the host is "up" but
@@ -386,6 +403,7 @@ type ShellCtrlMsg =
   | ShellPeerError
   | ShellSuperseded
   | ShellHead
+  | ShellClipboardSaved
   | ShellActivityQueryOK
   | ShellActivityQueryErr
   | ShellActivityEntryMsg
@@ -625,8 +643,102 @@ const screenSub = new Sub<{ w: number; h: number }>({ w: window.innerWidth, h: w
 // latest content pushed by clipboard.changed broadcasts; gets resolve
 // through pendingClipboardGets (req_id → resolver), same shape the Go
 // SDK uses for its ClipboardGet round-trip.
-const clipboardSub = new Sub<{ mime: string; text: string }>({ mime: '', text: '' });
+const clipboardSub = new Sub<WashClipEntry>({ mime: '', text: '' });
+// The selection slot: the last thing highlighted, pasted by middle-click.
+const selectionSub = new Sub<WashClipEntry>({ mime: '', text: '' });
 let clipboardReqID = 0;
+// clipboard.save_image round-trips, req_id → settle.
+const pendingImageSaves = new Map<number, { resolve: (path: string) => void; reject: (e: Error) => void }>();
+// mirrorPending: a clipboard change from elsewhere (another box, an app's
+// BE) that this box's system clipboard hasn't had yet — written out on the
+// next focus, where the browser allows a write without a gesture.
+let mirrorPending = false;
+
+// clipboardGet round-trips a slot — content set by app BEs before this
+// shell attached isn't in the local mirror. The mirror only serves as the
+// timeout/disconnect fallback.
+function clipboardGet(slot: '' | 'selection'): Promise<{ mime: string; text: string; data?: string; source?: string; at?: number }> {
+  const mirror = slot === 'selection' ? selectionSub : clipboardSub;
+  const reqID = ++clipboardReqID;
+  return new Promise((resolve) => {
+    pendingClipboardGets.set(reqID, resolve);
+    try {
+      conn.sendCtrl(slot ? { t: 'clipboard.get', req_id: reqID, slot } : { t: 'clipboard.get', req_id: reqID });
+    } catch {
+      pendingClipboardGets.delete(reqID);
+      resolve(mirror.value);
+    }
+    // WS hiccup safety: resolve with the local mirror rather than
+    // hanging a paste forever.
+    setTimeout(() => {
+      if (pendingClipboardGets.delete(reqID)) resolve(mirror.value);
+    }, 3000);
+  });
+}
+
+// seedClipboards fills both slot caches after attaching: a synchronous
+// peek (a paste deciding inside its event) must not see empty slots just
+// because nothing has changed since this tab loaded.
+function seedClipboards(): void {
+  for (const slot of ['', 'selection'] as const) {
+    const sub = slot ? selectionSub : clipboardSub;
+    void clipboardGet(slot).then((d) => {
+      if ((d.at ?? 0) >= (sub.value.at ?? 0)) sub.set(entryOf(d));
+    });
+  }
+}
+
+function base64Bytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+// entryOf turns a clipboard.data / clipboard.changed into the cached slot.
+function entryOf(m: { mime: string; text: string; size?: number; source?: string; at?: number }): WashClipEntry {
+  return { mime: m.mime, text: m.text ?? '', size: m.size, source: m.source, at: m.at };
+}
+
+// clipboardSource names where a copy came from, for the sidebar pane:
+// the title of the window holding focus.
+function clipboardSource(): string {
+  const el = document.activeElement as HTMLElement | null;
+  const id = el?.closest?.('[data-wash-window]')?.getAttribute('data-wash-window');
+  const w = id ? windows.find((x) => x.origin === LOCAL_ORIGIN && String(x.windowID) === id) : undefined;
+  const title = w?.title ?? '';
+  return title.length > 40 ? `${title.slice(0, 39)}…` : title;
+}
+
+// mirrorClipboardOut writes the wash clipboard to this box's system
+// clipboard when it changed elsewhere. Chrome permits writeText on a
+// focused document without a gesture; a refusal (Firefox wants transient
+// activation) leaves it pending, and paste still gets it right through
+// resolvePaste. Skipped when unfocused: the user is outside this browser
+// and may be copying there — a deferred overwrite would clobber that.
+function mirrorClipboardOut(): void {
+  const c = clipboardSub.value;
+  if (!c.text || !(c.mime === '' || c.mime.startsWith('text/'))) {
+    mirrorPending = false;
+    return;
+  }
+  if (!document.hasFocus() || !navigator.clipboard?.writeText) {
+    mirrorPending = true;
+    return;
+  }
+  const text = c.text;
+  void navigator.clipboard.writeText(text).then(
+    () => { markSystemSeen(text); mirrorPending = false; },
+    () => { mirrorPending = true; },
+  );
+}
+window.addEventListener('focus', () => { if (mirrorPending) mirrorClipboardOut(); });
 
 function wsURL(): string {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -717,6 +829,7 @@ function makeHandlers(client: RouterClient): ClientHandlers {
           setHoldsHead(false);
           headGen = 0;
           claimAfterAttach();
+          seedClipboards();
         } else {
           // A remote router's head keeps the old rule, newest attach wins:
           // nothing here would claim it back on use.
@@ -899,8 +1012,16 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         const wait = client.pendingClipboardGets.get(d.req_id);
         if (wait) {
           client.pendingClipboardGets.delete(d.req_id);
-          wait(d.text);
+          wait(d);
         }
+        break;
+      }
+      case 'clipboard.saved': {
+        const p = pendingImageSaves.get(msg.req_id);
+        if (!p) break;
+        pendingImageSaves.delete(msg.req_id);
+        if (msg.path) p.resolve(msg.path);
+        else p.reject(new Error(msg.error || 'image not saved'));
         break;
       }
       case 'peer.error': {
@@ -956,21 +1077,16 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         // Cross-host clipboard sync is M5; mirror only the local router's.
         if (!isLocal) break;
         const c = msg;
-        clipboardSub.set({ mime: c.mime, text: c.text });
-        // Best-effort outward mirror: this change came from somewhere
-        // with no browser gesture to ride — an app BE (fm "Copy path"),
-        // an X app via wash-display's clipboard bridge, another attached
-        // shell — so without this push a native Ctrl+V would paste the
-        // system clipboard's STALE text right after a wash-side copy.
-        // Chrome permits writeText on a focused document without a
-        // gesture; browsers that refuse (Firefox needs transient
-        // activation) reject silently and the wash clipboard still wins
-        // through washPasteText's fallback. Skipped when unfocused: the
-        // user is outside this browser and may be copying there — a
-        // deferred overwrite would clobber that.
-        if (c.text && document.hasFocus()) {
-          void navigator.clipboard?.writeText(c.text).catch(() => { /* no gesture / permission — best effort */ });
+        if (c.slot === 'selection') {
+          selectionSub.set(entryOf(c));
+          break;
         }
+        clipboardSub.set(entryOf(c));
+        // This change came from somewhere with no browser gesture to
+        // ride — an app BE (fm "Copy path"), an X app via wash-display,
+        // another tab or box — so write it out where allowed. A paste
+        // gets it right either way (resolvePaste).
+        mirrorClipboardOut();
         break;
       }
     }
@@ -2566,84 +2682,57 @@ window.wash = {
     return (clientForOrigin(origin) ?? local).conn.bufferedAmount();
   },
   clipboardSetText(text) {
-    clipboardSub.set({ mime: 'text/plain', text });
-    conn.sendCtrl({ t: 'clipboard.set', mime: 'text/plain', text });
+    const source = clipboardSource();
+    clipboardSub.set({ mime: 'text/plain', text, source, at: Date.now() });
+    conn.sendCtrl({ t: 'clipboard.set', mime: 'text/plain', text, source });
   },
   clipboardGetText() {
-    // Always round-trip — content set by app BEs before this shell
-    // attached isn't in the local mirror. The mirror only serves as
-    // the timeout/disconnect fallback.
-    const reqID = ++clipboardReqID;
-    return new Promise<string>((resolve) => {
-      pendingClipboardGets.set(reqID, resolve);
-      try {
-        conn.sendCtrl({ t: 'clipboard.get', req_id: reqID });
-      } catch {
-        pendingClipboardGets.delete(reqID);
-        resolve(clipboardSub.value.text);
-      }
-      // WS hiccup safety: resolve with the local mirror rather than
-      // hanging a paste forever.
-      setTimeout(() => {
-        if (pendingClipboardGets.delete(reqID)) resolve(clipboardSub.value.text);
-      }, 3000);
-    });
+    return clipboardGet('').then((d) => d.text);
+  },
+  clipboardPeek() {
+    return clipboardSub.value;
+  },
+  clipboardGet() {
+    return clipboardGet('').then((d) => ({ ...entryOf(d), data: d.data ? base64Bytes(d.data) : undefined }));
   },
   onClipboardChanged(cb) {
     return clipboardSub.on(cb);
   },
+  clipboardSaveImage(mime, bytes) {
+    const reqID = ++clipboardReqID;
+    const source = clipboardSource();
+    return new Promise<string>((resolve, reject) => {
+      pendingImageSaves.set(reqID, {
+        // The image is the clipboard now; the router tells only the other
+        // shells, so this one's mirror is set here.
+        resolve: (path) => {
+          clipboardSub.set({ mime, text: '', size: bytes.length, source, at: Date.now() });
+          resolve(path);
+        },
+        reject,
+      });
+      conn.sendCtrl({ t: 'clipboard.save_image', req_id: reqID, mime, data: bytesBase64(bytes), source });
+      setTimeout(() => {
+        if (pendingImageSaves.delete(reqID)) reject(new Error('no answer from the router'));
+      }, 10_000);
+    });
+  },
+  selectionSetText(text) {
+    const source = clipboardSource();
+    selectionSub.set({ mime: 'text/plain', text, source, at: Date.now() });
+    conn.sendCtrl({ t: 'clipboard.set', slot: 'selection', mime: 'text/plain', text, source });
+  },
+  selectionPeek() {
+    return selectionSub.value;
+  },
+  onSelectionChanged(cb) {
+    return selectionSub.on(cb);
+  },
 };
 
-// Mirror every native copy/cut anywhere in the shell into the wash
-// clipboard. This is what makes editor→terminal flow work without
-// app-side wiring: Ctrl+C in CodeMirror/TipTap raises a real copy
-// event whose selection we can read. The native copy continues to the
-// system clipboard untouched. Guarded for the synthetic copies our
-// own mirror helper fires (data-wash-clipboard-mirror) so a wash→
-// system mirror doesn't echo back as a second set.
-//
-// document.getSelection() doesn't cover <input>/<textarea> selections
-// in every browser (Firefox keeps field selections out of the document
-// selection entirely), so a focused field's selectionStart/End range is
-// read directly — otherwise Ctrl+C in a path bar or rename field leaves
-// the wash clipboard stale. Password fields are skipped: their content
-// must not leak into a clipboard every app can read.
-function nativeCopySelection(): string {
-  const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
-    if ((el as HTMLInputElement).type === 'password') return '';
-    const { selectionStart, selectionEnd } = el;
-    if (selectionStart != null && selectionEnd != null && selectionEnd > selectionStart) {
-      return el.value.slice(selectionStart, selectionEnd);
-    }
-    return '';
-  }
-  return String(document.getSelection() ?? '');
-}
-function mirrorCopyEvent(ev: ClipboardEvent): void {
-  const t = ev.target as HTMLElement | null;
-  if (t && t.closest?.('[data-wash-clipboard-mirror]')) return;
-  const sel = nativeCopySelection();
-  if (sel) window.wash.clipboardSetText(sel);
-}
-document.addEventListener('copy', mirrorCopyEvent);
-document.addEventListener('cut', mirrorCopyEvent);
-
-// Mirror every native paste's text into the wash clipboard too. A
-// Ctrl+V carries the SYSTEM clipboard (the paste event's clipboardData)
-// straight into xterm/CodeMirror; without this fold the wash clipboard
-// — and everything that reads it (right-click Paste, X apps via
-// wash-display, the sidebar widget) — silently diverges from what the
-// user just demonstrably pasted. Skipped when the text already matches
-// (the common case now that washPasteText folds system reads itself).
-// CAPTURE phase: xterm stopPropagation()s paste events on its textarea,
-// so a bubble listener would miss exactly the terminal pastes.
-document.addEventListener('paste', (ev) => {
-  const t = ev.target as HTMLElement | null;
-  if (t && t.closest?.('[data-wash-clipboard-mirror]')) return;
-  const text = ev.clipboardData?.getData('text/plain') ?? '';
-  if (text && text !== clipboardSub.value.text) window.wash.clipboardSetText(text);
-}, { capture: true });
+// Copy, paste, highlighting and the paste-selection gestures, document-
+// wide (docs/CLIPBOARD.md).
+installClipboardGestures();
 
 // Auto-capture browser errors so they show up server-side.
 window.addEventListener('error', (ev: ErrorEvent) => {

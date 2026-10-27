@@ -15,6 +15,7 @@ interface FakeWash {
   data: string;
   clipboardSetText(text: string): void;
   clipboardGetText(): Promise<string>;
+  clipboardPeek(): { mime: string; text: string };
 }
 
 function installHost(): FakeWash {
@@ -25,6 +26,9 @@ function installHost(): FakeWash {
     },
     clipboardGetText() {
       return Promise.resolve(w.data);
+    },
+    clipboardPeek() {
+      return { mime: 'text/plain', text: w.data };
     },
   };
   (globalThis as unknown as { window: unknown }).window = { wash: w };

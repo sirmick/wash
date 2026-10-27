@@ -1,7 +1,6 @@
 // wash-term font + copy/paste UX: the menubar "Font" menu offers a
-// font-size stepper and a font-family picker; right-click copies the
-// selection or pastes when there is none (Shift+right-click keeps the
-// Copy/Paste menu). Font size and family are window-wide (persisted in
+// font-size stepper and a font-family picker; right-click is the
+// Copy/Paste/Paste selection menu (docs/CLIPBOARD.md). Font size and family are window-wide (persisted in
 // app state) and apply live to xterm. Copy/paste go through the real
 // browser clipboard so they interop with the host OS.
 
@@ -102,39 +101,35 @@ test.describe('terminal font + copy/paste menu', () => {
       .toContain('Fira Code');
   });
 
-  test('right-click copies the selection / pastes without one; Shift keeps the menu', async ({ page, context, router }) => {
+  test('right-click is the menu: Copy, Paste, Paste selection', async ({ page, context, router }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: router.url });
     const host = await openTerminal(page, router.url);
 
-    // ---- copy: plain right-click with a live selection ----
-    // Copies to the wash clipboard, mirrors to the system clipboard
-    // while the gesture is live, and clears the selection so the NEXT
-    // right-click means paste.
+    // ---- Copy: the menu's Copy puts the live selection on the clipboard ----
     await host.click();
     await page.keyboard.type('wash-copy-marker');
     await host.evaluate((h: any) => h.__washTerm?.selectAll());
     await host.click({ button: 'right' });
-    const clip = await page.evaluate(() => navigator.clipboard.readText());
-    expect(clip).toContain('wash-copy-marker');
-    expect(await host.evaluate((h: any) => !!h.__washTerm?.hasSelection())).toBe(false);
+    await expect(page.locator('[data-testid="term-context-menu"]')).toBeVisible();
+    await page.locator('[data-testid="term-ctx-copy"]').click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('wash-copy-marker');
 
-    // ---- paste: plain right-click with no selection ----
-    // On this secure origin paste PREFERS the system clipboard: seed
-    // system and wash with different markers and expect system to win.
+    // ---- Paste: on this secure origin a system clipboard changed outside
+    // wash wins (docs/CLIPBOARD.md "last change wins") ----
     await page.evaluate(() => (window as any).wash.clipboardSetText('wash-paste-marker'));
     await page.evaluate(() => navigator.clipboard.writeText('sys-paste-marker'));
     await host.click({ button: 'right' });
+    await page.locator('[data-testid="term-ctx-paste"]').click();
     await expect.poll(() => bufferText(page), { timeout: 5_000 }).toContain('sys-paste-marker');
     // The system read is folded back into the wash clipboard.
     await expect
       .poll(() => page.evaluate(() => (window as any).wash.clipboardGetText()), { timeout: 5_000 })
       .toBe('sys-paste-marker');
 
-    // ---- Shift+right-click still offers the Copy/Paste menu ----
-    await page.evaluate(() => navigator.clipboard.writeText('menu-paste-marker'));
-    await host.click({ button: 'right', modifiers: ['Shift'] });
-    await expect(page.locator('[data-testid="term-ctx-copy"]')).toBeVisible();
-    await page.locator('[data-testid="term-ctx-paste"]').click();
-    await expect.poll(() => bufferText(page), { timeout: 5_000 }).toContain('menu-paste-marker');
+    // ---- Paste selection: the last highlighted text ----
+    await page.evaluate(() => (window as any).wash.selectionSetText('sel-paste-marker'));
+    await host.click({ button: 'right' });
+    await page.locator('[data-testid="term-ctx-paste-selection"]').click();
+    await expect.poll(() => bufferText(page), { timeout: 5_000 }).toContain('sel-paste-marker');
   });
 });

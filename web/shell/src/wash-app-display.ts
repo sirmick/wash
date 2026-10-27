@@ -14,6 +14,7 @@
 // a 45-byte little-endian header followed by an image payload — WebP or
 // PNG, auto-detected by createImageBitmap from the magic bytes.
 
+import { ChordFilter, type ButtonName } from './mouse-chord.ts';
 import { registerDisplayWindow, subscribeRaw, subscribeResync, subscribeUnbind, unregisterDisplayWindow } from './api';
 import { type Origin, LOCAL_ORIGIN } from './clients';
 import { SerialQueue, normalizeWheel } from './display-frames';
@@ -235,6 +236,16 @@ export class WashAppDisplay extends HTMLElement {
     this.tabIndex = 0;
     this.style.outline = 'none';
 
+    // Left+right together reach the guest as a middle-click
+    // (docs/CLIPBOARD.md); every other button goes through as itself.
+    const chord = new ChordFilter((e) => {
+      this.queue({ ev: 'button', btn: e.btn, state: e.state });
+      this.flushNow();
+    });
+    let pressX = 0;
+    let pressY = 0;
+    const DRAG_PX = 4;
+
     const onPointerMove = (ev: PointerEvent) => {
       this.lastClientX = ev.clientX;
       this.lastClientY = ev.clientY;
@@ -249,6 +260,15 @@ export class WashAppDisplay extends HTMLElement {
         return;
       }
       this.queueMotion(ev);
+      // A second button pressed or released while another is held comes
+      // as a move with that button set (Pointer Events "chorded buttons").
+      if (ev.button >= 0 && BUTTON_NAME[ev.button]) {
+        const bit = ev.button === 1 ? 4 : ev.button === 2 ? 2 : 1;
+        if (ev.buttons & bit) chord.down(BUTTON_NAME[ev.button] as ButtonName);
+        else chord.up(BUTTON_NAME[ev.button] as ButtonName);
+        return;
+      }
+      if (Math.abs(ev.clientX - pressX) > DRAG_PX || Math.abs(ev.clientY - pressY) > DRAG_PX) chord.moved();
       this.scheduleFlush();
     };
     const onPointerDown = (ev: PointerEvent) => {
@@ -265,24 +285,22 @@ export class WashAppDisplay extends HTMLElement {
       }
       this.focus({ preventScroll: true });
       this.queueMotion(ev);
-      this.queue({ ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'down' });
-      this.flushNow();
+      pressX = ev.clientX;
+      pressY = ev.clientY;
+      chord.down((BUTTON_NAME[ev.button] ?? 'left') as ButtonName);
     };
     const onPointerUp = (ev: PointerEvent) => {
       this.lastClientX = ev.clientX;
       this.lastClientY = ev.clientY;
       ev.preventDefault();
-      if (this.moving) {
-        this.endMove();
-        return;
-      }
-      if (this.resizing) {
-        this.endResize();
+      if (this.moving || this.resizing) {
+        chord.forget((BUTTON_NAME[ev.button] ?? 'left') as ButtonName);
+        if (this.moving) this.endMove();
+        else this.endResize();
         return;
       }
       this.queueMotion(ev);
-      this.queue({ ev: 'button', btn: BUTTON_NAME[ev.button] ?? 'left', state: 'up' });
-      this.flushNow();
+      chord.up((BUTTON_NAME[ev.button] ?? 'left') as ButtonName);
     };
     const onWheel = (ev: WheelEvent) => {
       // Normalize deltaMode before forwarding (Firefox line deltas, page

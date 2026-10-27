@@ -11,7 +11,7 @@ export { createAppBus } from './app-bus';
 export type { AppBus, AppBusMessage, AppBusMsgBound, AppBusOptions } from './app-bus';
 export { Button } from './button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './button';
-export { Menu, MenuItem, MenuSeparator } from './menu';
+export { Menu, MenuItem, MenuSeparator, ShortcutHint } from './menu';
 export { Tab, TAB_HEIGHT } from './tab';
 export type { TabProps } from './tab';
 export { MenuBar, kbdStyle } from './menubar';
@@ -56,7 +56,14 @@ export {
 } from './terminal';
 export type { TerminalProps, TerminalAPI, TermFont, TermModes, TermTheme, TermSearchOptions, TermCursorStyle, TermLinks } from './terminal';
 export type { TermNotification } from './term-notify';
-export { washCopyText, washPasteText, systemCopyText, systemCopyTextChecked } from './clipboard';
+export {
+  washCopyText, washPasteText, systemCopyText, systemCopyTextChecked,
+  resolvePaste, systemSeen, markSystemSeen,
+  washSetSelection, washSelectionText, pasteSelectionAt, PASTE_SELECTION_EVENT,
+} from './clipboard';
+export type { PasteSelectionEvent } from './clipboard';
+export { shortcutHint, CLIPBOARD_BINDINGS, TERMINAL_BINDINGS } from './clipboard-bindings';
+export type { ClipboardAction, ClipboardBinding } from './clipboard-bindings';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
 export { Markdown, LinkText, parseBlocks, parseInline, isWebURL, trimURL } from './markdown';

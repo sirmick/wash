@@ -407,6 +407,12 @@ func DecodeCtrl(data []byte) (any, error) {
 	case TShellClipboardChanged:
 		var m ShellClipboardChanged
 		return m, json.Unmarshal(data, &m)
+	case TShellClipboardSaveImage:
+		var m ShellClipboardSaveImage
+		return m, json.Unmarshal(data, &m)
+	case TShellClipboardSaved:
+		var m ShellClipboardSaved
+		return m, json.Unmarshal(data, &m)
 	case TShellAppCrashed:
 		var m ShellAppCrashed
 		return m, json.Unmarshal(data, &m)

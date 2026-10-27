@@ -536,6 +536,8 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 		return s.handleShellClipboardSet(m)
 	case wire.ShellClipboardGet:
 		return s.handleShellClipboardGet(m)
+	case wire.ShellClipboardSaveImage:
+		return s.handleShellClipboardSaveImage(m)
 	}
 	s.router.log("shell: unexpected ctrl msg %T", msg)
 	return nil

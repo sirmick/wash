@@ -378,12 +378,39 @@ interface WashGlobals {
   // cancel) behind its data. 0 on transports that don't expose it.
   rawBufferedAmount(): number;
   // Router-held clipboard — the wash-internal clipboard every app
-  // shares. Distinct from the browser's system clipboard, which is
-  // gesture-gated; the washCopyText helper in @wash/ui bridges the
-  // two where the browser allows.
+  // shares (docs/CLIPBOARD.md). Distinct from the browser's system
+  // clipboard, which is gesture-gated; the washCopyText helper in
+  // @wash/ui bridges the two where the browser allows.
   clipboardSetText(text: string): void;
   clipboardGetText(): Promise<string>;
-  onClipboardChanged(cb: (c: { mime: string; text: string }) => void): () => void;
+  // clipboardPeek is the shell's cached copy, kept current by the
+  // router's pushes: synchronous, for a paste handler that must decide
+  // inside the event. Non-text content has empty text.
+  clipboardPeek(): WashClipEntry;
+  // clipboardGet fetches the full entry, bytes included (the pane's
+  // image thumbnail).
+  clipboardGet(): Promise<WashClipEntry & { data?: Uint8Array }>;
+  onClipboardChanged(cb: (c: WashClipEntry) => void): () => void;
+  // clipboardSaveImage writes a pasted image to a file on the router's
+  // host, makes it the clipboard, and resolves its path (rejects when
+  // the router couldn't write it).
+  clipboardSaveImage(mime: string, bytes: Uint8Array): Promise<string>;
+  // The selection slot: the last thing highlighted anywhere in wash,
+  // pasted by middle-click. Never touches the system clipboard.
+  selectionSetText(text: string): void;
+  selectionPeek(): WashClipEntry;
+  onSelectionChanged(cb: (c: WashClipEntry) => void): () => void;
+}
+
+// WashClipEntry is one slot's content as the shell knows it. source is the
+// app it came from, at when it was set (unix ms, 0 = never), size the byte
+// count of non-text content.
+interface WashClipEntry {
+  mime: string;
+  text: string;
+  size?: number;
+  source?: string;
+  at?: number;
 }
 
 interface Window {

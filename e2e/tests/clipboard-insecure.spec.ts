@@ -99,10 +99,12 @@ test.describe('clipboard on an insecure origin (plain HTTP, non-localhost)', () 
     await page.keyboard.press('Enter');
     await expect.poll(() => termBuffer(termHost)).toContain('insec-clip-8642');
 
-    // Select-to-copy must land in the wash clipboard even though the
-    // system mirror degrades to execCommand (or fails outright).
+    // Highlight → the wash selection; Ctrl+C → the wash clipboard, even
+    // though the system mirror degrades to execCommand (or fails outright).
     await selectInTerm(termHost, 'insec-clip-8642');
+    await page.keyboard.press('Control+c');
     await page.locator('[data-testid="sidebar-section-header-clipboard"]').click();
+    await expect(page.locator('[data-testid="selection-preview"]')).toContainText('insec-clip-8642');
     await expect(page.locator('[data-testid="clipboard-preview"]')).toContainText('insec-clip-8642');
 
     // Editor context-menu paste pulls from the wash clipboard — no
@@ -119,7 +121,7 @@ test.describe('clipboard on an insecure origin (plain HTTP, non-localhost)', () 
     await expect(editor.locator('.cm-content')).toContainText('insec-clip-8642');
   });
 
-  test('editor Ctrl+C mirror → terminal right-click paste still works', async ({ page, router }) => {
+  test('editor Ctrl+C mirror → terminal menu paste still works', async ({ page, router }) => {
     await page.goto(insecureURL(router.url));
     await expect(page.locator('wash-app-session')).toBeVisible();
     await page.locator('button[title="Apps"]').click();
@@ -138,10 +140,11 @@ test.describe('clipboard on an insecure origin (plain HTTP, non-localhost)', () 
     const termHost = editor.locator('[data-testid^="edit-term-host-"]').locator('visible=true');
     await expect(termHost).toBeVisible();
     await expect.poll(() => termBuffer(termHost), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
-    // Right-click with no selection pastes directly — on this insecure
-    // origin navigator.clipboard.readText is absent, so the paste is
-    // pure wash-clipboard fallback.
+    // Right-click opens the terminal's menu; its Paste reads the
+    // clipboard (falling back to the wash clipboard where the browser
+    // won't let it read).
     await termHost.click({ button: 'right' });
+    await page.locator('[data-testid="term-ctx-paste"]').click();
     await expect.poll(() => termBuffer(termHost)).toContain('insec-edit-1212');
   });
 

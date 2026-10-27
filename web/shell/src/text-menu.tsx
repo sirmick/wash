@@ -1,5 +1,6 @@
-// The wash context menu for text fields — Cut / Copy / Paste / Select all
-// on any <input> or <textarea>, in place of the browser's own menu.
+// The wash context menu for text fields — Cut / Copy / Paste / Paste
+// selection / Select all on any <input> or <textarea>, in place of the
+// browser's own menu (docs/CLIPBOARD.md).
 //
 // It lives in the SHELL, on one document-level listener, rather than in a
 // component apps opt into: there are ~85 raw <input>/<textarea> across the
@@ -16,8 +17,7 @@
 // see everything, whereas a menu should yield to a more specific one.
 //
 // Not shown for:
-//   - xterm's helper textarea (.xterm) — the terminal has its own menu, with
-//     PuTTY-style plain-right-click behaviour this would preempt.
+//   - xterm's helper textarea (.xterm) — the terminal has its own menu.
 //   - <wash-app-display> — right-click there belongs to the VM guest, which
 //     is why that surface suppresses the native menu itself.
 //   - non-text inputs (checkbox, range, file, colour …) — nothing to edit.
@@ -25,7 +25,8 @@
 // its contextmenu does not cross the boundary, so the embedded app keeps its
 // own menu without any check here.
 //
-// Shift+right-click is the browser's, everywhere. Wash's menus have no
+// Shift+right-click is the browser's, everywhere, the terminal included.
+// Wash's menus have no
 // spelling suggestions (browsers give a page no way to read them), and a
 // misspelled word underlined in a textarea with no way to reach its
 // corrections is a trap; the native menu also has Inspect and the rest. A
@@ -36,7 +37,7 @@
 
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component } from 'solid-js';
-import { Menu, MenuItem, MenuSeparator, washCopyText, washPasteText } from '@wash/ui';
+import { Menu, MenuItem, MenuSeparator, ShortcutHint, washCopyText, washPasteText, washSelectionText } from '@wash/ui';
 
 export type TextField = HTMLInputElement | HTMLTextAreaElement;
 
@@ -60,9 +61,9 @@ export function fieldFromEvent(ev: MouseEvent): TextField | null {
 // edit joins the field's native undo stack and fires `input` on its own —
 // which controlled Solid fields need to see. The manual splice is the
 // fallback for where execCommand is refused; it dispatches `input` itself.
-function insertText(el: TextField, text: string): void {
+export function insertText(el: TextField, text: string): void {
   el.focus();
-  if (document.execCommand('insertText', false, text)) return;
+  if (typeof document.execCommand === 'function' && document.execCommand('insertText', false, text)) return;
   const s = el.selectionStart ?? el.value.length;
   const e = el.selectionEnd ?? s;
   el.value = el.value.slice(0, s) + text + el.value.slice(e);
@@ -133,6 +134,7 @@ export const TextFieldMenu: Component<{
     <Menu x={props.x} y={props.y} onDismiss={() => done(restore)} data-testid="text-context-menu">
       <MenuItem
         label="Cut"
+        trailing={<ShortcutHint action="cut" />}
         disabled={!canCopy || readOnly}
         data-testid="text-ctx-cut"
         onClick={() => done(() => {
@@ -142,6 +144,7 @@ export const TextFieldMenu: Component<{
       />
       <MenuItem
         label="Copy"
+        trailing={<ShortcutHint action="copy" />}
         disabled={!canCopy}
         data-testid="text-ctx-copy"
         onClick={() => done(() => {
@@ -151,6 +154,7 @@ export const TextFieldMenu: Component<{
       />
       <MenuItem
         label="Paste"
+        trailing={<ShortcutHint action="paste" />}
         disabled={readOnly}
         data-testid="text-ctx-paste"
         onClick={() => done(() => {
@@ -162,9 +166,20 @@ export const TextFieldMenu: Component<{
           });
         })}
       />
+      <MenuItem
+        label="Paste selection"
+        trailing={<ShortcutHint action="paste-selection" />}
+        disabled={readOnly || !washSelectionText()}
+        data-testid="text-ctx-paste-selection"
+        onClick={() => done(() => {
+          restore();
+          insertText(el, washSelectionText());
+        })}
+      />
       <MenuSeparator />
       <MenuItem
         label="Select all"
+        trailing={<ShortcutHint action="select-all" />}
         disabled={!el.value}
         data-testid="text-ctx-select-all"
         onClick={() => done(() => {
@@ -181,14 +196,13 @@ export const TextFieldMenu: Component<{
 };
 
 /** The browser's own menu, on request: a Shift+right-click reaches no wash
- *  handler at all. The terminal and the VM display are left out: plain
- *  right-click is copy/paste there, so Shift+right-click is the terminal's
- *  own menu (the split verbs live on it), and neither has prose to spell.
+ *  handler at all, the terminal's included. The VM display is left out:
+ *  every click there belongs to the guest app.
  *  Exported for the test; installed by TextMenuLayer. */
 export function yieldToBrowserMenu(ev: MouseEvent): void {
   if (!ev.shiftKey) return;
   const t = ev.target as HTMLElement | null;
-  if (t?.closest?.('.xterm, wash-app-display')) return;
+  if (t?.closest?.('wash-app-display')) return;
   ev.stopImmediatePropagation();
 }
 

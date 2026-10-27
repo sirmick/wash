@@ -78,7 +78,7 @@ test.describe('clipboard over TLS (secure context)', () => {
     await expect(page.locator('[data-testid="clipboard-warning"]')).toHaveCount(0);
   });
 
-  test('terminal select-copy reaches the real system clipboard', async ({ page, router, context }) => {
+  test('terminal highlight is the selection; Ctrl+C reaches the real system clipboard', async ({ page, router, context }) => {
     proxy = await startTlsProxy(router.url);
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: proxy.url });
     await page.goto(proxy.url);
@@ -94,14 +94,21 @@ test.describe('clipboard over TLS (secure context)', () => {
     await page.keyboard.press('Enter');
     await expect.poll(() => termBuffer(termHost)).toContain('tls-clip-1357');
 
+    // Highlighting is the selection, and leaves the clipboard alone
+    // (docs/CLIPBOARD.md) — it used to overwrite it on every highlight.
+    await page.evaluate(() => navigator.clipboard.writeText('copied-before'));
     await selectInTerm(termHost, 'tls-clip-1357');
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('copied-before');
 
-    // Wash clipboard got it (sidebar preview)…
+    // Ctrl+C with the selection live copies: the wash clipboard (sidebar
+    // preview) and the SYSTEM clipboard, via the async API this secure
+    // context provides.
+    await page.keyboard.press('Control+c');
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('tls-clip-1357');
     await page.locator('[data-testid="sidebar-section-header-clipboard"]').click();
     await expect(page.locator('[data-testid="clipboard-preview"]')).toContainText('tls-clip-1357');
-    // …and so did the SYSTEM clipboard, via the async API this
-    // secure context provides.
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('tls-clip-1357');
+    await expect(page.locator('[data-testid="selection-preview"]')).toContainText('tls-clip-1357');
   });
 
   test('system clipboard → terminal via native Ctrl+V', async ({ page, router, context }) => {
@@ -124,6 +131,24 @@ test.describe('clipboard over TLS (secure context)', () => {
     // same renderer path a physical Ctrl+V takes).
     await page.evaluate(() => navigator.clipboard.writeText('sys-paste-2468'));
     await termHost.click();
+
+    // The terminal must leave Ctrl+V to the browser. xterm used to turn
+    // it into ^V for the program and cancel the keydown, so a real Ctrl+V
+    // never pasted at all — the CDP paste below runs the command whether
+    // or not the keydown was cancelled, which is how this test passed
+    // through it. So check the keydown itself: not cancelled, and no ^V.
+    await termHost.evaluate((el: any) => {
+      (window as any).__termData = [];
+      el.__washTerm.onData((d: string) => (window as any).__termData.push(d));
+      (window as any).__ctrlV = null;
+      window.addEventListener('keydown', (ev) => {
+        if (ev.key === 'v') setTimeout(() => { (window as any).__ctrlV = ev.defaultPrevented; });
+      }, true);
+    });
+    await page.keyboard.press('Control+v');
+    await expect.poll(() => page.evaluate(() => (window as any).__ctrlV)).toBe(false);
+    expect(await page.evaluate(() => (window as any).__termData.join(''))).not.toContain('\x16');
+
     const cdp = await context.newCDPSession(page);
     await cdp.send('Input.dispatchKeyEvent', {
       type: 'keyDown',
@@ -142,7 +167,7 @@ test.describe('clipboard over TLS (secure context)', () => {
       .toBe('sys-paste-2468');
   });
 
-  test('terminal right-click paste prefers the system clipboard over a stale wash clipboard', async ({ page, router, context }) => {
+  test('terminal menu paste prefers the system clipboard over a stale wash clipboard', async ({ page, router, context }) => {
     proxy = await startTlsProxy(router.url);
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: proxy.url });
     await page.goto(proxy.url);
@@ -159,7 +184,8 @@ test.describe('clipboard over TLS (secure context)', () => {
     // (code-server). Paste must resolve the system side.
     await page.evaluate(() => (window as any).wash.clipboardSetText('stale-wash-11'));
     await page.evaluate(() => navigator.clipboard.writeText('fresh-system-22'));
-    await termHost.click({ button: 'right' }); // no selection → direct paste
+    await termHost.click({ button: 'right' });
+    await page.locator('[data-testid="term-ctx-paste"]').click();
     await expect.poll(() => termBuffer(termHost)).toContain('fresh-system-22');
     // …and the system read is folded back into the wash clipboard.
     await expect

@@ -203,9 +203,9 @@ pane first; as built the tab is the unit, and the menus say so.) Because
 Chromium reserves Ctrl+Shift+T/W and Ctrl+Tab for itself, every tab verb
 also has an Alt binding — Alt+T, Alt+W, Alt+PageUp/PageDown, Alt+1…9.
 
-**Pane context menu** (M2): Shift+right-click is owned by `<Terminal>`
-(`terminal.tsx:914`) and renders a fixed Copy/Paste menu; plain right-click is
-the direct copy/paste gesture and must not change. Adding split verbs there
+**Pane context menu** (M2): right-click is owned by `<Terminal>` and renders
+its Copy / Paste / Paste selection / Select all menu (docs/CLIPBOARD.md;
+Shift+right-click is the browser's). Adding split verbs there
 needs an optional `menuExtras` prop on `<Terminal>` — additive, no behaviour
 change for other consumers.
 
@@ -313,9 +313,8 @@ under the minimum; close-collapse and redistribution; same-dir flattening;
   - **Equalize rebalances every split**, not just the focused one
     (`equalizeAll`) — evening one level while a nested split stays lopsided is
     not what the word means.
-  - `<Terminal>` gained `menuExtras(close)`, an additive seam: the Shift+
-    right-click menu keeps Copy/Paste and appends the host's items. Plain
-    right-click is untouched.
+  - `<Terminal>` gained `menuExtras(close)`, an additive seam: the
+    right-click menu keeps its clipboard items and appends the host's.
   - Cross-strip tab drag needed no new code — M1's `moveTabBefore` already
     handled it, and the e2e proves the moved terminal keeps its scrollback.
 - **M3 — drop-zone splitting.** Drag a tab to a pane edge to split there; drag

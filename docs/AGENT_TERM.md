@@ -439,7 +439,7 @@ a detail the design left open:
 
 Pastes copied out of AI chats arrive broken in two ways, and every paste path
 already funnels through one choke point (`TerminalAPI.paste` in the shared
-terminal component — menu, right-click, Ctrl+Shift+V), so both are fixed
+terminal component — the menu, Ctrl+V, paste-selection; docs/CLIPBOARD.md), so both are fixed
 there, FE-only:
 
 - **Wrap artifacts**: the chat's soft line-wrap becomes hard newlines, so one

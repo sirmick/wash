@@ -369,12 +369,10 @@ test.describe('term split panes (M1 + M2)', () => {
 
   test('the pane context menu carries the split verbs', async ({ page, router }) => {
     const host = await openTerminal(page, router.url);
-    // Shift+right-click is the terminal's own menu; the pane verbs are
-    // appended to it. Plain right-click stays copy/paste.
+    // Right-click is the terminal's menu (docs/CLIPBOARD.md); the pane
+    // verbs are appended to it.
     const box = (await host.boundingBox())!;
-    await page.keyboard.down('Shift');
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
-    await page.keyboard.up('Shift');
 
     await expect(page.locator('[data-testid="term-context-menu"]')).toBeVisible();
     await expect(page.locator('[data-testid="term-ctx-copy"]')).toBeVisible();

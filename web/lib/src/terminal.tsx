@@ -24,8 +24,8 @@ import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
 
 import { washAssetUrl } from './assets';
-import { Menu, MenuItem, MenuSeparator } from './menu';
-import { washCopyText, washPasteText } from './clipboard';
+import { Menu, MenuItem, MenuSeparator, ShortcutHint } from './menu';
+import { PASTE_SELECTION_EVENT, resolvePaste, washCopyText, washPasteText, washSelectionText, washSetSelection, type PasteSelectionEvent } from './clipboard';
 import { parseOsc52 } from './term-osc52';
 import { Osc99, parseOsc777, parseOsc9, type TermNotification } from './term-notify';
 import { washAppearance, onAppearanceChange } from './packs';
@@ -795,6 +795,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
     });
   };
 
+  // pasteImage saves a pasted image beside the pty and pastes its path,
+  // quoted for a shell. Only for the local router: a remote host's
+  // terminal (docs/REMOTE.md) would get a path on the wrong machine.
+  const pasteImage = async (file: File) => {
+    if (origin !== 'local') {
+      window.wash.log('warn', 'terminal', 'image paste into a remote terminal is not supported');
+      return;
+    }
+    try {
+      const path = await window.wash.clipboardSaveImage(file.type, new Uint8Array(await file.arrayBuffer()));
+      void pasteFiltered(/^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`);
+    } catch (e) {
+      window.wash.log('warn', 'terminal', `image paste: ${e}`);
+    }
+  };
+
   // pasteFiltered is the one place text enters the pty from the clipboard.
   // With no beforePaste hook it is a straight term.paste(); with one, the
   // hook decides what (if anything) lands.
@@ -957,10 +973,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
       });
     }
     // Clipboard keys are component-level so every terminal in wash
-    // behaves the same; the consumer's customKeyHandler runs after.
-    // Ctrl+Shift+C copies the selection; Ctrl+Shift+V pastes the wash
-    // clipboard (plain Ctrl+V stays the browser's native system-clipboard
-    // paste, which xterm receives as a paste event).
+    // behaves the same (docs/CLIPBOARD.md); the consumer's customKeyHandler
+    // runs after. Ctrl+Shift+C copies the selection. Plain Ctrl+V is handed
+    // to the browser as its native paste (below), which arrives on xterm's
+    // textarea as a paste event; Ctrl+Shift+V sends the ^V that takes.
     //
     // Plain copy without Shift is platform-split: on macOS Cmd+C copies
     // (Ctrl+C is left alone as SIGINT); elsewhere Ctrl+C copies WHEN a
@@ -1002,8 +1018,21 @@ export const Terminal: Component<TerminalProps> = (props) => {
           // No selection: let Ctrl+C through as SIGINT.
         }
       }
-      if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey && (ev.key === 'V' || ev.key === 'v')) {
-        pasteWash();
+      // Ctrl+Shift+V: the literal ^V plain Ctrl+V no longer sends — vim's
+      // visual block, bash's quoted-insert.
+      if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey && !ev.altKey && !ev.metaKey && (ev.key === 'V' || ev.key === 'v')) {
+        term?.input('\x16', true);
+        return false;
+      }
+      // Plain Ctrl+V off macOS: let the browser paste. xterm would turn it
+      // into ^V for the program and cancel the keydown, so the browser
+      // never fired its paste — bash took it as quoted-insert and ate the
+      // next key, Claude Code as "paste an image" from the box's clipboard,
+      // and nothing ever pasted. Returning false skips xterm's handling
+      // without cancelling, so the native paste runs: no permission
+      // prompt, and it goes through onNativePaste. A literal ^V is
+      // Ctrl+Shift+V, above.
+      if (!isMac && ev.type === 'keydown' && ev.ctrlKey && !ev.shiftKey && !ev.altKey && !ev.metaKey && (ev.key === 'v' || ev.key === 'V')) {
         return false;
       }
       return props.customKeyHandler ? props.customKeyHandler(ev) : true;
@@ -1126,38 +1155,57 @@ export const Terminal: Component<TerminalProps> = (props) => {
     notifyVia(777, parseOsc777);
     notifyVia(99, (data) => osc99.feed(data));
 
-    // PuTTY-style select = copy: xterm keeps its own selection model
-    // (not a DOM selection), so on selection-end we push the selected
-    // text into the wash clipboard + mirror it to the system clipboard
-    // while the mouseup gesture is live. LEFT button only — right-click
-    // has its own copy/paste semantics in onCtx below.
+    // Highlighting sets the wash selection (docs/CLIPBOARD.md): xterm keeps
+    // its own selection model (not a DOM selection), so the shell's
+    // document-wide reader can't see it and it is reported here, on the
+    // release that ends it. It never touches the clipboard: copying is
+    // Ctrl+C or the menu.
     const onMouseUp = (ev: MouseEvent) => {
       if (ev.button !== 0) return;
       const sel = term?.getSelection();
-      if (sel) washCopyText(sel);
+      if (sel) washSetSelection(sel);
     };
     hostEl.addEventListener('mouseup', onMouseUp);
     onCleanup(() => {
       hostEl.removeEventListener('mouseup', onMouseUp);
     });
 
-    // Native paste (Ctrl+V, the browser's own Edit▸Paste, middle-click on
-    // X11) goes straight to xterm's textarea and would bypass the smart-paste
-    // filter — so when a consumer installs one, we intercept the DOM event in
-    // the capture phase and re-enter through the same choke point. Only wired
-    // when beforePaste exists: with no filter, xterm's own handling is left
-    // exactly as it was.
-    if (props.beforePaste) {
-      const onNativePaste = (ev: ClipboardEvent) => {
-        const text = ev.clipboardData?.getData('text/plain') ?? '';
-        if (!text) return;
+    // Native paste (Ctrl+V, the browser's own Edit▸Paste) goes straight to
+    // xterm's textarea. Intercept it in the capture phase so it takes the
+    // same road as every other paste: the "last change wins" rule picks
+    // between this box's clipboard and the wash clipboard (resolvePaste),
+    // then the consumer's smart-paste filter. A paste holding an image
+    // and no text is saved to a file on the router's host and its path
+    // pasted — the terminal can't take the bytes, a CLI can take a file.
+    const onNativePaste = (ev: ClipboardEvent) => {
+      const text = ev.clipboardData?.getData('text/plain') ?? '';
+      if (text) {
         ev.preventDefault();
         ev.stopPropagation();
-        void pasteFiltered(text);
-      };
-      hostEl.addEventListener('paste', onNativePaste, true);
-      onCleanup(() => hostEl.removeEventListener('paste', onNativePaste, true));
-    }
+        void pasteFiltered(resolvePaste(text));
+        return;
+      }
+      const image = Array.from(ev.clipboardData?.items ?? []).find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+      const file = image?.getAsFile();
+      if (!file) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      void pasteImage(file);
+    };
+    hostEl.addEventListener('paste', onNativePaste, true);
+    onCleanup(() => hostEl.removeEventListener('paste', onNativePaste, true));
+
+    // A paste-selection gesture (middle-click, Alt+right-click, left+right,
+    // the menu) — dispatched by the shell at whatever it landed on.
+    const onPasteSelection = (ev: Event) => {
+      const text = (ev as PasteSelectionEvent).detail?.text;
+      if (!text) return;
+      ev.preventDefault();
+      term?.focus();
+      void pasteFiltered(text);
+    };
+    hostEl.addEventListener(PASTE_SELECTION_EVENT, onPasteSelection);
+    onCleanup(() => hostEl.removeEventListener(PASTE_SELECTION_EVENT, onPasteSelection));
 
     if (channelId > 0) {
       const stallCheck = window.setInterval(() => {
@@ -1309,41 +1357,26 @@ export const Terminal: Component<TerminalProps> = (props) => {
     });
   });
 
-  // ---- right-click: direct copy/paste (menu on Shift) ----
+  // ---- right-click: the wash menu ----
   //
-  // Plain right-click acts immediately, PuTTY-style: with a live
-  // selection it copies (and clears the selection, so the next
-  // right-click pastes); with none it pastes. Ctrl+C is taken by
-  // SIGINT half the time, so right-click is the terminal's primary
-  // mouse clipboard gesture — a menu in the middle just adds a click.
-  // Shift+right-click keeps the Copy/Paste menu for discoverability.
-  // (Firefox quirk: it shows its native menu on Shift+right-click
-  // regardless of preventDefault — there the wash menu may double up;
-  // the term app's Edit menubar remains the clean path.)
+  // Right-click is the same everywhere in wash (docs/CLIPBOARD.md): plain
+  // opens this menu, Shift gives the browser's (the shell stops it before
+  // it gets here), Alt pastes the selection (the shell again, through
+  // onPasteSelection). It used to paste, PuTTY-style, and to copy when a
+  // selection was live — and a selection outlives the release that made
+  // it, so a right-click meant to paste copied instead.
   const onCtx = (ev: MouseEvent) => {
     if (props.contextMenu === false) return;
     ev.preventDefault();
-    if (ev.shiftKey) {
-      setHasSel(!!term?.hasSelection());
-      setMenu({ x: ev.clientX, y: ev.clientY });
-      return;
-    }
-    const sel = term?.getSelection();
-    if (sel) {
-      washCopyText(sel);
-      term?.clearSelection();
-    } else {
-      term?.focus();
-      pasteWash();
-    }
+    setHasSel(!!term?.hasSelection());
+    setMenu({ x: ev.clientX, y: ev.clientY });
   };
 
   // Menu Copy/Paste ride the wash clipboard helpers: washCopyText
   // mirrors to the system clipboard while the click gesture is live;
-  // pasteWash prefers the system clipboard where readable (HTTPS) and
-  // falls back to the wash clipboard, then goes through term.paste()
-  // so the text rides the same path as typed input and honors
-  // bracketed-paste mode.
+  // pasteWash reads the system clipboard where it can and lets the "last
+  // change wins" rule choose, then goes through term.paste() so the text
+  // rides the same path as typed input and honors bracketed-paste mode.
   const doCopy = () => {
     const sel = term?.getSelection() ?? '';
     if (sel) washCopyText(sel);
@@ -1354,6 +1387,21 @@ export const Terminal: Component<TerminalProps> = (props) => {
     term?.focus();
     pasteWash();
     setMenu(null);
+  };
+
+  const doPasteSelection = () => {
+    setMenu(null);
+    const text = washSelectionText();
+    if (!text) return;
+    term?.focus();
+    void pasteFiltered(text);
+  };
+
+  const doSelectAll = () => {
+    setMenu(null);
+    term?.selectAll();
+    const sel = term?.getSelection();
+    if (sel) washSetSelection(sel);
   };
 
   return (
@@ -1376,14 +1424,29 @@ export const Terminal: Component<TerminalProps> = (props) => {
           >
             <MenuItem
               label="Copy"
+              trailing={<ShortcutHint action="copy" />}
               disabled={!hasSel()}
               data-testid="term-ctx-copy"
               onClick={doCopy}
             />
             <MenuItem
               label="Paste"
+              trailing={<ShortcutHint action="paste" />}
               data-testid="term-ctx-paste"
               onClick={doPaste}
+            />
+            <MenuItem
+              label="Paste selection"
+              trailing={<ShortcutHint action="paste-selection" />}
+              disabled={!washSelectionText()}
+              data-testid="term-ctx-paste-selection"
+              onClick={doPasteSelection}
+            />
+            <MenuSeparator />
+            <MenuItem
+              label="Select all"
+              data-testid="term-ctx-select-all"
+              onClick={doSelectAll}
             />
             <Show when={props.menuExtras}>
               <MenuSeparator />

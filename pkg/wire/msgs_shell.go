@@ -119,9 +119,9 @@ const (
 	// Shell ↔ router clipboard. The same router-held clipboard the
 	// per-app event channel reaches via §9 clipboard.* — these tags
 	// expose it on the shell channel so app FRONTENDS can use it
-	// through window.wash without a BE round-trip. Text-only on this
-	// surface (JSON channel; []byte would base64) — mime tags the
-	// payload for future richness but Text carries it.
+	// through window.wash without a BE round-trip. Two slots, the
+	// clipboard and the selection (Slot, docs/CLIPBOARD.md). Text mimes
+	// ride Text; anything else (an image) rides Data, base64.
 	//
 	// Shell → router.
 	TShellClipboardSet = "clipboard.set"
@@ -132,6 +132,11 @@ const (
 	// changes made by app BEs via the §9 path). Carries the content
 	// so consumers (sidebar widget) don't need a follow-up get.
 	TShellClipboardChanged = "clipboard.changed"
+	// Shell → router: write pasted image bytes to a file on the router's
+	// host and make them the clipboard; the router answers clipboard.saved
+	// with the path (docs/CLIPBOARD.md, Images).
+	TShellClipboardSaveImage = "clipboard.save_image"
+	TShellClipboardSaved     = "clipboard.saved"
 
 	// Router → shell, sent to a still-live shell that just lost the
 	// foreground "head" to a newer connection (another tab/window/device
@@ -757,55 +762,98 @@ func NewShellChannelCredit(channelID, n uint32) ShellChannelCredit {
 	return ShellChannelCredit{T: TShellChannelCredit, ChannelID: channelID, N: n}
 }
 
-// ShellClipboardSet writes text into the router-held clipboard on
+// SlotSelection names the router's second clipboard slot: what was last
+// highlighted, pasted by middle-click (docs/CLIPBOARD.md). The empty slot
+// is the clipboard.
+const SlotSelection = "selection"
+
+// ShellClipboardSet writes a slot of the router-held clipboard on
 // behalf of the browser shell (window.wash.clipboardSetText). The
-// router broadcasts the change to every app BE and every OTHER shell.
+// router broadcasts the change to every OTHER shell, and a clipboard
+// (not selection) change to every app BE. Text carries text mimes;
+// Data carries anything else (an image), base64 on the wire. Source
+// names where it came from (the focused app), for the sidebar pane.
 type ShellClipboardSet struct {
-	T    string `json:"t"`
-	Mime string `json:"mime"`
-	Text string `json:"text"`
+	T      string `json:"t"`
+	Slot   string `json:"slot,omitempty"`
+	Mime   string `json:"mime"`
+	Text   string `json:"text"`
+	Data   []byte `json:"data,omitempty"`
+	Source string `json:"source,omitempty"`
 }
 
 func NewShellClipboardSet(mime, text string) ShellClipboardSet {
 	return ShellClipboardSet{T: TShellClipboardSet, Mime: mime, Text: text}
 }
 
-// ShellClipboardGet requests the clipboard's current content; the
-// router replies with ShellClipboardData carrying the same ReqID.
+// ShellClipboardGet requests a slot's current content; the router
+// replies with ShellClipboardData carrying the same ReqID.
 type ShellClipboardGet struct {
 	T     string `json:"t"`
 	ReqID uint64 `json:"req_id"`
+	Slot  string `json:"slot,omitempty"`
 }
 
 func NewShellClipboardGet(reqID uint64) ShellClipboardGet {
 	return ShellClipboardGet{T: TShellClipboardGet, ReqID: reqID}
 }
 
-// ShellClipboardData is the clipboard.get reply. Non-text content
-// (future mimes) is surfaced as empty Text with the mime preserved.
+// ShellClipboardData is the clipboard.get reply. Text mimes come as
+// Text; anything else as Data with Text empty. At is when the slot was
+// set (unix ms), 0 when it never was.
 type ShellClipboardData struct {
-	T     string `json:"t"`
-	ReqID uint64 `json:"req_id"`
-	Mime  string `json:"mime"`
-	Text  string `json:"text"`
+	T      string `json:"t"`
+	ReqID  uint64 `json:"req_id"`
+	Slot   string `json:"slot,omitempty"`
+	Mime   string `json:"mime"`
+	Text   string `json:"text"`
+	Data   []byte `json:"data,omitempty"`
+	Source string `json:"source,omitempty"`
+	At     int64  `json:"at,omitempty"`
 }
 
 func NewShellClipboardData(reqID uint64, mime, text string) ShellClipboardData {
 	return ShellClipboardData{T: TShellClipboardData, ReqID: reqID, Mime: mime, Text: text}
 }
 
-// ShellClipboardChanged announces a clipboard change to shells.
-// Unlike the §9 event-channel notice (mime only), this carries the
-// content: shells fan out to FE consumers (sidebar preview, paste
-// handlers) that would otherwise each issue a get.
+// ShellClipboardChanged announces a slot change to shells. Unlike the
+// §9 event-channel notice (mime only), this carries text content:
+// shells fan out to FE consumers (sidebar preview, paste handlers)
+// that would otherwise each issue a get. Non-text content is not
+// pushed — Size says how big it is, and a consumer that wants the
+// bytes (the pane's thumbnail) gets them.
 type ShellClipboardChanged struct {
-	T    string `json:"t"`
-	Mime string `json:"mime"`
-	Text string `json:"text"`
+	T      string `json:"t"`
+	Slot   string `json:"slot,omitempty"`
+	Mime   string `json:"mime"`
+	Text   string `json:"text"`
+	Size   int    `json:"size,omitempty"`
+	Source string `json:"source,omitempty"`
+	At     int64  `json:"at,omitempty"`
 }
 
 func NewShellClipboardChanged(mime, text string) ShellClipboardChanged {
 	return ShellClipboardChanged{T: TShellClipboardChanged, Mime: mime, Text: text}
+}
+
+// ShellClipboardSaveImage asks the router to save a pasted image to a
+// file on its host and make it the clipboard. The terminal pastes the
+// path from the clipboard.saved reply.
+type ShellClipboardSaveImage struct {
+	T      string `json:"t"`
+	ReqID  uint64 `json:"req_id"`
+	Mime   string `json:"mime"`
+	Data   []byte `json:"data"`
+	Source string `json:"source,omitempty"`
+}
+
+// ShellClipboardSaved answers clipboard.save_image: the file's path, or
+// Error when it could not be written.
+type ShellClipboardSaved struct {
+	T     string `json:"t"`
+	ReqID uint64 `json:"req_id"`
+	Path  string `json:"path,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // ShellAppCrashed reports that an app BE process exited abnormally.

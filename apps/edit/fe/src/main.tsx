@@ -14,7 +14,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Component, JSX } from 'solid-js';
-import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, Splitter, StatusBar, Tab, Terminal, defineWashApp, saveDownload, tokens, washCopyText, washPasteText, washAppearance, onAppearanceChange } from '@wash/ui';
+import { AgentSession, Button, ConfirmDialog, FilePicker, FileTree, Input, isDirLike, Menu, MenuItem, MenuSeparator, Overlay, PASTE_SELECTION_EVENT, ShortcutHint, Splitter, StatusBar, Tab, Terminal, defineWashApp, saveDownload, tokens, washCopyText, washPasteText, washSelectionText, washAppearance, onAppearanceChange, type PasteSelectionEvent } from '@wash/ui';
 import type { InsertedDraft } from '@wash/ui';
 import type { AgentStatus, PathHit, PathLinks, TerminalAPI, agentproto } from '@wash/ui';
 import { applyAgentEvent } from '@wash/ui';
@@ -1652,22 +1652,32 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     }
   };
   const cmdPaste = () => {
-    void washPasteText().then((text) => {
-      if (!text) return;
-      const t = activeTab();
-      if (t?.mode === 'wysiwyg') {
-        const h = wysHandles.get(t.id);
-        if (!h) return;
-        h.editor.commands.focus();
-        // pasteText runs ProseMirror's normal paste pipeline, so
-        // tiptap-markdown's transformPastedText applies — pasting
-        // "# title" gives a heading, same as a native Ctrl+V.
-        h.editor.view.pasteText(text);
-      } else if (editorView) {
-        editorView.focus();
-        editorView.dispatch({ ...editorView.state.replaceSelection(text), scrollIntoView: true });
-      }
-    });
+    void washPasteText().then(insertEditorText);
+  };
+  // insertEditorText pastes text into the active editor at its cursor.
+  const insertEditorText = (text: string) => {
+    if (!text) return;
+    const t = activeTab();
+    if (t?.mode === 'wysiwyg') {
+      const h = wysHandles.get(t.id);
+      if (!h) return;
+      h.editor.commands.focus();
+      // pasteText runs ProseMirror's normal paste pipeline, so
+      // tiptap-markdown's transformPastedText applies — pasting
+      // "# title" gives a heading, same as a native Ctrl+V.
+      h.editor.view.pasteText(text);
+    } else if (editorView) {
+      editorView.focus();
+      editorView.dispatch({ ...editorView.state.replaceSelection(text), scrollIntoView: true });
+    }
+  };
+  // A paste-selection gesture over the text (middle-click, Alt+right-
+  // click, left+right — dispatched by the shell, docs/CLIPBOARD.md).
+  const onPasteSelection = (ev: Event) => {
+    const text = (ev as PasteSelectionEvent).detail?.text;
+    if (!text || ev.defaultPrevented || !activeTab() || activeTab()?.blocked) return;
+    ev.preventDefault();
+    insertEditorText(text);
   };
 
   // toggleWysiwyg flips the active tab's editor mode. .md files that
@@ -3903,6 +3913,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
               props.host above them. */}
           <div
             style={editorBodyStyle}
+            ref={(el) => el.addEventListener(PASTE_SELECTION_EVENT, onPasteSelection)}
             onContextMenu={(ev) => {
               // Right-click over the text layers opens the wash
               // Cut/Copy/Paste menu (the native menu's Paste can't
@@ -4295,9 +4306,16 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
           onDismiss={() => setTextCtxMenu(null)}
           data-testid="edit-text-ctx-menu"
         >
-          <MenuItem label="Cut" onClick={() => { setTextCtxMenu(null); cmdCut(); }} data-testid="edit-text-ctx-cut" />
-          <MenuItem label="Copy" onClick={() => { setTextCtxMenu(null); cmdCopy(); }} data-testid="edit-text-ctx-copy" />
-          <MenuItem label="Paste" onClick={() => { setTextCtxMenu(null); cmdPaste(); }} data-testid="edit-text-ctx-paste" />
+          <MenuItem label="Cut" trailing={<ShortcutHint action="cut" />} onClick={() => { setTextCtxMenu(null); cmdCut(); }} data-testid="edit-text-ctx-cut" />
+          <MenuItem label="Copy" trailing={<ShortcutHint action="copy" />} onClick={() => { setTextCtxMenu(null); cmdCopy(); }} data-testid="edit-text-ctx-copy" />
+          <MenuItem label="Paste" trailing={<ShortcutHint action="paste" />} onClick={() => { setTextCtxMenu(null); cmdPaste(); }} data-testid="edit-text-ctx-paste" />
+          <MenuItem
+            label="Paste selection"
+            trailing={<ShortcutHint action="paste-selection" />}
+            disabled={!washSelectionText()}
+            onClick={() => { setTextCtxMenu(null); insertEditorText(washSelectionText()); }}
+            data-testid="edit-text-ctx-paste-selection"
+          />
           <MenuSeparator />
           <MenuItem
             label="Send to Agent"

@@ -41,7 +41,7 @@ export class RouterClient {
   readonly appIDs = new Map<string, string>();
   readonly bundleReady = new Map<string, Promise<void>>();
   readonly seenWindowIDs = new Set<number>();
-  readonly pendingClipboardGets = new Map<number, (text: string) => void>();
+  readonly pendingClipboardGets = new Map<number, (d: { mime: string; text: string; data?: string; source?: string; at?: number }) => void>();
 
   constructor(
     origin: Origin,

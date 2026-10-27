@@ -2,6 +2,7 @@ import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import type { Component, JSX, ParentComponent } from 'solid-js';
 import { tokens } from './tokens';
+import { shortcutHint, type ClipboardAction } from './clipboard-bindings';
 
 // Menu positions one of two ways:
 //   - cursor-relative (x/y in props): drop-on-target menus,
@@ -161,6 +162,13 @@ export interface MenuItemProps {
   /** The event is there for a row that opens something beside itself. */
   onClick: (ev: MouseEvent) => void;
 }
+
+// ShortcutHint is a clipboard item's key, dimmed on the right of its row
+// (MenuItem's trailing). From clipboard-bindings.ts, so a menu and the
+// Clipboard pane say the same thing.
+export const ShortcutHint: Component<{ action: ClipboardAction }> = (props) => (
+  <span style={{ color: tokens.fgDim, 'margin-left': '16px', font: tokens.type.textSm }}>{shortcutHint(props.action)}</span>
+);
 
 export const MenuItem: Component<MenuItemProps> = (props) => {
   return (

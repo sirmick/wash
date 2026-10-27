@@ -6,7 +6,7 @@
 // first has said it wants to), and that a password field's contents never
 // reach a clipboard every app can read.
 
-import { test, expect, afterEach, vi } from 'vitest';
+import { test, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent } from '@solidjs/testing-library';
 import { fieldFromEvent, TextFieldMenu, yieldToBrowserMenu } from './text-menu.tsx';
 
@@ -19,6 +19,18 @@ const item = (id: string): HTMLButtonElement => {
   return el as HTMLButtonElement;
 };
 const isDisabled = (id: string) => item(id).disabled;
+
+// The menu reads the selection slot for its Paste selection item.
+const washStub = (extra: Record<string, unknown> = {}) => {
+  (window as unknown as { wash: unknown }).wash = {
+    clipboardSetText: () => {},
+    clipboardGetText: async () => '',
+    selectionPeek: () => ({ mime: 'text/plain', text: 'highlighted' }),
+    ...extra,
+  };
+};
+
+beforeEach(() => washStub());
 
 afterEach(() => {
   cleanup();
@@ -89,17 +101,24 @@ test('Shift+right-click reaches no wash handler, so the browser menu shows', () 
 // copy/paste there, so Shift+right-click is the terminal's own menu, which
 // carries the split verbs. The hook stands aside and the terminal's handler
 // runs as before.
-test('Shift+right-click in the terminal still reaches the terminal', () => {
-  const host = mount('<div class="xterm"><textarea></textarea></div>');
-  const el = host.querySelector('textarea')!;
+test('Shift+right-click in the terminal is the browser\'s too; the VM display keeps its own', () => {
+  // The terminal used to keep Shift+right-click for its own menu; right-
+  // click is the same everywhere now (docs/CLIPBOARD.md).
+  const host = mount('<div class="xterm"><textarea></textarea></div><wash-app-display><canvas></canvas></wash-app-display>');
+  const term = host.querySelector('textarea')!;
+  const display = host.querySelector('canvas')!;
   const termHandler = vi.fn((ev: Event) => ev.preventDefault());
-  el.addEventListener('contextmenu', termHandler);
+  const displayHandler = vi.fn((ev: Event) => ev.preventDefault());
+  term.addEventListener('contextmenu', termHandler);
+  display.addEventListener('contextmenu', displayHandler);
   document.addEventListener('contextmenu', yieldToBrowserMenu, true);
   try {
-    const shifted = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true });
-    el.dispatchEvent(shifted);
-    expect(termHandler).toHaveBeenCalledTimes(1);
-    expect(shifted.defaultPrevented).toBe(true);
+    const onTerm = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true });
+    term.dispatchEvent(onTerm);
+    expect(termHandler).not.toHaveBeenCalled();
+    expect(onTerm.defaultPrevented).toBe(false);
+    display.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true }));
+    expect(displayHandler).toHaveBeenCalledTimes(1);
   } finally {
     document.removeEventListener('contextmenu', yieldToBrowserMenu, true);
   }
@@ -147,11 +166,21 @@ test('Copy and Cut need a selection; Cut and Paste need a writable field', () =>
   expect(isDisabled('text-ctx-copy')).toBe(false); // reading is fine
   expect(isDisabled('text-ctx-cut')).toBe(true);
   expect(isDisabled('text-ctx-paste')).toBe(true);
+  expect(isDisabled('text-ctx-paste-selection')).toBe(true);
+});
+
+test('Paste selection inserts the last highlighted text', () => {
+  const host = mount('<input type="text" value="ab">');
+  const el = host.firstElementChild as HTMLInputElement;
+  el.setSelectionRange(1, 1);
+  render(() => <TextFieldMenu x={0} y={0} el={el} onDismiss={() => {}} />);
+  fireEvent.click(item('text-ctx-paste-selection'));
+  expect(el.value).toBe('ahighlightedb');
 });
 
 test('Copy puts the selection on the clipboard and hands the field back', () => {
   const setText = vi.fn();
-  (window as unknown as { wash: unknown }).wash = { clipboardSetText: setText, clipboardGetText: async () => '' };
+  washStub({ clipboardSetText: setText });
   const host = mount('<input type="text" value="hello world">');
   const el = host.firstElementChild as HTMLInputElement;
   el.setSelectionRange(6, 11);

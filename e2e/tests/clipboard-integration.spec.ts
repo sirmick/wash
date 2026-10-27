@@ -75,11 +75,14 @@ test.describe('clipboard integration', () => {
     await expect.poll(() => termBuffer(termHost)).toContain('wash-clip-7777');
 
     // Select the printed marker (not the typed command line — pick the
-    // output row, which is the last buffer hit) → wash clipboard.
+    // output row, which is the last buffer hit) → the wash selection; then
+    // Ctrl+C with it live → the wash clipboard (docs/CLIPBOARD.md).
     await selectInTerm(termHost, 'wash-clip-7777');
+    await page.keyboard.press('Control+c');
 
-    // Sidebar widget previews it.
+    // Sidebar widget previews both slots.
     await page.locator('[data-testid="sidebar-section-header-clipboard"]').click();
+    await expect(page.locator('[data-testid="selection-preview"]')).toContainText('wash-clip-7777');
     await expect(page.locator('[data-testid="clipboard-preview"]')).toContainText('wash-clip-7777');
 
     // Editor: fresh buffer, right-click the text area, Paste.
@@ -95,7 +98,7 @@ test.describe('clipboard integration', () => {
     await expect(editor.locator('.cm-content')).toContainText('wash-clip-7777');
   });
 
-  test('editor Ctrl+C mirror → terminal right-click paste (edit terminal pane)', async ({ page, router }) => {
+  test('editor Ctrl+C mirror → terminal menu paste (edit terminal pane)', async ({ page, router }) => {
     await page.goto(router.url);
     await expect(page.locator('wash-app-session')).toBeVisible();
     await page.locator('button[title="Apps"]').click();
@@ -118,13 +121,11 @@ test.describe('clipboard integration', () => {
     const termHost = editor.locator('[data-testid^="edit-term-host-"]').locator('visible=true');
     await expect(termHost).toBeVisible();
     await expect.poll(() => termBuffer(termHost), { timeout: 8_000 }).toMatch(/[$#%>][ ]?/);
-
-    // Right-click with no selection pastes directly (PuTTY semantics —
-    // no menu detour); the wash clipboard rides into the pty and bash
-    // echoes it on the prompt. (localhost is a secure context, but the
-    // un-granted clipboard-read permission rejects readText and paste
-    // falls back to the wash clipboard.)
+    // Right-click opens the terminal's menu; its Paste reads the
+    // clipboard (falling back to the wash clipboard where the browser
+    // won't let it read).
     await termHost.click({ button: 'right' });
+    await page.locator('[data-testid="term-ctx-paste"]').click();
     await expect.poll(() => termBuffer(termHost)).toContain('edit-clip-4242');
   });
 
