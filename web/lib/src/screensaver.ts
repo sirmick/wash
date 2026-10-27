@@ -110,9 +110,9 @@ export interface ScreensaverConfig {
 }
 
 export const SCREENSAVER_DEFAULTS: ScreensaverConfig = {
-  enabled: false,
+  enabled: true,
   timeout_s: 600,
-  saver: RANDOM_SAVER,
+  saver: 'harbor',
   options: {},
 };
 
@@ -130,7 +130,7 @@ export function normalizeScreensaver(raw: unknown): ScreensaverConfig {
       if (v && typeof v === 'object' && !Array.isArray(v)) options[id] = { ...(v as Record<string, unknown>) };
     }
   }
-  return { enabled: r.enabled === true, timeout_s: Math.max(MIN_TIMEOUT_S, Math.round(t)), saver, options };
+  return { enabled: typeof r.enabled === 'boolean' ? r.enabled : SCREENSAVER_DEFAULTS.enabled, timeout_s: Math.max(MIN_TIMEOUT_S, Math.round(t)), saver, options };
 }
 
 /** resolveSaver turns the configured choice into a concrete saver id. */

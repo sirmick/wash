@@ -122,14 +122,15 @@ test('timeout 0 disables; setTimeoutMs re-enables from now', () => {
 });
 
 test('normalizeScreensaver applies defaults and clamps', () => {
-  assert.deepEqual(normalizeScreensaver(undefined), { enabled: false, timeout_s: 600, saver: RANDOM_SAVER, options: {} });
-  const n = normalizeScreensaver({ enabled: true, timeout_s: 0.2, saver: 'nope', options: { harbor: { fog: 1 }, bad: 3 } });
-  assert.equal(n.enabled, true);
+  // On by default, Harbor Night; turning it off is kept.
+  assert.deepEqual(normalizeScreensaver(undefined), { enabled: true, timeout_s: 600, saver: 'harbor', options: {} });
+  const n = normalizeScreensaver({ enabled: false, timeout_s: 0.2, saver: 'nope', options: { harbor: { fog: 1 }, bad: 3 } });
+  assert.equal(n.enabled, false);
   assert.equal(n.timeout_s, 1);
-  assert.equal(n.saver, RANDOM_SAVER);
+  assert.equal(n.saver, 'harbor');
   assert.deepEqual(n.options, { harbor: { fog: 1 } });
-  assert.equal(normalizeScreensaver({ enabled: 'yes' }).enabled, false);
-  assert.equal(normalizeScreensaver({ saver: 'harbor' }).saver, 'harbor');
+  assert.equal(normalizeScreensaver({ enabled: 'yes' }).enabled, true);
+  assert.equal(normalizeScreensaver({ saver: RANDOM_SAVER }).saver, RANDOM_SAVER);
 });
 
 test('resolveSaver: random draws only animated savers; unknown ids blank', () => {
