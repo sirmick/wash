@@ -181,9 +181,9 @@ test.describe('window layouts', () => {
     await expect.poll(async () => (await geoms(second)).map(pos)).toEqual(halves(await workArea(second)));
     await expect.poll(async () => (await geoms(page)).map(pos)).toEqual(halves(await workArea(second)));
 
-    // Use here: the first tab is the head again and re-places for its own
-    // screen.
-    await page.locator('[data-testid="wash-connection-use-here"]').click();
+    // Using the first tab makes it the head again, and it re-places for
+    // its own screen.
+    await page.locator('[data-testid="wash-connection-superseded"]').click();
     await expect.poll(async () => (await geoms(page)).map(pos)).toEqual(halves(await workArea(page)));
     await second.close();
   });

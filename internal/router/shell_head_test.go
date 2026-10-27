@@ -245,3 +245,206 @@ func TestOnlyHeadDrivesVideoApps(t *testing.T) {
 		t.Error("superseded shell was refused a non-video app")
 	}
 }
+
+// headNotices collects the shell.head / shell.superseded frames a test
+// shell's FE receives, as "head" / "superseded".
+func headNotices(fe wire.FrameTransport) <-chan string {
+	out := make(chan string, 16)
+	go func() {
+		for {
+			f, err := fe.ReadFrame()
+			if err != nil {
+				return
+			}
+			var p struct {
+				T string `json:"t"`
+			}
+			if f.Channel != ChannelControl || json.Unmarshal(f.Payload, &p) != nil {
+				continue
+			}
+			switch p.T {
+			case wire.TShellHead:
+				out <- "head"
+			case wire.TShellSuperseded:
+				out <- "superseded"
+			}
+		}
+	}()
+	return out
+}
+
+func nextNotice(t *testing.T, ch <-chan string) string {
+	t.Helper()
+	select {
+	case n := <-ch:
+		return n
+	case <-time.After(2 * time.Second):
+		t.Fatal("no head notice")
+		return ""
+	}
+}
+
+func claim(t *testing.T, s *ShellSession, ifGen uint64) {
+	t.Helper()
+	payload, err := json.Marshal(wire.ShellClaimHead{T: wire.TShellClaimHead, IfGen: ifGen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.dispatch(wire.Frame{Flags: wire.FlagEnd, Channel: ChannelControl, Payload: payload}); err != nil {
+		t.Fatalf("dispatch claim_head: %v", err)
+	}
+}
+
+// TestAttachLeavesALiveHeadAlone: a shell attaching while another holds the
+// head is told it is not the head, and the terminals stay where they are.
+// Every attach used to take the head, so a background tab that the
+// read-idle reaper kept closing took the terminals off the tab in use on
+// each redial, about every 95s.
+func TestAttachLeavesALiveHeadAlone(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+	s1, fe1, c1 := newTestShellSession(t)
+	s1.router = r
+	defer c1()
+	s2, fe2, c2 := newTestShellSession(t)
+	s2.router = r
+	defer c2()
+	n1, n2 := headNotices(fe1), headNotices(fe2)
+
+	r.registerShell(s1)
+	r.attachShell(s1)
+	if got := nextNotice(t, n1); got != "head" {
+		t.Fatalf("first attach got %q, want head", got)
+	}
+	term := &channelBinding{channelID: 42, kind: wire.ChannelKindGeneric, shell: s1, buf: newRingBuffer(ChannelScrollbackBytes)}
+	r.registerChannel(term)
+
+	r.registerShell(s2)
+	r.attachShell(s2)
+	if got := nextNotice(t, n2); got != "superseded" {
+		t.Fatalf("second attach got %q, want superseded", got)
+	}
+	if got := r.headShellOrAny(); got != s1 {
+		t.Fatalf("head = %p, want s1 %p kept", got, s1)
+	}
+	term.shellMu.Lock()
+	owner := term.shell
+	term.shellMu.Unlock()
+	if owner != s1 {
+		t.Errorf("terminal moved to %p on attach, want left on s1 %p", owner, s1)
+	}
+
+	// The user touches the second tab: an unconditional claim takes it.
+	claim(t, s2, 0)
+	if got := r.headShellOrAny(); got != s2 {
+		t.Fatalf("after claim, head = %p, want s2 %p", got, s2)
+	}
+	if got := nextNotice(t, n1); got != "superseded" {
+		t.Errorf("old head got %q, want superseded", got)
+	}
+}
+
+// TestRedialClaimIsConditional: a tab redialing after holding the head
+// gets it back only if nobody took it in between — its stale socket may
+// still hold it, which is fine — and a tab that lost it while dark does not
+// take it back from the one in use.
+func TestRedialClaimIsConditional(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+	old, _, c1 := newTestShellSession(t)
+	old.router = r
+	defer c1()
+	redial, feR, c2 := newTestShellSession(t)
+	redial.router = r
+	defer c2()
+	other, feO, c3 := newTestShellSession(t)
+	other.router = r
+	defer c3()
+	nR, nO := headNotices(feR), headNotices(feO)
+
+	// The tab's old socket holds the head; its redial arrives alongside.
+	r.registerShell(old)
+	r.attachShell(old)
+	held := r.headGen.Load()
+	r.registerShell(redial)
+	r.attachShell(redial)
+	if got := nextNotice(t, nR); got != "superseded" {
+		t.Fatalf("redial attach got %q, want superseded", got)
+	}
+	claim(t, redial, held)
+	if got := r.headShellOrAny(); got != redial {
+		t.Fatalf("redial claim at the held gen refused: head = %p, want %p", got, redial)
+	}
+	if got := nextNotice(t, nR); got != "head" {
+		t.Fatalf("redial got %q, want head", got)
+	}
+
+	// Another tab's redial claims a generation it lost long ago: refused.
+	r.registerShell(other)
+	r.attachShell(other)
+	if got := nextNotice(t, nO); got != "superseded" {
+		t.Fatalf("other attach got %q, want superseded", got)
+	}
+	claim(t, other, held)
+	if got := r.headShellOrAny(); got != redial {
+		t.Fatalf("stale claim took the head: head = %p, want %p kept", got, redial)
+	}
+	if got := nextNotice(t, nO); got != "superseded" {
+		t.Errorf("stale claimant got %q, want superseded", got)
+	}
+
+	// The head claiming again is confirmed without a takeover.
+	gen := r.headGen.Load()
+	claim(t, redial, 0)
+	if r.headGen.Load() != gen {
+		t.Errorf("the head's own claim bumped the generation %d -> %d", gen, r.headGen.Load())
+	}
+	if got := nextNotice(t, nR); got != "head" {
+		t.Errorf("head re-claim got %q, want head", got)
+	}
+}
+
+// TestRedialClaimWinsOverPromotion: the head's socket closes cleanly, so the
+// other tab is promoted at once; the head's redial still claims the head it
+// held. Nobody chose the promoted tab, and refusing would hand the session
+// to whichever box was left open on every network blip.
+func TestRedialClaimWinsOverPromotion(t *testing.T) {
+	r := NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+	other, _, c1 := newTestShellSession(t)
+	other.router = r
+	other.connID = 1
+	defer c1()
+	old, _, c2 := newTestShellSession(t)
+	old.router = r
+	old.connID = 2
+	defer c2()
+	redial, feR, c3 := newTestShellSession(t)
+	redial.router = r
+	redial.connID = 3
+	defer c3()
+	nR := headNotices(feR)
+
+	r.registerShell(other)
+	r.attachShell(other)
+	r.registerShell(old)
+	r.attachShell(old)
+	claim(t, old, 0) // the user is using this tab
+	held := r.headGen.Load()
+
+	r.unregisterShell(old)
+	deadline := time.Now().Add(2 * time.Second)
+	for r.headShellOrAny() != other || r.headGen.Load() == held {
+		if time.Now().After(deadline) {
+			t.Fatal("the other tab was never promoted")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	r.registerShell(redial)
+	r.attachShell(redial)
+	if got := nextNotice(t, nR); got != "superseded" {
+		t.Fatalf("redial attach got %q, want superseded", got)
+	}
+	claim(t, redial, held)
+	if got := r.headShellOrAny(); got != redial {
+		t.Fatalf("redial claim refused over a promotion: head = %p, want %p", got, redial)
+	}
+}

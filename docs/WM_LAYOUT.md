@@ -191,8 +191,9 @@ is sized by it (`republishDisplayState`). Tiling follows the same rule:
   edited by any tab.
 - Only the head *computes geometry* and sends the moves/resizes. It
   re-places a cell when that cell's data changes (from any tab), when its
-  own work area changes, and when it **gains the head** — so "Use here" on
-  a laptop reflows the panels to the laptop, as the display does.
+  own work area changes, and when it **gains the head** — so picking up a
+  laptop and typing (the head follows use) reflows the panels to the
+  laptop, as the display does.
 - A non-head tab renders what the router echoes. The one local exception is
   a divider drag in progress, which moves windows live for feedback and
   commits fractions to the data on release.

@@ -224,10 +224,12 @@ func (r *Router) HandleShell(ctx context.Context, t FrameTransport) error {
 	}
 	sess.writeMu.Unlock()
 
-	// After the snapshot, take ownership of every still-detached raw
-	// channel (PTYs from a previous shell session, etc.) and replay
-	// the scrollback so the user lands on their pre-refresh terminal.
-	r.reattachChannelsToShell(sess)
+	// After the snapshot, take the head if it is vacant — every still-
+	// detached raw channel (PTYs from a previous shell session, etc.) binds
+	// here with a scrollback replay, so the user lands on their pre-refresh
+	// terminal. With a head attached elsewhere this shell waits for its FE
+	// to claim it.
+	r.attachShell(sess)
 
 	// Replay any already-cached bundles to the new shell.
 	for _, inst := range snapshot {
@@ -504,10 +506,11 @@ func (s *ShellSession) dispatch(f wire.Frame) error {
 	case wire.ShellPing:
 		return s.handlePing(m)
 	case wire.ShellClaimHead:
-		// "Use here": the same takeover a fresh attach does, on this open
-		// connection — no re-dial, so nothing races a reconnect.
-		s.router.log("shell: claim head conn=%d", s.connID)
-		s.router.reattachChannelsToShell(s)
+		// The user touched this tab, or it redialed after holding the
+		// head (IfGen). On the open connection — no re-dial, so nothing
+		// races a reconnect.
+		s.router.log("shell: claim head conn=%d if_gen=%d", s.connID, m.IfGen)
+		s.router.claimHead(s, m.IfGen)
 		return nil
 	case wire.ShellStateSet:
 		return s.handleStateSet(m)

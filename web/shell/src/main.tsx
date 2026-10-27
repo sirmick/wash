@@ -706,14 +706,21 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         break;
       case 'session.snapshot':
         handleSnapshot(client, msg, isLocal);
-        // A fresh snapshot from the LOCAL router means this tab just (re)attached
-        // as the foreground head, so any prior "opened elsewhere" notice is stale.
-        // The generation count restarts too: a restarted router counts from
-        // one again, and every head message for this connection follows.
+        // A fresh snapshot from the LOCAL router means this tab just
+        // (re)attached. The router follows it with shell.head if the head was
+        // vacant and shell.superseded if another tab holds it; until then this
+        // tab is not the head. The generation count restarts too: a restarted
+        // router counts from one again, and every head message for this
+        // connection follows.
         if (isLocal) {
           setSuperseded(null);
+          setHoldsHead(false);
           headGen = 0;
-          setHoldsHead(true);
+          claimAfterAttach();
+        } else {
+          // A remote router's head keeps the old rule, newest attach wins:
+          // nothing here would claim it back on use.
+          client.conn.sendCtrl({ t: 'shell.claim_head' });
         }
         break;
       case 'session.patch':
@@ -920,18 +927,24 @@ function makeHandlers(client: RouterClient): ClientHandlers {
         // silently dark (REVIEW-RECONNECT L2). LOCAL only — head is a
         // local-router concept.
         if (!isLocal) break;
+        claimInFlight = false;
         if (!newerHeadGen(msg.gen)) break;
-        shellLog('warn', 'conn', `superseded: ${msg.msg}`);
+        shellLog('info', 'conn', `superseded: ${msg.msg}`);
         setSuperseded(msg.msg);
         setHoldsHead(false);
+        heldGen = 0;
         break;
       }
       case 'shell.head': {
-        // This tab holds the head again — it claimed it, or the tab that
-        // had it went away and the router promoted this one. Its display
-        // metrics were overridden by that tab, so re-send them.
-        if (!isLocal || !newerHeadGen(msg.gen)) break;
+        // This tab holds the head — it attached to a vacant one, claimed
+        // it, or the tab that had it went away and the router promoted
+        // this one. Its display metrics were overridden by that tab, so
+        // re-send them.
+        if (!isLocal) break;
+        claimInFlight = false;
+        if (!newerHeadGen(msg.gen)) break;
         setHoldsHead(true);
+        heldGen = msg.gen;
         if (superseded() !== null) {
           shellLog('info', 'conn', 'head regained');
           setSuperseded(null);
@@ -1603,12 +1616,11 @@ conn.onEvent((e) => {
   if (e.kind === 'open') setLostInput(null);
 });
 
-// superseded holds the "opened elsewhere" notice: the router tells a still-
-// live shell it lost the foreground head to a newer connection, so its
-// terminals go quiet (REVIEW-RECONNECT L2). Set by the shell.superseded ctrl
-// message; cleared when this tab (re)attaches as head (its own fresh
-// session.snapshot), when it reconnects, or when the user dismisses it —
-// keeping the session in the other window is an answer too.
+// superseded holds the "in use in another window" notice: the router tells a
+// shell another tab holds the foreground head, so its terminals are quiet
+// (REVIEW-RECONNECT L2). Set by the shell.superseded ctrl message; cleared on
+// shell.head and on each fresh session.snapshot. Shown as the thin
+// InactiveBand, which goes away as soon as the tab is used (claimOnUse).
 const [superseded, setSuperseded] = createSignal<string | null>(null);
 
 // shellPacks: the theme packs whose wallpapers the local router's shell
@@ -1616,10 +1628,9 @@ const [superseded, setSuperseded] = createSignal<string | null>(null);
 // build (the in-browser VM) sends a list.
 let shellPacks: string[] | null = null;
 
-// holdsHead: whether this tab is the router's foreground head right now. A
-// local snapshot or shell.head says yes, shell.superseded says no. Unlike
-// superseded() it is not cleared by dismissing the banner — dismissing
-// leaves the head where it is. Window layouts are placed only by the head
+// holdsHead: whether this tab is the router's foreground head right now.
+// shell.head says yes; shell.superseded and a fresh snapshot (until the
+// router says which) say no. Window layouts are placed only by the head
 // (tiling-runtime.ts, docs/WM_LAYOUT.md §6).
 const [holdsHead, setHoldsHead] = createSignal(false);
 
@@ -1646,15 +1657,61 @@ function republishDisplayState(): void {
   publishKeymap(local);
 }
 
-// claimHead is the banner's "Use here": the router migrates the terminal and
-// display channels back to this connection (and tells the tab that had them).
-// The metrics go now rather than on the router's shell.head: the router
-// drops a superseded tab's display traffic, and the claim is ahead of them
-// on the same queue.
-function claimHead(): void {
-  local.conn.sendCtrl({ t: 'shell.claim_head' });
-  setSuperseded(null);
+// heldGen is the head generation this tab holds, 0 when it holds none. It
+// outlives a dropped socket: the redial claims the head back at this
+// generation, which the router grants only if nobody took it meanwhile.
+let heldGen = 0;
+// attachedOnce: this page has had a snapshot from the local router already,
+// so the next one is a redial rather than the page load.
+let attachedOnce = false;
+// claimInFlight: a claim was sent and its answer (shell.head or
+// shell.superseded) hasn't arrived — so a burst of keys sends one claim.
+let claimInFlight = false;
+let claimTimer: ReturnType<typeof setTimeout> | undefined;
+
+// claimHead asks the router for the head: the terminal and display channels
+// move to this connection and the tab that had them is told. ifGen 0 is
+// unconditional (the user is using this tab); non-zero is a redial asking
+// for the head it held. The metrics go now rather than on the router's
+// shell.head: the router drops a non-head tab's display traffic, and the
+// claim is ahead of them on the same queue.
+function claimHead(ifGen = 0): void {
+  claimInFlight = true;
+  clearTimeout(claimTimer);
+  // An answer lost to a dropped socket mustn't block claims for good.
+  claimTimer = setTimeout(() => { claimInFlight = false; }, 3000);
+  local.conn.sendCtrl(ifGen ? { t: 'shell.claim_head', if_gen: ifGen } : { t: 'shell.claim_head' });
   republishDisplayState();
+}
+
+// claimAfterAttach runs on each local snapshot. Opening the page in view is
+// using it, so a visible page load claims the head outright; a page loaded
+// hidden (a restored background tab) waits to be touched. A redial claims
+// back only the head it held when its socket dropped — automatic redials
+// otherwise never take the head, or a background tab that keeps getting
+// reaped takes the terminals off the tab in use every time.
+function claimAfterAttach(): void {
+  const held = heldGen;
+  heldGen = 0;
+  if (!attachedOnce) {
+    attachedOnce = true;
+    if (document.visibilityState === 'visible') claimHead();
+  } else if (held) {
+    claimHead(held);
+  }
+}
+
+// The head follows use: pressing a key, clicking or scrolling in a tab that
+// isn't the head claims it, and the event goes on to do what it does.
+// Capture phase, so an app stopping propagation doesn't swallow the claim;
+// the claim is queued ahead of the input it came with.
+function claimOnUse(): void {
+  if (holdsHead() || claimInFlight || connState() !== 'open') return;
+  shellLog('info', 'conn', 'claiming head on use');
+  claimHead();
+}
+for (const ev of ['pointerdown', 'keydown', 'wheel'] as const) {
+  window.addEventListener(ev, claimOnUse, { capture: true, passive: true });
 }
 
 // connTick drives the banner's live "no contact for Ns / next retry" readout
@@ -2003,7 +2060,43 @@ const App = () => (
     <TextMenuLayer />
     <LayoutMenuLayer />
     <ConnectionBanner state={connState()} />
+    <InactiveBand />
   </>
+);
+
+// InactiveBand is the thin strip across the top of a tab that isn't the
+// head: another window has the session. Using this tab anywhere takes it
+// (claimOnUse), so the strip is a hint, not a prompt — no button. It fades
+// in late so a redial, which is briefly not the head until its claim is
+// answered, doesn't flash it. Clicking it is using the tab like any click.
+const InactiveBand: Component = () => (
+  <Show when={superseded() && connState() === 'open'}>
+    <div
+      data-testid="wash-connection-superseded"
+      style={{
+        position: 'fixed',
+        top: '0',
+        left: '0',
+        right: '0',
+        height: '20px',
+        display: 'flex',
+        'align-items': 'center',
+        'justify-content': 'center',
+        background: tokens.bgDenied,
+        color: tokens.fg,
+        'border-bottom': `1px solid ${tokens.borderDenied}`,
+        font: tokens.type.textSm,
+        // Above the windows and the boot splash, like the connection banner.
+        'z-index': 1000000,
+        'pointer-events': 'auto',
+        cursor: 'pointer',
+        'user-select': 'none',
+        animation: 'wash-fade-in 200ms ease-out 400ms both',
+      }}
+    >
+      Active in another window — click or type here to use it in this one
+    </div>
+  </Show>
 );
 
 // ConnectionBanner shows a status overlay when the WS is anything other
@@ -2043,7 +2136,7 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
   // re-auth, and a clean connect is already in flight.
   const canRetry = () => props.state === 'reconnecting' || props.state === 'closed';
   return (
-    <Show when={props.state !== 'open' || lostInput() || superseded()}>
+    <Show when={props.state !== 'open' || lostInput()}>
       <div
         data-testid="wash-connection-banner"
         data-state={props.state}
@@ -2082,11 +2175,6 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
               ⚠ {lostInput()}
             </span>
           </Show>
-          <Show when={superseded()}>
-            <span data-testid="wash-connection-superseded" style={{ opacity: '0.9', font: tokens.type.textSm }}>
-              ⚠ {superseded()}
-            </span>
-          </Show>
         </span>
         <Show when={canRetry()}>
           <button
@@ -2104,52 +2192,6 @@ const ConnectionBanner: Component<{ state: ConnState }> = (props) => {
             }}
           >
             Reconnect now
-          </button>
-        </Show>
-        {/* Reclaiming the head is a shell.claim_head on the open socket.
-            It used to be conn.reconnectNow(), which is a no-op while the
-            socket is open — the only time this button shows — so "Use
-            here" did nothing. While the link is down "Reconnect now"
-            stands in: the fresh attach takes the head anyway. */}
-        <Show when={superseded() && !canRetry()}>
-          <button
-            data-wash-hit
-            data-testid="wash-connection-use-here"
-            onClick={claimHead}
-            style={{
-              font: tokens.type.textSm,
-              color: tokens.fg,
-              background: 'rgba(255,255,255,0.12)',
-              border: `1px solid ${tokens.borderDenied}`,
-              'border-radius': '4px',
-              padding: '2px 8px',
-              cursor: 'pointer',
-            }}
-          >
-            Use here
-          </button>
-        </Show>
-        {/* Leaving the session in the other tab is a valid answer, and the
-            banner sits above everything: without this it stayed for the rest
-            of the session with no way to put it away. */}
-        <Show when={superseded() && props.state === 'open'}>
-          <button
-            data-wash-hit
-            data-testid="wash-connection-superseded-dismiss"
-            title="Keep the session in the other window"
-            aria-label="Dismiss"
-            onClick={() => setSuperseded(null)}
-            style={{
-              font: tokens.type.textSm,
-              color: tokens.fg,
-              background: 'transparent',
-              border: 'none',
-              padding: '2px 4px',
-              opacity: '0.7',
-              cursor: 'pointer',
-            }}
-          >
-            ✕
           </button>
         </Show>
       </div>

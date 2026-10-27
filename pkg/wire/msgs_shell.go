@@ -139,9 +139,9 @@ const (
 	// this shell's terminals go quiet; the FE raises an "opened elsewhere"
 	// banner instead of leaving the tab silently dark (REVIEW-RECONNECT L2).
 	TShellSuperseded = "shell.superseded"
-	// Shell → router, the banner's "Use here": take the head back on this
-	// still-open connection — channels migrate here and the shell that
-	// holds the head now is sent shell.superseded in turn.
+	// Shell → router: take the head on this still-open connection — the
+	// user is using this tab, or it redialed after holding it (IfGen).
+	// Channels migrate here and the previous head is sent shell.superseded.
 	TShellClaimHead = "shell.claim_head"
 	// Shell → router: store a shell-owned blob (window layouts) in the
 	// session's app_state map under a reserved "shell:" key. Broadcast
@@ -568,9 +568,12 @@ func NewShellHead(gen uint64) ShellHead {
 }
 
 // ShellClaimHead asks the router to make this shell the foreground head
-// again without re-dialing.
+// without re-dialing. IfGen zero claims it outright (the user is using this
+// tab). Non-zero is a redial asking for the head it held at that
+// generation: refused (shell.superseded) if another shell took it since.
 type ShellClaimHead struct {
-	T string `json:"t"`
+	T     string `json:"t"`
+	IfGen uint64 `json:"if_gen,omitempty"`
 }
 
 func NewShellClaimHead() ShellClaimHead {

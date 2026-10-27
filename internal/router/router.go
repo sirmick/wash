@@ -188,6 +188,12 @@ type Router struct {
 	// than steal channels back from it. It also rides shell.head and
 	// shell.superseded so the FE can order the two.
 	headGen atomic.Uint64
+	// headTakenGen is the generation of the last head change a shell
+	// asked for — an attach to a vacant head or a claim — as opposed to a
+	// promotion. Guarded by mu. A redial claiming the head it held gets it
+	// over a promotion (its old socket closed cleanly, so the other tab was
+	// handed the head meanwhile) but not over a tab that claimed it.
+	headTakenGen uint64
 
 	// idleInhibits is instance id → reason for every app currently
 	// asking the reaper to hold off. Guarded by mu. Level-triggered, so
@@ -1706,12 +1712,62 @@ func (r *Router) replayBundleToShell(s *ShellSession, inst *AppInstance) {
 	}
 }
 
-// reattachChannelsToShell takes ownership of every currently-detached
-// channel binding, sending ShellChannelBind + a scrollback replay
-// frame so the new shell can rebuild any terminal-style state.
+// attachShell settles a freshly attached shell's head status, right after
+// its snapshot. It takes the head only when nobody holds it. With a head
+// already attached the newcomer is told it is not the head and waits for
+// its FE to claim it (wire.ShellClaimHead): on a visible page load, on a
+// redial of the tab that held it, or when the user touches it. Taking the
+// head on every attach let a background tab that redials every ~95s
+// (its heartbeat throttled, so the read-idle reaper keeps closing it) take
+// the terminals off the tab in use, over and over.
+func (r *Router) attachShell(s *ShellSession) {
+	r.mu.Lock()
+	head := r.headShell
+	gen := r.headGen.Load()
+	r.mu.Unlock()
+	if head == nil || head == s {
+		r.reattachChannelsToShell(s)
+		return
+	}
+	if err := s.WriteCtrl(wire.NewShellSuperseded("This session is in use in another window.", gen)); err != nil {
+		r.log("superseded notice to new shell: %v", err)
+	}
+}
+
+// claimHead runs a shell's wire.ShellClaimHead. ifGen 0 takes the head
+// unconditionally (the user is using this tab). Otherwise it is a redial
+// asking for the head it held at generation ifGen: granted only if no shell
+// took it since (a promotion doesn't count), else the shell is told it is
+// not the head.
+func (r *Router) claimHead(s *ShellSession, ifGen uint64) {
+	r.mu.Lock()
+	head := r.headShell
+	gen := r.headGen.Load()
+	taken := r.headTakenGen
+	r.mu.Unlock()
+	if head == s {
+		// Already the head (a claim racing the head notice): confirm,
+		// without a sweep that would replay every terminal again.
+		if err := s.WriteCtrl(wire.NewShellHead(gen)); err != nil {
+			r.log("head notice: %v", err)
+		}
+		return
+	}
+	if ifGen != 0 && head != nil && gen != ifGen && taken != ifGen {
+		if err := s.WriteCtrl(wire.NewShellSuperseded("This session is in use in another window.", gen)); err != nil {
+			r.log("superseded notice to claimant: %v", err)
+		}
+		return
+	}
+	r.reattachChannelsToShell(s)
+}
+
+// reattachChannelsToShell makes s the head and takes ownership of every
+// channel binding, sending ShellChannelBind + a scrollback replay frame
+// so the new shell can rebuild any terminal-style state.
 //
-// Called once per shell session, immediately after the snapshot, and again
-// when a superseded shell claims the head back (wire.ShellClaimHead).
+// Called by attachShell when the head is vacant, and by claimHead when a
+// shell takes the head (wire.ShellClaimHead).
 func (r *Router) reattachChannelsToShell(s *ShellSession) {
 	// This shell is now the foreground head: new channels bind here and
 	// terminal channels migrate here below. Capture the outgoing head under
@@ -1723,6 +1779,7 @@ func (r *Router) reattachChannelsToShell(s *ShellSession) {
 	_, prevLive := r.shells[prev]
 	r.headShell = s
 	gen := r.headGen.Add(1)
+	r.headTakenGen = gen
 	r.mu.Unlock()
 	if prev != nil && prev != s && prevLive {
 		// Best-effort: if prev is actually a dying/zombie connection the write
