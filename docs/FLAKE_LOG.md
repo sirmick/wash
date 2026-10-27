@@ -128,6 +128,14 @@ file within the budget; one sighting, full-suite load only.
 
 **Verdict:** flake, logged; watch for a second sighting before digging.
 
+**Second sighting, 2026-10-27:** same test, same 25s timeout, during a
+full-suite run (`--workers=3`, multicall) on the clipboard-model change
+(docs/CLIPBOARD.md): 775 passed / 1 failed / 18 skipped. 8/8 alone straight
+after, and 15/15 across the whole spec with `--repeat-each=5`. The change
+touches no picker code; it does add document-level capture listeners for
+mouse and clipboard events, which the picker's clicks pass through. Two
+sightings under load: worth digging next time it shows.
+
 ---
 
 ## 2026-09-23 — term-tab-verbs + term-bell-activity: deterministic red from a DEEP worktree path (harness artifact)
