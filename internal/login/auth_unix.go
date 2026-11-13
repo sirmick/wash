@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -41,6 +42,10 @@ var DefaultSuPaths = []string{
 // pam_faildelay-style sleep on most distros (~2s); 10s is generous
 // enough to swallow that without timing out a legitimate user.
 const defaultAuthTimeout = 10 * time.Second
+
+// nobodyID is the conventional uid/gid of `nobody`, the real uid su
+// runs under when wash-login itself is root.
+const nobodyID = 65534
 
 type suAuth struct {
 	suPath  string
@@ -85,18 +90,38 @@ func findSu() string {
 // answer. Wrong-password and unknown-user both surface as
 // ErrInvalidCredentials so we don't leak existence.
 func (a *suAuth) Authenticate(user, password string) (Identity, error) {
-	if user == "" || strings.ContainsAny(user, "\x00\n\r:") {
+	if user == "" || user[0] == '-' || strings.ContainsAny(user, "\x00\n\r:") {
+		return Identity{}, ErrInvalidCredentials
+	}
+	// The password crosses a canonical-mode tty, whose line discipline
+	// edits it before PAM sees it: CR/NL end the line, DEL / ^U / ^W
+	// erase, ^V quotes. So "pw\njunk" or "junk\x15pw" would check as
+	// "pw". No browser-typed password has a control char; refuse them.
+	if hasControl(password) {
 		return Identity{}, ErrInvalidCredentials
 	}
 	// -c true: run /bin/true as the target user, exit immediately
 	//          on success. No shell, no .profile, no motd.
-	cmd := exec.Command(a.suPath, "-c", "true", user)
+	// --: the user is never parsed as an su option.
+	cmd := exec.Command(a.suPath, "-c", "true", "--", user)
 	// Detach from any inherited controlling tty so su reads from
 	// the PTY we're about to give it. Setctty applies the slave
 	// side as the controlling tty for the child.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid:  true,
 		Setctty: true,
+	}
+	// su run by root never asks for a password (pam_rootok, busybox
+	// su), so every password would pass. When we are root (the
+	// supervisord example, wash-vmlogin from init), run su with
+	// nobody's real uid: setuid su still gets euid 0, but PAM now
+	// authenticates. Where su isn't setuid this fails closed.
+	if os.Getuid() == 0 {
+		cmd.SysProcAttr.Credential = &syscall.Credential{
+			Uid:    nobodyID,
+			Gid:    nobodyID,
+			Groups: []uint32{},
+		}
 	}
 
 	ptyMaster, err := creackpty.Start(cmd)
@@ -126,7 +151,13 @@ func (a *suAuth) Authenticate(user, password string) (Identity, error) {
 
 	select {
 	case err := <-waitErr:
-		<-driveErr // make sure the driver goroutine has finished too
+		// driveSuPty returns nil only once it has written the password.
+		// su exiting 0 without ever taking it (root caller, a PAM stack
+		// that trusts us, a passwordless account) authenticated nothing.
+		werr := <-driveErr
+		if err == nil && werr != nil {
+			return Identity{}, fmt.Errorf("%w (su succeeded without asking for a password)", ErrInvalidCredentials)
+		}
 		if err == nil {
 			return a.resolveAfterAuth(user)
 		}
@@ -142,6 +173,17 @@ func (a *suAuth) Authenticate(user, password string) (Identity, error) {
 		// matches, so callers treat it as a credentials failure.
 		return Identity{}, fmt.Errorf("%w (su timed out after %s)", ErrInvalidCredentials, a.timeout)
 	}
+}
+
+// hasControl reports whether s holds an ASCII control byte (C0 or
+// DEL) — everything a tty line discipline might act on.
+func hasControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // driveSuPty waits for a "Password:" prompt from su and writes the

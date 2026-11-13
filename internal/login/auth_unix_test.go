@@ -98,15 +98,59 @@ func TestSuAuthUnknownUserAfterSuccess(t *testing.T) {
 	}
 }
 
+// su run by root exits 0 without ever prompting. Exit 0 alone must
+// not count as a correct password.
+func TestSuAuthRejectsSuccessWithoutPrompt(t *testing.T) {
+	dir := t.TempDir()
+	fakeSu := filepath.Join(dir, "su")
+	if err := os.WriteFile(fakeSu, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := NewSuAuth(fakeSu, fakeLookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = auth.Authenticate("alice", "anything")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("got %v, want ErrInvalidCredentials", err)
+	}
+}
+
 func TestSuAuthRejectsBadUsernames(t *testing.T) {
 	auth, err := NewSuAuth("/bin/true", fakeLookup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{"", "user\nwith\nnewline", "user:colon", "user\x00nul"} {
+	for _, bad := range []string{"", "user\nwith\nnewline", "user:colon", "user\x00nul", "-", "-ccmd"} {
 		_, err := auth.Authenticate(bad, "anything")
 		if !errors.Is(err, ErrInvalidCredentials) {
 			t.Errorf("Authenticate(%q): got %v want ErrInvalidCredentials", bad, err)
+		}
+	}
+}
+
+// The tty line discipline edits the password before su reads it, so
+// each of these would arrive as "hunter2" and pass if sent through.
+func TestSuAuthRejectsLineEditedPasswords(t *testing.T) {
+	dir := t.TempDir()
+	fakeSu := filepath.Join(dir, "su")
+	writeFakeSu(t, fakeSu, "hunter2")
+
+	auth, err := NewSuAuth(fakeSu, fakeLookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		"hunter2\njunk",
+		"hunter2\rjunk",
+		"hunterX\x7f2",
+		"junk\x15hunter2",
+		"junk\x17hunter2",
+		"hunter2\x04",
+	} {
+		_, err := auth.Authenticate("alice", bad)
+		if !errors.Is(err, ErrInvalidCredentials) {
+			t.Errorf("Authenticate(alice, %q): got %v want ErrInvalidCredentials", bad, err)
 		}
 	}
 }
