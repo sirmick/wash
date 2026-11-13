@@ -2189,6 +2189,7 @@ const InactiveBand: Component = () => (
   <Show when={superseded() && connState() === 'open'}>
     <div
       data-testid="wash-connection-superseded"
+      data-wash-no-hit
       style={{
         position: 'fixed',
         top: '0',
