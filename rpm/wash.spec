@@ -1,5 +1,5 @@
 Name:           wash
-Version:        0.21.0
+Version:        0.22.0
 Release:        1%{?dist}
 Summary:        Lightweight remote-admin desktop environment
 
@@ -205,6 +205,17 @@ fi
 exit 0
 
 %changelog
+* Fri Nov 13 2026 sirmick <sirmick@gmail.com> - 0.22.0-1
+- wash-login (security): the su backend accepted any password when run
+  as root, and tty line editing let edited passwords ("pw\njunk") pass;
+  su now runs as nobody under root, must be sent the password, and
+  control characters are refused.
+- Clipboard: two slots, the clipboard and the selection, X11-style;
+  right-click is the wash menu everywhere.
+- Screensaver: on by default, Harbor Night.
+- Shell head: follows the tab in use; a background redial no longer
+  takes it.
+
 * Mon Oct 26 2026 sirmick <sirmick@gmail.com> - 0.21.0-1
 - Screensaver: LogoWriter 3D, Harbor Night, Moiré Interference, Moiré
   Glow, Blank or Random after an idle time per tab; the waking input
