@@ -1,5 +1,6 @@
 // Package pathlink resolves the file references an agent writes in its
-// transcript — `apps/edit/be/app.go:42`, `./run.sh`, `/abs/x.go:7:3` — to
+// transcript — `apps/edit/be/app.go:42`, `./run.sh`, `/abs/x.go:7:3`,
+// `docs/`, `a.c:146-148`, `x.go#L42` — to
 // a file on disk, confined to the session's folder.
 //
 // The frontend finds the path-shaped tokens; this decides which of them
@@ -16,6 +17,7 @@ package pathlink
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -36,8 +38,29 @@ type Hit struct {
 	Dir bool `json:"dir,omitempty"`
 }
 
-// Split separates a trailing `:line` or `:line:col` from a token.
+// The positions a token may end with besides :line and :line:col: a
+// :first-last range (the first line is where it opens) and a forge-style
+// #L42, #L42C7 or #L42-L60 anchor. web/lib/src/path-links.tsx reads the
+// same shapes.
+var (
+	rangeRE  = regexp.MustCompile(`:([1-9]\d*)-\d+$`)
+	anchorRE = regexp.MustCompile(`#L([1-9]\d*)(?:C([1-9]\d*))?(?:-L?\d+(?:C\d+)?)?$`)
+)
+
+// Split separates a trailing position from a token: `:line`, `:line:col`,
+// `:first-last` or `#L42`-style.
 func Split(tok string) (path string, line, col int) {
+	if m := anchorRE.FindStringSubmatchIndex(tok); m != nil && m[0] > 0 {
+		line, _ = strconv.Atoi(tok[m[2]:m[3]])
+		if m[4] >= 0 {
+			col, _ = strconv.Atoi(tok[m[4]:m[5]])
+		}
+		return tok[:m[0]], line, col
+	}
+	if m := rangeRE.FindStringSubmatchIndex(tok); m != nil && m[0] > 0 {
+		line, _ = strconv.Atoi(tok[m[2]:m[3]])
+		return tok[:m[0]], line, 0
+	}
 	path = tok
 	if i := strings.LastIndexByte(path, ':'); i > 0 {
 		if n, err := strconv.Atoi(path[i+1:]); err == nil && n > 0 {

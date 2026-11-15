@@ -280,6 +280,40 @@ test('a tool row whose path the host cannot open is not a link', async () => {
   expect(container.querySelector('[data-testid="agent-tool-full"]')?.textContent).toContain('Read');
 });
 
+test('a tool row whose file is gone says so', async () => {
+  const events: agentproto.Event[] = [{
+    seq: 1, kind: 'tool', tool_kind: 'edit', title: 'Edit', status: 'completed', path: '/w/old.go', at_ms: 0,
+  }];
+  const links: PathLinks = { probe: async () => [], open: () => {} };
+  const { container } = render(() => <AgentSession events={() => events} links={links} />);
+  await settle();
+  const row = container.querySelector('[data-testid="agent-tool-row"]') as HTMLElement;
+  expect(row.getAttribute('title')).toBe('Not found now: /w/old.go');
+  expect((container.querySelector('[data-testid="agent-tool-path"]') as HTMLElement).style.textDecoration).toBe('line-through');
+});
+
+// "I'll create a/new.go" is text until the edit lands, then a link, with
+// the message itself unchanged.
+test('a path the agent writes after naming it becomes a link', async () => {
+  const [events, setEvents] = createSignal<agentproto.Event[]>([
+    { seq: 1, kind: 'message', text: "I'll create `a/new.go` and a fence:\n\n```sh\ngo run ./a/new.go\n```", at_ms: 0 },
+  ]);
+  let made = false;
+  const links: PathLinks = {
+    probe: async (toks) => (made ? toks.filter((t) => t.includes('a/new.go')).map((t) => ({ token: t, path: '/w/a/new.go' })) : []),
+    open: () => {},
+  };
+  const { container } = render(() => <AgentSession events={events} links={links} />);
+  await settle();
+  expect(container.querySelectorAll('[data-testid="agent-path-link"]')).toHaveLength(0);
+  made = true;
+  setEvents([...events(), { seq: 2, kind: 'tool', tool_kind: 'edit', title: 'Write a/new.go', status: 'completed', at_ms: 1 }]);
+  await settle();
+  const found = [...container.querySelectorAll('[data-testid="agent-path-link"]')].map((a) => a.textContent);
+  // The code span, and the same file in the fence's command.
+  expect(found).toEqual(['a/new.go', './a/new.go']);
+});
+
 test("files named in the agent's prose are links, with their line", async () => {
   const events: agentproto.Event[] = [{
     seq: 1,
