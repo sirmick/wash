@@ -19,7 +19,8 @@
 // Fenced blocks are syntax-highlighted (syntax.ts, which returns text runs
 // with roles rather than markup — the no-innerHTML rule survives it) and
 // carry a copy button, because taking the command or the patch out of a
-// reply is the commonest thing anyone does with one.
+// reply is the commonest thing anyone does with one. Their URLs and the
+// files they name are links, as in prose (path-links.tsx).
 
 import { For, Show, createSignal, onCleanup } from 'solid-js';
 import type { Component, JSX } from 'solid-js';
@@ -27,7 +28,7 @@ import { tokens } from './tokens';
 import { washCopyText } from './clipboard';
 import { highlightSpans, syntaxLang } from './syntax';
 import type { SyntaxRole } from './syntax';
-import { PathLink, PathText, codeToken, useHits, usePathLinks } from './path-links';
+import { LinkText, LinkedCode, PathLink, WebLink, codeToken, isWebURL, trimURL, useHits, usePathLinks } from './path-links';
 
 type Block =
   | { t: 'p'; lines: string[] }
@@ -199,28 +200,12 @@ type Span =
 // Inline scanner. Code spans win over emphasis, because `*` inside
 // backticks is a literal asterisk and getting that backwards mangles
 // every shell glob an agent prints. A bare URL is a token of its own, so
-// the `_` and `*` inside one are never emphasis.
-const INLINE_RE = /(`[^`]+`)|(\[[^\]]+\]\([^)\s]+\))|(https?:\/\/[^\s<>"'`]+)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(_[^_]+_)/;
-
-/** isWebURL says whether an href is one a click may open: http(s) only. */
-export function isWebURL(href: string): boolean {
-  return /^https?:\/\/\S+$/i.test(href.trim());
-}
-
-/**
- * trimURL takes the prose punctuation off the end of a URL found in text:
- * the full stop of a sentence, a comma, and a closing bracket the URL did
- * not open — "(see https://x.y/z)" names https://x.y/z.
- */
-export function trimURL(url: string): string {
-  for (;;) {
-    const last = url[url.length - 1];
-    if ('.,;:!?'.includes(last)) { url = url.slice(0, -1); continue; }
-    if (last === ')' && (url.match(/\(/g)?.length ?? 0) < (url.match(/\)/g)?.length ?? 0)) { url = url.slice(0, -1); continue; }
-    if (last === ']' && (url.match(/\[/g)?.length ?? 0) < (url.match(/]/g)?.length ?? 0)) { url = url.slice(0, -1); continue; }
-    return url;
-  }
-}
+// the `_` and `*` inside one are never emphasis. A link's target may hold
+// one level of brackets: Wikipedia's /wiki/Glider_(video_game) is a whole
+// address, not one cut at its first `)`.
+// An `_` inside a word is not emphasis (CommonMark agrees): fat_cfm.py and
+// merge_gate.sh are names, and italicising between them split the path.
+const INLINE_RE = /(`[^`]+`)|(\[[^\]]+\]\((?:[^()\s]|\([^()\s]*\))+\))|(https?:\/\/[^\s<>"'`]+)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|((?<!\w)_[^_]+_(?!\w))/;
 
 export function parseInline(src: string): Span[] {
   const out: Span[] = [];
@@ -336,7 +321,7 @@ export const CodeBlock: Component<{ code: string; lang?: string }> = (p) => {
       {/* Its own scroll container: a long command must not make the
           whole transcript scroll sideways. */}
       <pre style={preStyle}>
-        <HighlightedCode code={p.code} lang={p.lang} />
+        <LinkedCode code={p.code} lang={p.lang} color={(r) => ROLE_COLOR[r]} />
       </pre>
     </div>
   );
@@ -349,18 +334,6 @@ const codeStyle: JSX.CSSProperties = {
   'border-radius': tokens.radiusSm,
   padding: '1px 4px',
 };
-
-// A web link: a real anchor, opened in a new tab with no opener and no
-// referrer. Only http(s) gets here (isWebURL), so a javascript: or data:
-// href from model output is never something a click runs. The target is
-// on the title, so a label that says one thing and points at another can
-// be checked before the click.
-const WebLink: Component<{ href: string; label?: string }> = (p) => (
-  <a data-wash-hit href={p.href} title={p.href} target="_blank" rel="noopener noreferrer"
-    style={{ color: tokens.accentBlue, 'overflow-wrap': 'anywhere' }}>
-    {p.label ?? p.href}
-  </a>
-);
 
 // A Markdown link. A web target is an anchor; a file the host vouches for
 // (path-links.tsx) opens that file; anything else — a relative path the
@@ -386,7 +359,7 @@ const LinkSpan: Component<{ label: string; href: string }> = (p) => {
             </>
           }
         >
-          <WebLink href={p.href.trim()} label={p.label} />
+          <WebLink href={p.href.trim()}>{p.label}</WebLink>
         </Show>
       }
     >
@@ -395,35 +368,21 @@ const LinkSpan: Component<{ label: string; href: string }> = (p) => {
   );
 };
 
-/**
- * Plain text with every URL in it a link, for the places that show text
- * as typed rather than as Markdown (a person's own message). Anything that
- * looks like a web address is clickable everywhere in wash.
- */
-export const LinkText: Component<{ text: string }> = (p) => (
-  <For each={parseInline(p.text)}>
-    {(s) => (
-      <Show when={s.t === 'url'} fallback={<>{s.t === 'text' ? s.s : s.t === 'code' ? `\`${s.s}\`` : s.t === 'strong' ? `**${s.s}**` : s.t === 'em' ? `_${s.s}_` : `[${s.s}](${(s as { href: string }).href})`}</>}>
-        <WebLink href={s.s} />
-      </Show>
-    )}
-  </For>
-);
-
-// Every span's text goes through PathText, so a file named in prose, in
-// bold or in backticks is a link when the host can open it.
+// Every span's text goes through LinkText, so a URL or a file named in
+// prose, in bold or in backticks is a link — the file when the host can
+// open it.
 const Inline: Component<{ text: string }> = (p) => (
   <For each={parseInline(p.text)}>
     {(s) => (
-      <Show when={s.t !== 'text'} fallback={<PathText text={s.s} />}>
+      <Show when={s.t !== 'text'} fallback={<LinkText text={s.s} />}>
         <Show when={s.t === 'code'}>
-          <code style={codeStyle}><PathText text={s.s} code /></code>
+          <code style={codeStyle}><LinkText text={s.s} code /></code>
         </Show>
         <Show when={s.t === 'strong'}>
-          <strong style={{ 'font-weight': '600' }}><PathText text={s.s} /></strong>
+          <strong style={{ 'font-weight': '600' }}><LinkText text={s.s} /></strong>
         </Show>
         <Show when={s.t === 'em'}>
-          <em><PathText text={s.s} /></em>
+          <em><LinkText text={s.s} /></em>
         </Show>
         <Show when={s.t === 'link'}>
           <LinkSpan label={s.s} href={(s as { href: string }).href} />
@@ -566,3 +525,6 @@ export const Markdown: Component<MarkdownProps> = (props) => (
     </For>
   </div>
 );
+
+// The link helpers live with the path links; these were always here.
+export { LinkText, isWebURL, trimURL };

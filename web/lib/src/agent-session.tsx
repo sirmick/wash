@@ -19,7 +19,7 @@ import { tokens } from './tokens';
 import { Tab } from './tab';
 import { agentStateColor, agentStateLabel } from './agent-status';
 import { HighlightedCode, LinkText, Markdown } from './markdown';
-import { PathLinksProvider, hitTitle, looksLikePath, pathResolver, useHits, usePathLinks } from './path-links';
+import { PathLinksProvider, hitTitle, looksLikePath, pathResolver, useProbe, usePathLinks } from './path-links';
 import type { PathLinks } from './path-links';
 import { Terminal } from './terminal';
 import { WASH_SCROLL_CLASS } from './scrollbars';
@@ -223,6 +223,10 @@ const Dot: Component<{ color: string }> = (p) => (
   />
 );
 
+// The ACP tool kinds that can leave a file behind. A read, a search or a
+// fetch cannot, so finishing one is no reason to ask about paths again.
+const MAY_WRITE = new Set(['edit', 'delete', 'move', 'execute', 'other']);
+
 /** basename: a transcript row has no width for an absolute path, and the
  *  directory is the session cwd nearly every time. The full path stays in
  *  the title attribute. */
@@ -249,9 +253,13 @@ const ToolRow: Component<{ e: agentproto.Event }> = (p) => {
     return looksLikePath(t) ? t : '';
   };
   const links = usePathLinks();
-  const hits = useHits(() => (token() ? [{ start: 0, end: token().length, token: token() }] : []));
+  const { hits, settled } = useProbe(() => (token() ? [{ start: 0, end: token().length, token: token() }] : []));
   const hit = () => hits().get(token());
   const clickable = () => !!hit();
+  // The host answered and the file is not there: deleted or moved since,
+  // or somewhere it will not open. Said on the row, struck through, rather
+  // than a click that only folds the row out.
+  const gone = () => !!p.e.path && settled() && !hit();
   const openHit = () => { const h = hit(); if (h) links?.open(h); };
   // Expanded by default: a diff nobody opened is a diff nobody read, and
   // the box is height-capped so even a big one costs a scroll, not a
@@ -272,7 +280,7 @@ const ToolRow: Component<{ e: agentproto.Event }> = (p) => {
       data-wash-hit={clickable() || hasFull() ? '' : undefined}
       role={clickable() || hasFull() ? 'button' : undefined}
       tabindex={clickable() || hasFull() ? 0 : undefined}
-      title={hit() ? hitTitle(hit()!) : p.e.path || (hasFull() ? (full() ? 'Hide the full call' : 'Show the full call') : undefined)}
+      title={hit() ? hitTitle(hit()!) : gone() ? `Not found now: ${p.e.path}` : p.e.path || (hasFull() ? (full() ? 'Hide the full call' : 'Show the full call') : undefined)}
       onClick={act}
       onKeyDown={(ev) => {
         if ((clickable() || hasFull()) && (ev.key === 'Enter' || ev.key === ' ')) {
@@ -328,6 +336,7 @@ const ToolRow: Component<{ e: agentproto.Event }> = (p) => {
             flex: 'none',
             font: tokens.type.monoSm,
             color: clickable() ? tokens.accentBlue : tokens.fgDim,
+            'text-decoration': gone() ? 'line-through' : undefined,
             'max-width': '24ch',
             overflow: 'hidden',
             'text-overflow': 'ellipsis',
@@ -1107,6 +1116,16 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
   // One resolver per session view: its cache is what keeps a streaming
   // reply from re-probing the same paths on every chunk.
   const resolver = props.links ? pathResolver(props.links) : undefined;
+  // A tool that may have written a file finishing is when a path the
+  // transcript named, and the host said was not there, may be there now:
+  // "I'll create a/b.go" becomes a link once the edit lands, without the
+  // message having to change.
+  const writesDone = createMemo(() => {
+    let n = 0;
+    for (const e of props.events()) if (e.kind === 'tool' && e.status === 'completed' && MAY_WRITE.has(e.tool_kind ?? '')) n++;
+    return n;
+  });
+  createEffect(on(writesDone, () => resolver?.forget(), { defer: true }));
 
   return (
     <PathLinksProvider resolver={resolver}>

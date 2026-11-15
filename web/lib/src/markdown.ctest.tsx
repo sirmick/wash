@@ -125,3 +125,41 @@ test('web addresses are anchors: bare, in link markup, and never for other schem
   expect(container.textContent).toContain('run (javascript:alert(1))');
   expect(container.querySelector('em')).toBeNull();
 });
+
+// The URLs an agent most wants clicked are the ones it dresses up.
+test('a URL in bold, in backticks or in a fence is a link', () => {
+  const { container } = render(() => (
+    <Markdown text={[
+      'Your server is at **https://172.16.16.74:8090/**.',
+      '- **Windows zip:** `http://172.16.16.74:8095/executor-windows.zip`. Done.',
+      '',
+      '```sh',
+      'curl http://192.168.2.2/login.html',
+      '```',
+    ].join('\n')} />
+  ));
+  const hrefs = [...container.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+  expect(hrefs).toEqual([
+    'https://172.16.16.74:8090/',
+    'http://172.16.16.74:8095/executor-windows.zip',
+    'http://192.168.2.2/login.html',
+  ]);
+  expect(container.querySelector('code a')).not.toBeNull();
+  expect(container.querySelector('pre')?.textContent).toBe('curl http://192.168.2.2/login.html');
+});
+
+test("a Markdown link's target keeps its brackets", () => {
+  const { container } = render(() => (
+    <Markdown text={'([Wikipedia](https://en.wikipedia.org/wiki/Glider_(video_game)), [GitHub](https://github.com/x/y))'} />
+  ));
+  expect([...container.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+    ['Wikipedia', 'https://en.wikipedia.org/wiki/Glider_(video_game)'],
+    ['GitHub', 'https://github.com/x/y'],
+  ]);
+  expect(container.textContent).toBe('(Wikipedia, GitHub)');
+});
+
+test('an underscore inside a word is not emphasis', () => {
+  const { container } = render(() => <Markdown text={'Checking provisioning/fat_cfm.py and merge_gate.sh, _really_.'} />);
+  expect([...container.querySelectorAll('em')].map((e) => e.textContent)).toEqual(['really']);
+});

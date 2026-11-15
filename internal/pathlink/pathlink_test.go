@@ -21,6 +21,12 @@ func TestSplit(t *testing.T) {
 		{"a/b.go:x", "a/b.go:x", 0, 0},
 		{"C:12", "C", 12, 0},
 		{":12", ":12", 0, 0},
+		{"a.c:146-148", "a.c", 146, 0},
+		{"a/b.go#L42", "a/b.go", 42, 0},
+		{"a/b.go#L42C7", "a/b.go", 42, 7},
+		{"a/b.go#L42-L60", "a/b.go", 42, 0},
+		{"a/b.go#L0", "a/b.go#L0", 0, 0},
+		{"#L4", "#L4", 0, 0},
 	} {
 		p, l, col := Split(c.in)
 		if p != c.path || l != c.line || col != c.col {
@@ -71,6 +77,9 @@ func TestResolve(t *testing.T) {
 	ok("alias.go", filepath.Join(base, "alias.go"), 0, 0)
 	no("missing.go")
 	ok("src", filepath.Join(base, "src"), 0, 0)                                    // a folder, for the file manager
+	ok("src/", filepath.Join(base, "src"), 0, 0)                                   // the way agents write a folder
+	ok("src/app.ts:4-9", filepath.Join(base, "src/app.ts"), 4, 0)                  // a range opens at its first line
+	ok("src/app.ts#L7", filepath.Join(base, "src/app.ts"), 7, 0)                   // a forge anchor
 	ok(filepath.Join(top, "outside.txt"), filepath.Join(top, "outside.txt"), 0, 0) // absolute: explicit, anywhere it exists
 	ok(base, base, 0, 0)                                                           // the folder itself, absolute
 	no("../outside.txt")                                                           // relative, above the folder

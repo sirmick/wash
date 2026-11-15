@@ -66,9 +66,9 @@ export { shortcutHint, CLIPBOARD_BINDINGS, TERMINAL_BINDINGS } from './clipboard
 export type { ClipboardAction, ClipboardBinding } from './clipboard-bindings';
 export { analyzePaste, joinWrapped } from './paste-analyze';
 export type { PasteAnalysis, PasteIssue, PasteOptions } from './paste-analyze';
-export { Markdown, LinkText, parseBlocks, parseInline, isWebURL, trimURL } from './markdown';
+export { Markdown, parseBlocks, parseInline } from './markdown';
 export type { MarkdownProps, Align } from './markdown';
-export { looksLikePath, pathTokens } from './path-links';
+export { LinkText, isWebURL, linkTokens, looksLikePath, pathTokens, trimURL, urlTokens } from './path-links';
 export { MenuPicker, filterOptions } from './menu-picker';
 export type { MenuPickerProps, PickerOption } from './menu-picker';
 export type { PathHit, PathLinks } from './path-links';
