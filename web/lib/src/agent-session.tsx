@@ -463,6 +463,12 @@ const STOP_HINT = 'Esc';
 // holding ↑ is not a way to lose your place.
 const MAX_PROMPT_HISTORY = 50;
 
+// How many transcript rows are in the page at once, and how many more each
+// "Show earlier" adds. A session that has run for days holds thousands of
+// rows and dozens of screenshots; rendering all of them, in every Agent
+// window, is what ran a long-lived tab out of memory.
+const TRANSCRIPT_WINDOW = 400;
+
 const hintStyle: JSX.CSSProperties = {
   font: tokens.type.monoSm,
   opacity: 0.7,
@@ -866,6 +872,40 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
     if (!scroller) return true;
     return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
   };
+
+  // The rows in the page: the newest TRANSCRIPT_WINDOW while following the
+  // tail. Reading back freezes the first row (startSeq), so nothing slides
+  // out from under you as the agent keeps talking; "Show earlier" moves it
+  // back a window at a time; returning to the tail lets go again.
+  const [startSeq, setStartSeq] = createSignal<number | null>(null);
+  const startIndex = (all: agentproto.Event[]) => {
+    const s = startSeq();
+    if (s == null) return Math.max(0, all.length - TRANSCRIPT_WINDOW);
+    const i = all.findIndex((e) => e.seq >= s);
+    return i < 0 ? 0 : i;
+  };
+  const shown = createMemo(() => {
+    const all = props.events();
+    const i = startIndex(all);
+    return i === 0 ? all : all.slice(i);
+  });
+  const hiddenEarlier = () => props.events().length - shown().length;
+  const onTranscriptScroll = () => {
+    const bottom = atBottom();
+    setPinned(bottom);
+    if (bottom) setStartSeq(null);
+    else if (startSeq() == null) setStartSeq(shown()[0]?.seq ?? null);
+  };
+  const showEarlier = () => {
+    const all = props.events();
+    const from = Math.max(0, startIndex(all) - TRANSCRIPT_WINDOW);
+    // Keep the row you were looking at where it is: the new rows land
+    // above it, so hold the distance from the bottom instead of the top.
+    const fromBottom = scroller ? scroller.scrollHeight - scroller.scrollTop : 0;
+    setPinned(false);
+    setStartSeq(all[from]?.seq ?? null);
+    if (scroller) scroller.scrollTop = scroller.scrollHeight - fromBottom;
+  };
   createEffect(() => {
     props.events();
     props.asks?.();
@@ -1193,7 +1233,7 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
       <div
         ref={scroller}
         data-testid="agent-transcript"
-        onScroll={() => setPinned(atBottom())}
+        onScroll={onTranscriptScroll}
         style={{
           flex: 1,
           'min-height': 0,
@@ -1209,7 +1249,27 @@ export const AgentSession: Component<AgentSessionProps> = (props) => {
           gap: `${tokens.spaceMd}px`,
         }}
       >
-        <For each={props.events()}>
+        <Show when={hiddenEarlier() > 0}>
+          <button
+            type="button"
+            data-testid="agent-show-earlier"
+            data-wash-hit
+            onClick={showEarlier}
+            style={{
+              'align-self': 'center',
+              background: 'transparent',
+              border: `1px solid ${tokens.borderMenu}`,
+              'border-radius': tokens.radiusMd,
+              color: tokens.fgMuted,
+              font: tokens.type.monoSm,
+              cursor: 'pointer',
+              padding: `${tokens.spaceXs}px ${tokens.spaceMd}px`,
+            }}
+          >
+            Show earlier ({hiddenEarlier()} not shown)
+          </button>
+        </Show>
+        <For each={shown()}>
           {(e) => (
             <Show when={visible(e)}>
             <Show when={e.kind === 'image'}>

@@ -212,3 +212,72 @@ func TestServiceRegisterMountRemoteWatch(t *testing.T) {
 		t.Fatalf("remote event path = %q; want /mnt/host/dir/x (translation failed)", p)
 	}
 }
+
+// TestServiceDropsGoneInstanceWatches: a subscriber the router tears down
+// without an unwatch_all (killed, crashed) loses its watches on
+// instance.gone, so changes stop being sent to an instance that no longer
+// exists.
+func TestServiceDropsGoneInstanceWatches(t *testing.T) {
+	if mgr, err := fswatch.New(); err != nil {
+		t.Skipf("no inotify in this env: %v", err)
+	} else {
+		mgr.Close()
+	}
+
+	dir := t.TempDir()
+	router, cleanup := connectFswatch(t)
+	defer cleanup()
+
+	writeControl(t, router, map[string]any{"kind": KindWatch, "path": dir}, "i-sub")
+	stop := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(50 * time.Millisecond)
+		defer tick.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d", i)), []byte("x"), 0o644)
+			}
+		}
+	}()
+	defer close(stop)
+	readEventTo(t, router, "i-sub", 3*time.Second)
+
+	gone, err := wire.EncodeEvt(wire.NewEvtInstanceGone("com.wash.fm", "i-sub"))
+	if err != nil {
+		t.Fatalf("encode instance.gone: %v", err)
+	}
+	if err := router.WriteFrame(wire.Frame{Flags: wire.FlagEnd, Channel: 1, Payload: gone}); err != nil {
+		t.Fatalf("write instance.gone: %v", err)
+	}
+
+	// Drain what was already in flight, then expect silence while the
+	// files keep changing. One reader for the rest of the test, so no
+	// frame is swallowed by an abandoned read.
+	toSub := make(chan struct{}, 64)
+	go func() {
+		for {
+			f, err := router.ReadFrame()
+			if err != nil {
+				return
+			}
+			if m, err := wire.DecodeEvt(f.Payload); err == nil {
+				if msg, ok := m.(wire.EvtAppMsg); ok && msg.To != nil && msg.To.InstanceID == "i-sub" {
+					toSub <- struct{}{}
+				}
+			}
+		}
+	}()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case <-toSub:
+		case <-time.After(600 * time.Millisecond):
+			return // no event to i-sub for a good while: watches dropped
+		case <-deadline:
+			t.Fatal("still sending events to a gone instance")
+		}
+	}
+}

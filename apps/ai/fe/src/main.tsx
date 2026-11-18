@@ -20,7 +20,7 @@ import type { Component } from 'solid-js';
 import {
   AgentRoster, AgentSession, Button, ConfirmDialog, FilePicker, Input, Menu, MenuBar, MenuItem, MenuPicker, MenuSeparator,
   Overlay, PLACES_AGENT, PlacesBar, Select, Splitter, Tab,
-  agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, washCopyText,
+  agentproto, applyAgentEvent, createAppBus, defineWashApp, kbdStyle, mergeAgentEvents, tokens, TranscriptHeld, washCopyText,
 } from '@wash/ui';
 import type { PlacesView } from '@wash/ui';
 import type {
@@ -73,6 +73,8 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   const [workspaceResult, setWorkspaceResult] = createSignal<agentproto.WorkspaceResult>();
   // One replay request in flight at a time; the snapshot clears it.
   let resyncPending = false;
+  // How much of the transcript we hold, so a reconnect asks only for the rest.
+  const held = new TranscriptHeld();
   const [sessionKey, setSessionKey] = createSignal('');
   const [roster, setRoster] = createSignal<RosterView>({});
   const [error, setError] = createSignal('');
@@ -238,6 +240,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'started':
         setSessionKey(m.key);
         setEvents([]);
+        held.clear();
         setStarting(false);
         setError('');
         break;
@@ -257,6 +260,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
       case 'restore_failed':
         setSessionKey('');
         setEvents([]);
+        held.clear();
         break;
       case 'path_probe_ok':
         probeWaiters.get(m.id)?.(m.hits ?? []);
@@ -274,6 +278,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         if (staleTranscript(m)) break;
         resyncPending = false;
         setEvents((prev) => mergeAgentEvents(prev, m.events ?? []));
+        held.snapshot(m);
         break;
       case 'transcript_event': {
         const e = m.event;
@@ -284,6 +289,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
         // mid-reply, say — so ask for the snapshot again, once.
         const r = applyAgentEvent(events(), e);
         setEvents(r.events);
+        if (!r.gap) held.see(e);
         if (r.gap && !resyncPending) {
           resyncPending = true;
           sendAgentd({ kind: 'transcript_subscribe', key: sessionKey(), replay: true });
@@ -411,7 +417,7 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     // The mount-time asks again, after a connection blip that remounted
     // nothing (reconnect.ts). History's answer can be lost the same way.
     onReconnect: () => {
-      for (const msg of reconnectRequests(role(), sessionKey())) {
+      for (const msg of reconnectRequests(role(), sessionKey(), held.since())) {
         if (msg.kind === 'transcript_subscribe') resyncPending = true;
         sendAgentd(msg);
       }

@@ -85,7 +85,8 @@ func init() {
 			Surface:         sdk.SurfaceBackground,
 			Instancing:      sdk.InstancingSingleton,
 		},
-		OnReady: onReady,
+		OnReady:        onReady,
+		OnInstanceGone: onInstanceGone,
 	}
 	registry.Register(&registry.App{
 		Name:     "wash-fswatch",
@@ -137,9 +138,8 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 		return nil
 	})
 	// unwatch_all releases every watch a subscriber holds. A consumer fires it
-	// on teardown (window/FE close), since there is no instance-gone signal a
-	// background service can hook — without it a crashed consumer's watches
-	// would leak (the cost StateService tolerates, but watches hold inotify).
+	// on teardown (window/FE close); onInstanceGone is the backstop for one
+	// that crashed or was killed before it could.
 	sdk.HandleFromVoid(bus, KindUnwatchAll, func(_ *sdk.Conn, _ string, _ struct{}, from wire.Sender) error {
 		if from.InstanceID == "" {
 			return nil
@@ -162,6 +162,17 @@ func onReady(c *sdk.Conn, instanceID string, _ uint32) {
 	// trees silently un-watched. (Addressing by app id spawns com.wash.remote
 	// if it isn't up; it is autostart-at-boot, so normally it just answers.)
 	_ = c.SendAppMsgTo(wire.Recipient{AppID: fswatchproto.RemoteAppID}, map[string]any{"kind": fswatchproto.KindResyncMounts})
+}
+
+// onInstanceGone drops a dead instance's watches. Without it a window that
+// went away without unwatch_all (killed, wedged) kept its watches for the
+// service's life: every change under them went on being sent to an instance
+// the router no longer had — 400k such sends in one 12-day session — and
+// each still held an inotify watch.
+func onInstanceGone(_ *sdk.Conn, _, instanceID string) {
+	if hub != nil {
+		hub.RemoveSubscriber(instanceID)
+	}
 }
 
 // openWatchChannel opens the wash watch stream to a remote host — by default

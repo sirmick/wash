@@ -62,6 +62,10 @@ interface TagColor {
   label: string;
   value: string;
 }
+
+// The least gap between two bells this window reports to its BE (onBell).
+const BELL_SEND_MS = 1000;
+
 const TAG_COLORS: TagColor[] = [
   { id: 'red', label: 'Red', value: tokens.accentRed },
   { id: 'amber', label: 'Amber', value: tokens.accentAmber },
@@ -533,8 +537,13 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
   // window's attention flag — which the router shows only while the window
   // is NOT focused and clears the moment it is, so an audible-bell-shaped
   // annoyance can't follow you into the window you are already in.
+  //
+  // The BE hears about it at most once a second per tab: one program
+  // ringing in a loop sent 780k bells through the router in four days,
+  // each one a raised attention flag and a log line.
+  const bellSentAt = new Map<number, number>();
   const onBell = (channelID: number) => {
-    if (!visibleTab(channelID)) {
+    if (!visibleTab(channelID) && !bells().has(channelID)) {
       const next = new Set(bells());
       next.add(channelID);
       setBells(next);
@@ -542,6 +551,9 @@ const App: Component<{ instance: string; host: HTMLElement; origin: string }> = 
     setFlash({ id: channelID, n: ++flashSeq });
     if (flashTimer) clearTimeout(flashTimer);
     flashTimer = setTimeout(() => setFlash(null), 180);
+    const now = Date.now();
+    if (now - (bellSentAt.get(channelID) ?? -Infinity) < BELL_SEND_MS) return;
+    bellSentAt.set(channelID, now);
     send({ kind: 'bell', channel_id: channelID });
   };
 

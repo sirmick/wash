@@ -740,3 +740,27 @@ test('a tool row with no file link folds out to the full call on click', async (
   (container.querySelector('[data-testid="agent-tool-full-toggle"]') as HTMLButtonElement).click();
   expect(container.querySelector('[data-testid="agent-tool-full"]')).toBeNull();
 });
+
+// A long transcript keeps only its newest rows in the page; "Show earlier"
+// brings the rest back a window at a time.
+test('a long transcript renders its newest rows and shows earlier ones on request', () => {
+  const events: agentproto.Event[] = Array.from({ length: 1000 }, (_, i) => ({
+    seq: i + 1,
+    kind: 'user',
+    text: `row-${String(i + 1).padStart(4, '0')}`,
+    at_ms: 0,
+  }));
+  const { container, getByTestId, queryByTestId } = render(() => <AgentSession events={() => events} />);
+  const text = () => container.textContent ?? '';
+  expect(text()).toContain('row-1000');
+  expect(text()).toContain('row-0601');
+  expect(text()).not.toContain('row-0600');
+  expect(getByTestId('agent-show-earlier').textContent).toContain('600');
+
+  fireEvent.click(getByTestId('agent-show-earlier'));
+  expect(text()).toContain('row-0201');
+  expect(text()).not.toContain('row-0200');
+  fireEvent.click(getByTestId('agent-show-earlier'));
+  expect(text()).toContain('row-0001');
+  expect(queryByTestId('agent-show-earlier')).toBeNull();
+});

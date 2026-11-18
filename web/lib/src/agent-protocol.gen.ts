@@ -672,6 +672,13 @@ export interface Event {
    * length + the delta against it, and asks for a replay on mismatch.
    */
   text_len?: number;
+  /**
+   * Rev orders changes within one Epoch of a transcript (see
+   * TranscriptSnapshot): every append or in-place change stamps the row
+   * with the transcript's next rev, so the highest rev a frontend holds
+   * says how much of the history it has. Wire-only; never stored.
+   */
+  rev?: number;
 }
 
 /**
@@ -1609,12 +1616,21 @@ export interface TranscriptEvent {
 /**
  * TranscriptSnapshot is a session's history, sent in bounded frames: the
  * first has Reset (replace what you hold), the rest append.
+ * 
+ * Epoch names the run of revs its events carry. It changes whenever the
+ * revs start over (agentd restarted, the history was reloaded from disk),
+ * and a frontend's Since means nothing across one. Since is non-zero on a
+ * partial snapshot: only the rows with Rev above it, to merge into what
+ * the frontend holds; such a snapshot never has Reset, and may carry no
+ * events at all ("you are up to date").
  */
 export interface TranscriptSnapshot {
   kind: 'transcript_snapshot';
   key: string;
   reset: boolean;
   events: Event[] | null;
+  epoch?: string;
+  since?: number;
 }
 
 /**
@@ -1631,6 +1647,15 @@ export interface TranscriptSubscribe {
    * delta).
    */
   replay?: boolean;
+  /**
+   * Epoch and Since, sent with Replay, say what the frontend already
+   * holds: Epoch's rows up to rev Since. When Epoch is still current the
+   * snapshot carries only the rows changed after Since — after a
+   * reconnect that is a handful, where the whole history of a long
+   * session runs to megabytes. Anything else gets the whole history.
+   */
+  epoch?: string;
+  since?: number;
 }
 
 /** Unsubscribe stops a Subscribe. */

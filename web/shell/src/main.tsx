@@ -1845,9 +1845,15 @@ createEffect(() => {
 // socket. These browser signals all mean "we may have just resumed" — hand
 // them to Conn, which probes liveness fast (open) or skips the backoff and
 // redials now (down). See docs/RECONNECT.md.
+//
+// Hiding is reported too: a background tab's heartbeat gets throttled, and
+// the router reaped such a tab every ~95s until it knew to wait longer.
 if (typeof document !== 'undefined') {
+  conn.setHidden(document.visibilityState === 'hidden');
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') conn.wake('visible');
+    const hidden = document.visibilityState === 'hidden';
+    conn.setHidden(hidden);
+    if (!hidden) conn.wake('visible');
   });
 }
 if (typeof window !== 'undefined') {

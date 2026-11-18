@@ -643,6 +643,7 @@ Event is one line in a transcript.
 | `at_ms` | `number` | AtMS is wall-clock at first append, for the FE's own clock anchoring. |
 | `append?` | `boolean` | Append marks a wire-only delta: Text is what was ADDED to the event with this Seq since the last emit, not the whole message. Never set on a stored or snapshotted event (transcript_emit.go). |
 | `text_len?` | `number` | TextLen is the message's byte length after this event applies, on message/thought events. A consumer applying a delta checks its own length + the delta against it, and asks for a replay on mismatch. |
+| `rev?` | `number` | Rev orders changes within one Epoch of a transcript (see TranscriptSnapshot): every append or in-place change stamps the row with the transcript's next rev, so the highest rev a frontend holds says how much of the history it has. Wire-only; never stored. |
 
 #### Focus
 
@@ -1225,6 +1226,8 @@ TranscriptSnapshot is a session's history, sent in bounded frames: the first has
 | `key` | `string` |  |
 | `reset` | `boolean` |  |
 | `events` | `Event[] \| null` |  |
+| `epoch?` | `string` |  |
+| `since?` | `number` |  |
 
 #### TranscriptSubscribe
 
@@ -1234,6 +1237,8 @@ TranscriptSubscribe watches a session's transcript, and re-affirms the watch: a 
 |---|---|---|
 | `key` | `string` |  |
 | `replay?` | `boolean` | Replay asks for the whole history again even from a watcher agentd already knows, after a frontend lost its copy (a reload, a missed delta). |
+| `epoch?` | `string` | Epoch and Since, sent with Replay, say what the frontend already holds: Epoch's rows up to rev Since. When Epoch is still current the snapshot carries only the rows changed after Since — after a reconnect that is a handful, where the whole history of a long session runs to megabytes. Anything else gets the whole history. |
+| `since?` | `number` |  |
 
 #### Unsubscribe
 

@@ -82,6 +82,9 @@ type ShellSession struct {
 	// so a heartbeat-less legacy FE is never reaped for idleness. Atomic for
 	// the same cross-goroutine reason as lastReadAtNanos.
 	sawPing atomic.Bool
+	// hidden is the page visibility the FE's latest ping reported; while set
+	// the watchdog uses hiddenReadIdleTimeout.
+	hidden atomic.Bool
 	// connID is a short per-connection id for correlating the connect /
 	// disconnect / reap log lines of one browser session.
 	connID uint64
@@ -295,6 +298,7 @@ func (s *ShellSession) handlePing(m wire.ShellPing) error {
 	if s.sawPing.CompareAndSwap(false, true) {
 		s.router.log("shell: heartbeat armed conn=%d", s.connID)
 	}
+	s.hidden.Store(m.Hidden)
 	return s.WriteCtrlClass(wire.NewShellPong(m.Seq), wire.ClassControl)
 }
 
@@ -347,15 +351,24 @@ func (s *ShellSession) readIdleLoop(ctx context.Context) {
 		case <-s.drainerDone:
 			return
 		case <-t.C:
-			if s.idleReapDue(time.Now(), readIdleTimeout) {
+			if s.idleReapDue(time.Now(), s.idleTimeout()) {
 				idle := time.Since(time.Unix(0, s.lastReadAtNanos.Load()))
-				s.router.log("shell: read-idle reap conn=%d idle=%s — closing zombie connection",
-					s.connID, idle.Round(time.Millisecond))
+				s.router.log("shell: read-idle reap conn=%d idle=%s hidden=%v — closing zombie connection",
+					s.connID, idle.Round(time.Millisecond), s.hidden.Load())
 				_ = s.Transport.Close()
 				return
 			}
 		}
 	}
+}
+
+// idleTimeout is how long the watchdog lets this connection go silent: far
+// longer while the FE says its page is hidden (see hiddenReadIdleTimeout).
+func (s *ShellSession) idleTimeout() time.Duration {
+	if s.hidden.Load() {
+		return hiddenReadIdleTimeout
+	}
+	return readIdleTimeout
 }
 
 // idleReapDue is the watchdog's decision, factored out so it can be tested

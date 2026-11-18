@@ -608,9 +608,16 @@ func NewShellStateSet(key string, state json.RawMessage) ShellStateSet {
 // liveness heartbeat. Seq lets the FE match a pong to the ping it sent
 // and ignore a stale pong that arrives after it already gave up; the
 // router echoes Seq verbatim and holds no per-ping state of its own.
+//
+// Hidden says the page is not visible. A browser throttles a background
+// tab's timers — its heartbeat Worker's too — so its pings can stop for
+// minutes; the router's read-idle watchdog gives such a connection far
+// longer before calling it a zombie. Every ping carries the current state,
+// and the FE sends one the moment the page hides.
 type ShellPing struct {
-	T   string `json:"t"`
-	Seq uint64 `json:"seq"`
+	T      string `json:"t"`
+	Seq    uint64 `json:"seq"`
+	Hidden bool   `json:"hidden,omitempty"`
 }
 
 func NewShellPing(seq uint64) ShellPing {

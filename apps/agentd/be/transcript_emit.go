@@ -214,12 +214,21 @@ func eventBySeq(key string, seq uint64) (agentproto.Event, bool) {
 // sendTranscriptSnapshot replays a session's history to one subscriber.
 // Under the emitter's lock, with pending deltas flushed first: the text
 // the snapshot holds is then exactly the base the next delta appends to.
-func sendTranscriptSnapshot(conn *sdk.Conn, instanceID, key string) error {
+//
+// epoch and since are what the window says it holds (TranscriptSubscribe).
+// When epoch is still current it gets only the rows changed after since:
+// the delta withheld from it just above grew a row past since, so that row
+// is among them. Otherwise the whole history.
+func sendTranscriptSnapshot(conn *sdk.Conn, instanceID, key, epoch string, since uint64) error {
 	em := emitterFor(key, conn)
 	em.mu.Lock()
 	defer em.mu.Unlock()
 	em.flushLockedExcept(instanceID)
-	for _, msg := range transcriptSnapshotMsgs(key, snapshot(key)) {
+	events, cur := snapshotEpoch(key)
+	if epoch == "" || epoch != cur {
+		since = 0
+	}
+	for _, msg := range transcriptSnapshotMsgs(key, events, cur, since) {
 		if err := agentproto.Send(conn, wire.Recipient{InstanceID: instanceID}, msg); err != nil {
 			return err
 		}

@@ -56,10 +56,18 @@ virtio/v86 transport.
 - `handlePing` echoes `pong` (Control class), echoing `seq` verbatim and
   holding no per-ping state.
 - `dispatch` stamps `lastReadAt` on every inbound frame.
-- `readIdleLoop` reaps a connection silent for `readIdleTimeout` (45s, =
-  3 missed pings): it closes the transport, which unblocks the read loop
+- `readIdleLoop` reaps a connection silent for `readIdleTimeout` (90s, =
+  6 missed pings): it closes the transport, which unblocks the read loop
   and runs the normal teardown — freeing the session and, crucially,
   logging the disconnect instead of pinning a dead `ShellSession` forever.
+- **Hidden pages:** a browser throttles a background tab's timers, its
+  heartbeat Worker's included, so its pings can stop for minutes. The FE
+  sends a ping with `hidden: true` the moment the page hides (and every
+  ping carries the state); while the last one said hidden, the watchdog
+  waits `hiddenReadIdleTimeout` (15m) instead. Before this a background tab
+  was reaped and reconnected every ~95s for as long as it sat unwatched. A
+  hidden page also arms no pong deadline: the wake probe on becoming
+  visible again is what checks the socket.
 - **Backward-compat guard:** the watchdog only arms after the first ping
   (`sawPing`). An older FE that predates the heartbeat never pings, so it
   is never falsely reaped during an idle stretch — it keeps the legacy
@@ -124,7 +132,8 @@ no scrollback survives on the remote side because A never had it).
 | `HEARTBEAT_INTERVAL_MS` | ws.ts | 15s | FE ping cadence |
 | `PONG_TIMEOUT_MS` | ws.ts | 10s | periodic-beat pong deadline |
 | `WAKE_PROBE_TIMEOUT_MS` | ws.ts | 4s | wake-probe pong deadline |
-| `readIdleTimeout` | transport.go | 45s | router reaps a silent armed conn |
+| `readIdleTimeout` | transport.go | 90s | router reaps a silent armed conn |
+| `hiddenReadIdleTimeout` | transport.go | 15m | the same, while the page says it is hidden |
 | `wsWriteTimeout` | transport.go | 30s | per-write deadline (PTY_ROBUST Fix C) |
 
 ## Tests

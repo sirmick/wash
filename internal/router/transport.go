@@ -46,6 +46,16 @@ const wsWriteTimeout = 30 * time.Second
 // "detected only when written to" behaviour.
 const readIdleTimeout = 90 * time.Second
 
+// hiddenReadIdleTimeout replaces readIdleTimeout while the FE's last ping
+// said the page is hidden (wire.ShellPing.Hidden). A background tab's
+// heartbeat can stall for well past 90s, and reaping it then cost a full
+// reconnect every ~95s for as long as the tab sat unwatched — each one
+// re-sending every window's state (agent transcripts in the megabytes) into
+// a page that was not even being looked at. A hidden page that really is
+// dead is still reaped, just later; when it comes back to the foreground
+// its wake probe finds out for itself within seconds.
+const hiddenReadIdleTimeout = 15 * time.Minute
+
 // readIdleCheckInterval is how often the watchdog samples liveness.
 const readIdleCheckInterval = 5 * time.Second
 

@@ -245,6 +245,8 @@ func Run(args []string) int {
 	if *logFile != "" {
 		if err := redirectOutput(*logFile); err != nil {
 			log.New(os.Stderr, "wash-router ", 0).Printf("log-file %s: %v (falling back to inherited stderr)", *logFile, err)
+		} else {
+			go capLogLoop(*logFile)
 		}
 	}
 
@@ -1073,6 +1075,50 @@ func redirectOutput(path string) error {
 		return err
 	}
 	return nil
+}
+
+// maxLogBytes caps a --log-file. It lives under /run, which is RAM, and a
+// session runs for weeks: one reached 97MB in twelve days.
+const maxLogBytes = 32 << 20
+
+// capLogLoop keeps a --log-file under maxLogBytes for the process lifetime.
+func capLogLoop(path string) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for range t.C {
+		if err := capLog(path, maxLogBytes); err != nil {
+			log.Printf("wash-router log cap %s: %v", path, err)
+		}
+	}
+}
+
+// capLog moves a log over limit to path.1 (replacing the previous one) and
+// empties it. Copy then truncate, not rename: fds 1 and 2 stay on the same
+// file, and since it is opened O_APPEND every writer's next line simply
+// lands at the new end. A line written between the copy and the truncate is
+// lost, which a log can afford.
+func capLog(path string, limit int64) error {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() < limit {
+		return err
+	}
+	src, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(path+".1", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		return err
+	}
+	return os.Truncate(path, 0)
 }
 
 // fmtIdle renders an idle threshold for a log line. Zero is spelled

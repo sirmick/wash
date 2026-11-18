@@ -20,3 +20,10 @@ test('a controller re-claims its session and asks for the whole transcript', () 
 test('a controller still on its launcher has nothing to re-claim', () => {
   assert.deepEqual(reconnectRequests('session', ''), []);
 });
+
+test('a controller that holds the transcript asks only for what changed', () => {
+  assert.deepEqual(reconnectRequests('session', 'acp:2', { epoch: 'e1', since: 41 }), [
+    { kind: 'session_claim', key: 'acp:2' },
+    { kind: 'transcript_subscribe', key: 'acp:2', replay: true, epoch: 'e1', since: 41 },
+  ]);
+});

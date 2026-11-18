@@ -12,16 +12,25 @@
 // Both asks are idempotent for a window that already holds the role: a
 // manager_subscribe or a claim from the lease holder just force-sends the
 // current view.
+//
+// `held` is what of the transcript the window already has (TranscriptHeld):
+// with it agentd re-sends only the rows that changed while we were away.
+// This runs on every reconnect, and a background tab used to get a
+// reconnect every ~95s — each one re-sending megabytes of history.
 
 import type { agentproto } from '@wash/ui';
 
-export function reconnectRequests(role: 'session' | 'manager', sessionKey: string): agentproto.AgentdRequest[] {
+export function reconnectRequests(
+  role: 'session' | 'manager',
+  sessionKey: string,
+  held: { epoch?: string; since?: number } = {},
+): agentproto.AgentdRequest[] {
   if (role === 'manager') return [{ kind: 'manager_subscribe' }];
   // A controller with no session yet is a launcher; there is nothing to
   // re-claim, and its pending start answers on its own.
   if (!sessionKey) return [];
   return [
     { kind: 'session_claim', key: sessionKey },
-    { kind: 'transcript_subscribe', key: sessionKey, replay: true },
+    { kind: 'transcript_subscribe', key: sessionKey, replay: true, ...held },
   ];
 }

@@ -130,7 +130,7 @@ func TestTranscriptSnapshotReplayIsChunked(t *testing.T) {
 	maxTranscriptSnapshotBytes = 1
 	defer func() { maxTranscriptSnapshotBytes = old }()
 
-	msgs := transcriptSnapshotMsgs("acp:1", events)
+	msgs := transcriptSnapshotMsgs("acp:1", events, "e", 0)
 	if len(msgs) != len(events) {
 		t.Fatalf("%d snapshot chunks, want %d", len(msgs), len(events))
 	}
@@ -318,5 +318,74 @@ func TestReaffirmedWatcherOutlivesTheTTL(t *testing.T) {
 	}
 	if got := transcriptWatchers("acp:1"); len(got) != 1 {
 		t.Fatalf("a re-affirming watcher was dropped: %v", got)
+	}
+}
+
+// Every change stamps its row with the transcript's next rev — appends,
+// streamed growth, and tool rows updated in place — so a window that says
+// "I hold up to rev N" can be sent just what changed after.
+func TestTranscriptRevsStampEveryChange(t *testing.T) {
+	resetTranscripts()
+	now := time.Unix(0, 0)
+	appendPrompt("acp:1", "hi", now)
+	appendUpdate("acp:1", acp.SessionUpdate{
+		SessionUpdate: acp.UpdateToolCall,
+		ToolCall:      acp.ToolCall{ToolCallID: "t1", Title: "ls", Status: acp.ToolStatusPending},
+	}, now)
+	appendUpdate("acp:1", chunk("Hel"), now)
+	_, epoch := snapshotEpoch("acp:1")
+	held := snapshot("acp:1")
+	since := held[len(held)-1].Rev
+
+	appendUpdate("acp:1", chunk("lo"), now) // grows the open message
+	appendUpdate("acp:1", acp.SessionUpdate{
+		SessionUpdate: acp.UpdateToolCallUpdate,
+		ToolCall:      acp.ToolCall{ToolCallID: "t1", Status: acp.ToolStatusCompleted},
+	}, now)
+
+	events, cur := snapshotEpoch("acp:1")
+	if cur != epoch || epoch == "" {
+		t.Fatalf("epoch %q then %q, want one stable non-empty epoch", epoch, cur)
+	}
+	msgs := transcriptSnapshotMsgs("acp:1", events, cur, since)
+	if len(msgs) != 1 || msgs[0].Reset || msgs[0].Since != since || msgs[0].Epoch != epoch {
+		t.Fatalf("partial snapshot = %+v, want one non-reset frame since %d", msgs, since)
+	}
+	var got []string
+	for _, e := range msgs[0].Events {
+		got = append(got, e.Kind+":"+e.Text+e.Status)
+	}
+	if len(got) != 2 || got[0] != "tool:"+acp.ToolStatusCompleted || got[1] != "message:Hello" {
+		t.Fatalf("changed rows = %v, want the completed tool and the grown message (in seq order)", got)
+	}
+
+	// Nothing changed since the newest rev: one empty frame, so the window
+	// still gets its answer.
+	events, _ = snapshotEpoch("acp:1")
+	top := uint64(0)
+	for _, e := range events {
+		top = max(top, e.Rev)
+	}
+	msgs = transcriptSnapshotMsgs("acp:1", events, cur, top)
+	if len(msgs) != 1 || len(msgs[0].Events) != 0 || msgs[0].Reset {
+		t.Fatalf("up-to-date snapshot = %+v, want one empty non-reset frame", msgs)
+	}
+}
+
+// A history replaced from disk starts a new epoch: revs a window holds from
+// before mean nothing against it.
+func TestTranscriptRenumberStartsNewEpoch(t *testing.T) {
+	resetTranscripts()
+	appendPrompt("acp:1", "hi", time.Unix(0, 0))
+	_, before := snapshotEpoch("acp:1")
+	transMu.Lock()
+	trans["acp:1"].renumber()
+	transMu.Unlock()
+	events, after := snapshotEpoch("acp:1")
+	if after == before {
+		t.Fatal("renumber kept the epoch")
+	}
+	if events[0].Rev != 1 {
+		t.Fatalf("rev after renumber = %d, want 1", events[0].Rev)
 	}
 }

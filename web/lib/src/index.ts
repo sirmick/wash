@@ -76,7 +76,7 @@ export { AgentSession } from './agent-session';
 export { QuestionPanel } from './question-panel';
 export type { QuestionAnswers, QuestionPanelProps } from './question-panel';
 export type { AgentSessionProps, AgentStatus, PromptBlock, InsertedDraft } from './agent-session';
-export { applyAgentEvent, mergeAgentEvents, utf8Len } from './agent-events';
+export { applyAgentEvent, mergeAgentEvents, TranscriptHeld, utf8Len } from './agent-events';
 export type { ApplyResult } from './agent-events';
 // The roster (docs/SIDEBAR.md M2): com.wash.ai's list pane, and the
 // desktop rail's questions. Its types are agentproto's (below).

@@ -200,6 +200,8 @@ func persistEvent(key string, e agentproto.Event) {
 	if sid == "" {
 		return
 	}
+	// A rev only means something within one agentd's epoch.
+	e.Rev = 0
 	line, err := json.Marshal(e)
 	if err != nil {
 		return
@@ -466,6 +468,8 @@ func reconcileResume(key, sessionID string, launch launchRecord, cwd string, now
 			}
 		}
 		t.seq = max
+		// The revs a window holds came from the events this replaced.
+		t.renumber()
 	}
 	if workspaces != nil {
 		workspaces.restoreProvenance(sessionID, t.events)
@@ -544,6 +548,7 @@ func rewriteTranscript(sessionID string, launch launchRecord, cwd string, events
 	w.Write(meta)
 	w.WriteByte('\n')
 	for _, e := range events {
+		e.Rev = 0
 		line, err := json.Marshal(e)
 		if err != nil {
 			continue

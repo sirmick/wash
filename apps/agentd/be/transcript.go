@@ -17,7 +17,10 @@
 package agentd
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -81,6 +84,34 @@ type transcript struct {
 	// with the square of the reply (Redoubt: one reply written 187 times).
 	unsaved bool
 	savedAt time.Time
+	// rev stamps changes (agentproto.Event.Rev): every append or in-place
+	// change takes the next one, so a reconnecting window can say how much
+	// it holds and be sent only what changed after. epoch names this run of
+	// revs; it is new whenever they start over.
+	rev   uint64
+	epoch string
+}
+
+// touch stamps event i as just changed.
+func (t *transcript) touch(i int) {
+	t.rev++
+	t.events[i].Rev = t.rev
+}
+
+// renumber starts a new epoch and re-stamps every event in order, for a
+// history replaced wholesale (reloaded from disk).
+func (t *transcript) renumber() {
+	t.epoch = newEpoch()
+	t.rev = 0
+	for i := range t.events {
+		t.touch(i)
+	}
+}
+
+func newEpoch() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // messageSaveEvery bounds how much of a streaming reply a crash can lose.
@@ -125,7 +156,7 @@ var (
 )
 
 func newTranscript(key string) *transcript {
-	return &transcript{key: key, toolAt: map[string]int{}, openMessage: -1}
+	return &transcript{key: key, toolAt: map[string]int{}, openMessage: -1, epoch: newEpoch()}
 }
 
 // appendPrompt records what the human sent, so the transcript reads as a
@@ -183,6 +214,7 @@ func updateEvent(key string, seq uint64, mutate func(*agentproto.Event)) (agentp
 	for i := range t.events {
 		if t.events[i].Seq == seq {
 			mutate(&t.events[i])
+			t.touch(i)
 			// Append the new version under the same seq; loading folds
 			// last-write-wins, so the reloaded row matches the live one.
 			persistEvent(t.key, t.events[i])
@@ -247,6 +279,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []agentproto.E
 		// in between closes it, because the agent has moved on.
 		if t.openMessage >= 0 && t.events[t.openMessage].Kind == kind {
 			t.events[t.openMessage].Text += text
+			t.touch(t.openMessage)
 			// Continuation grows the event in place, so the accumulated
 			// message is written again, not just its first chunk: at most
 			// once per messageSaveEvery, and when it closes.
@@ -300,6 +333,7 @@ func appendUpdate(key string, u acp.SessionUpdate, now time.Time) []agentproto.E
 			if diff != "" {
 				ev.Diff = diff
 			}
+			t.touch(at)
 			// On disk too: a tool row stayed "pending" there for good.
 			persistEvent(t.key, *ev)
 			return append(imgs, *ev)
@@ -351,6 +385,8 @@ func (t *transcript) push(e agentproto.Event) agentproto.Event {
 	t.seq++
 	e.Seq = t.seq
 	t.events = append(t.events, e)
+	t.touch(len(t.events) - 1)
+	e = t.events[len(t.events)-1]
 	// Persist as it happens (transcript_store.go). Safe under transMu:
 	// this only appends to a channel, and the disk write is a different
 	// goroutine's problem.
@@ -364,24 +400,39 @@ func (t *transcript) push(e agentproto.Event) agentproto.Event {
 // the events at all: before persistence they had to be held forever,
 // because agentd was the only place they existed.
 func snapshot(key string) []agentproto.Event {
+	events, _ := snapshotEpoch(key)
+	return events
+}
+
+// snapshotEpoch is snapshot plus the epoch its revs belong to. A history
+// read back from disk is stamped in file order under an epoch derived from
+// the file's contents: a retired session no longer changes, so a window
+// that re-subscribes to one it already holds is sent nothing.
+func snapshotEpoch(key string) ([]agentproto.Event, string) {
 	transMu.Lock()
 	t := trans[key]
 	if t != nil {
 		out := append([]agentproto.Event(nil), t.events...)
+		epoch := t.epoch
 		transMu.Unlock()
-		return out
+		return out, epoch
 	}
 	transMu.Unlock()
 
 	sid := transcriptSessionID(key)
 	if sid == "" {
-		return nil
+		return nil, ""
 	}
 	events, err := loadTranscript(sid)
 	if err != nil {
 		log.Printf("agentd: transcript load key=%s session=%s: %v", key, sid, err)
 	}
-	return events
+	var maxSeq uint64
+	for i := range events {
+		events[i].Rev = uint64(i + 1)
+		maxSeq = max(maxSeq, events[i].Seq)
+	}
+	return events, fmt.Sprintf("disk:%s:%d:%d", sid, len(events), maxSeq)
 }
 
 // transcriptLen is how many folded events a session has, for the history
@@ -417,14 +468,27 @@ func releaseTranscript(key string) {
 // it must not be scheduled ahead of the frames that make the desktop
 // feel alive. Both halves of the stream ride the same class so the
 // snapshot cannot be overtaken by the events that follow it.
-func transcriptSnapshotMsgs(key string, events []agentproto.Event) []agentproto.TranscriptSnapshot {
+//
+// since > 0 is a partial snapshot for a window already holding epoch's
+// rows up to that rev: only the rows changed after it, never Reset, and one
+// empty frame when nothing has — the window is waiting for an answer.
+func transcriptSnapshotMsgs(key string, events []agentproto.Event, epoch string, since uint64) []agentproto.TranscriptSnapshot {
+	if since > 0 {
+		var changed []agentproto.Event
+		for _, e := range events {
+			if e.Rev > since {
+				changed = append(changed, e)
+			}
+		}
+		events = changed
+	}
 	if len(events) == 0 {
-		return []agentproto.TranscriptSnapshot{{Key: key, Reset: true}}
+		return []agentproto.TranscriptSnapshot{{Key: key, Reset: since == 0, Events: []agentproto.Event{}, Epoch: epoch, Since: since}}
 	}
 	var out []agentproto.TranscriptSnapshot
 	var batch []agentproto.Event
 	var bytes int
-	reset := true
+	reset := since == 0
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -433,6 +497,8 @@ func transcriptSnapshotMsgs(key string, events []agentproto.Event) []agentproto.
 			Key:    key,
 			Reset:  reset,
 			Events: append([]agentproto.Event(nil), batch...),
+			Epoch:  epoch,
+			Since:  since,
 		})
 		reset = false
 		batch = batch[:0]
@@ -518,12 +584,13 @@ func registerTranscriptHandlers(bus *sdk.Bus) {
 		// side has always logged; this is the other half, and it is what
 		// lets a test tell "the browser came back and asked again" from
 		// "the FE still had the transcript from before".
-		log.Printf("agentd: transcript subscribed instance=%s key=%s replay=%v", from.InstanceID, req.Key, req.Replay)
+		log.Printf("agentd: transcript subscribed instance=%s key=%s replay=%v since=%d", from.InstanceID, req.Key, req.Replay, req.Since)
 
 		// Reply with the history so a reload, or a second window, starts
 		// where the session actually is rather than empty. The history is
-		// unbounded server-side, so replay is chunked into bounded frames.
-		return sendTranscriptSnapshot(conn, from.InstanceID, req.Key)
+		// unbounded server-side, so replay is chunked into bounded frames;
+		// a window that says what it holds gets only what changed since.
+		return sendTranscriptSnapshot(conn, from.InstanceID, req.Key, req.Epoch, req.Since)
 	})
 }
 

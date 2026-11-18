@@ -105,3 +105,57 @@ func TestIdleReapDue(t *testing.T) {
 		t.Error("failed to reap a silent armed connection")
 	}
 }
+
+// TestHiddenPingRelaxesWatchdog: a ping saying the page is hidden switches
+// the watchdog to the long timeout — a throttled background tab must not be
+// reaped (and so reconnect + resync everything) every ~95s — and the next
+// visible ping switches it back.
+func TestHiddenPingRelaxesWatchdog(t *testing.T) {
+	sess, fe, cleanup := newTestShellSession(t)
+	defer cleanup()
+	sess.router = NewRouter(Config{}, NewRegistry(), func(string, ...any) {})
+
+	if got := sess.idleTimeout(); got != readIdleTimeout {
+		t.Fatalf("idleTimeout before any ping = %v, want %v", got, readIdleTimeout)
+	}
+	hidden := wire.NewShellPing(1)
+	hidden.Hidden = true
+	if err := sess.handlePing(hidden); err != nil {
+		t.Fatalf("handlePing: %v", err)
+	}
+	if _, err := fe.ReadFrame(); err != nil {
+		t.Fatalf("read pong: %v", err)
+	}
+	if got := sess.idleTimeout(); got != hiddenReadIdleTimeout {
+		t.Errorf("idleTimeout after hidden ping = %v, want %v", got, hiddenReadIdleTimeout)
+	}
+
+	now := time.Unix(1_000_000, 0)
+	sess.lastReadAtNanos.Store(now.Add(-(readIdleTimeout + time.Minute)).UnixNano())
+	if sess.idleReapDue(now, sess.idleTimeout()) {
+		t.Error("reaped a hidden page after only a few minutes of silence")
+	}
+
+	if err := sess.handlePing(wire.NewShellPing(2)); err != nil {
+		t.Fatalf("handlePing: %v", err)
+	}
+	if _, err := fe.ReadFrame(); err != nil {
+		t.Fatalf("read pong: %v", err)
+	}
+	if got := sess.idleTimeout(); got != readIdleTimeout {
+		t.Errorf("idleTimeout after visible ping = %v, want %v", got, readIdleTimeout)
+	}
+}
+
+// TestShellPingHiddenWire: hidden round-trips through the ctrl codec and is
+// omitted when false, so an older router decodes a new FE's pings unchanged.
+func TestShellPingHiddenWire(t *testing.T) {
+	m, err := wire.DecodeCtrl([]byte(`{"t":"ping","seq":7,"hidden":true}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	p, ok := m.(wire.ShellPing)
+	if !ok || !p.Hidden || p.Seq != 7 {
+		t.Fatalf("decoded %#v, want hidden ping seq 7", m)
+	}
+}

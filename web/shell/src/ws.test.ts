@@ -318,6 +318,30 @@ test('wake while open fires a fresh liveness probe', (t: TestCtx) => {
   assert.ok(events.some((e) => e.kind === 'wake'));
 });
 
+test('hiding sends a hidden ping at once; showing again pings without it', (t: TestCtx) => {
+  const { conn, socks, sent } = hbConn(t);
+  socks[0].onopen!(new Event('open'));
+  assert.equal(lastCtrl(sent).hidden, undefined, 'a visible page does not say hidden');
+  conn.setHidden(true);
+  const hiddenPing = lastCtrl(sent);
+  assert.equal(hiddenPing.t, 'ping');
+  assert.equal(hiddenPing.hidden, true);
+  conn.setHidden(false);
+  conn.wake('visible');
+  const back = lastCtrl(sent);
+  assert.ok(back.seq > hiddenPing.seq);
+  assert.equal(back.hidden, undefined);
+});
+
+test('a hidden page arms no pong deadline (no background zombie redial)', async (t: TestCtx) => {
+  const { conn, socks, events } = hbConn(t, { pongTimeoutMs: 15 });
+  conn.setHidden(true);
+  socks[0].onopen!(new Event('open'));
+  await new Promise((r) => setTimeout(r, 120));
+  assert.ok(!events.some((e) => e.kind === 'zombie'), 'no zombie while hidden');
+  assert.equal(socks.length, 1, 'no redial while hidden');
+});
+
 test('wake while reconnecting redials immediately (skips backoff)', async (t: TestCtx) => {
   const { conn, socks } = hbConn(t);
   socks[0].onopen!(new Event('open'));

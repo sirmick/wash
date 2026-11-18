@@ -92,7 +92,9 @@ export interface ConnDiag {
 // Heartbeat timing. The FE pings on an interval; if a ping goes unanswered
 // for longer than the pong timeout the socket is a zombie (the OS froze it
 // on laptop-suspend and never delivered a close) and we force a redial. The
-// router reaps its own side after readIdleTimeout (45s) off these same pings.
+// router reaps its own side after readIdleTimeout (90s) off these same pings
+// — or hiddenReadIdleTimeout (15m) while they say the page is hidden, since
+// a background tab's timers (its Worker's included) get throttled.
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const PONG_TIMEOUT_MS = 10_000;
 // After a wake signal we want a verdict in seconds, not on the next 15s
@@ -196,6 +198,9 @@ export class Conn {
   // Seq of the ping we're awaiting a pong for, or null when none outstanding.
   private outstandingPing: number | null = null;
   private lastPingSentAt = 0;
+  // The page is hidden (setHidden). Rides every ping so the router can give
+  // a throttled background tab longer before reaping it.
+  private hidden = false;
 
   /**
    * Construct from a URL (default: real WebSocket) or a SocketFactory
@@ -523,8 +528,24 @@ export class Conn {
     this.outstandingPing = seq;
     this.lastPingSentAt = this.now();
     if (this.pongTimer != null) clearTimeout(this.pongTimer);
-    this.pongTimer = setTimeout(() => this.onPongTimeout(seq), deadlineMs);
-    this.sendCtrl({ t: 'ping', seq }, CLASS_CONTROL);
+    this.pongTimer = null;
+    // No deadline while hidden: a throttled tab can't time a pong fairly,
+    // and redialing a page nobody is looking at buys nothing. Coming back
+    // to the foreground runs the wake probe, which does have one.
+    if (!this.hidden) this.pongTimer = setTimeout(() => this.onPongTimeout(seq), deadlineMs);
+    this.sendCtrl(this.hidden ? { t: 'ping', seq, hidden: true } : { t: 'ping', seq }, CLASS_CONTROL);
+  }
+
+  /**
+   * setHidden records the page's visibility. Hiding sends a ping at once so
+   * the router relaxes its read-idle watchdog before the browser starts
+   * throttling our heartbeat; showing again is the caller's wake('visible'),
+   * whose probe ping carries hidden=false.
+   */
+  setHidden(hidden: boolean): void {
+    if (hidden === this.hidden) return;
+    this.hidden = hidden;
+    if (hidden) this.sendPing(this.pongTimeoutMs);
   }
 
   private onPong(seq: number): void {

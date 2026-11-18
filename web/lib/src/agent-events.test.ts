@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAgentEvent, mergeAgentEvents, utf8Len } from './agent-events.ts';
+import { applyAgentEvent, mergeAgentEvents, TranscriptHeld, utf8Len } from './agent-events.ts';
 import type * as agentproto from './agent-protocol.gen';
 
 const msg = (seq: number, text: string, extra: Partial<agentproto.Event> = {}): agentproto.Event => ({
@@ -60,4 +60,41 @@ test('does not mutate the previous list', () => {
   const prev = [msg(1, 'Hello')];
   applyAgentEvent(prev, delta(1, '!', 6));
   assert.equal(prev[0].text, 'Hello');
+});
+
+test('a replay that repeats rows keeps the objects already held', () => {
+  const prev = [msg(1, 'a'), { seq: 2, kind: 'tool', title: 'ls', status: 'running', at_ms: 0 }];
+  // A fresh decode: equal rows, new objects.
+  const same = JSON.parse(JSON.stringify(prev)) as agentproto.Event[];
+  assert.equal(mergeAgentEvents(prev, same), prev, 'nothing changed: the very same list');
+
+  const moved = JSON.parse(JSON.stringify(prev)) as agentproto.Event[];
+  moved[1].status = 'completed';
+  const out = mergeAgentEvents(prev, [...moved, msg(3, 'c')]);
+  assert.equal(out[0], prev[0], 'an unchanged row keeps its object');
+  assert.notEqual(out[1], prev[1], 'a changed row is replaced');
+  assert.equal(out[1].status, 'completed');
+  assert.deepEqual(out.map((e) => e.seq), [1, 2, 3]);
+});
+
+test('an identical whole row leaves the list untouched', () => {
+  const prev = [msg(1, 'a')];
+  const r = applyAgentEvent(prev, msg(1, 'a'));
+  assert.equal(r.events, prev);
+  assert.equal(r.gap, false);
+});
+
+test('TranscriptHeld: asks for a whole replay until a snapshot names the epoch', () => {
+  const h = new TranscriptHeld();
+  h.see(msg(1, 'a', { rev: 3 }));
+  assert.deepEqual(h.since(), {}, 'live events alone do not say which epoch');
+  h.snapshot({ epoch: 'e1', events: [msg(1, 'a', { rev: 3 }), msg(2, 'b', { rev: 5 })] });
+  assert.deepEqual(h.since(), { epoch: 'e1', since: 5 });
+  h.see(msg(3, 'c', { rev: 9 }));
+  assert.deepEqual(h.since(), { epoch: 'e1', since: 9 });
+  // agentd restarted: its revs start over, ours mean nothing against them.
+  h.snapshot({ epoch: 'e2', events: [msg(1, 'a', { rev: 1 })] });
+  assert.deepEqual(h.since(), { epoch: 'e2', since: 1 });
+  h.clear();
+  assert.deepEqual(h.since(), {});
 });
