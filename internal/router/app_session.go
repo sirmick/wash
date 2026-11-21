@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -1034,26 +1035,46 @@ func (inst *AppInstance) handleSpawnRequest(m wire.EvtSpawnRequest) error {
 
 // handleOpenRequest resolves m.Path's extension to a registered handler app
 // (manifest Opens) and spawns it with `--open <path>`. Gated on CapOpen.
-// Fire-and-forget: an unhandled extension, protocol mismatch, or spawn
-// failure is logged, not replied — the caller keeps its own fallback (e.g.
-// fm's inline preview).
+// Fire-and-forget: nothing is replied. A request the router refuses is
+// logged and toasted (refuseOpen); a spawn failure is logged. A caller with
+// its own fallback checks the association table first (fm's inline
+// preview), so it never asks for a file no app opens.
 func (inst *AppInstance) handleOpenRequest(m wire.EvtOpenRequest) error {
 	if !inst.Manifest.HasCapability(CapOpen) {
-		inst.router.log("open: instance=%s lacks CapOpen", inst.InstanceID)
+		inst.refuseOpen(m.Path, fmt.Sprintf("instance=%s lacks CapOpen", inst.InstanceID),
+			inst.Manifest.Name+" is not allowed to open files.")
 		return nil
 	}
 	target := inst.router.resolveOpen(m.Path)
 	if target == nil {
-		inst.router.log("open: no handler for %q", m.Path)
+		body := "No app opens files without an extension."
+		if ext := filepath.Ext(m.Path); ext != "" {
+			body = "No app opens " + ext + " files."
+		}
+		inst.refuseOpen(m.Path, fmt.Sprintf("no handler for %q", m.Path), body)
 		return nil
 	}
 	if target.Manifest.ProtocolVersion != ProtocolVersion {
-		inst.router.log("open: handler %s protocol mismatch", target.Manifest.ID)
+		inst.refuseOpen(m.Path, fmt.Sprintf("handler %s protocol mismatch", target.Manifest.ID),
+			target.Manifest.Name+" is a different version of wash.")
 		return nil
 	}
 	inst.router.log("open.request: path=%q handler=%s from=%s", m.Path, target.Manifest.ID, inst.Manifest.ID)
 	go inst.router.spawnForOpen(target, m.Path)
 	return nil
+}
+
+// refuseOpen logs an open request the router will not route and says so in
+// a toast from the app that asked. Without it a click on a file did nothing
+// at all: the Agent window's links outside its folder went dead for a month
+// on a missing CapOpen that only this log knew about.
+func (inst *AppInstance) refuseOpen(path, why, body string) {
+	inst.router.log("open: %s", why)
+	_ = inst.relayNotify(wire.EvtNotify{
+		Title: "Cannot open " + filepath.Base(path),
+		Body:  body,
+		Level: wire.NotifyLevelWarn,
+	})
 }
 
 // handleIdleInhibit records this instance's request that the router not
