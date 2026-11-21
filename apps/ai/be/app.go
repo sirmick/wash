@@ -97,7 +97,9 @@ func init() {
 			Accent:          "violet",
 			Instancing:      sdk.InstancingMulti,
 			Hidden:          true,
-			Capabilities:    []string{sdk.CapSpawn},
+			// CapOpen: a transcript link to a file outside the session's
+			// folder goes to its handler app (editor.go showEditor).
+			Capabilities: []string{sdk.CapOpen, sdk.CapSpawn},
 			// 600, not 720: the composer grew a row (Attach…) and the
 			// status bar grew root chips, and a window as tall as a
 			// 720-line screen left both under the 40px taskbar. Sized so
